@@ -179,13 +179,18 @@ Record the exact command line. Two rules that have each cost a silent green:
 Does this repo keep a **spec artifact** per change?
 
 - A spec tool's tree plus its CLI on PATH (for example an `openspec/` directory and the
-  `openspec` binary) ⇒ **spec-engine repo**. The `spec` stage produces that tool's
-  artifacts through its own skills, and the `archive` stage runs.
+  `openspec` binary) ⇒ **spec-engine repo**. §7.B produces that tool's artifacts through its
+  own skills, `spec-review` reviews them, and `archive` runs.
 - A stated design-doc convention in `AGENTS.md` (a directory of design docs, one per
-  change) ⇒ **design-doc repo**. The `spec` stage writes that doc on the branch; there is no
-  archive stage.
-- Neither ⇒ **no-spec repo**. `spec`, `spec-review` and `archive` are skipped entirely and
-  the pipeline runs `issue-ready → apply → impl-review → ready-to-merge`.
+  change) ⇒ **design-doc repo**. §7.B writes that doc on the branch and `spec-review` reviews
+  it; there is no archive stage.
+- Neither ⇒ **no-spec repo**. `spec-review` and `archive` are skipped entirely and the
+  pipeline runs `issue-ready → apply → impl-review → ready-to-merge`.
+
+Producing the artifact is **not** a state of its own — it happens inside §7.B. Every state
+name this skill uses is in the §4 enum and has a §7 handler; the repo's gate asserts that,
+because a stage named in prose but absent from the machine is how a supervisor comes to
+believe in a stall that reads as normal.
 
 Record which. **Do not install a spec tool, do not initialise one, and do not invent a spec
 artifact a repo has not asked for.** The property worth protecting is that a design gets an
@@ -445,6 +450,9 @@ rounds so it does not re-report them.
 |---|---|
 | `impl-correctness` | The diff-scoped bug hunt: logic errors, off-by-one, null/undefined, async races, error paths, resource leaks, regressions in touched code. May invoke **`/code-review <effort>`** inside itself and fold its findings in. Every blocking claim needs a concrete failure scenario. |
 | `impl-security` | **Attempts `/security-review` inside itself and reports whether it actually ran** (see below), then covers the surface regardless: authorization on every new route and query, tenant/owner scoping, secrets in code, config, CI or logs, injection (SQL, command, template, prompt), SSRF and caller-supplied URLs, unsafe deserialization, new dependencies, data exposed to a client that should not see it. For an infrastructure diff also network exposure, policy gaps, role scope, and secret delivery. Plus the three shapes below, which have each shipped for real. |
+| `impl-spec-conformance` | Code against the spec artifacts, **both directions**: every requirement satisfied by the code; no shipped behaviour no requirement describes; no unchecked task whose work is genuinely absent. In a no-spec repo this axis becomes *code against the issue*: does the change do what was asked, no more and no less? |
+| `impl-conventions` | The repo's own conventions as discovered in §2.7 — style, structure, localization parity, formatting of user-facing text, dead or debug code, stray markers, commented-out blocks, and **no AI/assistant attribution anywhere in the diff**. |
+| `impl-gates-coverage` | What actually runs in CI versus what changed — is any part of this change unverified by construction? Does every component with a test entry point appear in the pipeline that should run it? Does the change need manual or browser verification? Are the discovered check commands sufficient evidence for *this* diff, and did they actually run green on *this* head? |
 
 Three defects that have actually reached a default branch, and are therefore named in the
 `impl-security` charter explicitly rather than left to the reviewer's imagination:
@@ -455,12 +463,9 @@ Three defects that have actually reached a default branch, and are therefore nam
 - **A green check that proves nothing because the mutation was never applied to the CALL
   SITE.** The definition changed, the caller did not, and the check exercised the definition.
 - **A secret, token, credential or session file about to be committed.** This one is
-  **always blocking** — an explicit exception to every normalization rule in §5.4: it is
-  blocking with no failure scenario, at any confidence, and it may not be downgraded to
-  optional. Nothing else in this skill is unconditional.
-| `impl-spec-conformance` | Code against the spec artifacts, **both directions**: every requirement satisfied by the code; no shipped behaviour no requirement describes; no unchecked task whose work is genuinely absent. In a no-spec repo this axis becomes *code against the issue*: does the change do what was asked, no more and no less? |
-| `impl-conventions` | The repo's own conventions as discovered in §2.7 — style, structure, localization parity, formatting of user-facing text, dead or debug code, stray markers, commented-out blocks, and **no AI/assistant attribution anywhere in the diff**. |
-| `impl-gates-coverage` | What actually runs in CI versus what changed — is any part of this change unverified by construction? Does every component with a test entry point appear in the pipeline that should run it? Does the change need manual or browser verification? Are the discovered check commands sufficient evidence for *this* diff, and did they actually run green on *this* head? |
+  **always blocking** — the single exception to every normalization rule in §5.4, restated
+  there so it cannot be normalized away: blocking with no failure scenario, at any confidence,
+  never downgraded. Nothing else in this skill is unconditional.
 
 **The security engine may be unable to start, and that must be visible.** Both source
 lineages of this skill record the same failure: `/security-review` derives its target from
@@ -510,6 +515,11 @@ Normalization ship applies on receipt — deterministic, no judgement needed:
   that does not exist. On one measured change, 22 of 66 findings in a single category were
   exactly this shape; each cost a fix, and each fix added lines the next round then reviewed.
 - `confidence < 60` ⇒ `optional`.
+- **ONE exception to every rule above: a secret, token, credential or session file about to
+  be committed is ALWAYS blocking** — with no failure scenario, at any confidence, and it may
+  not be downgraded. Stated here as well as in §5.3 on purpose: a rule that lives only in the
+  charter gets normalized away right here, which would let the exact finding it exists for
+  ship as `optional` and never gate anything.
 - **blocking** = a real defect that must be fixed before hand-off: correctness bug, security
   issue, data loss, broken contract, behaviour-changing spec drift, a gate that would fail —
   failing *live*, per the clause above.

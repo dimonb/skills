@@ -10,12 +10,15 @@ Two plugins:
 | **[`ship`](plugins/ship)** | Drives **one** change end-to-end — issue, implementation, its own review passes, hand-off or merge — on GitHub or GitLab. It reviews its own work with read-only subagents and adversarially verifies every finding, so no stage ever waits on an external reviewer. |
 | **[`shipyard`](plugins/shipyard)** | Runs `ship` in background terminals and supervises a **fleet** of them: one git worktree per change, a status table on a timer, stall and context-ceiling watchdogs, and every question or architectural decision carried back to the session you are sitting in. |
 
-`shipyard` launches `ship` and nothing else, so install `ship` too if you want the fleet.
-Neither Claude Code nor Codex can declare a plugin-to-plugin dependency, so that is a
-documented requirement rather than an enforced one.
+`shipyard` launches `ship` and nothing else. In Claude Code that is declared —
+`shipyard`'s manifest carries `"dependencies": ["ship"]`, so the CLI resolves it. Codex has
+no equivalent, so there it is a documented requirement: install `ship` too.
 
-Nothing here requires any other tool to be installed. `ship` **discovers** the repository it
-is pointed at — forge, default branch, branch naming, check commands, whether the project
+**No spec tooling is required** by anything here — `ship` adapts to whatever the repo already
+uses, or to nothing. It does need `git` and the CLI for your forge; `shipyard` also needs
+`jq` and a terminal backend. Each plugin's README lists its own prerequisites.
+
+`ship` **discovers** the repository it is pointed at — forge, default branch, branch naming, check commands, whether the project
 keeps a spec artifact, and whether it is allowed to merge — so it adapts to a repo instead of
 asking the repo to adapt to it.
 
@@ -137,11 +140,15 @@ any `SKILL.md`; that no per-forge reference file carries a copy of the pipeline 
 and no state exists without a handler; and that no non-generic string is present.
 
 `make check-test` exists because a gate that has never failed can be vacuous and look
-identical to one that works. It injects one violation per assertion — 26 of them — and
-requires a failure each time. Writing and re-running it has found five real bugs so far,
-including a broken symlink that slipped past an `[ -e ]` test, a leak check that never saw
-untracked files, and a state/handler check that passed because `spec` is a prefix of
-`spec-review`.
+identical to one that works. It injects 37 violations, one at a time, and requires the gate to
+fail each time — covering **every** failure path in `check.sh`, with each probe constructed so
+that only the assertion it names can fire. Writing and re-running it has found six real bugs
+so far, including a broken symlink that slipped past an `[ -e ]` test, a leak check that never
+saw untracked files, a state/handler check that passed because `spec` is a prefix of
+`spec-review`, and probes of its own that fired the wrong check and so proved nothing.
+
+If you add a check, add its probe. An assertion with no probe can be vacuous, and a green
+`make check-test` would certify it anyway.
 
 ### The leak check
 

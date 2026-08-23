@@ -1,6 +1,12 @@
 #!/usr/bin/env bash
 # shipyard-lib.sh — shared helpers for the `shipyard` skill. Source only, never execute.
-export PATH="/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin:$PATH"
+# A child is spawned by a GUI app or by a tmux server, neither of which inherits a login
+# shell's PATH — so `git`, `jq`, `gh`/`glab` and `agtermctl` can all be missing even though
+# they work fine in your terminal. This prepends the standard system and package-manager
+# locations so those lookups succeed. It is a UNION of conventional paths, not one machine's
+# layout: entries that do not exist on a given system are inert, and the caller's own PATH is
+# preserved at the end, so anything already resolvable stays resolvable.
+export PATH="/opt/homebrew/bin:/opt/local/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin:$PATH"
 
 # The terminal a child lives in — agterm (default) or tmux — sits behind the shipyard_*
 # functions in shipyard-backend.sh. Nothing else in this skill calls agtermctl or tmux.

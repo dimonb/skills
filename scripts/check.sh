@@ -8,9 +8,10 @@
 # 5. dogfooding: both agents linked to every packaged skill, links contained in plugins/,
 #    and no second copy of any SKILL.md
 # 6. ship's forge reference files do not carry a copy of the pipeline state enum
-# 7. no non-generic strings (structural patterns + an optional gitignored local list)
+# 7. no non-generic strings (structural patterns only; no dependency on any untracked file)
 set -uo pipefail
 cd "$(dirname "$0")/.."
+ROOT_P=$(pwd -P)          # physical repo root; see the symlink containment check below
 rc=0
 fail() { echo "FAIL $*"; rc=1; }
 
@@ -101,16 +102,20 @@ for d in .claude/skills .agents/skills; do
     # substring test accepts `../../../../../tmp/plugins/x/skills/x` and any absolute path
     # containing `/plugins/`, and an agent opened in a clone would read that out-of-tree
     # SKILL.md as instructions. Resolve it and require it to be under this repo's plugins/.
+    # Compare PHYSICAL against PHYSICAL. `$PWD` is the LOGICAL path `cd` set, so matching a
+    # `pwd -P` result against it fails on every checkout reached through a symlink — a clone
+    # under /tmp on macOS (/tmp -> /private/tmp), a symlinked home, an automounted project
+    # dir — and the message then names a target that is plainly inside the repo.
     tgt=$(cd "$e" 2>/dev/null && pwd -P)
     case "$tgt" in
-      "$PWD/plugins/"*) ;;
+      "$ROOT_P/plugins/"*) ;;
       *) fail "symlink target is outside this repo's plugins/: $e -> ${tgt:-<unresolved>}" ;;
     esac
   done
 done
-# A tracked SKILL.md outside plugins/ is a duplicated source of truth.
+# A SKILL.md anywhere but plugins/ is a duplicated source of truth (tracked or not).
 while IFS= read -r f; do
-  case "$f" in plugins/*) ;; *) fail "SKILL.md tracked outside plugins/: $f" ;; esac
+  case "$f" in plugins/*) ;; *) fail "SKILL.md outside plugins/ (the packaged copy is the only source of truth): $f" ;; esac
 done < <(git ls-files --cached --others --exclude-standard '*SKILL.md')
 # Every packaged skill must HAVE both links. Validating only the links that exist lets a new
 # skill ship with no dogfooding at all, which is the invariant this check is here to protect.
@@ -127,9 +132,27 @@ done
 # stale-enum failure both source variants of ship warned about, so assert it cannot exist.
 core=plugins/ship/skills/ship/SKILL.md
 if [ -f "$core" ]; then
+  # Derive the enum ONCE and use it for both assertions below. A second, hand-maintained
+  # copy of the state list inside this gate would be a copy of an enum going stale, inside
+  # the check written to stop copies of an enum going stale.
+  # Match only a line whose value CONTAINS `|`, i.e. the enum itself, and require exactly one
+  # such line. `head -1` over any `"state": "` line would silently pick up a later single-value
+  # example instead, leaving one state to check and the rest unasserted — a vacuous version of
+  # the very check written to stop a state existing without a handler.
+  enum_lines=$(grep -cE '"state": "[^"]*\|[^"]*"' "$core")
+  states=$(sed -n 's/.*"state": "\([^"]*|[^"]*\)".*/\1/p' "$core" | tr '|' ' ')
+  if [ "$enum_lines" != 1 ] || [ -z "$states" ]; then
+    fail "cannot find exactly one state enum in $core (found $enum_lines candidate line(s))"
+    states=""
+  fi
+
+  # Only the hyphenated names are searched for in the forge files: the single-word states
+  # (`apply`, `archive`, `done`) are ordinary English that legitimately appears in prose, so
+  # matching them would be all false positives.
   for ref in plugins/ship/skills/ship/references/*.md; do
     [ -f "$ref" ] || continue
-    for st in need-issue issue-ready spec-review impl-review ready-to-merge needs-human; do
+    for st in $states; do
+      case "$st" in *-*) ;; *) continue ;; esac
       if grep -qF -- "$st" "$ref"; then
         fail "forge reference carries the state name '$st' (the core owns it): $ref"
       fi
@@ -140,8 +163,6 @@ if [ -f "$core" ]; then
   # with no handler is the failure the launcher skill documents as its own worst: a
   # supervisor believing in a stage that does not exist reads a real stall as business as
   # usual. `done` is exempt — it is terminal, reached from inside another handler.
-  states=$(sed -n 's/.*"state": "\([^"]*\)".*/\1/p' "$core" | head -1 | tr '|' ' ')
-  [ -n "$states" ] || fail "cannot find the state enum in $core"
   for st in $states; do
     [ "$st" = done ] && continue
     # Match the backticked name exactly. An unanchored `.*$st` would let `spec` be satisfied

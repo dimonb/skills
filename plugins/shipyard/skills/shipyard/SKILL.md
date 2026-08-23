@@ -1,6 +1,6 @@
 ---
 name: shipyard
-description: "shipyard: run the repo's /ship skill in background terminals (agterm sessions when available, tmux windows otherwise) and supervise them. Use when one or more changes should be driven through the pipeline (issue → spec → apply → review → ready-to-merge) by background Claude sessions, with a status table every 10 minutes and questions/architecture decisions escalated back to this session. Requires a /ship skill in the repo — it launches nothing else."
+description: "shipyard: run the repo's /ship skill in background terminals (agterm sessions when available, tmux windows otherwise) and supervise them. Use when one or more changes should each be driven end to end by their own background Claude session, with a status table every 10 minutes, stall and context-ceiling watchdogs, and questions or architectural decisions escalated back to this session. Requires a /ship skill in the repo — it launches nothing else, and the stage names come from that skill, not from here."
 ---
 
 # shipyard: run ship in background terminals, monitor it, answer its escalations
@@ -17,8 +17,9 @@ then acts on it.
 knows nothing about the stages — `/ship` owns all of them and takes a free-text idea, a
 `#N` issue, or an MR/PR number as its argument. `shipyard` only starts it, watches it, and
 carries its questions to you. The repo must provide that skill; if it does not, `shipyard`
-has nothing to run. Neither Claude Code nor Codex can declare a plugin-to-plugin
-dependency, so that requirement lives here, in prose, and nowhere else.
+has nothing to run. In Claude Code that dependency is declared in this plugin's manifest
+(`"dependencies": ["ship"]`), so the CLI resolves it; Codex has no equivalent field, so
+there the requirement lives in prose only.
 
 Skill arguments:
 * `/shipyard 108 104` — continue existing MRs/PRs by number;

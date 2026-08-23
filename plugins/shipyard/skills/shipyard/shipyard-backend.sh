@@ -46,7 +46,7 @@ shipyard_backend() {
         _SHIPYARD_BE=none
       fi ;;
     # A bad SHIPYARD_BACKEND resolves to a VALUE too, and says nothing here: the message is
-    # _sh_no_backend's, so a caller gets one accurate line instead of a "nothing is
+    # _shipyard_no_backend's, so a caller gets one accurate line instead of a "nothing is
     # installed" error stacked on top of "you typed the name wrong".
     *) _SHIPYARD_BE=invalid ;;
   esac
@@ -54,7 +54,7 @@ shipyard_backend() {
 }
 
 # The refusal every dispatch shares, so an unusable backend can never read as a no-op.
-_sh_no_backend() {
+_shipyard_no_backend() {
   # Re-resolve rather than reading $_SHIPYARD_BE directly: every dispatch reaches us from
   # inside a `case "$(shipyard_backend)"`, i.e. from a SUBSHELL, so an assignment made during
   # that resolution never reached this shell. shipyard_backend is deterministic and cached.
@@ -81,7 +81,7 @@ shipyard_backend_check() {
       command -v jq >/dev/null 2>&1 || { echo "error: the agterm backend needs jq" >&2; return 1; } ;;
     tmux)
       command -v tmux >/dev/null 2>&1 || { echo "error: tmux is not on PATH" >&2; return 1; } ;;
-    *) _sh_no_backend; return 1 ;;
+    *) _shipyard_no_backend; return 1 ;;
   esac
 }
 
@@ -116,7 +116,7 @@ shipyard_current_workspace() {
 
 # Where the pinned container name lives. Keyed by BACKEND: switching to tmux must not
 # inherit an agterm workspace name as its session name.
-_sh_container_file() {
+_shipyard_container_file() {
   local mb; mb=$(shipyard_mailbox 2>/dev/null) || return 1
   printf '%s/container-%s' "$mb" "$(shipyard_backend)"
 }
@@ -145,7 +145,7 @@ shipyard_container_derive() {
       # Unchanged: `<repo>`, so ship windows keep sharing one session with your own.
       key=$(shipyard_repo_key) || return 1
       printf '%s' "$key" ;;
-    *) _sh_no_backend; return 1 ;;
+    *) _shipyard_no_backend; return 1 ;;
   esac
 }
 
@@ -160,7 +160,7 @@ shipyard_container() {
     tmux)   [ -n "${SHIPYARD_SESSION:-}" ]   && { printf '%s' "$SHIPYARD_SESSION"; return 0; } ;;
   esac
   local f v
-  if f=$(_sh_container_file 2>/dev/null) && [ -f "$f" ]; then
+  if f=$(_shipyard_container_file 2>/dev/null) && [ -f "$f" ]; then
     v=$(head -1 "$f" 2>/dev/null)
     [ -n "$v" ] && { printf '%s' "$v"; return 0; }
   fi
@@ -174,14 +174,14 @@ shipyard_container() {
 shipyard_container_pin() {
   local v f
   v=$(shipyard_container) || return 1
-  if f=$(_sh_container_file 2>/dev/null); then printf '%s\n' "$v" >"$f" 2>/dev/null || true; fi
+  if f=$(_shipyard_container_file 2>/dev/null); then printf '%s\n' "$v" >"$f" 2>/dev/null || true; fi
   printf '%s' "$v"
 }
 
 # shipyard_container_unpin — forget it, so the next launch derives a fresh one. Only correct
 # once nothing is left in the old container (shipyard-down.sh calls it then).
 shipyard_container_unpin() {
-  local f; f=$(_sh_container_file 2>/dev/null) && rm -f "$f" 2>/dev/null
+  local f; f=$(_shipyard_container_file 2>/dev/null) && rm -f "$f" 2>/dev/null
   return 0
 }
 
@@ -190,7 +190,7 @@ shipyard_container_kind() {
   case "$(shipyard_backend)" in
     agterm) printf 'workspace' ;;
     tmux)   printf 'session' ;;
-    *) _sh_no_backend; return 1 ;;
+    *) _shipyard_no_backend; return 1 ;;
   esac
 }
 
@@ -198,7 +198,7 @@ shipyard_container_kind() {
 shipyard_shq() { printf "'%s'" "$(printf '%s' "$1" | sed "s/'/'\\\\''/g")"; }
 
 # --- agterm internals ----------------------------------------------------------
-_sh_at_sessions() {   # one compact JSON object per session in our workspace
+_shipyard_at_sessions() {   # one compact JSON object per session in our workspace
   agtermctl tree --json 2>/dev/null \
     | jq -c --arg ws "$(shipyard_container)" \
         '.result.tree.workspaces[]? | select(.name==$ws) | .sessions[]?' 2>/dev/null
@@ -212,12 +212,12 @@ shipyard_target() {
   local slot="$1" v
   case "$(shipyard_backend)" in
     agterm)
-      v=$(_sh_at_sessions | jq -r --arg n "ship-$slot" 'select(.name==$n) | .id' 2>/dev/null | head -1) ;;
+      v=$(_shipyard_at_sessions | jq -r --arg n "ship-$slot" 'select(.name==$n) | .id' 2>/dev/null | head -1) ;;
     tmux)
       v=$(tmux list-windows -t "$(shipyard_container)" -F '#{window_index} #{window_name}' 2>/dev/null \
           | awk -v n="ship-$slot" '{ gsub(/[-*]$/,"",$2); if ($2==n) { print $1; exit } }')
       [ -n "$v" ] && v="$(shipyard_container):$v" ;;
-    *) _sh_no_backend; return 1 ;;
+    *) _shipyard_no_backend; return 1 ;;
   esac
   [ -n "$v" ] || return 1
   printf '%s' "$v"
@@ -230,7 +230,7 @@ shipyard_slot_addr() {
   case "$(shipyard_backend)" in
     agterm) printf '%s' "$(printf '%s' "$t" | cut -c1-8 | tr '[:upper:]' '[:lower:]')" ;;
     tmux)   printf '%s' "${t##*:}" ;;
-    *) _sh_no_backend; return 1 ;;
+    *) _shipyard_no_backend; return 1 ;;
   esac
 }
 
@@ -241,7 +241,7 @@ shipyard_where() {
   case "$(shipyard_backend)" in
     agterm) printf '%s/ship-%s' "$(shipyard_container)" "$1" ;;
     tmux)   printf '%s' "$t" ;;
-    *) _sh_no_backend; return 1 ;;
+    *) _shipyard_no_backend; return 1 ;;
   esac
 }
 
@@ -251,17 +251,17 @@ shipyard_peek_hint() {
   case "$(shipyard_backend)" in
     agterm) printf "agtermctl session text --target %s --lines 20" "$t" ;;
     tmux)   printf "tmux capture-pane -t '%s' -p | tail -20" "$t" ;;
-    *) _sh_no_backend; return 1 ;;
+    *) _shipyard_no_backend; return 1 ;;
   esac
 }
 
 # shipyard_slots — every slot that currently has a terminal.
 shipyard_slots() {
   case "$(shipyard_backend)" in
-    agterm) _sh_at_sessions | jq -r '.name // empty' 2>/dev/null | sed -n -E 's/^ship-(.+)$/\1/p' ;;
+    agterm) _shipyard_at_sessions | jq -r '.name // empty' 2>/dev/null | sed -n -E 's/^ship-(.+)$/\1/p' ;;
     tmux)   tmux list-windows -t "$(shipyard_container)" -F '#{window_name}' 2>/dev/null \
               | sed -E 's/[-*]$//' | sed -n -E 's/^ship-(.+)$/\1/p' ;;
-    *) _sh_no_backend; return 1 ;;
+    *) _shipyard_no_backend; return 1 ;;
   esac
 }
 
@@ -271,7 +271,7 @@ shipyard_capture() {
   case "$(shipyard_backend)" in
     agterm) agtermctl session text --target "$t" --json 2>/dev/null | jq -r '.result.text // ""' ;;
     tmux)   tmux capture-pane -t "$t" -p 2>/dev/null ;;
-    *) _sh_no_backend; return 1 ;;
+    *) _shipyard_no_backend; return 1 ;;
   esac
 }
 
@@ -282,7 +282,7 @@ shipyard_type() {
   case "$(shipyard_backend)" in
     agterm) printf '%s' "$2" | agtermctl session type --stdin --target "$t" >/dev/null 2>&1 ;;
     tmux)   tmux send-keys -t "$t" -l "$2" 2>/dev/null ;;
-    *) _sh_no_backend; return 1 ;;
+    *) _shipyard_no_backend; return 1 ;;
   esac
 }
 
@@ -295,7 +295,7 @@ shipyard_submit() {
     agterm) printf '\n' | agtermctl session type --stdin --target "$t" >/dev/null 2>&1 ;;
     tmux)   if [ "${2:-}" = alt ]; then tmux send-keys -t "$t" KPEnter 2>/dev/null
             else tmux send-keys -t "$t" Enter 2>/dev/null; fi ;;
-    *) _sh_no_backend; return 1 ;;
+    *) _shipyard_no_backend; return 1 ;;
   esac
 }
 
@@ -306,7 +306,7 @@ shipyard_esc() {
   case "$(shipyard_backend)" in
     agterm) printf '\033' | agtermctl session type --stdin --target "$t" >/dev/null 2>&1 ;;
     tmux)   tmux send-keys -t "$t" Escape 2>/dev/null ;;
-    *) _sh_no_backend; return 1 ;;
+    *) _shipyard_no_backend; return 1 ;;
   esac
 }
 
@@ -341,7 +341,7 @@ shipyard_launch() {
         "${scrub[@]}" tmux new-session -d -s "$(shipyard_container)" -n "ship-$slot" -c "$cwd" "$cmd" || return 1
       fi
       ;;
-    *) _sh_no_backend; return 1 ;;
+    *) _shipyard_no_backend; return 1 ;;
   esac
 }
 
@@ -351,7 +351,7 @@ shipyard_kill() {
   case "$(shipyard_backend)" in
     agterm) agtermctl session close --target "$t" >/dev/null ;;
     tmux)   tmux kill-window -t "$t" ;;
-    *) _sh_no_backend; return 1 ;;
+    *) _shipyard_no_backend; return 1 ;;
   esac
 }
 
@@ -361,7 +361,7 @@ shipyard_focus() {
   case "$(shipyard_backend)" in
     agterm) agtermctl session select --target "$t" >/dev/null ;;
     tmux)   tmux select-window -t "$t" ;;
-    *) _sh_no_backend; return 1 ;;
+    *) _shipyard_no_backend; return 1 ;;
   esac
 }
 
@@ -393,7 +393,7 @@ shipyard_container_prune() {
       # A tmux session is shared with the human's own windows, so it is never
       # pruned from here — tmux kills an empty session by itself anyway.
       return 0 ;;
-    *) _sh_no_backend; return 1 ;;
+    *) _shipyard_no_backend; return 1 ;;
   esac
 }
 

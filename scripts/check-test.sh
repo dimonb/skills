@@ -179,6 +179,71 @@ probe '-----BEGIN RSA PRIVATE KEY-----'     'private key header'
 probe "date TZ=Europe/Somewhere"            'hardcoded timezone'
 rmdir docs 2>/dev/null || true
 
+# 8 — the two assertions the gate is most easily made vacuous by, and which the review
+# noted were themselves untested: the leak check failing LOUDLY rather than open when it
+# cannot scan, and the dual-agent manifest/disk invariant.
+sed -i.bak 's/^deny=.\/Users/deny='"'"'(unclosed/' scripts/check.sh
+expect_fail "leak check fails LOUDLY on a broken pattern (not open)"
+mv scripts/check.sh.bak scripts/check.sh
+
+python3 - <<'PY'
+import json
+for p in (".claude-plugin/marketplace.json", ".agents/plugins/marketplace.json"):
+    d = json.load(open(p))
+    d["plugins"] = [e for e in d["plugins"] if e.get("name") != "shipyard"]
+    json.dump(d, open(p, "w"), indent=2)
+PY
+expect_fail "marketplace plugins do not match plugins/ on disk"
+git checkout -- .claude-plugin .agents/plugins
+
+# 9 — SKILL.md frontmatter: each field, and a skill tracked outside plugins/
+perl -0pi -e 's/^---\nname: ship\n/---\nnome: ship\n/' "$CORE"
+expect_fail "SKILL.md with no name:"
+git checkout -- "$CORE"
+
+perl -pi -e 's/^description: "Drive one change/descriptio: "Drive one change/' "$CORE"
+expect_fail "SKILL.md with no description:"
+git checkout -- "$CORE"
+
+# Outside .claude/skills and .agents/skills on purpose: placing it under either would trip
+# the "not a symlink" branch of check 5 first, and a probe that fires the wrong check
+# proves nothing about the one it names.
+mkdir -p docs/stray
+printf -- '---\nname: stray\ndescription: A stray skill outside plugins/.\n---\n' \
+  > docs/stray/SKILL.md
+expect_fail "SKILL.md outside plugins/"
+rm -rf docs/stray
+
+# 10 — a plugin with manifests but no skills tree, then one with an empty skills tree
+mkdir -p plugins/hollow/.claude-plugin plugins/hollow/.codex-plugin
+printf '{"name":"hollow","description":"d"}\n' > plugins/hollow/.claude-plugin/plugin.json
+printf '{"name":"hollow","description":"d","skills":"./skills/"}\n' > plugins/hollow/.codex-plugin/plugin.json
+expect_fail "plugin with no skills/ directory"
+mkdir -p plugins/hollow/skills
+expect_fail "plugin with an empty skills/ directory"
+rm -rf plugins/hollow
+
+# 11 — the remaining gate assertions, so that "every assertion" is literally true
+perl -0pi -e 's/\A---\n/name: ship\n/' "$CORE"
+expect_fail "SKILL.md with no frontmatter"
+git checkout -- "$CORE"
+
+mv .agents/plugins/marketplace.json "$SCRATCH/mp.json"
+expect_fail "missing marketplace manifest"
+mv "$SCRATCH/mp.json" .agents/plugins/marketplace.json
+
+printf 'oops' >> .agents/plugins/marketplace.json
+expect_fail "invalid JSON in a marketplace manifest"
+git checkout -- .agents/plugins/marketplace.json
+
+mv .agents/skills "$SCRATCH/agents-skills"
+expect_fail "missing project skills dir"
+mv "$SCRATCH/agents-skills" .agents/skills
+
+perl -pi -e 's/^  "state": "need-issue/  "sate": "need-issue/' "$CORE"
+expect_fail "state enum not found in the core skill"
+git checkout -- "$CORE"
+
 echo
 echo "assertions proven: $pass   not caught: $nocatch"
 [ "$nocatch" -eq 0 ] || exit 1

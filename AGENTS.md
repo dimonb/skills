@@ -51,6 +51,12 @@ The test to apply to every line before committing it: *would this still be corre
 else's repository, on someone else's machine, in another timezone, on the other forge?* If
 not, it is not generic, and it goes.
 
+Two things this rule does **not** forbid, because a published package cannot exist without
+them: the **publisher's identity** where a manifest requires it (`author`, `homepage`,
+`repository`, the marketplace name, the copyright line), and **this repository's own
+coordinates** in its install instructions. Those describe who ships the thing, not the
+machine it was built on. Everything else is in scope, including comments and examples.
+
 Machine- or person-specific configuration is an **environment variable, never a default**. A
 hardcoded default for a personal tool-config directory is both a leak and a functional bug:
 everyone else's run silently points at a directory that does not exist.
@@ -65,6 +71,80 @@ also publish it, which is the failure it was meant to prevent.
 
 So the gate catches the *shapes*, and rule zero — absolutely, by judgement, on every line —
 catches the names.
+
+## The two skills, and how they relate
+
+**`ship`** drives one change end to end: issue, branch, implementation, its own review
+battery, hand-off. It works on GitHub or GitLab and discovers the repo it is pointed at
+rather than assuming one.
+
+**`shipyard`** runs a fleet of `ship` sessions — one background terminal and one git worktree
+per change — and carries their escalations back to the human. It launches `/ship` and nothing
+else, so it is useless without it. In Claude Code that dependency is declared in its manifest
+(`"dependencies": ["ship"]`, which the CLI resolves); **Codex has no equivalent field**, so
+there it holds only because the docs say so.
+
+The **escalation mailbox** lives in the shared git directory, at `.git/ship-escalations/`, so
+the same path resolves from the main worktree and from every child worktree, and it is never
+committed. That directory and the `ship-<slot>` terminal and worktree prefix kept their names
+through the `sh` → `shipyard` rename **on purpose**: they are the protocol between a watcher
+and a `/ship` child, not this skill's own surface, and renaming either would orphan the
+mailbox of a run already in flight.
+
+## How work happens here
+
+One change is one issue, one branch, one pull request:
+
+```
+issue -> branch -> PR -> the review battery over the diff -> ready-to-merge -> a human merges
+```
+
+The review battery is `ship`'s own: read-only subagents on parallel axes, every blocking
+finding put to a skeptic that tries to refute it, and a bounded number of fix rounds. Nothing
+external clears a stage, and no stage waits on an actor nobody starts. What ends a change is a
+**human merging it** — a clean self-review is a better first pair of eyes, never a second one.
+
+Design discussion belongs in the issue and the PR description. There is no spec artifact
+(above).
+
+## How to add a skill
+
+A plugin may hold **several** skills, so a new skill usually joins an existing plugin rather
+than creating one. Either way:
+
+1. `plugins/<plugin>/skills/<skill>/SKILL.md` — frontmatter `name` must equal the directory
+   name. Scripts and `references/` live beside it.
+2. For a **new** plugin only: `plugins/<plugin>/.claude-plugin/plugin.json` and
+   `.codex-plugin/plugin.json`, both named after the directory; the Codex one needs
+   `"skills": "./skills/"`. Add a `README.md` — it travels with the plugin when installed.
+3. Both dogfooding symlinks: `.claude/skills/<skill>` and `.agents/skills/<skill>`, each
+   pointing at `../../plugins/<plugin>/skills/<skill>`.
+4. For a **new** plugin only: register it in **both** marketplace manifests —
+   `.claude-plugin/marketplace.json` and `.agents/plugins/marketplace.json`. The gate fails if
+   the two disagree or if either disagrees with `plugins/` on disk.
+5. `make check`.
+
+## How to verify a change for real
+
+```bash
+make check        # the gate
+make check-test   # proves the gate's assertions actually fail when violated
+```
+
+Then install it the way a user would, from this clone, in whichever agents the change affects
+(exact commands are in the README):
+
+```bash
+claude plugin marketplace add .  &&  claude plugin install <plugin>@dimonb-skills
+codex  plugin marketplace add .  &&  codex  plugin add     <plugin>@dimonb-skills
+```
+
+**Tear both down afterwards** — remove the plugin and then the marketplace in each CLI. A
+local marketplace left registered points at a working-tree path: it shadows the published
+version, and it breaks outright once the branch or worktree goes away.
+
+A claim that something installs, or that a command exists, is only worth making after running
+it. Say in the change which parts you verified by running and which you reasoned about.
 
 ## Rules
 
@@ -90,6 +170,14 @@ catches the names.
   structural cases; judgement covers the rest. **Every example is a placeholder** — an
   anecdote's lesson is generic, its identifiers are not, so keep the lesson and invent the
   identifiers.
+* **Rule zero also governs commit messages, PR and issue bodies, and comments** — not just
+  tracked files. A commit message cannot be scrubbed later without rewriting history, so a
+  private name used to *explain* removing a private name undoes the removal permanently. Name
+  the shape of the thing, never the thing.
+* **If the gate cannot check a rule, say so where the rule is stated.** A rule this file
+  states and the gate cannot see is carried by judgement alone; pretending otherwise is how a
+  green gate gets read as coverage. Adding a check is better than adding a caveat — and a new
+  check needs a probe in `check-test.sh`, or it may be vacuous and nothing will ever say so.
 * **A skill's documented behaviour must match the skill.** These files are read by agents as
   instructions, so a stale copy of a command, a flag, or a state name is not a documentation
   bug — it is a defect that makes an agent do the wrong thing confidently. Prefer pointing at

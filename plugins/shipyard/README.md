@@ -20,8 +20,8 @@ Run it from the **main worktree** of a git repo.
 
 `shipyard` launches exactly one thing: `/ship`. It is not a pipeline of its own and knows
 nothing about the stages. Install the [`ship`](../ship) plugin, or provide your own `/ship`
-skill. Neither Claude Code nor Codex can declare a plugin-to-plugin dependency, so this is a
-documented requirement rather than an enforced one.
+skill. In Claude Code the dependency is declared in this plugin's manifest, so the CLI
+resolves it; Codex has no equivalent field, so there it is a documented requirement only.
 
 ## What it actually gives you
 
@@ -104,19 +104,26 @@ What keeps that safe is the pairing, so do not break it:
 - **you** are the human it escalates to. If you launch children and stop reading the
   escalations, you have removed the only judgement in the loop.
 
-`SHIPYARD_DRY=1` prints the slot, the protocol, the propagated environment and the exact
-command a child would get, and starts nothing. Use it the first time.
+Run it with `SHIPYARD_DRY=1` the first time: that prints everything a child would get and
+starts nothing.
 
 ## Requirements
 
 - `git`, `bash`, `jq`, and either an agterm app or `tmux`.
 - A `/ship` skill in the repo — see above.
-- An agent CLI on `PATH` that the launcher can start a child with.
+- The **`claude` CLI** on `PATH`. The launcher starts each child with
+  `claude --permission-mode auto --remote-control …`, which is Claude-Code-specific: the
+  skill is installable in Codex, but the sessions it supervises are Claude Code sessions.
 - `gh` or `glab`, authenticated, for the status table's forge lookups. `GH_CONFIG_DIR` is
   honoured from your environment when set and otherwise left to `gh` — there is no default
   pointing at anyone's machine. `GITLAB_HOST` defaults to the host in the `origin` remote.
 
 Environment knobs: `SHIPYARD_BACKEND`, `SHIPYARD_WORKSPACE`, `SHIPYARD_SESSION`,
-`SHIPYARD_ENV_PASS`, `SHIPYARD_FORCE`, `SHIPYARD_DRY`, `SHIPYARD_STALL_SECS`,
-`SHIPYARD_TELL_MAXLINE`, `SHIPYARD_ASK_TIMEOUT`. `SHIPYARD_DRY=1` prints everything a child
-would get and starts nothing.
+`SHIPYARD_ENV_PASS`, `SHIPYARD_ENV_SCRUB`, `SHIPYARD_SLOT`, `SHIPYARD_FORCE`, `SHIPYARD_DRY`,
+`SHIPYARD_STALL_SECS`, `SHIPYARD_TELL_MAXLINE`, `SHIPYARD_ASK_TIMEOUT`.
+
+Two are worth knowing about: `SHIPYARD_ENV_PASS` extends the set of variables copied from your
+session into a child, and `SHIPYARD_ENV_SCRUB` overrides the set removed from it — the
+defaults strip this session's own identity, including the messaging socket, so a child cannot
+reach the parent's IPC channel. Override that one only if you know why. `SHIPYARD_DRY=1`
+prints everything a child would get and starts nothing.
