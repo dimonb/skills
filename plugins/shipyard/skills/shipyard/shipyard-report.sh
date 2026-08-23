@@ -113,9 +113,12 @@ mr_state() {
     # In a SUBSHELL cd, so gh resolves the repo from the remote itself. Deriving
     # owner/name with sed here needed a non-greedy quantifier BSD sed does not have,
     # and it failed loudly on every call while still appearing to work.
+    # GH_CONFIG_DIR is passed through only when the caller set it; with no default, gh uses
+    # its own. A hardcoded default here pointed gh at a config dir that exists on exactly one
+    # machine, so everywhere else gh ran unauthenticated, every state came back `?`, `?`
+    # counts as in-flight below, and the monitor loop could never terminate.
     st=$( (cd "$ROOT" 2>/dev/null && unset GITHUB_TOKEN \
-      && GH_CONFIG_DIR=${GH_CONFIG_DIR:-$HOME/.config/gh-dim0nb} \
-         gh pr view "$iid" --json state --jq '.state') 2>/dev/null)
+      && gh pr view "$iid" --json state --jq '.state') 2>/dev/null)
     case "$st" in
       OPEN) printf 'opened' ;; MERGED) printf 'merged' ;; CLOSED) printf 'closed' ;;
       *) printf '?' ;;
@@ -158,7 +161,7 @@ status_line() {
 
 if [ ${#SLOTS[@]} -eq 0 ]; then
   {
-    echo "### ship status — $(TZ=Europe/Moscow date '+%H:%M:%S MSK')"
+    echo "### ship status — $(date '+%H:%M:%S %Z')"
     echo
     echo "_no live ship terminals in $KIND \`$CONTAINER\` ($(shipyard_backend))_"
   } | cat
@@ -296,7 +299,7 @@ elif [ -n "$SIGFILE" ]; then
 fi
 
 {
-  echo "### ship status — $(TZ=Europe/Moscow date '+%H:%M:%S MSK') · $(shipyard_backend) $KIND \`$CONTAINER\`"
+  echo "### ship status — $(date '+%H:%M:%S %Z') · $(shipyard_backend) $KIND \`$CONTAINER\`"
   echo
   echo "| slot | MR | term | session | MR state / stage | esc | ctx | last line |"
   echo "|------|----|------|---------|------------------|-----|-----|-----------|"

@@ -67,11 +67,11 @@ FLAGS
                      instead of stopping. Default is a HARD stop.
 
 PIPELINE (one branch + one PR/MR per change)
-  need-issue -> issue-ready -> spec -> spec-review -> apply -> impl-review
+  need-issue -> issue-ready -> spec-review -> apply -> impl-review
              -> archive -> ready-to-merge -> done
                                           -> needs-human   (blockers survived the budget)
 
-  `spec`, `spec-review` and `archive` are SKIPPED in a repo that keeps no spec artifact
+  `spec-review` and `archive` are SKIPPED in a repo that keeps no spec artifact
   (§2.5). Stage labels on the PR/MR are decoration for the board, never a handshake.
 
 BEHAVIOR
@@ -334,7 +334,7 @@ run is in flight — exit.
   "spec_engine": "openspec|design-doc|none",
   "spec_artifact_prefix": "openspec/changes|docs/design|null",
   "check_cmd": "make check",
-  "state": "need-issue|issue-ready|spec|spec-review|apply|impl-review|archive|ready-to-merge|needs-human|done",
+  "state": "need-issue|issue-ready|spec-review|apply|impl-review|archive|ready-to-merge|needs-human|done",
   "phase": "working|waiting|done",
   "phase_started_at": "2026-08-23T10:00:00Z",
   "last_head_sha": "819f7d74...",
@@ -350,12 +350,12 @@ run is in flight — exit.
     "spec": {
       "head": "819f7d74...", "rounds": 1, "clean": true, "mode": "delta",
       "axes": ["spec-completeness", "spec-architecture", "spec-security", "spec-scope-fit"],
-      "security_engine": "ran|unavailable", "security_engine_reason": "…",
       "candidates": 7, "confirmed": 3, "fixed": 3, "optional": 4,
       "open": []
     },
     "impl": {
       "head": "a1b2c3d4...", "rounds": 2, "clean": false, "mode": "delta+sweep",
+      "security_engine": "ran|unavailable", "security_engine_reason": "…",
       "open": [
         { "id": "impl-2", "fp": "sha256(...)", "file": "lib/foo.ts", "line": 42,
           "severity": "blocking", "category": "correctness", "origin": "original",
@@ -429,6 +429,12 @@ about a path that no longer exists rots silently); and **concurrency, ordering a
 partial-failure cases the proposal states no behaviour for** — historically the most
 productive question to ask any spec.
 
+**End every charter — spec and implementation alike — with the anti-noise clause:** *return
+an EMPTY array if the change is clean on your axis, and say so. Inventing a nitpick to look
+diligent is a failure, not thoroughness.* The §5.4 normalization rules stop an invented
+finding from *gating*, but not from being raised, verified and acted on, and that churn is
+what the round budget is paying for.
+
 ### 5.3 Implementation-stage battery (5 axes, parallel)
 
 Context every axis gets: the diff against the base branch, the spec artifacts if any, the
@@ -438,7 +444,20 @@ rounds so it does not re-report them.
 | Axis | Charter |
 |---|---|
 | `impl-correctness` | The diff-scoped bug hunt: logic errors, off-by-one, null/undefined, async races, error paths, resource leaks, regressions in touched code. May invoke **`/code-review <effort>`** inside itself and fold its findings in. Every blocking claim needs a concrete failure scenario. |
-| `impl-security` | **Attempts `/security-review` inside itself and reports whether it actually ran** (see below), then covers the surface regardless: authorization on every new route and query, tenant/owner scoping, secrets in code, config, CI or logs, injection (SQL, command, template, prompt), SSRF and caller-supplied URLs, unsafe deserialization, new dependencies, data exposed to a client that should not see it. For an infrastructure diff also network exposure, policy gaps, role scope, and secret delivery. |
+| `impl-security` | **Attempts `/security-review` inside itself and reports whether it actually ran** (see below), then covers the surface regardless: authorization on every new route and query, tenant/owner scoping, secrets in code, config, CI or logs, injection (SQL, command, template, prompt), SSRF and caller-supplied URLs, unsafe deserialization, new dependencies, data exposed to a client that should not see it. For an infrastructure diff also network exposure, policy gaps, role scope, and secret delivery. Plus the three shapes below, which have each shipped for real. |
+
+Three defects that have actually reached a default branch, and are therefore named in the
+`impl-security` charter explicitly rather than left to the reviewer's imagination:
+
+- **A guard test that passes because the fake makes its own assertion true.** The test runs,
+  goes green, and proves nothing. Distinct from a runner that selects nothing (§2.4): here the
+  test genuinely executed.
+- **A green check that proves nothing because the mutation was never applied to the CALL
+  SITE.** The definition changed, the caller did not, and the check exercised the definition.
+- **A secret, token, credential or session file about to be committed.** This one is
+  **always blocking** — an explicit exception to every normalization rule in §5.4: it is
+  blocking with no failure scenario, at any confidence, and it may not be downgraded to
+  optional. Nothing else in this skill is unconditional.
 | `impl-spec-conformance` | Code against the spec artifacts, **both directions**: every requirement satisfied by the code; no shipped behaviour no requirement describes; no unchecked task whose work is genuinely absent. In a no-spec repo this axis becomes *code against the issue*: does the change do what was asked, no more and no less? |
 | `impl-conventions` | The repo's own conventions as discovered in §2.7 — style, structure, localization parity, formatting of user-facing text, dead or debug code, stray markers, commented-out blocks, and **no AI/assistant attribution anywhere in the diff**. |
 | `impl-gates-coverage` | What actually runs in CI versus what changed — is any part of this change unverified by construction? Does every component with a test entry point appear in the pipeline that should run it? Does the change need manual or browser verification? Are the discovered check commands sufficient evidence for *this* diff, and did they actually run green on *this* head? |
@@ -453,6 +472,11 @@ whole security surface above yourself — the axis still has to happen."* ship r
 value per round in the ledger and it decides the note's shape (§5.9). The measured failure
 this closes: one change where the engine died on its first invocation and **84 subsequent
 rounds carried no security analysis at all, with nothing anywhere saying so.**
+
+**`security_engine` is re-established from each round's axis report and NEVER inherited.** An
+engine can become available between rounds, or stop being — and a stale `unavailable` carried
+forward keeps a working engine switched off for the rest of the change, which is the same
+silence this clause exists to close.
 
 ### 5.4 Finding contract and normalization
 
@@ -544,8 +568,12 @@ round 3: …
 ```
 
 - **Round 1** runs the full battery for the stage.
-- **Round N > 1 is scoped**: the fix diff since the last round (pass it to an engine as a
-  commit range), plus a regression re-check of every finding confirmed earlier, plus any
+- **Round N > 1 is scoped**: the fix diff since the last round — pass it to an engine as a
+  commit range (`--range <last-round-sha>..HEAD`, undocumented but working; **the engine
+  echoes the range back, so read the scope out of the result and confirm it took**). A range
+  flag that is silently ignored reverts every later round to a full-diff review while you
+  believe you scoped, which is how the unscoped 22.1 h path gets paid for by accident. Plus a
+  regression re-check of every finding confirmed earlier, plus any
   axis whose sweep trigger newly fired (§5.8). Do not re-run the whole battery over an
   unchanged region: it costs the same and finds the same nothing. The measured spread is
   roughly fourfold — the one run that scoped its engine calls spent 1.9 h over 27 rounds,
@@ -910,8 +938,11 @@ explicitly if the reference did not do it), then `state=done`, stop the watch, s
 nothing more.
 
 If the forge refuses the merge because the **project** requires approvals, do NOT attempt to
-self-approve or work around it: report it, post a short comment asking for the approval, and
-keep polling. That is a project-configuration gate, not ship's own.
+self-approve or work around it — and do NOT sit there polling. That is a project-configuration
+gate that only a person can clear, so it is the same terminal path as any blocker ship will
+not fix: report it, post one comment asking for the approval, set `state=needs-human`, and
+schedule nothing more. Polling an approval that reviewer-equals-author can never produce is
+the infinite wait §10 exists to rule out, and it presents as a healthy green board.
 
 ### 7.H — `needs-human`
 

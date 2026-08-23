@@ -95,8 +95,8 @@ shipyard_json_set() {
 #
 # This is not hypothetical and it is not only an operator error: it has eaten a
 # term out of a child's escalation ("the two overlapped and  could not dedupe
-# them") and out of a parent's decision ("#429 IS THE TRAP.  inside a STEP is
-# rejected"). Both read as merely clumsy rather than corrupted, which is what
+# them") and out of a parent's decision ("#N IS THE TRAP.  inside a transaction
+# is rejected"). Both read as merely clumsy rather than corrupted, which is what
 # makes it expensive.
 #
 # `shipyard_payload` gives every caller an input channel that no shell touches:

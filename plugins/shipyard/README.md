@@ -89,11 +89,32 @@ The escalation mailbox directory (`ship-escalations`) and the terminal/worktree 
 parent watcher and a `/ship` child, and renaming either would orphan the mailbox of a run
 already in flight.
 
+## What a child is allowed to do — read this before your first run
+
+A child is an **autonomous agent session with tool permissions auto-granted**, working in a
+git worktree of your repository and pushing to your forge, with no human in its terminal. It
+is launched with `--permission-mode auto` deliberately: a background session that stops to
+ask permission is a background session that sits idle until someone notices.
+
+What keeps that safe is the pairing, so do not break it:
+
+- the child runs `/ship`, which escalates anything risky or irreversible instead of deciding
+  — and `ship`'s own guardrails forbid force-pushing, history rewriting, branch deletion
+  beyond the merge convention, and merging without an explicit policy or go-ahead;
+- **you** are the human it escalates to. If you launch children and stop reading the
+  escalations, you have removed the only judgement in the loop.
+
+`SHIPYARD_DRY=1` prints the slot, the protocol, the propagated environment and the exact
+command a child would get, and starts nothing. Use it the first time.
+
 ## Requirements
 
 - `git`, `bash`, `jq`, and either an agterm app or `tmux`.
 - A `/ship` skill in the repo — see above.
 - An agent CLI on `PATH` that the launcher can start a child with.
+- `gh` or `glab`, authenticated, for the status table's forge lookups. `GH_CONFIG_DIR` is
+  honoured from your environment when set and otherwise left to `gh` — there is no default
+  pointing at anyone's machine. `GITLAB_HOST` defaults to the host in the `origin` remote.
 
 Environment knobs: `SHIPYARD_BACKEND`, `SHIPYARD_WORKSPACE`, `SHIPYARD_SESSION`,
 `SHIPYARD_ENV_PASS`, `SHIPYARD_FORCE`, `SHIPYARD_DRY`, `SHIPYARD_STALL_SECS`,

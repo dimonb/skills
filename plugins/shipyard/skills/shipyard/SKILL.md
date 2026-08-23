@@ -52,9 +52,9 @@ stops with an error naming both — it has no third way to reach a child, and a 
 ### Which workspace children land in
 
 Children go **beside the work**: the agterm workspace the parent watcher is sitting in,
-plus `-ai`. Launch from workspace `chessid` and they appear in `chessid-ai`. The suffix
+plus `-ai`. Launch from workspace `myproject` and they appear in `myproject-ai`. The suffix
 keeps them out of the workspace you keep your own tabs in, and it never stacks — launching
-from inside `chessid-ai` (a child starting a sibling) stays `chessid-ai`.
+from inside `myproject-ai` (a child starting a sibling) stays `myproject-ai`.
 
 Resolution order, first hit wins:
 
@@ -164,6 +164,15 @@ claude -w ship-<slot> --effort max -n ship-<slot> --permission-mode auto \
   '/ship <target> [flags]'
 ```
 
+**`--permission-mode auto` is deliberate, and it is the child's whole risk posture.** A
+background session that stops to ask permission is a background session that sits idle until
+someone notices, so a child gets its tools auto-granted: it works in a worktree of the repo
+and pushes to the forge with no human in its terminal. What makes that acceptable is the
+pairing — `/ship` escalates anything risky or irreversible rather than deciding, and the
+parent watcher is the human it escalates to. Launching children and then not reading their
+escalations removes the only judgement in the loop. Say this out loud to anyone you set this
+up for; it is the one property of the skill that is not recoverable after the fact.
+
 `SHIPYARD_DRY=1` prints the slot, the protocol path, the propagated env and the whole launcher
 without starting anything — use it when you are unsure what a child will get.
 
@@ -249,9 +258,9 @@ it runs every review pass itself, as subagents, so a review stage is WORK, not a
 nothing external needs launching, ever.
 
 **Do not trust this paragraph for the state names.** The bundled `/ship` uses
-`need-issue`, `issue-ready`, `spec`, `spec-review`, `apply`, `impl-review`, `archive`,
-`ready-to-merge`, `needs-human`, `done` — with the spec and archive stages skipped in a
-repo that keeps no spec artifact. But a repo may carry its own `/ship`, and this file is a
+`need-issue`, `issue-ready`, `spec-review`, `apply`, `impl-review`, `archive`,
+`ready-to-merge`, `needs-human`, `done` — with the spec-review and archive stages skipped in
+a repo that keeps no spec artifact. But a repo may carry its own `/ship`, and this file is a
 copy of nothing: **read the state enum in the `/ship` you are actually running.**
 
 `ready-to-merge` resolves itself only where repo policy lets ship merge; where it does not,
@@ -294,7 +303,7 @@ When an escalation arrives:
    instead — `@<path>`, or `@-` for stdin:**
 
    ```bash
-   bash <SKILL>/shipyard-answer.sh <id> @/tmp/decision.md
+   bash <SKILL>/shipyard-answer.sh <id> @"$BODY"  # BODY=$(mktemp)
    ```
 
    The payload is a shell ARGUMENT, so your own shell expands it before the script runs:
@@ -303,7 +312,7 @@ When an escalation arrives:
    nothing. The record is then written and looks fine, minus the words that mattered.
    This is not theoretical: it has eaten a term out of a child's escalation ("the two
    overlapped and&nbsp;&nbsp;could not dedupe them") and out of a parent's decision
-   ("#429 IS THE TRAP.&nbsp;&nbsp;inside a STEP is rejected by DBOS"). Both read as merely
+   ("#N IS THE TRAP.&nbsp;&nbsp;inside a transaction is rejected"). Both read as merely
    clumsy rather than corrupted, which is exactly what makes it expensive to notice.
 
    `shipyard-tell.sh` takes `@file` / `@-` too, and the child side has `--context-file` /
@@ -417,7 +426,7 @@ INTERRUPT while one is running — it would kill the work in flight. Re-run when
 Exit 4 means no `Compacted` marker appeared before the timeout — the session is past the
 point of accepting even a slash command. Then recover the way a dead child is recovered: a
 FRESH session on the SAME worktree plus a written handoff file. Check `git status` and
-`git log origin/main..HEAD` there first — a stalled child has usually committed and pushed
+`git log origin/<default-branch>..HEAD` there first — a stalled child has usually committed and pushed
 more than its last notice reported, so nothing is lost. **`/clear` is never the answer** —
 it throws away exactly what you are trying to keep.
 
@@ -448,7 +457,7 @@ what to look at; `--force` overrides both. It removes the worktree with a DOUBLE
 for dirty, one for locked — a single `-f` fails on a lock with a message that reads like a
 permissions problem), prunes, and on agterm drops the `-ai` workspace — plus its pinned
 name — once it holds no ship sessions. The change's feature branch can go afterwards
-(`git branch -D <branch>` — it is already in origin's default branch).
+(`git branch -d <branch>` — `-d` refuses an unmerged branch, which is what you want after a CLOSE rather than a merge).
 
 ## What the table shows
 

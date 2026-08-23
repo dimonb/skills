@@ -9,6 +9,12 @@ Everything here uses `glab`. Substitute the discovered coordinates for `$HOST` a
 (the URL-encoded `namespace/path`, or the numeric project id — the numeric id is the more
 robust key in API paths) and the merge-request iid for `IID`.
 
+**`$BODY` below always means a freshly created temporary file — `BODY=$(mktemp)` — never a
+fixed path.** A predictable path like `/tmp/mr-body.md` can be pre-created by another local
+user as a symlink, so the write lands somewhere else, or left writable and its content
+swapped between the write and the read, which publishes somebody else's text to the forge
+under this account.
+
 ---
 
 ## 1. Environment guard — in EVERY shell block
@@ -48,7 +54,7 @@ good day and silently on a bad one, so verify rather than assume:
   `glab api` *does* accept: `-F/--field`, `-H/--header`, `-i/--include`, `--input`,
   `-X/--method`, `--output`, `--paginate`, `-f/--raw-field`, `--silent`, `--hostname`.
 - **`glab mr create` has NO `--description-file`** — it errors with `Unknown flag`.
-  `-d/--description` takes the text itself, so pass `-d "$(cat /tmp/mr-body.md)"`, which
+  `-d/--description` takes the text itself, so pass `-d "$(cat "$BODY")"`, which
   keeps real newlines and does not re-interpret backticks from the body. Write the body to a
   file first; **never** an escaped `\n` in a quoted argument.
 - **`--yes` skips the interactive confirmation** on `mr create` and `mr merge`.
@@ -75,7 +81,7 @@ unset OAUTH_TOKEN; export GITLAB_HOST=<host>
 glab api "projects/$PROJECT/issues/N"
 glab issue list --search "<keywords>"
 glab issue create --title "<title>" --assignee "$ME" --label "<kind>" \
-  -d "$(cat /tmp/issue-body.md)" --yes
+  -d "$(cat "$BODY")" --yes
 glab api --method PUT "projects/$PROJECT/issues/N" -f assignee_ids="<id>"
 ```
 
@@ -108,7 +114,7 @@ glab api "projects/$PROJECT/merge_requests?source_branch=<branch>&state=opened"
 # create — -d takes the TEXT (no --description-file on 1.90; §3)
 glab mr create --source-branch "<branch>" --target-branch <base> \
   --title "<title>" --assignee "$ME" --label "<label>" \
-  -d "$(cat /tmp/mr-body.md)" --yes
+  -d "$(cat "$BODY")" --yes
 
 # claim the MR we drive (idempotent)
 glab mr update IID --assignee "$ME"
@@ -137,7 +143,7 @@ unset OAUTH_TOKEN; export GITLAB_HOST=<host>
 
 # our own review record (core §5.9) — body through a file
 glab api --method POST "projects/$PROJECT/merge_requests/IID/notes" \
-  -f "body=$(cat /tmp/review-record.md)"
+  -f "body=$(cat "$BODY")"
 
 # every discussion, flattened: who opened it, resolvable, resolved
 glab api --paginate "projects/$PROJECT/merge_requests/IID/discussions?per_page=100" \
@@ -151,7 +157,7 @@ glab api --paginate "projects/$PROJECT/merge_requests/IID/discussions?per_page=1
 # reply INTO someone else's discussion (never resolve it)
 glab api --method POST \
   "projects/$PROJECT/merge_requests/IID/discussions/DISCUSSION_ID/notes" \
-  -f "body=$(cat /tmp/reply.md)"
+  -f "body=$(cat "$BODY")"
 ```
 
 - **Thread ownership is `notes[0].author.username`** — the opener. Reply with the fix or the

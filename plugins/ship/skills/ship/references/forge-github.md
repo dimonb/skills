@@ -8,6 +8,12 @@ and a second copy of an enum is a copy that rots.
 Everything here uses `gh`. Substitute the discovered coordinates for `$REPO`
 (`<owner>/<repo>`), `$OWNER`, `$NAME` and `N`.
 
+**`$BODY` below always means a freshly created temporary file — `BODY=$(mktemp)` — never a
+fixed path.** A predictable path like `/tmp/pr-body.md` can be pre-created by another local
+user as a symlink, so the write lands somewhere else, or left writable and its content
+swapped between the write and the `--body-file` read, which publishes somebody else's text
+to the forge under this account.
+
 ---
 
 ## 1. Environment guard — in EVERY shell block
@@ -68,7 +74,7 @@ gh label create "<name>" --repo "$REPO" --color RRGGBB --description "<what it m
 
 # create (body via file — NEVER an escaped \n in a quoted arg; it publishes literally)
 gh issue create --repo "$REPO" --title "<title>" --assignee "@me" \
-  --label "<kind>" --label "<area>" --body-file /tmp/issue-body.md
+  --label "<kind>" --label "<area>" --body-file "$BODY"
 
 gh issue edit N --repo "$REPO" --add-assignee "@me"
 gh issue close N --repo "$REPO"
@@ -110,7 +116,7 @@ gh pr list --repo "$REPO" --head "<branch>" --state open --json number,url
 # create — body via file, issue reference inside it
 gh pr create --repo "$REPO" --base <base> --head "<branch>" \
   --title "<title>" --assignee "@me" \
-  --label "<kind>" --label "<area>" --body-file /tmp/pr-body.md
+  --label "<kind>" --label "<area>" --body-file "$BODY"
 
 # labels (board decoration only — they gate nothing)
 gh pr edit N --repo "$REPO" --remove-label "<old>" --add-label "<new>"
@@ -136,7 +142,7 @@ the merge does not close it early.
 unset GITHUB_TOKEN; export REPO=<owner>/<repo>
 
 # our own review record (core §5.9) — body via file
-gh pr comment N --repo "$REPO" --body-file /tmp/review-record.md
+gh pr comment N --repo "$REPO" --body-file "$BODY"
 
 # every review thread, with the author of its FIRST comment (= its owner)
 gh api graphql -f query='
@@ -154,7 +160,7 @@ gh api --paginate "repos/$REPO/issues/N/comments" \
 
 # reply INTO someone else's thread (never resolve it)
 gh api --method POST "repos/$REPO/pulls/N/comments/COMMENT_ID/replies" \
-  -f body="$(cat /tmp/reply.md)"
+  -f body="$(cat "$BODY")"
 
 # submitted reviews
 gh api "repos/$REPO/pulls/N/reviews" --jq '.[] | {user: .user.login, state}'

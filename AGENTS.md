@@ -41,6 +41,27 @@ what the issue asked for.
 
 Do not introduce a spec-artifact stage here without changing this section first.
 
+## Rule zero: everything here is generic
+
+**This repository ships generic skills.** Nothing tied to one machine, one company, one
+project, one forge or one person belongs in a tracked file — not as a value, not as a
+default, not as an example, not in a comment, and not hashed or split up to hide it.
+
+The test to apply to every line before committing it: *would this still be correct in someone
+else's repository, on someone else's machine, in another timezone, on the other forge?* If
+not, it is not generic, and it goes.
+
+Machine- or person-specific configuration is an **optional local file or an environment
+variable, never a default**. Two consequences that have already bitten:
+
+* a hardcoded default for a personal tool-config directory is both a leak and a functional
+  bug — everyone else's run silently points at a directory that does not exist;
+* the leak gate's own pattern list is subject to this rule. It carries only *structural*
+  patterns (absolute home paths, personal config-dir shapes, e-mail addresses, token and key
+  shapes), which are wrong in anybody's repo. Names private to one person or project go in
+  `scripts/denylist.local`, which is gitignored, optional, one extended-regex per line, and
+  which `make check` reports loading so reduced coverage is stated rather than silent.
+
 ## Rules
 
 * **Never commit or push to `main`** except docs-only changes (`README.md`, `AGENTS.md`,
@@ -59,10 +80,12 @@ Do not introduce a spec-artifact stage here without changing this section first.
   all outward-facing text fresh, in a neutral voice.
 * **English everywhere** — issues, pull requests, comments, code, docs. Multiline bodies go
   through a file, never an escaped newline inside a quoted argument.
-* **Nothing machine-specific or company-private in tracked files.** No absolute home paths,
-  no personal e-mail addresses, no internal hostnames, no private project names or slugs, no
-  internal issue or merge-request numbers, no tokens or credentials of any kind. `make check`
-  enforces the recognisable cases; judgement covers the rest. Every example is a placeholder.
+* **Rule zero, restated as a commit rule:** no absolute home paths, no personal e-mail
+  addresses, no internal hostnames, no private project names or slugs, no internal issue or
+  merge-request numbers, no tokens or credentials of any kind. `make check` enforces the
+  structural cases; judgement covers the rest. **Every example is a placeholder** — an
+  anecdote's lesson is generic, its identifiers are not, so keep the lesson and invent the
+  identifiers.
 * **A skill's documented behaviour must match the skill.** These files are read by agents as
   instructions, so a stale copy of a command, a flag, or a state name is not a documentation
   bug — it is a defect that makes an agent do the wrong thing confidently. Prefer pointing at

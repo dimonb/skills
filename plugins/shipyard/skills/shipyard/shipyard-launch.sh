@@ -180,10 +180,11 @@ PROTO="$MB/protocol-$SLOT.md"
   echo '  corruption, so nobody catches it. Same for $(...) and $VAR.'
   echo
   echo '  ```bash'
-  echo "  cat > /tmp/ctx.md <<'CTX'"
+  echo '  CTX=$(mktemp)          # a fresh temp file, never a fixed /tmp path'
+  echo "  cat > \"\$CTX\" <<'EOCTX'"
   echo '  ...options, trade-offs and your recommendation, with `code` intact...'
-  echo '  CTX'
-  echo "  bash $DIR/shipyard-ask.sh --kind decision '<the decision>' --context-file /tmp/ctx.md --timeout 540"
+  echo '  EOCTX'
+  echo "  bash $DIR/shipyard-ask.sh --kind decision '<the decision>' --context-file \"\$CTX\" --timeout 540"
   echo '  ```'
   echo "* Ambiguous, conflicting or missing requirements and acceptance criteria — including"
   echo "  the shape of the change itself when you were started from a free-text idea and"

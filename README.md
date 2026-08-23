@@ -128,12 +128,37 @@ make check        # the gate — must be green before every commit
 make check-test   # proves each of the gate's assertions actually fails when violated
 ```
 
+The gate checks that every shell script parses; that every `SKILL.md` has frontmatter whose
+`name` matches its directory; that each plugin has both manifests, valid and named after its
+directory, with at least one skill; that marketplace entries resolve and that **both**
+manifests offer the same plugins as `plugins/` on disk; that every packaged skill is
+symlinked for both agents, with the link resolving inside `plugins/` and no second copy of
+any `SKILL.md`; that no per-forge reference file carries a copy of the pipeline state enum
+and no state exists without a handler; and that no non-generic string is present.
+
 `make check-test` exists because a gate that has never failed can be vacuous and look
-identical to one that works. It injects one violation per assertion and requires a failure.
-Writing it found three real bugs on the first run — including a broken symlink that slipped
-past an `[ -e ]` test, and a denylist that never saw untracked files.
+identical to one that works. It injects one violation per assertion — 26 of them — and
+requires a failure each time. Writing and re-running it has found five real bugs so far,
+including a broken symlink that slipped past an `[ -e ]` test, a leak check that never saw
+untracked files, and a state/handler check that passed because `spec` is a prefix of
+`spec-review`.
+
+### The leak check and `scripts/denylist.local`
+
+The tracked gate carries only **structural** patterns — absolute home paths, personal
+config-directory shapes, e-mail addresses, token and key shapes, hardcoded timezones — the
+things that are wrong in anybody's repository. Names private to one person, company or
+project are not this repo's business and appear in no tracked file. If you have some you want
+caught, put them in `scripts/denylist.local`: gitignored, optional, one extended regular
+expression per line, `#` for comments. `make check` prints whether it loaded, so reduced
+coverage is stated rather than silent.
+
+One trap if you add patterns: **`git grep -E` does not support `\b`**. It matches a literal
+`b`, so `\bfoo\b` matches "bfoob" and *not* "foo" — silently inverting your pattern. Plain
+`grep -E` does support it, which is exactly how this bites. Write `(^|[^a-z])foo([^a-z]|$)`.
 
 [`AGENTS.md`](AGENTS.md) is the law for this repo and is binding on agents and humans alike.
+Its first rule is that everything here is generic.
 
 ## Licence
 

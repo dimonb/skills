@@ -2,30 +2,52 @@
 # Prove every assertion in scripts/check.sh actually fires.
 #
 # A gate that has never failed is decoration: it can be vacuous — a pattern that matches
-# nothing, a loop that iterates over nothing, a test skipped by a guard above it — and look
-# exactly like a gate that works. So each case here injects ONE violation, requires the gate
-# to fail, and restores. Both of the bugs this file was written to catch were real: a broken
-# symlink slipped past an `[ -e ]` guard, and the denylist never saw an untracked file.
+# nothing, a loop over an empty glob, an unanchored match that any neighbouring line
+# satisfies — and look exactly like a gate that works. So each case here injects ONE
+# violation, requires the gate to fail, and restores.
 #
-# Requires a clean working tree (it restores with `git checkout --`). Run: make check-test
+# Every bug this file has caught was real:
+#   * a broken symlink slipped past an `[ -e ]` guard (-e follows the link);
+#   * the leak check never saw untracked files (plain `git grep` is tracked-only);
+#   * its own restore trap was installed before the dirty-tree guard, so refusing to run
+#     still ran `git checkout --` and discarded uncommitted work;
+#   * the state/handler check matched `spec` against the `spec-review` heading, so it passed
+#     while the very defect it was written for was present.
+#
+# Requires a clean working tree, INCLUDING untracked files under the paths it restores:
+# the restore uses `git checkout --`, which cannot bring back a file that was never in git.
+# Run: make check-test
 set -uo pipefail
 cd "$(dirname "$0")/.."
 
-# The dirty-tree guard comes FIRST, and the restore trap is installed only after it
-# passes. Installing the trap earlier makes the guard's own early exit run the restore —
-# which is `git checkout --`, so refusing to run would DISCARD the very uncommitted work
-# the guard exists to protect. That happened once; hence the ordering and this comment.
-if ! git diff --quiet || ! git diff --cached --quiet; then
-  echo "refusing to run: working tree is dirty (this test restores files with git checkout)" >&2
+CORE=plugins/ship/skills/ship/SKILL.md
+GUARDED='.claude .agents plugins scripts .claude-plugin'
+
+# The guard comes FIRST and the trap is installed only after it passes. Installing the trap
+# earlier makes the guard's own early exit run the restore, which would discard exactly the
+# uncommitted work the guard exists to protect. `--untracked-files=all` is the other half:
+# `git diff` cannot see an untracked file, so without it a local unversioned skill under
+# .claude/skills is invisible here and destroyed by the restore below.
+# shellcheck disable=SC2086
+dirty=$(git status --porcelain --untracked-files=all -- $GUARDED)
+if [ -n "$dirty" ]; then
+  echo "refusing to run: uncommitted or untracked changes under $GUARDED" >&2
+  printf '%s\n' "$dirty" >&2
+  echo "this test restores with 'git checkout --', which cannot recover untracked files" >&2
   exit 2
 fi
 
 SCRATCH=$(mktemp -d)
 restore() {
-  git checkout -- plugins .claude-plugin .agents scripts 2>/dev/null || true
+  # shellcheck disable=SC2086
+  git checkout -- $GUARDED 2>/dev/null || true
+  # Only the entries this test replaces, never a whole directory.
+  for s in .claude/skills .agents/skills; do
+    rm -rf "$s/ship" "$s/shipyard" 2>/dev/null || true
+  done
+  # shellcheck disable=SC2086
+  git checkout -- $GUARDED 2>/dev/null || true
   rm -rf docs/_probe.md "$SCRATCH" 2>/dev/null || true
-  rm -rf .claude/skills .agents/skills 2>/dev/null || true
-  git checkout -- .claude .agents 2>/dev/null || true
   rmdir docs 2>/dev/null || true
 }
 trap restore EXIT
@@ -35,7 +57,7 @@ expect_fail() {
   if make check >"$SCRATCH/out" 2>&1; then
     echo "NOT CAUGHT: $1"; nocatch=$((nocatch+1))
   else
-    echo "caught:     $1   ->  $(grep -m1 '^FAIL' "$SCRATCH/out" | cut -c1-84)"
+    echo "caught:     $1   ->  $(grep -m1 '^FAIL' "$SCRATCH/out" | cut -c1-80)"
     pass=$((pass+1))
   fi
 }
@@ -47,7 +69,7 @@ else
   cat "$SCRATCH/out"; exit 1
 fi
 
-link() { ln -sfn "../../plugins/$1/skills/$1" ".claude/skills/$1"; }
+link() { ln -sfn "../../plugins/$1/skills/$1" "$2/$1"; }
 
 # 1 — shell syntax
 printf 'if true; then\n' >> plugins/shipyard/skills/shipyard/shipyard-lib.sh
@@ -55,9 +77,9 @@ expect_fail "broken shell syntax"
 git checkout -- plugins/shipyard/skills/shipyard/shipyard-lib.sh
 
 # 2 — a skill's frontmatter name disagrees with its directory
-perl -pi -e 's/^name: ship$/name: shipp/' plugins/ship/skills/ship/SKILL.md
+perl -pi -e 's/^name: ship$/name: shipp/' "$CORE"
 expect_fail "skill name != directory"
-git checkout -- plugins/ship/skills/ship/SKILL.md
+git checkout -- "$CORE"
 
 # 3a — one of the two plugin manifests is missing
 rm plugins/ship/.codex-plugin/plugin.json
@@ -74,44 +96,95 @@ printf 'oops' >> plugins/ship/.claude-plugin/plugin.json
 expect_fail "invalid JSON in a plugin manifest"
 git checkout -- plugins/ship/.claude-plugin/plugin.json
 
-# 4 — a marketplace entry pointing at nothing
-perl -pi -e 's{"source": "./plugins/ship"}{"source": "./plugins/nope"}' .claude-plugin/marketplace.json
+# 4a — a marketplace entry pointing at a directory that does not exist, with the basename
+# still matching the entry name, so ONLY the existence branch can fire.
+perl -pi -e 's{"source": "./plugins/ship"}{"source": "./plugins/gone/ship"}' .claude-plugin/marketplace.json
 expect_fail "marketplace entry -> missing directory"
 git checkout -- .claude-plugin/marketplace.json
+
+# 4b — an entry pointing at a real directory under a DIFFERENT name, so only the
+# name-agreement branch can fire. Split from 4a because one probe tripping both branches
+# proves neither: deleting either check would leave the assertion passing.
+perl -pi -e 's{"source": "./plugins/ship"}{"source": "./plugins/shipyard"}' .claude-plugin/marketplace.json
+expect_fail "marketplace entry -> differently-named directory"
+git checkout -- .claude-plugin/marketplace.json
+
+# 4c — the two marketplace manifests disagree about which plugins exist. Drop an entry
+# entirely rather than renaming one: a rename also trips the per-entry name check, and a
+# probe that fires two checks at once proves neither.
+python3 - <<'PY'
+import json
+p = ".agents/plugins/marketplace.json"
+d = json.load(open(p))
+d["plugins"] = d["plugins"][:1]
+json.dump(d, open(p, "w"), indent=2)
+PY
+expect_fail "the two marketplace manifests list different plugins"
+git checkout -- .agents/plugins/marketplace.json
 
 # 5a — a real file where a symlink belongs, i.e. a second copy of a SKILL.md
 rm .claude/skills/ship
 mkdir -p .claude/skills/ship
-cp plugins/ship/skills/ship/SKILL.md .claude/skills/ship/SKILL.md
+cp "$CORE" .claude/skills/ship/SKILL.md
 expect_fail "second copy of a SKILL.md instead of a symlink"
-rm -rf .claude/skills/ship; link ship
+rm -rf .claude/skills/ship; link ship .claude/skills
 
 # 5b — a broken symlink. `[ -e ]` follows the link, so this is the case that once slipped.
 ln -sfn ../../plugins/ship/skills/gone .claude/skills/ship
 expect_fail "broken dogfooding symlink"
-link ship
+link ship .claude/skills
 
-# 6 — a pipeline state name copied into a per-forge reference file
+# 5c — a symlink that resolves OUTSIDE the repo but whose text contains `/plugins/`, which a
+# substring check would accept. An agent opened in a clone would read that as instructions.
+mkdir -p "$SCRATCH/plugins/ship/skills/ship"
+cp "$CORE" "$SCRATCH/plugins/ship/skills/ship/SKILL.md"
+ln -sfn "$SCRATCH/plugins/ship/skills/ship" .claude/skills/ship
+expect_fail "symlink target outside the repo"
+link ship .claude/skills
+
+# 5d — a packaged skill with no symlink at all
+rm .agents/skills/shipyard
+expect_fail "packaged skill with no dogfooding symlink"
+link shipyard .agents/skills
+
+# 6a — a pipeline state name copied into a per-forge reference file
 printf '\nStages: need-issue then ready-to-merge.\n' >> plugins/ship/skills/ship/references/forge-github.md
-expect_fail "pipeline state enum copied into a forge reference"
+expect_fail "state enum copied into a forge reference"
 git checkout -- plugins/ship/skills/ship/references/forge-github.md
 
-# 7 — the denylist, one probe per class. The probe file is UNTRACKED on purpose: that is
-# the state a leak is in when `make check` runs just before `git add`.
+# 6b — a state in the enum with no handler. `spec` is the real historical case: it is a
+# PREFIX of `spec-review`, so an unanchored check passes and proves nothing.
+perl -pi -e 's{"state": "need-issue\|issue-ready\|}{"state": "need-issue|issue-ready|spec|}' "$CORE"
+expect_fail "enum state with no §7 handler"
+git checkout -- "$CORE"
+
+# 7 — the leak check: ONE probe per structural pattern, so a typo in any single alternative
+# cannot ship silently. The probe file is UNTRACKED on purpose: that is the state a leak is
+# in when `make check` runs just before `git add`. Every fixture is invented.
 mkdir -p docs
 probe() {
   printf '%s\n' "$1" > docs/_probe.md
-  expect_fail "denylist: $2"
+  expect_fail "leak: $2"
   rm -f docs/_probe.md
 }
-probe '/Users/someone/secret/path'       'absolute home path (macOS)'
-probe '/home/someone/secret/path'        'absolute home path (Linux)'
-probe 'someone@example-corp.com'         'e-mail address'
-probe 'ci.internal.finlab'               'internal hostname fragment'
-probe 'the tillabuy migration'           'private project slug'
-probe 'glpat-AbCdEfGhIjKlMnOpQrSt'       'GitLab token'
-probe 'ghp_AbCdEfGhIjKlMnOpQrStUvWx'     'GitHub token'
-probe '-----BEGIN RSA PRIVATE KEY-----'  'private key header'
+probe '/Users/someone/secret/path'          'absolute home path (macOS)'
+probe '/home/someone/secret/path'           'absolute home path (Linux)'
+probe 'someone@example.invalid'             'e-mail address'
+probe 'run ~/.local/bin/mytool'             'personal bin path'
+probe 'CFG=$HOME/.config/gh-someone'        'personal tool config dir'
+probe 'ghp_AbCdEfGhIjKlMnOpQrStUvWx'        'GitHub token'
+probe 'glpat-AbCdEfGhIjKlMnOpQrSt'          'GitLab token'
+probe 'xoxb-AbCdEfGhIjKlMnOpQrSt'           'Slack token'
+probe '-----BEGIN RSA PRIVATE KEY-----'     'private key header'
+probe "date TZ=Europe/Somewhere"            'hardcoded timezone'
+rmdir docs 2>/dev/null || true
+
+# 7b — a pattern supplied by the optional local list is applied too
+printf 'acme-widget-internal\n' > scripts/denylist.local
+mkdir -p docs
+printf 'the acme-widget-internal rollout\n' > docs/_probe.md
+expect_fail "leak: pattern from scripts/denylist.local"
+rm -f docs/_probe.md scripts/denylist.local
 rmdir docs 2>/dev/null || true
 
 echo

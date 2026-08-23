@@ -61,7 +61,7 @@ _sh_no_backend() {
   if [ "$(shipyard_backend)" = invalid ]; then
     echo "error: SHIPYARD_BACKEND must be agterm, tmux or auto (got: ${SHIPYARD_BACKEND:-})" >&2
   else
-    echo "error: no terminal backend available — sh cannot reach a child session." >&2
+    echo "error: no terminal backend available — shipyard cannot reach a child session." >&2
     echo "       agterm: install agtermctl (agterm ▸ Help ▸ Install Command Line Tool…) and start the app;" >&2
     echo "       tmux:   brew install tmux, then run with SHIPYARD_BACKEND=tmux." >&2
   fi
@@ -89,7 +89,7 @@ shipyard_backend_check() {
 shipyard_repo_key() {
   local root
   root=$(git rev-parse --show-toplevel 2>/dev/null) || {
-    echo "error: not inside a git repository — sh derives its container name from the repo" >&2
+    echo "error: not inside a git repository — shipyard derives its container name from the repo" >&2
     return 1; }
   basename "$root" | tr ':' '_'
 }

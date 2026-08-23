@@ -48,7 +48,7 @@ done
 [ ${#SHOW[@]} -eq 0 ] && exit 0
 
 {
-  echo "### ⚠️ ship escalations — $(TZ=Europe/Moscow date '+%H:%M:%S MSK')"
+  echo "### ⚠️ ship escalations — $(date '+%H:%M:%S %Z')"
   for f in "${SHOW[@]}"; do
     id=$(jq -r '.id' "$f"); slot=$(jq -r '.slot' "$f")
     kind=$(jq -r '.kind' "$f"); txt=$(jq -r '.text' "$f")
