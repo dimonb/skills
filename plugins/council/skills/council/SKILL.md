@@ -169,11 +169,30 @@ participant sits on a permission prompt **holding the floor**, which from the ou
 indistinguishable from a wedged session (measured: 626 s). This is why `status` calls out
 a long-held floor and why the turn deadline and `skip` exist.
 
+**Both `codex` and `agy` gate the first launch in an unfamiliar directory on a
+trust-this-directory prompt**, and until it is answered the participant holds the floor
+while looking, from the room, exactly like a wedged session. `up` prints the caveat for
+each adapter; `status` flags a long-held floor. Answer it once per directory.
+
 `codex queue --thread` looks like a native way to wake a busy Codex participant. It is
 not: it accepts the message, prints `Queued message …`, returns 0 — and delivered it
 **265 seconds later** in the one run where it did deliver. Typing into the terminal
 (`council.sh say`) arrives in seconds. Judge that channel by delivery, never by its exit
 code.
+
+## Decided but not built yet
+
+A council room of `claude` + `codex` argued its own schedule and killed the position that
+turn-taking is enough: **rotation moves the anchor, it does not remove it** — in a two- or
+three-participant room the second speaker still sees the first position before forming
+its own, which is precisely the case `debate` and `review` are for. The room settled on a
+limited `roundtable`: **the first lap only** runs as a barrier (independent positions,
+quorum on a deadline), and everything after it is turn-taking as today. That keeps the
+anchor off the opening positions without needing a delivery-stability rule, because after
+the first lap only one participant speaks at a time again.
+
+It is **not implemented**: `mode` accepts `token`, and a scenario asking for anything else
+gets turn-taking. The decision record is in the room that produced it.
 
 ## Supervising a room
 

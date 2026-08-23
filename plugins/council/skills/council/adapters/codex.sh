@@ -10,4 +10,7 @@ adapter_cmd() {
   printf 'exec codex -s workspace-write -a never --add-dir %q --add-dir %q \\\n' "$room" "$skill"
   printf '  %q\n' "Прочитай $proto и следуй ему буквально. Начинай."
 }
-adapter_notes() { :; }
+adapter_notes() {
+  printf 'codex (%s): первый запуск в незнакомом каталоге спросит доверие к нему.\n' "$1"
+  printf '            пока вы не ответите, участник держит слово и выглядит зависшим.\n'
+}
