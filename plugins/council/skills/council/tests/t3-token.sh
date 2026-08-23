@@ -53,14 +53,17 @@ fail=0
 # Canonical turns only: a message that LOST a turn conflict is kept in the log but does
 # not consume a turn, so counting it here would shift every later index by one and read as
 # out-of-turn speech by everybody.
-bash "$CLI" order | jq -s -c '[.[]|select(.hand==false and .valid)|{from,act}]' > "$R/log/turns.json"
+bash "$CLI" order | jq -s -c '[.[]|select(.hand==false and .valid)|{from,act,turn}]' > "$R/log/turns.json"
 turns=$(jq 'length' "$R/log/turns.json")
 [ "$turns" -ge "$TURNS" ] || { echo "FAIL only $turns turns, wanted $TURNS"; fail=1; }
 # every turn must have been taken by whoever the floor formula named at that index
 n=3
+# Assert on each message's OWN turn number, not on its position in the canonical list:
+# the canonical order is (lamport, from), which is the causal order, and it is a separate
+# sequence from the turn numbers. Reading position as turn index made this test blame the
+# room for two adjacent entries whose clocks happened to sort the other way.
 bad=$(jq -r --argjson n $n '
-  to_entries | map(select(.value.act != "skip")) | .[]
-  | "\(.key) \(.value.from)"' "$R/log/turns.json" | while read -r i who; do
+  .[] | select(.act != "skip") | "\(.turn) \(.from)"' "$R/log/turns.json" | while read -r i who; do
     lap=$(( i / n )); idx=$(( (i % n + lap) % n ))
     want=$(jq -r --argjson i "$idx" '.order[$i]' "$R/roster.json")
     [ "$who" = "$want" ] || echo "turn $i: $who spoke, floor was $want"

@@ -30,7 +30,7 @@ listener() {
 listener & LPID=$!
 sleep 1
 ( export COUNCIL_ME=a; . "$SKILL/lib/lib.sh"
-  for ((i=1;i<=N;i++)); do c_send --text "ping $i" >/dev/null; sleep 0.05; done )
+  for ((i=1;i<=N;i++)); do c_send --hand --text "ping $i" >/dev/null; sleep 0.05; done )
 wait $LPID
 sort -n "$R/log/lat" > "$R/log/lat.s"
 n=$(wc -l < "$R/log/lat.s" | tr -d ' ')

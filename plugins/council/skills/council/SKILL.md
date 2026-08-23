@@ -53,9 +53,10 @@ Three invariants replace every lock:
   derives the same sequence without asking anyone.
 
 Reaction is a **doorbell**: a one-byte write into the recipient's fifo, which a sleeping
-`recv` wakes on. Measured on the reference machine: the bell itself is **0.7 ms** at the
-median, end-to-end delivery **56 ms** (two `jq` spawns, not the wire). A poll loop would
-be 0–5 s. A keeper process holds every bell open read-write for the life of the room, so a
+`recv` wakes on. Measured on the reference machine: the bell itself is **sub-millisecond** (0.3 ms median
+from the write to a sleeping reader waking), and end-to-end delivery **~60 ms** — of which
+25 ms is the sender publishing and 39 ms the reader parsing, i.e. `jq` spawns rather than
+the wire. A poll loop would be 0–5 s. A keeper process holds every bell open read-write for the life of the room, so a
 bell rung at a participant that is not currently listening is buffered rather than lost,
 and the ring itself is backgrounded so a dead participant can never wedge a sender.
 
@@ -64,8 +65,10 @@ and single-writer, so probing `cursor+1, cursor+2, …` until the first missing 
 O(new). The globbing version was O(everything ever said), and it did not merely run slow:
 readers fell behind, and **the order in which a participant received messages diverged
 from the final transcript in ~30% of cases** under load. Fixing the scan took that from
-`0/101/133` inversions to `0/0/0`. Inversions are not structurally impossible — they are
-simply absent while readers keep up. In turn-taking mode only one participant speaks at a
+`0/101/133` inversions to single digits — repeated runs of 510 messages from three
+concurrent writers land anywhere between `0/0/0` and `0/4/5`. Inversions are not
+structurally impossible; they shrink to whatever the readers' lag is, which is why the
+number moves between runs and why nothing asserts it is zero. In turn-taking mode only one participant speaks at a
 time, so they cannot arise; any future free-for-all mode needs an explicit stability rule.
 
 ## Turn discipline: a floor with no token
@@ -105,13 +108,25 @@ answer it.
 | `propose` | put something on the table |
 | `amend --refs '["<proposal>","<objection>"]'` | a revision; referencing an objection **closes** it |
 | `object --refs '["<id>"]'` | must name a specific id, or there is nothing to close |
-| `concede --refs '["<id>"]'` | **the sender yields** |
+| `concede --refs '["<id>"]'` | **the sender yields**: pointing at an objection accepts it, pointing at your own proposal withdraws it in favour of somebody else's |
 | `withdraw` · `support` · `overrule` (chair) · `msg` · `notice` · `skip` · `decide` | |
 
 `concede` always means the same thing, and who sends it decides what falls: from the
 objection's author it closes the objection; from the proposal's author it kills the
-proposal. An objection also closes on `withdraw` by its author, on an `amend` that
-references it, or on the chair's `overrule`.
+proposal — whether it points at an objection or at the proposal itself. An objection also
+closes on `withdraw` by its author, on an `amend` that references it, or on the chair's
+`overrule`.
+
+An `amend` belongs to **one** proposal — the first proposal-typed id it references; its
+other refs are the objections it closes. (Referencing two proposals used to apply the
+amendment to both, so a room displayed two participants proposing the same words.)
+
+A barrier round puts **N proposals** on the table at once, one per participant, and
+`ready-to-decide` wants exactly one. That is the work of the lap after the barrier: yield
+the ones you no longer defend (`concede` your own), and fold what is worth keeping into
+the survivor with `amend`. A roundtable room that never does this sits at
+`deliberating` with N live proposals and no open objection, which reads as agreement and
+is not.
 
 **Verdicts** (`council.sh verdict`, and the alarms in `status`):
 

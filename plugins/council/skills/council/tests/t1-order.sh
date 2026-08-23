@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # t1 — concurrency, loss, corruption, causality, delivery order.
-# Three peers blast messages at each other with no turn discipline at all: this is the
-# worst case the transport will ever see, and the point is that it survives it without
-# a single lock.
+# Three peers blast messages at each other with no turn discipline at all (every message is
+# a raised hand, which is exempt from it): the worst case the transport will ever see, and
+# the point is that it survives without a single lock.
 set -uo pipefail
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 . "$DIR/_helpers.sh"
@@ -18,14 +18,20 @@ peer() {
   c_bell_open
   local i
   for ((i=1;i<=N;i++)); do
-    c_send --act msg --text "$me#$i" >/dev/null
+    # --hand: out-of-turn by definition, so the turn discipline does not throttle what this
+    # test is actually stressing — the transport under three concurrent writers.
+    c_send --act msg --hand --text "$me#$i" >/dev/null
     if out=$(c_drain); then printf '%s\n' "$out" | jq -r '.id' >> "$R/log/$me.got"; fi
   done
-  # settle: keep draining until the room goes quiet
-  local quiet=0
-  while [ $quiet -lt 6 ]; do
-    if out=$(c_drain); then printf '%s\n' "$out" | jq -r '.id' >> "$R/log/$me.got"; quiet=0
-    else quiet=$((quiet+1)); c_bell_wait 0.25; fi
+  # Settle on COMPLETENESS, not on quiet. "Six empty drains in a row" is a timer in
+  # disguise: a peer that finishes its own sends early hits a lull while the others are
+  # still writing, declares the room quiet, and stops two messages short — which then reads
+  # as the transport losing them.
+  local want=$(( N * 2 )) got=0 deadline=$(( $(date +%s) + 90 ))
+  while [ "$got" -lt "$want" ] && [ "$(date +%s)" -lt "$deadline" ]; do
+    if out=$(c_drain); then printf '%s\n' "$out" | jq -r '.id' >> "$R/log/$me.got"; fi
+    got=$(wc -l < "$R/log/$me.got" 2>/dev/null || echo 0)
+    [ "$got" -lt "$want" ] && c_bell_wait 0.25
   done
 }
 t0=$(date +%s)

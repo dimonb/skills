@@ -38,6 +38,13 @@ c_ring() { local f="$ROOM/bell/$1.fifo"; [ -p "$f" ] || return 0; ( printf '.' >
 # and a fork each is what turned a millisecond wake into a quarter-second one.
 c_slurp()   { local v=""; [ -f "$1" ] || { printf 0; return; }; read -r v < "$1" 2>/dev/null; printf '%s' "${v:-0}"; }
 c_lamport() { c_slurp "$ROOM/state/$ME.lamport"; }
+# The highest clock anywhere in the room, mine included.
+c_max_lamport() {
+  local mine disk
+  mine=$(c_lamport)
+  disk=$({ c_all 2>/dev/null || true; } | jq -s 'if length == 0 then 0 else (max_by(.lamport).lamport) end')
+  [ "${disk:-0}" -gt "$mine" ] && printf '%s' "$disk" || printf '%s' "$mine"
+}
 c_seq()     { c_slurp "$ROOM/state/$ME.seq"; }
 c_cursor()  { c_slurp "$ROOM/cursor/$ME/$1"; }
 
@@ -73,10 +80,20 @@ c_barrier() {
   n=$(c_npeers)
   posted=$(c_round0 | wc -l | tr -d ' ')
   [ "$posted" -ge "$n" ] && { printf 'closed'; return; }
+  # A quorum below 2 is not a quorum: at N=2 the N-1 default would let ONE position plus a
+  # deadline close the round, which is the barrier deleting itself. (Raised, blind and
+  # independently, by a Codex participant inside the very room deciding this question.)
   quorum=$(c_quorum); [ -n "$quorum" ] || quorum=$(( n - 1 )); [ "$quorum" -lt 2 ] && quorum=2
   first=$(c_round0 | jq -s 'if length == 0 then 0 else (min_by(.sent_ms).sent_ms) end')
   deadline=$(jq -r '.round_deadline_ms // 600000' "$ROOM/roster.json")
-  if [ "$first" != 0 ] && [ "$(c_ms)" -gt $(( first + deadline )) ] && [ "$posted" -ge "$quorum" ]; then
+  [ "$first" = 0 ] && { printf 'open'; return; }
+  local age=$(( $(c_ms) - first ))
+  if [ "$age" -gt "$deadline" ] && [ "$posted" -ge "$quorum" ]; then
+    printf 'closed'
+  elif [ "$age" -gt $(( deadline * 2 )) ]; then
+    # The backstop. With the quorum clamped to 2, an N=2 room whose partner never speaks
+    # would otherwise wait forever — the freeze the deadline exists to prevent, moved one
+    # step down. Past twice the deadline the round closes with whatever it has.
     printf 'closed'
   else
     printf 'open'
@@ -100,7 +117,13 @@ c_send() {
   done
   local seq lam id f deps turn round=null
   seq=$(( $(c_seq) + 1 ))
-  lam=$(( $(c_lamport) + 1 ))
+  # My clock must dominate everything I am about to COUNT, not merely everything I have
+  # read. c_turns counts messages on disk, so a participant can legitimately stamp turn 22
+  # while its own clock still sits below the author of turn 21 — and then the canonical
+  # (lamport, from) order disagrees with the turn order, which makes a transcript show a
+  # reply before what it replies to. Observing a message by counting it is still observing
+  # it, so the clock rises to match.
+  lam=$(( $(c_max_lamport) + 1 ))
   deps=$(c_deps_json)
   # Which turn this message claims. A hand (raised out of turn) claims none, and neither
   # does an opening position: the whole point of the barrier round is that N participants

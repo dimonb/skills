@@ -2,7 +2,7 @@
 # Shared test scaffolding. A test room is built directly, without terminals: these tests
 # cover the transport and the protocol, not the agents.
 export LC_ALL=C
-SKILL="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+SKILL="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"
 CLI="$SKILL/council.sh"
 
 mkroom() { # <dir> <peer>... — a room with no terminals attached

@@ -18,7 +18,18 @@ jq '.mode="roundtable" | .round_deadline_ms=600000' "$R/roster.json" > "$R/r.tmp
 
 seen() { COUNCIL_ROOM="$R" COUNCIL_ME="$1" bash "$CLI" recv --peek | jq -r '.id' | paste -sd, -; }
 
+# a participant that owes a position must be released at once: in a barrier round there is
+# no floor holder to wait for, and --until-floor would otherwise wait forever (a live Codex
+# participant did exactly that the first time a roundtable room ran).
+COUNCIL_ME=a timeout 12 bash "$CLI" recv --until-floor --timeout 8 >/dev/null
+[ $? = 0 ] || { echo "FAIL участник, который ещё не высказался, не отпущен из --until-floor"; fail=1; }
+
 say a propose '[]' "позиция a: барьер только на первый круг"
+
+# ...and one that HAS posted keeps waiting for the round, not for a turn
+COUNCIL_ME=a timeout 12 bash "$CLI" recv --until-floor --timeout 6 >/dev/null
+[ $? = 4 ] || { echo "FAIL высказавшийся участник не ждёт сбора круга"; fail=1; }
+echo "recv в барьере: должника отпускает сразу, высказавшегося держит"
 [ -z "$(seen b)" ] || { echo "FAIL b увидел позицию a до сбора круга: $(seen b)"; fail=1; }
 say b propose '[]' "позиция b: барьер вообще не нужен"
 [ -z "$(seen c)" ] || { echo "FAIL c увидел чужие позиции до сбора круга: $(seen c)"; fail=1; }
@@ -61,6 +72,24 @@ st=$(COUNCIL_ME=a bash -c '. '"$SKILL"'/lib/lib.sh; c_barrier')
 got=$(COUNCIL_ROOM="$R2" COUNCIL_ME=c bash "$CLI" recv --peek | jq -r '.id' | paste -sd, -)
 [ "$got" = "a-1,b-1" ] || { echo "FAIL после дедлайна не отдали собранное: '$got'"; fail=1; }
 echo "молчащий участник не держит комнату: круг закрыт по дедлайну, позиции отданы"
+
+# ...and the latecomer must not reopen or rewrite the round it missed. (Raised by a live
+# Codex participant while writing its own position in a roundtable room.)
+# c missed the round entirely; out of turn it is refused like anyone else, so let the
+# rotation come round to it and check what its first message then IS.
+rc0=$(COUNCIL_ME=c bash "$CLI" send --act msg "я опоздал" >/dev/null 2>&1; echo $?)
+[ "$rc0" = 6 ] || { echo "FAIL опоздавший заговорил вне очереди (код $rc0)"; fail=1; }
+while [ "$(bash "$CLI" floor | sed -n 's/.*floor=\([^ ]*\).*/\1/p')" != c ]; do
+  say_floor msg '[]' "ход" >/dev/null || break
+done
+COUNCIL_ME=c bash "$CLI" send --act msg "я опоздал, но дождался очереди" >/dev/null
+late=$(bash "$CLI" order | jq -r 'select(.from=="c") | .round')
+[ "$late" = null ] || { echo "FAIL опоздавшая реплика записана как позиция круга (round=$late)"; fail=1; }
+st=$(COUNCIL_ME=a bash -c '. '"$SKILL"'/lib/lib.sh; c_barrier')
+[ "$st" = closed ] || { echo "FAIL опоздавший переоткрыл круг: $st"; fail=1; }
+turns=$(COUNCIL_ME=a bash -c '. '"$SKILL"'/lib/lib.sh; c_turns')
+[ "$turns" -ge 3 ] || { echo "FAIL счёт ходов после закрытого круга сбит: $turns"; fail=1; }
+echo "опоздавший не переоткрывает круг: его реплика — обычный ход, круг остался закрытым"
 
 [ "$fail" = 0 ] && echo "t7 PASS" || echo "t7 FAIL"
 exit $fail

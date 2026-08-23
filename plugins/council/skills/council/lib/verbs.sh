@@ -27,6 +27,14 @@ v_recv() { # [--timeout N] [--peek] [--until-floor]
     esac
   done
   if [ "$peek" = 1 ]; then c_drain && return 0; return 4; fi
+  # During an open barrier round there IS no floor holder: everyone owes a position and
+  # nobody is waiting for a turn. A participant that has not posted yet must be released
+  # immediately, or it sits in --until-floor waiting for a turn that cannot arrive — which
+  # is exactly what a live Codex participant did the first time a roundtable room ran.
+  if [ "$until_floor" = 1 ] && [ "$(c_barrier)" = open ] && [ -z "$(c_posted_round0)" ]; then
+    c_drain || true
+    return 0
+  fi
   c_bell_open
   local deadline out got
   deadline=$(( $(c_ms) + timeout * 1000 ))
@@ -34,7 +42,9 @@ v_recv() { # [--timeout N] [--peek] [--until-floor]
     got=0
     if out=$(c_drain); then printf '%s\n' "$out"; got=1; c_bell_drain; fi
     if [ "$until_floor" = 1 ]; then
-      [ "$(c_floor)" = "$ME" ] && return 0
+      # Posted already, round still open: keep waiting — not for a turn, but for the round
+      # to complete, which is what releases everyone else's positions.
+      if [ "$(c_barrier)" != open ] && [ "$(c_floor)" = "$ME" ]; then return 0; fi
     elif [ "$got" = 1 ]; then return 0; fi
     [ "$(c_ms)" -ge "$deadline" ] && break
     c_bell_wait 0.5
@@ -92,7 +102,12 @@ v_verdict() {
   local g n budget turns last decided live open since lap v
   g=$(_graph) || return 1
   n=$(c_npeers); budget=$(jq -r '.turns_budget // 30' "$ROOM/roster.json")
-  read -r turns last decided live open <<<"$(printf '%s' "$g" | jq -r '[.turns, .last_claim_turn, (.decided // "-"), (.live|length), (.open|length)] | @tsv')"
+  read -r _gt last decided live open <<<"$(printf '%s' "$g" | jq -r '[.turns, .last_claim_turn, (.decided // "-"), (.live|length), (.open|length)] | @tsv')"
+  # Turns come from c_turns, not from the graph: the graph counts turn-claiming messages
+  # and knows nothing about a completed barrier round, which consumes a whole lap without
+  # any of its positions claiming a turn. Mixing the two produced a room "минус один ход
+  # без новых заявлений" — a negative age that no branch below reads correctly.
+  turns=$(c_turns)
   since=$(( turns - (last < 0 ? 0 : last) )); lap=$n
   if   [ "$decided" != "-" ]; then v=$(c_slurp "$ROOM/board/status"); [ "$v" = 0 ] && v=decided
   elif [ "$turns" -ge "$budget" ]; then v=unresolved
