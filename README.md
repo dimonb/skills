@@ -34,6 +34,7 @@ asking the repo to adapt to it.
 claude plugin marketplace add dimonb/skills
 claude plugin install ship@dimonb-skills
 claude plugin install shipyard@dimonb-skills
+claude plugin install council@dimonb-skills
 ```
 
 `marketplace add` also takes a local path or an HTTPS URL, and `--scope user|project|local`
@@ -53,6 +54,7 @@ claude plugin marketplace remove dimonb-skills
 codex plugin marketplace add dimonb/skills
 codex plugin add ship@dimonb-skills
 codex plugin add shipyard@dimonb-skills
+codex plugin add council@dimonb-skills
 ```
 
 `marketplace add` takes a local path, `owner/repo[@ref]`, or an HTTPS/SSH git URL, plus
