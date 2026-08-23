@@ -1,0 +1,22 @@
+{
+  "name": "ship",
+  "version": "0.1.0",
+  "description": "Drive one change end-to-end through a repo's pipeline — issue, spec, implementation, its own review passes, hand-off or merge — on GitHub or GitLab. Self-driven: every review pass runs as read-only subagents with adversarial verification, and nothing waits on an external reviewer.",
+  "author": {
+    "name": "dimonb",
+    "url": "https://github.com/dimonb"
+  },
+  "homepage": "https://github.com/dimonb/skills/tree/main/plugins/ship",
+  "repository": "https://github.com/dimonb/skills",
+  "license": "MIT",
+  "keywords": [
+    "ship",
+    "pipeline",
+    "github",
+    "gitlab",
+    "code-review",
+    "pull-request",
+    "merge-request",
+    "automation"
+  ]
+}
