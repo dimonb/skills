@@ -51,16 +51,20 @@ The test to apply to every line before committing it: *would this still be corre
 else's repository, on someone else's machine, in another timezone, on the other forge?* If
 not, it is not generic, and it goes.
 
-Machine- or person-specific configuration is an **optional local file or an environment
-variable, never a default**. Two consequences that have already bitten:
+Machine- or person-specific configuration is an **environment variable, never a default**. A
+hardcoded default for a personal tool-config directory is both a leak and a functional bug:
+everyone else's run silently points at a directory that does not exist.
 
-* a hardcoded default for a personal tool-config directory is both a leak and a functional
-  bug — everyone else's run silently points at a directory that does not exist;
-* the leak gate's own pattern list is subject to this rule. It carries only *structural*
-  patterns (absolute home paths, personal config-dir shapes, e-mail addresses, token and key
-  shapes), which are wrong in anybody's repo. Names private to one person or project go in
-  `scripts/denylist.local`, which is gitignored, optional, one extended-regex per line, and
-  which `make check` reports loading so reduced coverage is stated rather than silent.
+The leak gate is subject to this rule too, and that shapes what it can be. It carries only
+*structural* patterns — absolute home paths, personal config-directory shapes, e-mail
+addresses, token and key shapes, hardcoded timezones — which are wrong in anybody's repo, and
+it depends on no untracked file. It deliberately does **not** carry a list of anyone's private
+names: guarding a private name belongs to the machine that knows it, as a global hook or a
+secret-scanner config, not to one repository's gate. Writing such a list into the gate would
+also publish it, which is the failure it was meant to prevent.
+
+So the gate catches the *shapes*, and rule zero — absolutely, by judgement, on every line —
+catches the names.
 
 ## Rules
 

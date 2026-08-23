@@ -153,10 +153,14 @@ if [ -f "$core" ]; then
 fi
 
 # ------------------------------------------------- 7. non-generic strings (leak check)
-# Only STRUCTURAL patterns live here. They are generic — wrong in anybody's repo, which is
-# exactly why they belong in a shared gate. Names private to one person, company or project
-# are not this repo's business and appear in no tracked file in any form: put those, one
-# extended-regex per line, in `scripts/denylist.local` (gitignored, optional).
+# STRUCTURAL patterns only, and no dependency on any untracked file. These are generic —
+# wrong in anybody's repo — which is exactly why they belong in a shared gate.
+#
+# Names private to one person, company or project are deliberately NOT here. They are not
+# this repo's concern: guarding a private name belongs to the machine that knows it, as a
+# global hook or a secret-scanner config, not to one repository's gate. What this repo
+# enforces instead is the absolute rule that no such name appears in a tracked file at all
+# (AGENTS.md, rule zero).
 #
 # `--untracked` is load-bearing: plain `git grep` sees only tracked files, so a brand-new file
 # carrying a leak would pass right up until the commit that adds it. It still honours
@@ -171,17 +175,6 @@ deny="$deny"'|\.local/bin/|\.config/(gh|glab)-[a-zA-Z0-9._-]+'
 deny="$deny"'|(ghp|gho|ghu|ghs|ghr)_[A-Za-z0-9]{16,}|glpat-[A-Za-z0-9_-]{16,}'
 deny="$deny"'|-----BEGIN [A-Z ]*PRIVATE KEY-----|xox[baprs]-[A-Za-z0-9-]{10,}'
 deny="$deny"'|TZ=[A-Za-z]+/[A-Za-z_]+'
-
-if [ -f scripts/denylist.local ]; then
-  n=0
-  while IFS= read -r pat; do
-    case "$pat" in ''|'#'*) continue ;; esac
-    deny="$deny|$pat"; n=$((n+1))
-  done < scripts/denylist.local
-  echo "leak check: structural patterns + $n local pattern(s)"
-else
-  echo "leak check: structural patterns only (no scripts/denylist.local)"
-fi
 
 # Fail LOUDLY, and never confuse "clean" with "could not scan". git grep exits 0 on a match,
 # 1 on no match, and >1 on an error — an invalid regex, a bad pathspec, or not being inside a

@@ -143,15 +143,14 @@ including a broken symlink that slipped past an `[ -e ]` test, a leak check that
 untracked files, and a state/handler check that passed because `spec` is a prefix of
 `spec-review`.
 
-### The leak check and `scripts/denylist.local`
+### The leak check
 
-The tracked gate carries only **structural** patterns — absolute home paths, personal
-config-directory shapes, e-mail addresses, token and key shapes, hardcoded timezones — the
-things that are wrong in anybody's repository. Names private to one person, company or
-project are not this repo's business and appear in no tracked file. If you have some you want
-caught, put them in `scripts/denylist.local`: gitignored, optional, one extended regular
-expression per line, `#` for comments. `make check` prints whether it loaded, so reduced
-coverage is stated rather than silent.
+It carries only **structural** patterns — absolute home paths, personal config-directory
+shapes, e-mail addresses, token and key shapes, hardcoded timezones — the things that are
+wrong in anybody's repository, with no dependency on any untracked file. It deliberately does
+not carry anyone's private names: guarding a private name belongs to the machine that knows
+it, as a global hook or a secret-scanner config, and writing such a list into a public gate
+would publish the very thing it was meant to protect.
 
 One trap if you add patterns: **`git grep -E` does not support `\b`**. It matches a literal
 `b`, so `\bfoo\b` matches "bfoob" and *not* "foo" — silently inverting your pattern. Plain

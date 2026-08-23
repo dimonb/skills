@@ -179,14 +179,6 @@ probe '-----BEGIN RSA PRIVATE KEY-----'     'private key header'
 probe "date TZ=Europe/Somewhere"            'hardcoded timezone'
 rmdir docs 2>/dev/null || true
 
-# 7b — a pattern supplied by the optional local list is applied too
-printf 'acme-widget-internal\n' > scripts/denylist.local
-mkdir -p docs
-printf 'the acme-widget-internal rollout\n' > docs/_probe.md
-expect_fail "leak: pattern from scripts/denylist.local"
-rm -f docs/_probe.md scripts/denylist.local
-rmdir docs 2>/dev/null || true
-
 echo
 echo "assertions proven: $pass   not caught: $nocatch"
 [ "$nocatch" -eq 0 ] || exit 1

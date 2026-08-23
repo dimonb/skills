@@ -2,4 +2,3 @@
 .claude/worktrees/
 .DS_Store
 .pipeline-state/
-scripts/denylist.local
