@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# sh-compact.sh — compact a ship child and PUT IT BACK TO WORK.
+# shipyard-compact.sh — compact a ship child and PUT IT BACK TO WORK.
 #
 # `/compact` is a TUI slash command, so the mailbox cannot carry it. And on its own
 # it is only half the job: a compacted child comes back with an empty context and
@@ -9,11 +9,11 @@
 # meant to cure. This script always does both halves.
 #
 # usage:
-#   sh-compact.sh <slot> [--resume-file <path>] [--resume "<text>"] [--timeout <sec>]
-#   sh-compact.sh <slot> --no-resume        # only when you will drive it yourself
+#   shipyard-compact.sh <slot> [--resume-file <path>] [--resume "<text>"] [--timeout <sec>]
+#   shipyard-compact.sh <slot> --no-resume        # only when you will drive it yourself
 set -uo pipefail
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-. "$DIR/sh-lib.sh"
+. "$DIR/shipyard-lib.sh"
 
 SLOT=""; RESUME_FILE=""; RESUME_TEXT=""; NO_RESUME=0; TIMEOUT=300
 while [ $# -gt 0 ]; do
@@ -26,22 +26,22 @@ while [ $# -gt 0 ]; do
     *)             [ -z "$SLOT" ] && SLOT="$1"; shift ;;
   esac
 done
-[ -n "$SLOT" ] || { echo "usage: sh-compact.sh <slot> [--resume-file <path>|--resume <text>|--no-resume]" >&2; exit 2; }
+[ -n "$SLOT" ] || { echo "usage: shipyard-compact.sh <slot> [--resume-file <path>|--resume <text>|--no-resume]" >&2; exit 2; }
 
-sh_backend_check || exit 1
-T=$(sh_where "$SLOT") || {
-  echo "error: no live terminal \`ship-$SLOT\` in $(sh_container_kind) \`$(sh_container)\`" >&2; exit 3; }
+shipyard_backend_check || exit 1
+T=$(shipyard_where "$SLOT") || {
+  echo "error: no live terminal \`ship-$SLOT\` in $(shipyard_container_kind) \`$(shipyard_container)\`" >&2; exit 3; }
 
-pane() { sh_capture "$SLOT"; }
+pane() { shipyard_capture "$SLOT"; }
 
 # Submit is not the same key on every client build, and a session AT its ceiling can
 # refuse both — so try one, look, then try the other. Never conclude from one key.
 # (On agterm both are the same real newline, so the second attempt is a harmless retry.)
 submit() {
-  sh_submit "$SLOT"
+  shipyard_submit "$SLOT"
   sleep 3
   if [ "$(pane | grep -c 'esc to interrupt')" = "0" ]; then
-    sh_submit "$SLOT" alt
+    shipyard_submit "$SLOT" alt
     sleep 3
   fi
 }
@@ -61,8 +61,8 @@ done
 [ "$waited" -gt 0 ] && echo "turn ended after ${waited}s; compacting now"
 
 echo "compacting ship-$SLOT ($T)…"
-sh_esc "$SLOT"; sleep 1                # Escape CLEARS the box; BSpace restores an older draft
-sh_type "$SLOT" "/compact"; sleep 1
+shipyard_esc "$SLOT"; sleep 1                # Escape CLEARS the box; BSpace restores an older draft
+shipyard_type "$SLOT" "/compact"; sleep 1
 submit
 
 # Wait for it to finish. "Compacted" is the marker; a compaction of a very large
@@ -88,20 +88,20 @@ fi
 
 # --- the half that is always forgotten ----------------------------------------
 if [ -n "$RESUME_FILE" ]; then
-  exec bash "$DIR/sh-tell.sh" "$SLOT" "@$RESUME_FILE"
+  exec bash "$DIR/shipyard-tell.sh" "$SLOT" "@$RESUME_FILE"
 elif [ -n "$RESUME_TEXT" ]; then
-  exec bash "$DIR/sh-tell.sh" "$SLOT" "$RESUME_TEXT"
+  exec bash "$DIR/shipyard-tell.sh" "$SLOT" "$RESUME_TEXT"
 else
   # Standing orders are the ONLY thing that reliably survives a compaction, because a
   # rule held in conversation dies with the context. If the slot has such a file, the
   # resume brief must point at it — otherwise a hard constraint ("do not merge") is
   # silently lifted by the very operation meant to keep the child working.
-  MB=$(sh_mailbox 2>/dev/null) || MB=""
+  MB=$(shipyard_mailbox 2>/dev/null) || MB=""
   ORDERS="$MB/standing-orders-$SLOT.md"
   EXTRA=""
   if [ -n "$MB" ] && [ -f "$ORDERS" ]; then
     EXTRA=" STANDING ORDERS ARE IN FORCE: read $ORDERS NOW, before doing anything else, and treat it as authoritative over anything you remember. It exists because your remembered context was just discarded."
     echo "note: standing orders found for $SLOT — the resume brief points at them"
   fi
-  exec bash "$DIR/sh-tell.sh" "$SLOT" "You were compacted — that was your supervisor, not a failure, and you lost no work: worktree, branch and mailbox are intact. Do NOT re-derive the change from scratch; read only what the next slice needs. Check git log and your tasks file for where you actually are, then continue with the next unticked task. Escalate as usual if anything is ambiguous.$EXTRA"
+  exec bash "$DIR/shipyard-tell.sh" "$SLOT" "You were compacted — that was your supervisor, not a failure, and you lost no work: worktree, branch and mailbox are intact. Do NOT re-derive the change from scratch; read only what the next slice needs. Check git log and your tasks file for where you actually are, then continue with the next unticked task. Escalate as usual if anything is ambiguous.$EXTRA"
 fi

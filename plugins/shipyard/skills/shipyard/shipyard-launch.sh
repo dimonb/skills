@@ -1,17 +1,18 @@
 #!/usr/bin/env bash
-# sh-launch.sh — start a `/ship` Claude session in its own terminal (an agterm session
-# by default, a tmux window with SH_BACKEND=tmux) and its own git worktree.
+# shipyard-launch.sh — start a `/ship` Claude session in its own terminal (an agterm session
+# by default, a tmux window with SHIPYARD_BACKEND=tmux) and its own git worktree.
 #
 # Usage:
-#   sh-launch.sh 123                  # continue existing MR/PR !123      -> /ship 123
-#   sh-launch.sh "#42"                # start from issue 42               -> /ship #42
-#   sh-launch.sh "add X to Y"         # new change from a free-text idea  -> /ship "add X to Y"
-#   sh-launch.sh 123 no-merge         # extra ship flags are passed through
+#   shipyard-launch.sh 123                  # continue existing MR/PR !123      -> /ship 123
+#   shipyard-launch.sh "#42"                # start from issue 42               -> /ship #42
+#   shipyard-launch.sh "add X to Y"         # new change from a free-text idea  -> /ship "add X to Y"
+#   shipyard-launch.sh 123 no-merge         # extra ship flags are passed through
 #
-# The child runs `/ship` and nothing else. `/ship` owns the whole pipeline (issue →
-# spec → its own review passes → apply → archive → ready-to-merge), so there is no
-# second skill to hand over to and no explore step in front of it: a free-text idea is
-# exactly what `ship "<description>"` takes.
+# The child runs `/ship` and nothing else. `/ship` owns the whole pipeline — issue, spec
+# (where the repo keeps one), implementation, its own review passes, and the hand-off at
+# ready-to-merge — so there is no second skill to hand over to and no explore step in
+# front of it: a free-text idea is exactly what `ship "<description>"` takes. Read the
+# stage list from the `/ship` in use; do not rely on one written down here.
 #
 # Slot (= terminal named `ship-<slot>` = worktree `.claude/worktrees/ship-<slot>`):
 #   * numeric arg / `!123` / `#42` / an MR/PR/issue URL  -> slot = the number
@@ -22,25 +23,25 @@
 #
 # Every child is launched with an escalation protocol appended to its system prompt: no
 # human is present in a child terminal, so questions, design decisions and blockers go
-# up to the parent watcher through sh-ask.sh.
+# up to the parent watcher through shipyard-ask.sh.
 #
 # Env:
-#   SH_BACKEND    agterm (default) | tmux | auto
-#   SH_WORKSPACE  agterm workspace name (default: the parent's workspace + "-ai",
+#   SHIPYARD_BACKEND    agterm (default) | tmux | auto
+#   SHIPYARD_WORKSPACE  agterm workspace name (default: the parent's workspace + "-ai",
 #                 pinned in <mailbox>/container-agterm at the first launch)
-#   SH_SESSION    tmux session name    (default: <repo>)
-#   SH_ENV_PASS   env vars copied from THIS session into the child (default:
-#                 CLAUDE_HOME CLAUDE_CONFIG_DIR) — see sh_env_preamble in sh-lib.sh
-#   SH_FORCE=1    allow a second terminal for the same numeric slot
-#   SH_DRY=1      print the slot, protocol path and command; start nothing
+#   SHIPYARD_SESSION    tmux session name    (default: <repo>)
+#   SHIPYARD_ENV_PASS   env vars copied from THIS session into the child (default:
+#                 CLAUDE_HOME CLAUDE_CONFIG_DIR) — see shipyard_env_preamble in shipyard-lib.sh
+#   SHIPYARD_FORCE=1    allow a second terminal for the same numeric slot
+#   SHIPYARD_DRY=1      print the slot, protocol path and command; start nothing
 set -o pipefail
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-# shellcheck source=sh-lib.sh
-. "$DIR/sh-lib.sh"
+# shellcheck source=shipyard-lib.sh
+. "$DIR/shipyard-lib.sh"
 
 ARG="$1"
 if [ -z "$ARG" ]; then
-  echo 'usage: sh-launch.sh <mr-iid | #issue | "idea text"> [ship flags...]' >&2
+  echo 'usage: shipyard-launch.sh <mr-iid | #issue | "idea text"> [ship flags...]' >&2
   exit 2
 fi
 shift
@@ -56,16 +57,16 @@ if ! git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
   exit 1
 fi
 
-sh_backend_check || exit 1
-BACKEND=$(sh_backend)
-KIND=$(sh_container_kind)
+shipyard_backend_check || exit 1
+BACKEND=$(shipyard_backend)
+KIND=$(shipyard_container_kind)
 # PIN the container on the way in. On agterm it is derived from the workspace this
 # shell sits in, so re-deriving it later — from a report run in another workspace, or
 # from a child — would silently name a different container and find no children there.
 # The mailbox is created below, so pin against it explicitly first.
-sh_mailbox_ensure >/dev/null 2>&1
-CONTAINER=$(sh_container_pin) || { echo "error: cannot resolve the container name" >&2; exit 1; }
-_SH_CONTAINER="$CONTAINER"
+shipyard_mailbox_ensure >/dev/null 2>&1
+CONTAINER=$(shipyard_container_pin) || { echo "error: cannot resolve the container name" >&2; exit 1; }
+_SHIPYARD_CONTAINER="$CONTAINER"
 
 # --- slot + /ship target -------------------------------------------------------
 if [[ "$ARG" =~ ^[0-9]+$ ]]; then
@@ -94,15 +95,15 @@ else
   TARGET="$ARG"; NUMERIC=0
 fi
 
-if sh_target "$SLOT" >/dev/null 2>&1; then
-  if [ "$NUMERIC" = 1 ] && [ "${SH_FORCE:-}" != 1 ]; then
-    echo "already running: $(sh_where "$SLOT") exists (use SH_FORCE=1 to override)" >&2
-    echo "look inside: $(sh_peek_hint "$SLOT")" >&2
+if shipyard_target "$SLOT" >/dev/null 2>&1; then
+  if [ "$NUMERIC" = 1 ] && [ "${SHIPYARD_FORCE:-}" != 1 ]; then
+    echo "already running: $(shipyard_where "$SLOT") exists (use SHIPYARD_FORCE=1 to override)" >&2
+    echo "look inside: $(shipyard_peek_hint "$SLOT")" >&2
     exit 3
   fi
   if [ "$NUMERIC" != 1 ]; then
     n=2
-    while sh_target "$SLOT-$n" >/dev/null 2>&1; do n=$((n+1)); done
+    while shipyard_target "$SLOT-$n" >/dev/null 2>&1; do n=$((n+1)); done
     SLOT="$SLOT-$n"
   fi
 fi
@@ -121,19 +122,20 @@ fi
 for f in "${EXTRA[@]}"; do PROMPT="$PROMPT $f"; done
 
 # --- escalation protocol (appended to the child's system prompt) ----------------
-MB=$(sh_mailbox_ensure) || { echo "error: cannot create the escalation mailbox" >&2; exit 1; }
+MB=$(shipyard_mailbox_ensure) || { echo "error: cannot create the escalation mailbox" >&2; exit 1; }
 PROTO="$MB/protocol-$SLOT.md"
 
 {
   echo "# You are a CHILD ship session (slot \`$SLOT\`)"
   echo
-  echo "Started by the \`/sh\` skill in $KIND \`$CONTAINER\`, terminal \`$NAME\`, worktree"
+  echo "Started by the \`/shipyard\` skill in $KIND \`$CONTAINER\`, terminal \`$NAME\`, worktree"
   echo "\`.claude/worktrees/$NAME\`."
   echo
   echo "## Your one job is \`/ship\`"
   echo
-  echo "You were started with \`$PROMPT\` and that skill owns the whole pipeline — issue,"
-  echo "spec, its own review passes, apply, archive, ready-to-merge. Stay inside it. Do not"
+  echo "You were started with \`$PROMPT\` and that skill owns the whole pipeline — the issue,"
+  echo "the spec stage if this repo keeps one, the implementation, its own review passes, and"
+  echo "the hand-off at ready-to-merge. Stay inside it. Do not"
   echo "reach for another driver skill, do not invent a pre-step in front of it, and do not"
   echo "hand the change over to anything else: whatever \`/ship\` does not do is a question"
   echo "for the human (escalate it), not work for a different skill."
@@ -146,12 +148,12 @@ PROTO="$MB/protocol-$SLOT.md"
   echo "wait for the answer, and only then act on it and continue here."
   echo
   echo '```bash'
-  echo "bash $DIR/sh-ask.sh \"<question>\" --context \"<state, options, your recommendation>\" --timeout 540"
+  echo "bash $DIR/shipyard-ask.sh \"<question>\" --context \"<state, options, your recommendation>\" --timeout 540"
   echo '```'
   echo
   echo "It blocks and prints \`ANSWER: <text>\` (call it from the Bash tool with"
   echo "\`timeout: 600000\`). On \`PENDING:<id>\` do other *safe* work and re-check with"
-  echo "\`sh-ask.sh --wait <id> --timeout 540\` or \`--poll <id>\`. Keep re-checking; a"
+  echo "\`shipyard-ask.sh --wait <id> --timeout 540\` or \`--poll <id>\`. Keep re-checking; a"
   echo "pending question is never a reason to stop the pipeline loop or to decide alone."
   echo
   echo "## Always escalate — never decide alone"
@@ -162,7 +164,7 @@ PROTO="$MB/protocol-$SLOT.md"
   echo "  the design/spec artifacts (i.e. while proposing, not after):"
   echo
   echo '  ```bash'
-  echo "  bash $DIR/sh-ask.sh --kind decision \"<the decision>\" \\"
+  echo "  bash $DIR/shipyard-ask.sh --kind decision \"<the decision>\" \\"
   echo "    --context \"<option A/B/C, trade-offs, your recommendation>\" --timeout 540"
   echo '  ```'
   echo
@@ -170,7 +172,7 @@ PROTO="$MB/protocol-$SLOT.md"
   echo "  real options and your recommendation, then follow the answer you get back."
   echo
   echo '  **Write that context to a FILE and pass `--context-file`, not `--context "..."`.**'
-  echo '  The payload is a shell argument, so YOUR OWN shell expands it before sh-ask.sh'
+  echo '  The payload is a shell argument, so YOUR OWN shell expands it before shipyard-ask.sh'
   echo '  ever runs: inside double quotes a backticked identifier is COMMAND SUBSTITUTION'
   echo '  and is replaced by the output of running it, which is normally nothing. This has'
   echo '  already eaten a term out of a real escalation -- "the two overlapped and  could'
@@ -181,7 +183,7 @@ PROTO="$MB/protocol-$SLOT.md"
   echo "  cat > /tmp/ctx.md <<'CTX'"
   echo '  ...options, trade-offs and your recommendation, with `code` intact...'
   echo '  CTX'
-  echo "  bash $DIR/sh-ask.sh --kind decision '<the decision>' --context-file /tmp/ctx.md --timeout 540"
+  echo "  bash $DIR/shipyard-ask.sh --kind decision '<the decision>' --context-file /tmp/ctx.md --timeout 540"
   echo '  ```'
   echo "* Ambiguous, conflicting or missing requirements and acceptance criteria — including"
   echo "  the shape of the change itself when you were started from a free-text idea and"
@@ -193,7 +195,7 @@ PROTO="$MB/protocol-$SLOT.md"
   echo
   echo "## Notify without blocking"
   echo
-  echo "\`bash $DIR/sh-ask.sh --kind notice \"<what happened>\"\` on milestones: MR/PR opened,"
+  echo "\`bash $DIR/shipyard-ask.sh --kind notice \"<what happened>\"\` on milestones: MR/PR opened,"
   echo "a review pass posted blocking findings, pipeline failed, change archived, merged, and"
   echo "whenever you stop for any reason. No waiting, one line each."
   echo
@@ -257,24 +259,24 @@ PROTO="$MB/protocol-$SLOT.md"
 LAUNCHER="$MB/launch-$SLOT.sh"
 {
   echo '#!/bin/zsh -l'
-  echo "# generated by sh-launch.sh for slot $SLOT — re-runnable by hand"
+  echo "# generated by shipyard-launch.sh for slot $SLOT — re-runnable by hand"
   echo
   echo '# Re-assert the parent watcher'"'"'s Claude identity AFTER the login profile ran:'
   echo '# a profile that sets its own CLAUDE_HOME/CLAUDE_CONFIG_DIR would otherwise hand'
   echo '# the child a different config dir, hence different skills — possibly no /ship.'
-  sh_env_preamble
+  shipyard_env_preamble
   echo
-  echo "cd $(sh_shq "$CWD") || exit 1"
+  echo "cd $(shipyard_shq "$CWD") || exit 1"
   printf 'exec claude -w %s --effort max -n %s --permission-mode auto --remote-control %s \\\n' \
-    "$(sh_shq "$NAME")" "$(sh_shq "$NAME")" "$(sh_shq "$NAME")"
-  printf '  --append-system-prompt "$(cat %s)" \\\n' "$(sh_shq "$PROTO")"
-  printf '  %s\n' "$(sh_shq "$PROMPT")"
+    "$(shipyard_shq "$NAME")" "$(shipyard_shq "$NAME")" "$(shipyard_shq "$NAME")"
+  printf '  --append-system-prompt "$(cat %s)" \\\n' "$(shipyard_shq "$PROTO")"
+  printf '  %s\n' "$(shipyard_shq "$PROMPT")"
 } >"$LAUNCHER"
 chmod +x "$LAUNCHER"
 
-ENVSUM=$(sh_env_summary)
+ENVSUM=$(shipyard_env_summary)
 
-if [ "${SH_DRY:-}" = 1 ]; then
+if [ "${SHIPYARD_DRY:-}" = 1 ]; then
   echo "dry-run: backend $BACKEND, $KIND $CONTAINER, terminal $NAME (worktree .claude/worktrees/$NAME)"
   echo "dry-run: protocol $PROTO"
   echo "dry-run: launcher $LAUNCHER"
@@ -284,7 +286,7 @@ if [ "${SH_DRY:-}" = 1 ]; then
   exit 0
 fi
 
-sh_launch "$SLOT" "$CWD" "$LAUNCHER" || {
+shipyard_launch "$SLOT" "$CWD" "$LAUNCHER" || {
   echo "error: failed to start the child terminal ($BACKEND)" >&2; exit 1; }
 
 # Record what the child was given, so a later "why is it using the wrong skills?" is a
@@ -294,14 +296,14 @@ sh_launch "$SLOT" "$CWD" "$LAUNCHER" || {
 # question — a fake escalation that never resolves and keeps the monitor alive.
 jq -n --arg slot "$SLOT" --arg backend "$BACKEND" --arg container "$CONTAINER" \
       --arg prompt "$PROMPT" --arg proto "$PROTO" --arg launcher "$LAUNCHER" \
-      --arg env "$ENVSUM" --arg cwd "$CWD" --arg now "$(sh_now)" \
+      --arg env "$ENVSUM" --arg cwd "$CWD" --arg now "$(shipyard_now)" \
   '{id:("launch-"+$slot), slot:$slot, kind:"launch", status:"info",
     backend:$backend, container:$container, prompt:$prompt,
     protocol:$proto, launcher:$launcher, env:$env, cwd:$cwd, started_at:$now}' \
   >"$MB/launch-$SLOT.json" 2>/dev/null
 
-sh_note "$SLOT" active
+shipyard_note "$SLOT" active
 
-echo "started ship in $(sh_where "$SLOT") (worktree .claude/worktrees/$NAME) — $PROMPT"
+echo "started ship in $(shipyard_where "$SLOT") (worktree .claude/worktrees/$NAME) — $PROMPT"
 echo "env: $ENVSUM"
 echo "SLOT:$SLOT"

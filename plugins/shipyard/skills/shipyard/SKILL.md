@@ -1,38 +1,38 @@
 ---
-name: sh
-description: "sh: run the repo's /ship skill in background terminals (agterm sessions when available, tmux windows otherwise) and supervise them. Use when one or more changes should be driven through the pipeline (issue → spec → apply → archive → ready-to-merge) by background Claude sessions, with a status table every 10 minutes and questions/architecture decisions escalated back to this session."
+name: shipyard
+description: "shipyard: run the repo's /ship skill in background terminals (agterm sessions when available, tmux windows otherwise) and supervise them. Use when one or more changes should be driven through the pipeline (issue → spec → apply → review → ready-to-merge) by background Claude sessions, with a status table every 10 minutes and questions/architecture decisions escalated back to this session. Requires a /ship skill in the repo — it launches nothing else."
 ---
 
-# sh: run ship in background terminals, monitor it, answer its escalations
+# shipyard: run ship in background terminals, monitor it, answer its escalations
 
-Author-side twin of the `rv` skill. `rv` runs `/review <id>` on other people's MRs;
-`sh` runs the repo's own **`/ship`** skill on your work: every change gets its own
-terminal and its own git worktree, a background monitor posts a markdown status table
+A shipyard is where many ships are built at once. This skill runs the repo's own
+**`/ship`** skill on your work, one change at a time in parallel: every change gets its
+own terminal and its own git worktree, a background monitor posts a markdown status table
 every 10 minutes and stops itself once everything is merged/closed, and — because
 there is no human inside a child terminal — the child escalates every question and
 every architectural decision **up to this session**, waits for your answer, and only
 then acts on it.
 
-**`sh` launches exactly one thing: `/ship`.** It is not a pipeline of its own and it
-knows nothing about the stages — `/ship` owns all of them (issue → spec → its own
-review passes → apply → archive → ready-to-merge) and takes a free-text idea, a `#N`
-issue, or an MR/PR number as its argument. `sh` only starts it, watches it, and carries
-its questions to you. The repo must provide that skill; if it does not, `sh` has nothing
-to run.
+**`shipyard` launches exactly one thing: `/ship`.** It is not a pipeline of its own and it
+knows nothing about the stages — `/ship` owns all of them and takes a free-text idea, a
+`#N` issue, or an MR/PR number as its argument. `shipyard` only starts it, watches it, and
+carries its questions to you. The repo must provide that skill; if it does not, `shipyard`
+has nothing to run. Neither Claude Code nor Codex can declare a plugin-to-plugin
+dependency, so that requirement lives here, in prose, and nowhere else.
 
 Skill arguments:
-* `/sh 108 104` — continue existing MRs/PRs by number;
-* `/sh "#42"` — start from an existing issue;
-* `/sh "add X to Y"` — a brand-new change from a free-text idea, handed to `/ship` as-is;
-* `/sh 108 no-merge` — extra ship flags (`no-merge`, `merge`, `effort <level>`) go through verbatim;
-* `/sh` — no arguments: monitor-only over the ship terminals that already exist (Step 0).
+* `/shipyard 108 104` — continue existing MRs/PRs by number;
+* `/shipyard "#42"` — start from an existing issue;
+* `/shipyard "add X to Y"` — a brand-new change from a free-text idea, handed to `/ship` as-is;
+* `/shipyard 108 no-merge` — extra ship flags (`no-merge`, `merge`, `effort <level>`) go through verbatim;
+* `/shipyard` — no arguments: monitor-only over the ship terminals that already exist (Step 0).
 
 Run it from the **main worktree** of a git repo.
 
 ## Backends: auto → agterm, else tmux
 
 A child needs a terminal the parent can read from and type into. Two provide that, and
-everything in this skill goes through one abstraction (`sh-backend.sh`), so a slot
+everything in this skill goes through one abstraction (`shipyard-backend.sh`), so a slot
 behaves identically on either:
 
 | | agterm (preferred by `auto`) | tmux (fallback) |
@@ -43,11 +43,11 @@ behaves identically on either:
 | addressed by | session UUID | `<session>:<index>` |
 | sidebar glyph | yes — `active`/`blocked`/`completed` | none |
 
-Select with `SH_BACKEND=agterm|tmux|auto`. The default is **`auto`**: agterm whenever an
-agterm app is answering its control socket, else tmux. When **neither** is available `sh`
+Select with `SHIPYARD_BACKEND=agterm|tmux|auto`. The default is **`auto`**: agterm whenever an
+agterm app is answering its control socket, else tmux. When **neither** is available `shipyard`
 stops with an error naming both — it has no third way to reach a child, and a skill that
 "starts" work it cannot see or type into is worse than one that refuses. A misspelled
-`SH_BACKEND` gets its own error rather than the not-installed one.
+`SHIPYARD_BACKEND` gets its own error rather than the not-installed one.
 
 ### Which workspace children land in
 
@@ -58,19 +58,19 @@ from inside `chessid-ai` (a child starting a sibling) stays `chessid-ai`.
 
 Resolution order, first hit wins:
 
-1. `SH_WORKSPACE` (agterm) / `SH_SESSION` (tmux) — an explicit override;
+1. `SHIPYARD_WORKSPACE` (agterm) / `SHIPYARD_SESSION` (tmux) — an explicit override;
 2. the name **pinned** at the first launch, in `<mailbox>/container-<backend>`;
 3. freshly derived — the parent's workspace `-ai`, or `<repo>-ai` when there is no agterm
    around (a plain shell, cron, another terminal). tmux is always `<repo>`, unchanged, so
-   `sh` and `rv` windows keep sharing one session.
+   ship windows keep sharing one session with your own.
 
 **Step 2 is the load-bearing one.** The derived name depends on *where the caller was
 sitting*, so re-deriving it later — a report run from another workspace, a script run from
 inside a child — would name a different container and honestly report that it holds no
 children. That is the worst thing a monitor can do, so the name is written down at the
-first launch and every later script reads it. `sh-down.sh` erases the pin once the last
+first launch and every later script reads it. `shipyard-down.sh` erases the pin once the last
 child is gone, so the next run picks a fresh workspace; to repoint sooner, delete
-`<mailbox>/container-<backend>` or pass `SH_WORKSPACE`.
+`<mailbox>/container-<backend>` or pass `SHIPYARD_WORKSPACE`.
 
 A caveat that comes with reading the environment: `AGTERM_*` is inherited by every
 descendant, long-lived daemons included. A launch driven from a process that some *other*
@@ -83,7 +83,7 @@ it (`blocked` + blink = it is waiting on YOU, `completed` = merged/closed/ready-
 the board is readable at a glance without the table.
 
 **Do not call `agtermctl` or `tmux` directly from this skill's flow.** Every script
-here goes through `sh-backend.sh`; reaching around it is how one backend silently stops
+here goes through `shipyard-backend.sh`; reaching around it is how one backend silently stops
 being supported.
 
 ## The child's Claude identity — `CLAUDE_HOME` / `CLAUDE_CONFIG_DIR`
@@ -100,14 +100,14 @@ back to the profile default gets a child with **different skills — possibly no
 at all**, which surfaces as a child that starts, looks healthy, and does something else
 entirely.
 
-So `sh-launch.sh` writes a **launcher script** and re-asserts those variables inside it,
+So `shipyard-launch.sh` writes a **launcher script** and re-asserts those variables inside it,
 *after* the login profile has run:
 
 * propagated (only when set here): `CLAUDE_HOME`, `CLAUDE_CONFIG_DIR` — extend with
-  `SH_ENV_PASS="VAR1 VAR2"`;
+  `SHIPYARD_ENV_PASS="VAR1 VAR2"`;
 * scrubbed always: `CLAUDECODE`, `CLAUDE_CODE_ENTRYPOINT`, `CLAUDE_CODE_SESSION_ID`,
   `CLAUDE_CODE_CHILD_SESSION`, `CLAUDE_PID`, `CLAUDE_CODE_MESSAGING_SOCKET`,
-  `CLAUDE_CODE_MESSAGING_TOKEN`, `CLAUDE_EFFORT`, `SH_SLOT` — these are *this* session's
+  `CLAUDE_CODE_MESSAGING_TOKEN`, `CLAUDE_EFFORT`, `SHIPYARD_SLOT` — these are *this* session's
   identity, and handing a child the parent's messaging socket points it at the parent's
   own IPC channel.
 
@@ -117,7 +117,7 @@ has the wrong skills, the answer is usually there — and if a value drifted aft
 (you changed config dirs mid-flight), the fix is to re-launch the slot, not to patch the
 running child: the variable was read at startup.
 
-`SH_BACKEND=tmux` additionally scrubs `AGTERM_*` before the tmux server is born. A server
+`SHIPYARD_BACKEND=tmux` additionally scrubs `AGTERM_*` before the tmux server is born. A server
 started from inside an agterm session captures those and hands them to every process it
 ever spawns, so a child's status hook would report against whichever session happened to
 start tmux.
@@ -132,10 +132,10 @@ collapses away, so the slug can end up short — that is fine, it is only a name
 duplicate numeric slot is refused (two Claudes in one worktree collide); a duplicate
 text slot gets a `-2` suffix.
 
-## Step 0. `/sh` with no arguments — monitor only
+## Step 0. `/shipyard` with no arguments — monitor only
 
 Ship has no "inbox" (work comes from a human, not from the forge), so the no-argument
-mode is just the report: `bash <SKILL>/sh-report.sh` with no arguments finds every
+mode is just the report: `bash <SKILL>/shipyard-report.sh` with no arguments finds every
 `ship-*` terminal in the container by itself. Then go to Step 2 (same monitor, no slot
 list in the command).
 
@@ -144,7 +144,7 @@ list in the command).
 For each target in the arguments:
 
 ```bash
-bash <SKILL>/sh-launch.sh <number | "#42" | "idea text"> [ship flags...]
+bash <SKILL>/shipyard-launch.sh <number | "#42" | "idea text"> [ship flags...]
 ```
 
 The script checks we are in a git repo and not in `$HOME`, computes the slot, writes the
@@ -164,17 +164,17 @@ claude -w ship-<slot> --effort max -n ship-<slot> --permission-mode auto \
   '/ship <target> [flags]'
 ```
 
-`SH_DRY=1` prints the slot, the protocol path, the propagated env and the whole launcher
+`SHIPYARD_DRY=1` prints the slot, the protocol path, the propagated env and the whole launcher
 without starting anything — use it when you are unsure what a child will get.
 
 The primary path for anything needing a human is the escalation mailbox (Step 3);
-`sh-tell.sh` (Step 4) is the way back when the child did not ask. `--remote-control` is
+`shipyard-tell.sh` (Step 4) is the way back when the child did not ask. `--remote-control` is
 left on as a manual escape hatch for a human at another client — it has no send-side CLI,
 so do not plan on driving it from here.
 
 ## Step 2. Monitor every 10 minutes
 
-`<SKILL>/sh-report.sh [<slot> ...]` builds the report:
+`<SKILL>/shipyard-report.sh [<slot> ...]` builds the report:
 * running-vs-idle from a snapshot DIFF (two captures 3s apart), not spinner glyphs;
 * the MR/PR number of a text slot is read from `.pipeline-state/*.json` inside the
   worktree — before it exists the column says `no MR yet`;
@@ -189,7 +189,7 @@ so do not plan on driving it from here.
 Arm the status monitor (`Monitor`, `persistent: true`), substituting the slots:
 
 ```bash
-SCRIPT=<SKILL>/sh-report.sh
+SCRIPT=<SKILL>/shipyard-report.sh
 while true; do
   bash "$SCRIPT" --only-changed <slot> [<slot> ...] && { echo "__all changes shipped — exiting monitor__"; break; }
   sleep 594   # 594 + ~6s for two 3-second captures ≈ 10 min
@@ -209,13 +209,13 @@ child that hit its context ceiling, or that was compacted and never told to resu
 nothing at all. One ran that way for **8.5 hours**. The report therefore tracks how long
 each slot has been motionless and prints a loud `🛑 STALLED` block, bypassing
 `--only-changed`, once an idle slot with no open escalation has not moved for 30 minutes
-(`SH_STALL_SECS` to tune). Treat that block as an alarm, not as a status line.
+(`SHIPYARD_STALL_SECS` to tune). Treat that block as an alarm, not as a status line.
 
 Arm the **fast escalation monitor** too — 10 minutes is too slow for a child that is
 blocked on a question:
 
 ```bash
-SCRIPT=<SKILL>/sh-escalations.sh
+SCRIPT=<SKILL>/shipyard-escalations.sh
 while true; do
   bash "$SCRIPT" --new
   sleep 45
@@ -228,7 +228,7 @@ silent until something actually needs you. Description: "ship escalations (fast)
 * Both scripts are separate files, so edits land on the next iteration — unlike an
   inline `while` body, which bash caches (editing a running monitor does nothing;
   `TaskStop` and re-arm).
-* The status monitor exits by itself when `sh-report.sh` returns 0. Stop either one
+* The status monitor exits by itself when `shipyard-report.sh` returns 0. Stop either one
   manually with `TaskStop`.
 
 **Mirror what the monitors emit as a normal message.** Monitor events arrive as system
@@ -245,26 +245,32 @@ or `archive` (work in progress, or CI still green-lighting the head) is a normal
 state of a healthy ship session, not news.
 
 **Know which stages can resolve themselves and which cannot.** `/ship` is **self-driven**:
-it runs its own spec review and its own code+security review as subagents, so
-`spec-review` and `impl-review` are WORK, not waits — nothing external needs launching.
-Its states are `need-issue`, `issue-ready`, `spec-review`, `apply`, `impl-review`,
-`archive`, `ready-to-merge`, `done`.
+it runs every review pass itself, as subagents, so a review stage is WORK, not a wait —
+nothing external needs launching, ever.
 
-`ready-to-merge` never resolves itself, by design — `/ship` never merges its own work, so
-a child parked there is finished and waiting for the human. So is `needs-human`. Both are
-news; the rest are not.
+**Do not trust this paragraph for the state names.** The bundled `/ship` uses
+`need-issue`, `issue-ready`, `spec`, `spec-review`, `apply`, `impl-review`, `archive`,
+`ready-to-merge`, `needs-human`, `done` — with the spec and archive stages skipped in a
+repo that keeps no spec artifact. But a repo may carry its own `/ship`, and this file is a
+copy of nothing: **read the state enum in the `/ship` you are actually running.**
+
+`ready-to-merge` resolves itself only where repo policy lets ship merge; where it does not,
+a child parked there is finished and waiting for the human. `needs-human` never resolves
+itself anywhere. Both are news; the rest are not.
 
 Two lessons from how this file was wrong before, kept because the failure shape recurs:
 
 * It named a stage that existed in no version of `ship` and called it a normal resting
   state. Believing in a stage absent from the skill's own state enum is how a real stall
-  reads as business as usual. **Read the state enum in the repo's `/ship`, not this file** —
-  this one is a copy and copies rot.
-* When `ship` DID wait on an external reviewer, nothing started that reviewer
-  automatically. A child sat in `await-spec-review` with `esc —` and a green board,
+  reads as business as usual. That is why the enum above comes with the instruction to go
+  and check it — a copy of an enum is a copy, and copies rot.
+* When `ship` still had a stage that waited on an external reviewer, nothing started that
+  reviewer automatically. A child sat in that stage with `esc —` and a green board,
   indistinguishable from healthy waiting, until a human noticed. **If a stage waits on a
   second actor, check that something actually starts that actor.** A wait nobody
-  satisfies is invisible from outside.
+  satisfies is invisible from outside. The bundled `/ship` has no such stage left, by
+  design; if you point `shipyard` at a `/ship` that does, that stage is the first place to
+  look when a child goes quiet.
 
 ## Step 3. Answer escalations (this is the point of the skill)
 
@@ -281,14 +287,14 @@ When an escalation arrives:
    put the child's recommendation first.
 2. Write the answer back:
    ```bash
-   bash <SKILL>/sh-answer.sh <id> "<the answer / the decision>"
+   bash <SKILL>/shipyard-answer.sh <id> "<the answer / the decision>"
    ```
 
    **For anything longer than a line, or containing backticks or `$(...)`, pass a file
    instead — `@<path>`, or `@-` for stdin:**
 
    ```bash
-   bash <SKILL>/sh-answer.sh <id> @/tmp/decision.md
+   bash <SKILL>/shipyard-answer.sh <id> @/tmp/decision.md
    ```
 
    The payload is a shell ARGUMENT, so your own shell expands it before the script runs:
@@ -300,12 +306,12 @@ When an escalation arrives:
    ("#429 IS THE TRAP.&nbsp;&nbsp;inside a STEP is rejected by DBOS"). Both read as merely
    clumsy rather than corrupted, which is exactly what makes it expensive to notice.
 
-   `sh-tell.sh` takes `@file` / `@-` too, and the child side has `--context-file` /
-   `--text-file` on `sh-ask.sh`. Reach for them by default for technical content; the
+   `shipyard-tell.sh` takes `@file` / `@-` too, and the child side has `--context-file` /
+   `--text-file` on `shipyard-ask.sh`. Reach for them by default for technical content; the
    literal argument is for short one-liners.
    The child picks the answer up within ~5s and continues — for a `question` or a
    `decision` you never type into its terminal.
-3. `bash <SKILL>/sh-answer.sh --list` shows every escalation and its status.
+3. `bash <SKILL>/shipyard-answer.sh --list` shows every escalation and its status.
 
 Kinds, and what the child is instructed to escalate:
 
@@ -322,14 +328,14 @@ open question that nobody can answer.
 Do not answer a `decision` on the user's behalf. Relay it, get the call, pass it back
 verbatim — that is the whole reason it was escalated instead of decided in the child.
 
-## Step 4. Speak first — `sh-tell.sh`
+## Step 4. Speak first — `shipyard-tell.sh`
 
 The mailbox is a **child-initiated** channel: the child creates a record and polls it, you
 fill in the answer. That covers `question` and `decision` and nothing else. It does NOT
 carry:
 
 * a reply to a **`notice`** — fire-and-forget by construction, the child never polls it,
-  so `sh-answer.sh` on a notice writes an answer that is read by nobody;
+  so `shipyard-answer.sh` on a notice writes an answer that is read by nobody;
 * a reply to a record already **`done`** — the child consumed its answer and moved on;
 * anything **you** want to say that the child never asked about: "also fix the MR
   description", "don't merge yet", "the other session already pushed that".
@@ -338,7 +344,7 @@ For those, the channel that reaches a running child is its own terminal — Clau
 takes a typed message and queues it if it is mid-turn:
 
 ```bash
-bash <SKILL>/sh-tell.sh <slot | escalation-id> "<the directive>"
+bash <SKILL>/shipyard-tell.sh <slot | escalation-id> "<the directive>"
 ```
 
 It records the directive in the mailbox (`directive-<slot>-<n>.json` + `.txt`), flattens
@@ -348,8 +354,8 @@ is written to the `.txt` and the child is told to read that file. An escalation 
 accepted and resolves to its slot, so you can answer the notice you were just shown with
 the id you were shown. Exit 3 = no live terminal for that slot (the child is gone).
 
-`sh-answer.sh` knows this: on a `notice` or a `done` record it does **not** pretend to
-have answered — it hands the text to `sh-tell.sh` and says so. `--no-tell` forces the old
+`shipyard-answer.sh` knows this: on a `notice` or a `done` record it does **not** pretend to
+have answered — it hands the text to `shipyard-tell.sh` and says so. `--no-tell` forces the old
 write-the-record-only behaviour.
 
 The child's protocol tells it that a `[supervisor directive]` message is the human's
@@ -357,7 +363,7 @@ instruction, authoritative over its current plan, and to send a `notice` back wh
 
 Directives are `kind: directive`, `status: sent` — the report's `esc` column and the fast
 monitor both skip them, so telling a child something never looks like an open escalation.
-`bash <SKILL>/sh-tell.sh --list` shows what you have sent.
+`bash <SKILL>/shipyard-tell.sh --list` shows what you have sent.
 
 ## Step 5. Compact a child BEFORE it hits its context ceiling
 
@@ -376,8 +382,8 @@ the answer.
 **Act on `⚠️`, do not wait for `🛑`.** Compaction needs working room; at the ceiling it is
 itself an API call that may fail or retry for a long time.
 
-**Use `sh-compact.sh` — it does BOTH halves.** Compaction is a slash command in the TUI,
-so the mailbox cannot carry it (`sh-tell.sh` prefixes and flattens its payload into a
+**Use `shipyard-compact.sh` — it does BOTH halves.** Compaction is a slash command in the TUI,
+so the mailbox cannot carry it (`shipyard-tell.sh` prefixes and flattens its payload into a
 `[supervisor directive]` message, which is not the same thing). And on its own it is only
 half the job:
 
@@ -387,9 +393,9 @@ half the job:
 > just cured.
 
 ```bash
-bash <SKILL>/sh-compact.sh <slot>                        # compact, wait, then resume
-bash <SKILL>/sh-compact.sh <slot> --resume-file <path>   # with your own resume brief
-bash <SKILL>/sh-compact.sh <slot> --no-resume            # only if you will drive it yourself
+bash <SKILL>/shipyard-compact.sh <slot>                        # compact, wait, then resume
+bash <SKILL>/shipyard-compact.sh <slot> --resume-file <path>   # with your own resume brief
+bash <SKILL>/shipyard-compact.sh <slot> --no-resume            # only if you will drive it yourself
 ```
 
 **Constraints the child must not lose belong in a standing-orders file**, not in a
@@ -397,14 +403,14 @@ directive. A directive is a message: it lives in the child's context and dies wi
 next compaction, so a hard rule delivered that way ("do not merge — the human wants to
 check it locally first") is silently lifted by the very operation meant to keep the child
 working. Write it to `<mailbox>/standing-orders-<slot>.md`, tell the child to re-read that
-file after every compaction and before any irreversible action, and `sh-compact.sh` will
+file after every compaction and before any irreversible action, and `shipyard-compact.sh` will
 point every resume brief at it automatically.
 
 Prefer `--resume-file` for a long change: a resume brief that names where the child
 actually is (HEAD, pushed state, task count — read from git, not from its own last
 summary) stops it re-deriving the whole change from scratch on an empty context.
 
-Exit 5 means the child was still mid-turn when the wait ran out: `sh-compact.sh` will NOT
+Exit 5 means the child was still mid-turn when the wait ran out: `shipyard-compact.sh` will NOT
 drive a terminal during a turn, because the Escape it sends to clear the input box is
 INTERRUPT while one is running — it would kill the work in flight. Re-run when idle.
 
@@ -421,7 +427,7 @@ If you drive the terminal by hand instead, three facts that each cost a wrong di
   line it restores a PREVIOUS draft, so a box you believe you emptied comes back
   populated. `C-u` is UNDO here, not clear-line.
 * **Submission is `Enter` on some builds and `KPEnter` on others**, and a session AT its
-  ceiling refuses both. `sh_submit <slot> alt` sends the second form. Try one, look, try
+  ceiling refuses both. `shipyard_submit <slot> alt` sends the second form. Try one, look, try
   the other.
 * **Confirm by the FOOTER flipping to `esc to interrupt`**, never by the box looking
   empty — a capture can hand back a stale frame.
@@ -432,9 +438,9 @@ MERGE (or close) is the only teardown signal. Never tear a slot down early: a ch
 re-wakes itself and continues after long idle pauses, and the worktree goes with it.
 
 ```bash
-bash <SKILL>/sh-down.sh --list        # what exists and whether it is safe
-bash <SKILL>/sh-down.sh <slot>        # close the terminal, remove the worktree, prune
-bash <SKILL>/sh-down.sh <slot> --force
+bash <SKILL>/shipyard-down.sh --list        # what exists and whether it is safe
+bash <SKILL>/shipyard-down.sh <slot>        # close the terminal, remove the worktree, prune
+bash <SKILL>/shipyard-down.sh <slot> --force
 ```
 
 It refuses a slot with uncommitted changes or with commits not in its upstream, and says
@@ -466,31 +472,36 @@ waiting for something (Step 5). `/ship` never waits for an approval, so a sessio
 for a long stretch with a green pipeline and no escalation is worth a look — check its
 stage for `needs-human` or `ready-to-merge`.
 
-## sh and rv
+## There is no companion reviewer session
 
-They used to be two halves of one loop: `/ship` moved work forward, `/review` responded to
-each push, and they coordinated only through forge state. **That pairing is retired** —
-`/ship` reviews itself, so a `/sh` run needs no `/rv` beside it and launching one does
-nothing for the pipeline.
+This skill once had a twin that ran a separate `/review` session against each push, and the
+two coordinated only through forge state. **That pairing is retired.** `/ship` reviews its
+own work with subagents, so a `shipyard` run needs nothing beside it, and starting a second
+session to review the first does nothing for the pipeline.
 
-`rv` keeps its original job: reviewing **someone else's** MR/PR, where an independent pass
-by a separate session is the entire point. Both kinds of child coexist in one container
-(`ship-<slot>` vs `#<id>`).
+The reason to say so out loud: the retired design is the one that produced this skill's
+worst failure — a child parked in a stage that waited for a reviewer nobody had started,
+looking exactly like a healthy wait. If you ever find yourself launching a second session
+to unblock the first, that is the bug, not the fix.
+
+Children of other kinds can still share one container: a slot is keyed by name
+(`ship-<slot>`), so unrelated sessions in the same workspace or tmux session do not
+collide with it.
 
 ## Files
 
 | file | role |
 |------|------|
-| `sh-backend.sh` | the agterm/tmux abstraction — every terminal operation goes through it |
-| `sh-lib.sh` | mailbox paths, slot resolution, payload input, the child env preamble |
-| `sh-launch.sh` | start a child: slot, protocol, launcher, container |
-| `sh-report.sh` | the status table + stall watchdog + sidebar glyphs |
-| `sh-escalations.sh` | the escalation view (`--new` for the fast monitor) |
-| `sh-ask.sh` | CHILD side: raise a question / decision / notice |
-| `sh-answer.sh` | PARENT side: answer one |
-| `sh-tell.sh` | PARENT side: speak first, into the child's terminal |
-| `sh-compact.sh` | compact a child AND put it back to work |
-| `sh-down.sh` | teardown after a merge |
+| `shipyard-backend.sh` | the agterm/tmux abstraction — every terminal operation goes through it |
+| `shipyard-lib.sh` | mailbox paths, slot resolution, payload input, the child env preamble |
+| `shipyard-launch.sh` | start a child: slot, protocol, launcher, container |
+| `shipyard-report.sh` | the status table + stall watchdog + sidebar glyphs |
+| `shipyard-escalations.sh` | the escalation view (`--new` for the fast monitor) |
+| `shipyard-ask.sh` | CHILD side: raise a question / decision / notice |
+| `shipyard-answer.sh` | PARENT side: answer one |
+| `shipyard-tell.sh` | PARENT side: speak first, into the child's terminal |
+| `shipyard-compact.sh` | compact a child AND put it back to work |
+| `shipyard-down.sh` | teardown after a merge |
 
 ## Reminders
 
@@ -498,5 +509,9 @@ by a separate session is the entire point. Both kinds of child coexist in one co
   itself and continues after an idle pause (Step 6).
 * glab: `OAUTH_TOKEN` must be unset (the scripts do that themselves); the host comes from
   the origin remote.
-* The scripts are runnable by hand from a shell too. No `sh` zsh function is provided on
-  purpose — it would shadow the `sh` binary.
+* The scripts are runnable by hand from a shell too — nothing here needs the skill runtime
+  to be useful.
+* The mailbox directory (`.git/ship-escalations/`) and the slot prefix (`ship-<slot>`) are
+  named after `ship`, not after this skill, and that is deliberate: they are the protocol
+  between a parent watcher and a `/ship` child, so a rename here must not touch them. A
+  live run's mailbox is the one place where renaming would orphan work already in flight.

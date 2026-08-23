@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
-# sh-escalations.sh — PARENT watcher side: show escalations raised by child ship
+# shipyard-escalations.sh — PARENT watcher side: show escalations raised by child ship
 # sessions.
 #
 # Usage:
-#   sh-escalations.sh          every open (pending) item — read-only, flags untouched
-#   sh-escalations.sh --new    only items not shown yet; marks them notified
+#   shipyard-escalations.sh          every open (pending) item — read-only, flags untouched
+#   shipyard-escalations.sh --new    only items not shown yet; marks them notified
 #                              (for the fast monitor: silent when nothing is new)
 #
 # Prints one whole markdown block (so Monitor batches it into a single
@@ -12,13 +12,13 @@
 # escalations are never a loop-stop condition.
 set -o pipefail
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-# shellcheck source=sh-lib.sh
-. "$DIR/sh-lib.sh"
+# shellcheck source=shipyard-lib.sh
+. "$DIR/shipyard-lib.sh"
 
 ONLY_NEW=0
 [ "${1:-}" = "--new" ] && ONLY_NEW=1
 
-MB=$(sh_mailbox) || exit 0
+MB=$(shipyard_mailbox) || exit 0
 [ -d "$MB" ] || exit 0
 
 shopt -s nullglob
@@ -28,7 +28,7 @@ FILES=("$MB"/*.json)
 declare -a SHOW
 for f in "${FILES[@]}"; do
   # ALLOW-LIST, not a deny-list. The mailbox holds other records too — `directive`
-  # (parent->child, sh-tell.sh) and `launch` (what a child was started with) — and a
+  # (parent->child, shipyard-tell.sh) and `launch` (what a child was started with) — and a
   # deny-list only knows the kinds that existed when it was written. Anything whose
   # kind is not an escalation kind (including a record with no kind at all) used to
   # default to a pending question: a fake escalation nobody can answer, which keeps
@@ -63,11 +63,11 @@ done
     [ -n "$ctx" ] && { echo; echo "Context: $(printf '%s' "$ctx" | tr '\n' ' ')"; }
     echo
     if [ "$kind" != notice ]; then
-      echo "Reply: \`bash $DIR/sh-answer.sh $id \"<answer>\"\`"
+      echo "Reply: \`bash $DIR/shipyard-answer.sh $id \"<answer>\"\`"
     else
       # A notice needs no reply and the child does not poll it. If you DO want to
       # say something back, it has to go into the child's window.
-      echo "No reply needed. To send something back anyway: \`bash $DIR/sh-tell.sh $slot \"<directive>\"\`"
+      echo "No reply needed. To send something back anyway: \`bash $DIR/shipyard-tell.sh $slot \"<directive>\"\`"
     fi
   done
 } | cat
@@ -75,9 +75,9 @@ done
 # A notice needs no reply — close it right away so it stops showing as pending.
 for f in "${SHOW[@]}"; do
   if [ "$(jq -r '.kind' "$f" 2>/dev/null)" = notice ]; then
-    sh_json_set "$f" '.notified=true | .status="done"'
+    shipyard_json_set "$f" '.notified=true | .status="done"'
   elif [ "$ONLY_NEW" = 1 ]; then
-    sh_json_set "$f" '.notified=true'
+    shipyard_json_set "$f" '.notified=true'
   fi
 done
 exit 0

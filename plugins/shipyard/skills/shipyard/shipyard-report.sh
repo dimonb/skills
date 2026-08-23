@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
-# sh-report.sh — one markdown status table for a set of ship children.
-# Usage: sh-report.sh [--only-changed] [<slot> ...]
+# shipyard-report.sh — one markdown status table for a set of ship children.
+# Usage: shipyard-report.sh [--only-changed] [<slot> ...]
 #        no slot args = every `ship-*` terminal in this repo's container
 #
-# Terminals come from the backend layer (agterm by default, tmux with SH_BACKEND=tmux),
-# so this script never touches agtermctl or tmux itself — see sh-backend.sh.
+# Terminals come from the backend layer (agterm by default, tmux with SHIPYARD_BACKEND=tmux),
+# so this script never touches agtermctl or tmux itself — see shipyard-backend.sh.
 #
 # --only-changed prints NOTHING while the meaningful state is the same as the last
 # printed report, so a child parked in idle-wait for hours stops generating identical
@@ -15,7 +15,7 @@
 # always printed, so the end of the run is never swallowed. Exit codes are unchanged
 # whether or not anything was printed.
 #
-# Design notes (same as rv-report.sh):
+# Design notes:
 #  * running-vs-idle comes from a snapshot DIFF (two captures 3s apart), not from
 #    parsing spinner glyphs / the footer — those always look "busy";
 #  * the whole report is buffered and printed in ONE block so Monitor batches it
@@ -29,19 +29,19 @@
 #    exit 1 = work is still open.
 #
 # Env:
-#   SH_BACKEND   agterm (default) | tmux | auto
-#   SH_WORKSPACE agterm workspace name (default: the pinned one, see sh-backend.sh)
-#   SH_SESSION   tmux session name    (default: <repo>)
+#   SHIPYARD_BACKEND   agterm (default) | tmux | auto
+#   SHIPYARD_WORKSPACE agterm workspace name (default: the pinned one, see shipyard-backend.sh)
+#   SHIPYARD_SESSION   tmux session name    (default: <repo>)
 #   GITLAB_HOST  glab host (default: derived from the origin remote)
 set -o pipefail
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-# shellcheck source=sh-lib.sh
-. "$DIR/sh-lib.sh"
+# shellcheck source=shipyard-lib.sh
+. "$DIR/shipyard-lib.sh"
 
 ROOT=$(git rev-parse --show-toplevel 2>/dev/null || pwd)
-sh_backend_check || exit 1
-CONTAINER=$(sh_container)
-KIND=$(sh_container_kind)
+shipyard_backend_check || exit 1
+CONTAINER=$(shipyard_container)
+KIND=$(shipyard_container_kind)
 if [ -z "${GITLAB_HOST:-}" ]; then
   GITLAB_HOST=$(git -C "$ROOT" remote get-url origin 2>/dev/null \
     | sed -E 's#(git@|https?://)([^:/]+).*#\2#')
@@ -57,17 +57,17 @@ for a in "$@"; do
   esac
 done
 if [ ${#SLOTS[@]} -eq 0 ]; then
-  mapfile -t SLOTS < <(sh_slots)
+  mapfile -t SLOTS < <(shipyard_slots)
 fi
 
 # Where the last printed report's signature lives (shared .git, never committed).
 SIGFILE=""
 STALLFILE=""
-STALL_SECS="${SH_STALL_SECS:-1800}"   # 30 min of no movement, idle, nothing asked of you
+STALL_SECS="${SHIPYARD_STALL_SECS:-1800}"   # 30 min of no movement, idle, nothing asked of you
 # ENSURE, not just resolve: if the directory is missing the stall table cannot be
 # written, `since` resets to now on every run, and the watchdog silently never
 # fires. A watchdog that fails closed is worse than none — it looks armed.
-if mb=$(sh_mailbox_ensure 2>/dev/null); then SIGFILE="$mb/report-sig"; STALLFILE="$mb/report-stall"; fi
+if mb=$(shipyard_mailbox_ensure 2>/dev/null); then SIGFILE="$mb/report-sig"; STALLFILE="$mb/report-stall"; fi
 STALLED=()
 STALL_ROWS=()
 
@@ -84,7 +84,7 @@ forge() {
 # The MR/PR number for a slot, or empty when the change has not opened one yet.
 #
 # A NUMERIC SLOT IS NOT AUTOMATICALLY THE MR NUMBER. On GitLab it is (the slot comes
-# from an MR iid). On GitHub `/sh` is normally started from an ISSUE, so the slot is an
+# from an MR iid). On GitHub `/shipyard` is normally started from an ISSUE, so the slot is an
 # issue number and the PR does not exist yet and will get a DIFFERENT number. Returning
 # the slot there labelled a live issue as a PR, and then the state lookup for that
 # non-existent PR came back "?" — which mr_state()/inflight took for "finished", so the
@@ -127,7 +127,7 @@ mr_state() {
   printf '%s' "$st"
 }
 
-# Pipeline stage out of ship's state file (propose / await-spec-review / apply / ...).
+# Pipeline stage out of ship's state file (issue-ready / spec-review / apply / impl-review / ...).
 slot_stage() {
   local slot="$1" sd f
   sd="$ROOT/.claude/worktrees/ship-$slot/.pipeline-state"
@@ -138,11 +138,11 @@ slot_stage() {
 # Pending escalations for a slot (count).
 slot_pending() {
   local slot="$1" mb n=0 f
-  mb=$(sh_mailbox 2>/dev/null) || { printf 0; return; }
+  mb=$(shipyard_mailbox 2>/dev/null) || { printf 0; return; }
   [ -d "$mb" ] || { printf 0; return; }
   shopt -s nullglob
   for f in "$mb/$slot-"*.json; do
-    # Same allow-list as sh-escalations.sh: only a real escalation kind counts, so a
+    # Same allow-list as shipyard-escalations.sh: only a real escalation kind counts, so a
     # `directive` (parent->child) or any future record type can never inflate this.
     [ "$(jq -r 'if (.kind|IN("question","decision","notice")) then (.status // "pending") else "" end' \
          "$f" 2>/dev/null)" = pending ] && n=$((n+1))
@@ -160,7 +160,7 @@ if [ ${#SLOTS[@]} -eq 0 ]; then
   {
     echo "### ship status — $(TZ=Europe/Moscow date '+%H:%M:%S MSK')"
     echo
-    echo "_no live ship terminals in $KIND \`$CONTAINER\` ($(sh_backend))_"
+    echo "_no live ship terminals in $KIND \`$CONTAINER\` ($(shipyard_backend))_"
   } | cat
   exit 0
 fi
@@ -202,7 +202,7 @@ ctx_band() {
 
 for slot in "${SLOTS[@]}"; do
   [ -z "$slot" ] && continue
-  addr=$(sh_slot_addr "$slot")
+  addr=$(shipyard_slot_addr "$slot")
   iid=$(slot_iid "$slot")
   mr_label="—"; [ -n "$iid" ] && mr_label="!$iid"
   pend=$(slot_pending "$slot")
@@ -215,9 +215,9 @@ for slot in "${SLOTS[@]}"; do
     continue
   fi
 
-  a=$(sh_capture "$slot")
+  a=$(shipyard_capture "$slot")
   sleep 3
-  b=$(sh_capture "$slot")
+  b=$(shipyard_capture "$slot")
   [ "$a" = "$b" ] && run="⏸ idle/wait" || run="▶️ running"
 
   line=$(printf '%s\n' "$b" | status_line)
@@ -265,11 +265,11 @@ for slot in "${SLOTS[@]}"; do
 
   # Paint the same verdict on the sidebar glyph (agterm only; a no-op on tmux), so the
   # board is readable without reading the table: blocked = it is waiting on YOU.
-  if   [ "$pend" != 0 ];      then sh_note "$slot" blocked --blink
-  elif [ "$stalled_now" = 1 ]; then sh_note "$slot" blocked
+  if   [ "$pend" != 0 ];      then shipyard_note "$slot" blocked --blink
+  elif [ "$stalled_now" = 1 ]; then shipyard_note "$slot" blocked
   elif [ "$state" = merged ] || [ "$state" = closed ] || [ "$stage" = ready-to-merge ]; then
-                                   sh_note "$slot" completed
-  else                             sh_note "$slot" active
+                                   shipyard_note "$slot" completed
+  else                             shipyard_note "$slot" active
   fi
 
   ROWS+=("| $slot | $mr_label | $addr | $run | $state / $stage | $esc | $ctx | ${line} |")
@@ -296,7 +296,7 @@ elif [ -n "$SIGFILE" ]; then
 fi
 
 {
-  echo "### ship status — $(TZ=Europe/Moscow date '+%H:%M:%S MSK') · $(sh_backend) $KIND \`$CONTAINER\`"
+  echo "### ship status — $(TZ=Europe/Moscow date '+%H:%M:%S MSK') · $(shipyard_backend) $KIND \`$CONTAINER\`"
   echo
   echo "| slot | MR | term | session | MR state / stage | esc | ctx | last line |"
   echo "|------|----|------|---------|------------------|-----|-----|-----------|"
@@ -314,10 +314,10 @@ fi
       sl=${x%%|*}; rest=${x#*|}; mins=${rest%%|*}; c=${rest#*|}
       echo "- \`$sl\` — motionless for ${mins} min (ctx $c). A child does not idle this long on its own."
       echo "  If ctx is ⚠️/🛑 it has hit its context ceiling; if it was just compacted it is waiting to be told to resume."
-      echo "  Both are fixed the same way: \`bash $DIR/sh-compact.sh $sl\` (compacts AND resumes), or send a directive if ctx is low."
+      echo "  Both are fixed the same way: \`bash $DIR/shipyard-compact.sh $sl\` (compacts AND resumes), or send a directive if ctx is low."
     done
   fi
-  bash "$DIR/sh-escalations.sh" 2>/dev/null
+  bash "$DIR/shipyard-escalations.sh" 2>/dev/null
 } | cat
 
 # An unanswered escalation also keeps the loop alive — never exit on a live question.
