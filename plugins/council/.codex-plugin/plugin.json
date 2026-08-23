@@ -1,0 +1,41 @@
+{
+  "name": "council",
+  "version": "0.1.0",
+  "description": "Run a multi-agent discussion room: several agent sessions (Claude Code, Codex, Antigravity) argue one question in background terminals by a strict protocol — speaking in turn, objecting with references, closing objections mechanically — and the room writes a decision record when it converges, or an honest unresolved one when it does not.",
+  "author": {
+    "name": "dimonb",
+    "url": "https://github.com/dimonb"
+  },
+  "homepage": "https://github.com/dimonb/skills/tree/main/plugins/council",
+  "repository": "https://github.com/dimonb/skills",
+  "license": "MIT",
+  "keywords": [
+    "council",
+    "multi-agent",
+    "debate",
+    "review",
+    "decision",
+    "adr",
+    "tmux",
+    "agterm",
+    "codex",
+    "antigravity"
+  ],
+  "skills": "./skills/",
+  "interface": {
+    "displayName": "council",
+    "shortDescription": "A room where several agents argue one question",
+    "longDescription": "Puts N agent sessions — Claude Code, Codex, Antigravity — in one room with an agenda and a strict turn-taking protocol. Objections must reference what they object to and are closed mechanically; the room is finished only when nothing is open and a full lap passes with nothing new, and it then writes a decision record with the argument history. A room that does not converge says so and lists what is still open.",
+    "developerName": "dimonb",
+    "category": "Developer Tools",
+    "capabilities": [
+      "Interactive",
+      "Write"
+    ],
+    "defaultPrompt": [
+      "Обсудить этот выбор в комнате из claude, codex и agy",
+      "Show me the status of the council room",
+      "Разобрать это изменение: автор и ревьюер — разные агенты"
+    ]
+  }
+}
