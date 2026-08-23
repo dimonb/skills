@@ -1,0 +1,27 @@
+{
+  "$schema": "https://anthropic.com/claude-code/marketplace.schema.json",
+  "name": "dimonb-skills",
+  "description": "Agent skills for driving real work through a repo's pipeline: ship one change end-to-end with self-review, and shipyard a fleet of them in background terminals.",
+  "owner": {
+    "name": "dimonb",
+    "url": "https://github.com/dimonb"
+  },
+  "plugins": [
+    {
+      "name": "ship",
+      "description": "Drive one change end-to-end through a repo's pipeline on GitHub or GitLab — issue, spec, implementation, its own review passes, hand-off or merge. Self-driven: read-only review subagents with adversarial verification, and no stage that waits on an external reviewer.",
+      "author": { "name": "dimonb" },
+      "category": "workflow",
+      "source": "./plugins/ship",
+      "homepage": "https://github.com/dimonb/skills/tree/main/plugins/ship"
+    },
+    {
+      "name": "shipyard",
+      "description": "Run ship in background terminals and supervise a fleet of them: one git worktree per change, a status table on a timer, stall and context-ceiling watchdogs, and every escalation carried back to you. Requires the ship plugin.",
+      "author": { "name": "dimonb" },
+      "category": "workflow",
+      "source": "./plugins/shipyard",
+      "homepage": "https://github.com/dimonb/skills/tree/main/plugins/shipyard"
+    }
+  ]
+}

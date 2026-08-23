@@ -1,0 +1,25 @@
+{
+  "name": "shipyard",
+  "version": "0.1.0",
+  "description": "Run the repo's /ship skill in background terminals (agterm sessions, or tmux) and supervise a fleet of them: one git worktree each, a status table every 10 minutes, and every question or architectural decision escalated back to the session you are sitting in. Requires a /ship skill in the repo — it launches nothing else.",
+  "dependencies": [
+    "ship"
+  ],
+  "author": {
+    "name": "dimonb",
+    "url": "https://github.com/dimonb"
+  },
+  "homepage": "https://github.com/dimonb/skills/tree/main/plugins/shipyard",
+  "repository": "https://github.com/dimonb/skills",
+  "license": "MIT",
+  "keywords": [
+    "shipyard",
+    "ship",
+    "fleet",
+    "tmux",
+    "agterm",
+    "worktree",
+    "supervisor",
+    "automation"
+  ]
+}

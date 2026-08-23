@@ -1,0 +1,39 @@
+{
+  "name": "ship",
+  "version": "0.1.0",
+  "description": "Drive one change end-to-end through a repo's pipeline — issue, spec, implementation, its own review passes, hand-off or merge — on GitHub or GitLab. Self-driven: every review pass runs as read-only subagents with adversarial verification, and nothing waits on an external reviewer.",
+  "author": {
+    "name": "dimonb",
+    "url": "https://github.com/dimonb"
+  },
+  "homepage": "https://github.com/dimonb/skills/tree/main/plugins/ship",
+  "repository": "https://github.com/dimonb/skills",
+  "license": "MIT",
+  "keywords": [
+    "ship",
+    "pipeline",
+    "github",
+    "gitlab",
+    "code-review",
+    "pull-request",
+    "merge-request",
+    "automation"
+  ],
+  "skills": "./skills/",
+  "interface": {
+    "displayName": "ship",
+    "shortDescription": "Drive one change to a merge-ready PR/MR",
+    "longDescription": "Takes one piece of work from an idea or a half-done pull/merge request to a merge-ready change, in one session. Reviews its own work with read-only subagents across parallel axes, adversarially verifies every blocking finding, and fixes what survives within a bounded round budget. Works on GitHub and GitLab, and discovers the repo's own branch naming, check commands, spec tooling and merge policy instead of assuming any.",
+    "developerName": "dimonb",
+    "category": "Developer Tools",
+    "capabilities": [
+      "Interactive",
+      "Write"
+    ],
+    "defaultPrompt": [
+      "Ship issue #42 through the pipeline",
+      "Continue the pull request for this branch",
+      "Ship: add a typing indicator to the chat view"
+    ]
+  }
+}
