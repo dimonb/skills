@@ -80,6 +80,45 @@ codex  plugin marketplace add .   &&  codex  plugin add     ship@dimonb-skills
 
 ---
 
+## Using them
+
+Once installed, each plugin is a skill the agent invokes by name. One line to start; the
+details live in the plugin's own README, which travels with the install.
+
+```
+/ship "add a typing indicator"     one change, end to end: issue, implementation, its own
+                                   review passes, then hand-off or merge
+/ship #42                          start from, or continue, an existing issue
+/ship pr 108   ·   /ship !108      pick up an existing pull request / merge request
+
+/shipyard 108 104                  the same, several changes at once — one terminal and one
+                                   worktree each, supervised, questions carried back to you
+/shipyard "add X to Y"             a brand-new change from an idea
+/shipyard 108 no-merge             extra ship flags pass through verbatim
+```
+
+`council` is driven by its script rather than by a single argument, because a room outlives
+one turn:
+
+```bash
+council.sh up --scenario debate --agents claude,codex,agy "Sync or async delivery?"
+council.sh status                  # whose turn, what is on the table, what is still open
+council.sh decide                  # write the decision record and close the room
+```
+
+Two things worth knowing before the first run:
+
+* **`ship` and `shipyard` run from the main worktree of a git repository**, with the CLI for
+  your forge already authenticated (`gh` or `glab`). `ship` then discovers the rest — forge,
+  default branch, branch naming, check commands, merge policy — from the repo itself.
+* **`shipyard` launches `ship` and nothing else**, so `ship` has to be installed too. Claude
+  Code resolves that itself; in Codex, install it yourself.
+
+To confirm an install took, `claude plugin details <plugin>@dimonb-skills` lists the skills
+the plugin actually exposes.
+
+---
+
 ## Layout
 
 ```
