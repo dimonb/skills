@@ -3,12 +3,16 @@
 Agent skills for driving real work through a repository's pipeline, packaged so that **the
 same checkout installs as a plugin marketplace in both Claude Code and Codex**.
 
-Two plugins:
+Three plugins:
 
 | Plugin | What it does |
 |---|---|
 | **[`ship`](plugins/ship)** | Drives **one** change end-to-end — issue, implementation, its own review passes, hand-off or merge — on GitHub or GitLab. It reviews its own work with read-only subagents and adversarially verifies every finding, so no stage ever waits on an external reviewer. |
 | **[`shipyard`](plugins/shipyard)** | Runs `ship` in background terminals and supervises a **fleet** of them: one git worktree per change, a status table on a timer, stall and context-ceiling watchdogs, and every question or architectural decision carried back to the session you are sitting in. |
+| **[`council`](plugins/council)** | Puts several agent sessions — Claude Code, Codex, Antigravity — in one **room** to argue a single question: they speak in turn, objections must reference what they object to and are closed mechanically, and the room writes a decision record when it converges or an honest `unresolved` one when it does not. |
+
+`council` stands alone — it needs neither of the other two, only the CLIs of the agents you
+want in the room.
 
 `shipyard` launches `ship` and nothing else. In Claude Code that is declared —
 `shipyard`'s manifest carries `"dependencies": ["ship"]`, so the CLI resolves it. Codex has
@@ -30,6 +34,7 @@ asking the repo to adapt to it.
 claude plugin marketplace add dimonb/skills
 claude plugin install ship@dimonb-skills
 claude plugin install shipyard@dimonb-skills
+claude plugin install council@dimonb-skills
 ```
 
 `marketplace add` also takes a local path or an HTTPS URL, and `--scope user|project|local`
@@ -49,6 +54,7 @@ claude plugin marketplace remove dimonb-skills
 codex plugin marketplace add dimonb/skills
 codex plugin add ship@dimonb-skills
 codex plugin add shipyard@dimonb-skills
+codex plugin add council@dimonb-skills
 ```
 
 `marketplace add` takes a local path, `owner/repo[@ref]`, or an HTTPS/SSH git URL, plus

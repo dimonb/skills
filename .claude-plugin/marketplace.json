@@ -10,7 +10,9 @@
     {
       "name": "ship",
       "description": "Drive one change end-to-end through a repo's pipeline on GitHub or GitLab — issue, spec, implementation, its own review passes, hand-off or merge. Self-driven: read-only review subagents with adversarial verification, and no stage that waits on an external reviewer.",
-      "author": { "name": "dimonb" },
+      "author": {
+        "name": "dimonb"
+      },
       "category": "workflow",
       "source": "./plugins/ship",
       "homepage": "https://github.com/dimonb/skills/tree/main/plugins/ship"
@@ -18,10 +20,22 @@
     {
       "name": "shipyard",
       "description": "Run ship in background terminals and supervise a fleet of them: one git worktree per change, a status table on a timer, stall and context-ceiling watchdogs, and every escalation carried back to you. Requires the ship plugin.",
-      "author": { "name": "dimonb" },
+      "author": {
+        "name": "dimonb"
+      },
       "category": "workflow",
       "source": "./plugins/shipyard",
       "homepage": "https://github.com/dimonb/skills/tree/main/plugins/shipyard"
+    },
+    {
+      "name": "council",
+      "description": "A room where several agent sessions argue one question by a strict protocol — turn-taking, referenced objections, mechanical closure — and write a decision record when they converge, or an honest unresolved one when they do not.",
+      "author": {
+        "name": "dimonb"
+      },
+      "category": "workflow",
+      "source": "./plugins/council",
+      "homepage": "https://github.com/dimonb/skills/tree/main/plugins/council"
     }
   ]
 }

@@ -1,0 +1,24 @@
+{
+  "name": "council",
+  "version": "0.1.0",
+  "description": "Run a multi-agent discussion room: several agent sessions (Claude Code, Codex, Antigravity) argue one question in background terminals by a strict protocol — speaking in turn, objecting with references, closing objections mechanically — and the room writes a decision record when it converges, or an honest unresolved one when it does not.",
+  "author": {
+    "name": "dimonb",
+    "url": "https://github.com/dimonb"
+  },
+  "homepage": "https://github.com/dimonb/skills/tree/main/plugins/council",
+  "repository": "https://github.com/dimonb/skills",
+  "license": "MIT",
+  "keywords": [
+    "council",
+    "multi-agent",
+    "debate",
+    "review",
+    "decision",
+    "adr",
+    "tmux",
+    "agterm",
+    "codex",
+    "antigravity"
+  ]
+}
