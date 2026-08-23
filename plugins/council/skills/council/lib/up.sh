@@ -43,6 +43,7 @@ print("SC_MODE=%s" % (get("mode", "token") or "token"))
 print("SC_DECIDE=%s" % (get("decide_by", "unanimous") or "unanimous"))
 print("SC_TURNS=%s" % (get("turns", "30") or "30"))
 print("SC_ROLES='%s'" % " ".join(roles))
+print("SC_RDEADLINE=%s" % (get("round_deadline_ms", "600000") or "600000"))
 print("SC_TITLE='%s'" % get("title", "").replace("'", ""))
 PY
 }
@@ -107,8 +108,10 @@ council_up() {
   jq -n --argjson order "$(printf '%s\n' "${peers[@]}" | jq -R . | jq -s .)" \
         --argjson peers "$peers_json" --arg mode "$SC_MODE" --arg dec "$SC_DECIDE" \
         --argjson turns "$SC_TURNS" --arg sc "$scenario" --arg at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+        --argjson rdl "$SC_RDEADLINE" \
     '{order:$order, peers:$peers, scenario:$sc, mode:$mode, decide_by:$dec,
-      order_rotate:true, turn_deadline_ms:180000, turns_budget:$turns, created_at:$at}' \
+      order_rotate:true, turn_deadline_ms:180000, turns_budget:$turns,
+      round_deadline_ms:$rdl, created_at:$at}' \
     > "$room/roster.json"
   printf '%s\n' "${agenda:-（повестка не задана）}" > "$room/agenda.md"
 
@@ -146,6 +149,8 @@ council_up() {
 
   printf 'КОМНАТА: %s\n' "$room"
   printf 'сценарий %s · режим %s · правило %s · бюджет %s ходов\n' "$scenario" "$SC_MODE" "$SC_DECIDE" "$SC_TURNS"
+  [ "$SC_MODE" = roundtable ] && printf 'первый круг идёт барьером: позиции пишутся одновременно и не видны друг другу, пока не соберутся все\n'
+  true
   printf 'участники: '; for i in "${!peers[@]}"; do printf '%s(%s/%s) ' "${peers[$i]}" "${kinds[$i]}" "${roles[$i]}"; done; printf '\n'
   printf 'терминалов поднято: %s в контейнере %s\n' "$started" "$(ct_container)"
   [ -n "$me" ] && printf 'вы участвуете сами как: %s\n' "$me"

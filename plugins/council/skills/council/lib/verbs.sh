@@ -44,6 +44,13 @@ v_recv() { # [--timeout N] [--peek] [--until-floor]
 
 v_floor() {
   local t f last age
+  if [ "$(c_barrier)" = open ]; then
+    printf 'round=0 (барьер) собрано=%s/%s ждём=%s conflicts=%s\n' \
+      "$(c_round0 | wc -l | tr -d ' ')" "$(c_npeers)" \
+      "$(comm -23 <(c_peers | sort) <(c_round0 | jq -r .from | sort) | paste -sd, -)" \
+      "$(c_conflicts)"
+    return 0
+  fi
   t=$(c_turns); f=$(c_floor_at "$t"); last=$(c_last_turn_ms)
   age=$(( $(c_ms) - last )); [ "$last" = 0 ] && age=0
   printf 'turns=%s floor=%s next=%s held_ms=%s conflicts=%s\n' \
@@ -113,11 +120,17 @@ v_status() {
   held=$([ "$last" = 0 ] && echo 0 || echo $(( ($(c_ms) - last) / 1000 )))
   conf=$(c_conflicts)
   printf '=== council %s ===\n' "$(basename "$ROOM")"
+  [ "$(c_barrier)" = open ] && floor="— (барьер)"
   printf 'режим %s · участники %s · ходов %s/%s · слово: %s (держит %sс) · конфликтов ходов: %s\n' \
     "$(jq -r .mode "$ROOM/roster.json")" "$(c_peers | paste -sd, -)" "$t" \
     "$(printf '%s' "$j" | jq -r .budget)" "$floor" "$held" "$conf"
   printf 'вердикт: %s (без новых заявлений %s из %s)\n' "$verd" \
     "$(printf '%s' "$j" | jq -r .since_last_claim)" "$(printf '%s' "$j" | jq -r .lap)"
+  if [ "$(c_barrier)" = open ]; then
+    printf 'ОТКРЫТЫЙ КРУГ: собрано %s/%s, ждём %s — их позиции никто ещё не видит\n' \
+      "$(c_round0 | wc -l | tr -d ' ')" "$(c_npeers)" \
+      "$(comm -23 <(c_peers | sort) <(c_round0 | jq -r .from | sort) | paste -sd, -)"
+  fi
   printf '%s' "$g" | jq -r '
     if (.live|length) == 0 then "на столе: ничего" else (.live[] | "на столе: \(.id) от \(.from) — \(.current_text[0:90])") end,
     (if (.open|length) > 0 then (.open[] | "  ✗ ОТКРЫТО \(.id) (\(.from)): \(.text[0:90])") else "  открытых возражений нет" end)'
