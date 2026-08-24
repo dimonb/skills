@@ -163,7 +163,10 @@ it. Say in the change which parts you verified by running and which you reasoned
   changelog entries. No "generated with", no co-author trailer, no reaction footer. Author
   all outward-facing text fresh, in a neutral voice.
 * **English everywhere** — issues, pull requests, comments, code, docs. Multiline bodies go
-  through a file, never an escaped newline inside a quoted argument.
+  through a file, never an escaped newline inside a quoted argument. `make check` enforces the
+  *script*: a non-Latin character in a tracked file fails the gate. Latin-script prose that is
+  not English it cannot see, so that half is judgement — and a whole plugin once shipped its
+  protocol and its decision records in another language before anything said so.
 * **Rule zero, restated as a commit rule:** no absolute home paths, no personal e-mail
   addresses, no internal hostnames, no private project names or slugs, no internal issue or
   merge-request numbers, no tokens or credentials of any kind. `make check` enforces the
