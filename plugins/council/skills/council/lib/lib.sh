@@ -312,6 +312,40 @@ c_turns() {
   echo $(( base + n ))
 }
 
+# How many turns have gone by since the last NEW claim; -1 when the room holds no claim.
+#
+# ONE pass over the canonical log, deliberately. "turns consumed now" and "turns consumed
+# when the last claim landed" have to be read from the SAME snapshot, or their difference
+# is not a measurement of anything. Deriving the second from the graph's `last_claim_turn`
+# got that wrong three separate ways.
+#
+# It was off by one: `last_claim_turn` is the turn a claim STAMPED, turns are stamped from
+# zero, so a claim posted this very instant read as one turn of silence and both thresholds
+# fired a whole turn early -- half a lap in a two-peer room.
+#
+# It could not see a claim that stamps no turn, and two kinds do not: an opening position
+# in a barrier round, and anything raised out of turn with `--hand`. A hand-raised
+# objection therefore left the window untouched, and `stuck` fired in the very tick that
+# objection arrived -- a false alarm on the one signal a supervisor is told to act on,
+# which is how a supervisor is taught to ignore it.
+#
+# And the barrier lap had to be added back by the caller, from a SECOND reading of
+# `c_barrier` taken after `c_turns` had already taken its own. Those two disagree if the
+# round closes between them, and the counter goes negative. Here the base cancels: both
+# counts are on one scale, so it never enters the subtraction at all.
+c_turns_since_last_claim() {
+  local n
+  n=$(c_canon | jq -s '
+    reduce .[] as $x ({n: 0, last: null};
+      (.n + (if ($x.hand == false and $x.turn != null and $x.valid) then 1 else 0 end)) as $n
+      | { n: $n,
+          last: (if ($x.act == "propose" or $x.act == "amend" or $x.act == "object")
+                 then $n else .last end) })
+    | if .last == null then -1 else .n - .last end')
+  case "$n" in -1) ;; ''|*[!0-9]*) n=-1 ;; esac
+  printf '%s' "$n"
+}
+
 # The floor is a pure function of the log: no token file to lose or duplicate.
 # Order rotates one step per lap so the same peer is not always the anchor.
 c_floor_at() { # <turns-consumed>
