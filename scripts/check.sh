@@ -9,6 +9,7 @@
 #    and no second copy of any SKILL.md
 # 6. ship's forge reference files do not carry a copy of the pipeline state enum
 # 7. no non-generic strings (structural patterns only; no dependency on any untracked file)
+# 8. no non-Latin script in any tracked file (the checkable half of "English everywhere")
 set -uo pipefail
 cd "$(dirname "$0")/.."
 ROOT_P=$(pwd -P)          # physical repo root; see the symlink containment check below
@@ -207,6 +208,27 @@ if [ "$g" -eq 0 ]; then
   echo "FAIL: non-generic strings in tracked files:"; printf '%s\n' "$hits"; rc=1
 elif [ "$g" -gt 1 ]; then
   fail "leak check could not run (git grep rc=$g): $hits"
+fi
+
+# --------------------------------------------------- 8. English everywhere (script check)
+# AGENTS.md says English everywhere — issues, pull requests, comments, code, docs. That rule
+# held by judgement alone until a whole plugin shipped its protocol, its runtime messages and
+# its decision records in Russian: the files agents READ as instructions, in a language the
+# next reader of the repo may not have. So the gate checks what a gate can check — the SCRIPT.
+# A non-Latin script in a tracked file is the structural half of the rule; English prose
+# written in Latin letters is still a judgement call, and this check does not pretend
+# otherwise.
+#
+# `-P` (PCRE) rather than a literal character class, deliberately: writing the ranges out
+# would put the very characters this check forbids into the check, which then has to exempt
+# itself — and an exemption is how a check stops covering the file most likely to be edited
+# by whoever is adding a violation.
+nonlatin=$(git grep --untracked -nIP '\p{Cyrillic}|\p{Greek}|\p{Han}|\p{Hiragana}|\p{Katakana}|\p{Hangul}|\p{Arabic}|\p{Hebrew}|\p{Devanagari}|\p{Thai}|\p{Armenian}|\p{Georgian}' -- . 2>&1)
+g=$?
+if [ "$g" -eq 0 ]; then
+  echo "FAIL: non-Latin script in tracked files (AGENTS.md: English everywhere):"; printf '%s\n' "$nonlatin"; rc=1
+elif [ "$g" -gt 1 ]; then
+  fail "English check could not run (git grep rc=$g): $nonlatin"
 fi
 
 [ $rc -eq 0 ] && echo "check: OK"

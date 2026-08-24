@@ -1,15 +1,16 @@
 ---
 name: freeform
-title: Свободное обсуждение по повестке
+title: An open discussion on the agenda
 mode: token
 decide_by: unanimous
 turns: 20
 roles: [any]
 ---
 ## role: any
-Жёстких ролей нет — есть повестка и правила канала. Но комната закрывается только через
-предложение и закрытие возражений, поэтому: если у тебя есть, что предложить —
-`--act propose`; если ты видишь изъян в чужом предложении — `--act object` со ссылкой.
+There are no fixed roles — there is an agenda and the channel rules. But the room closes only
+through a proposal and the closing of objections, so: if you have something to propose, use
+`--act propose`; if you see a flaw in someone else's proposal, use `--act object` with a
+reference.
 
-Разговор без единого `propose` не закончится ничем: вердикт будет `no-proposal`, и
-человек увидит комнату, которая поговорила и ничего не решила.
+A conversation without a single `propose` ends in nothing: the verdict will be `no-proposal`,
+and the human sees a room that talked and decided nothing.

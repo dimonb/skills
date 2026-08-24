@@ -28,8 +28,8 @@ ct_backend() {
 }
 _ct_no_backend() {
   case "$(ct_backend)" in
-    invalid) echo "council: COUNCIL_BACKEND='${COUNCIL_BACKEND:-}' — только agterm, tmux или auto" >&2 ;;
-    *) echo "council: нет терминального бэкенда. Нужен agterm (с установленным agtermctl) либо tmux." >&2 ;;
+    invalid) echo "council: COUNCIL_BACKEND='${COUNCIL_BACKEND:-}' — only agterm, tmux or auto" >&2 ;;
+    *) echo "council: no terminal backend. Needs agterm (with agtermctl installed) or tmux." >&2 ;;
   esac
   return 1
 }

@@ -145,7 +145,7 @@ is not.
 ## Verbs
 
 ```bash
-council.sh up --scenario debate --agents claude,codex,agy "вопрос"   # or @file
+council.sh up --scenario debate --agents claude,codex,agy "question"   # or @file
 council.sh status | claims | verdict | order | transcript | floor
 council.sh say <peer> "..."        # out of band, into that participant's terminal
 council.sh decide [--force]        # write the ADR and close the room
@@ -225,7 +225,7 @@ Opening positions carry no turn number, so they never compete for one.
 
 A participant that never posts does not hold the room: past `round_deadline_ms` (default
 10 min, from the first position) with a quorum present (default N−1, never below 2) the
-round closes without it. `status` shows `ОТКРЫТЫЙ КРУГ: собрано k/N, ждём …` while it is
+round closes without it. `status` shows `OPEN ROUND: posted k/N, waiting for …` while it is
 open — the one state in which a long-held floor is normal rather than a stall.
 
 The `debate` scenario runs `roundtable`; `review` stays turn-taking, because there the

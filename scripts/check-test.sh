@@ -177,6 +177,19 @@ probe 'glpat-AbCdEfGhIjKlMnOpQrSt'          'GitLab token'
 probe 'xoxb-AbCdEfGhIjKlMnOpQrSt'           'Slack token'
 probe '-----BEGIN RSA PRIVATE KEY-----'     'private key header'
 probe "date TZ=Europe/Somewhere"            'hardcoded timezone'
+
+# 7b — English everywhere: the script check. Each fixture is BUILT from code points instead
+# of being written out, because a literal would put a violation into this very file — and
+# check 8, unlike the leak check, deliberately exempts nothing under scripts/.
+enprobe() {
+  printf '%b\n' "$1" > docs/_probe.md
+  expect_fail "non-Latin script: $2"
+  rm -f docs/_probe.md
+}
+enprobe '\u043f\u0440\u0438\u0432\u0435\u0442'  'Cyrillic'
+enprobe '\u03b1\u03b2\u03b3'                      'Greek'
+enprobe '\u6f22\u5b57'                             'Han'
+enprobe '\u0641\u0642'                             'Arabic'
 rmdir docs 2>/dev/null || true
 
 # 8 — the two assertions the gate is most easily made vacuous by, and which the review

@@ -132,7 +132,7 @@ c_send() {
     turn=null
   elif [ "$(c_barrier)" = open ]; then
     if [ -n "$(c_posted_round0)" ]; then
-      echo "council: круг ещё не собран — свою позицию вы уже высказали, ждите остальных" >&2
+      echo "council: the round is not complete — you have stated your position, wait for the others" >&2
       return 5
     fi
     round=0; turn=null
@@ -145,7 +145,7 @@ c_send() {
     # out-of-turn: caught exactly that way, by t3, once the check became slow enough to
     # widen the window.) `skip` is exempt: it is by definition spoken for somebody else.
     if [ "$act" != skip ] && [ "$(c_floor_at "$turn")" != "$ME" ]; then
-      echo "council: слово уже не ваше (ход $turn у $(c_floor_at "$turn")) — заберите входящее и ждите своей очереди" >&2
+      echo "council: the floor is no longer yours (turn $turn belongs to $(c_floor_at "$turn")) — drain your inbox and wait for your turn" >&2
       return 6
     fi
   fi
