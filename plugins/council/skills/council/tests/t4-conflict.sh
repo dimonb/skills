@@ -13,12 +13,12 @@ mkroom "$R" a b c
 export COUNCIL_ROOM="$R" ROOM="$R"
 fail=0
 
-COUNCIL_ME=a bash "$CLI" send --act propose "ход 0 от a" >/dev/null
-raw_msg b 1 2 1 object '["a-1"]' "ход 1 от b"
-raw_msg c 1 2 1 object '["a-1"]' "ход 1 от c"
+COUNCIL_ME=a bash "$CLI" send --act propose "turn 0 from a" >/dev/null
+raw_msg b 1 2 1 object '["a-1"]' "turn 1 from b"
+raw_msg c 1 2 1 object '["a-1"]' "turn 1 from c"
 
 claims=$(bash "$CLI" order | jq -s '[.[] | select(.turn == 1)] | length')
-[ "$claims" = 2 ] || { echo "FAIL подготовка: на ход 1 претендует $claims сообщений, нужно 2"; fail=1; }
+[ "$claims" = 2 ] || { echo "FAIL setup: $claims messages claim turn 1, need 2"; fail=1; }
 
 # every participant must settle it the same way, and only one way
 for p in a b c; do
@@ -26,23 +26,23 @@ for p in a b c; do
     | jq -r 'select(.turn == 1) | "\(.id) valid=\(.valid)"' | sort > "$R/log/verdict.$p"
 done
 cmp -s "$R/log/verdict.a" "$R/log/verdict.b" && cmp -s "$R/log/verdict.a" "$R/log/verdict.c" \
-  || { echo "FAIL участники разошлись в том, кто выиграл ход 1"; fail=1; }
+  || { echo "FAIL the participants disagreed about who won turn 1"; fail=1; }
 winners=$(grep -c "valid=true" "$R/log/verdict.a" || true)
 losers=$(grep -c "valid=false" "$R/log/verdict.a" || true)
-[ "$winners" = 1 ] && [ "$losers" = 1 ] || { echo "FAIL победителей=$winners проигравших=$losers, нужно 1/1"; fail=1; }
+[ "$winners" = 1 ] && [ "$losers" = 1 ] || { echo "FAIL winners=$winners losers=$losers, need 1/1"; fail=1; }
 lost=$(grep "valid=false" "$R/log/verdict.a" | cut -d' ' -f1)
 bash "$CLI" order | jq -e --arg i "$lost" 'select(.id==$i) | .text' >/dev/null \
-  || { echo "FAIL проигравшее сообщение исчезло из лога"; fail=1; }
+  || { echo "FAIL the losing message vanished from the log"; fail=1; }
 turns=$(COUNCIL_ME=a bash -c '. '"$SKILL"'/lib/lib.sh; c_turns')
-[ "$turns" = 2 ] || { echo "FAIL после разрешения ходов $turns, ждали 2"; fail=1; }
-echo "ход 1 заявлен дважды; все трое рассудили одинаково; проигравший ($lost) остался в логе"
+[ "$turns" = 2 ] || { echo "FAIL after settlement turns=$turns, expected 2"; fail=1; }
+echo "turn 1 claimed twice; all three settled it the same way; the loser ($lost) stayed in the log"
 
 # and the check that makes this rare: a participant that lost the floor while composing
 # is refused outright instead of stamping the next free turn
 holder=$(bash "$CLI" floor | sed -n 's/.*floor=\([^ ]*\).*/\1/p')
 notme=$(c_peers_list | grep -v "^$holder$" | head -1)
-out=$(COUNCIL_ME="$notme" bash "$CLI" send --act msg "говорю не в свой ход" 2>&1); rc=$?
-[ "$rc" = 6 ] || { echo "FAIL реплика вне очереди принята (код $rc): $out"; fail=1; }
-echo "реплика вне очереди ($notme при слове у $holder) отклонена кодом 6"
+out=$(COUNCIL_ME="$notme" bash "$CLI" send --act msg "speaking out of my turn" 2>&1); rc=$?
+[ "$rc" = 6 ] || { echo "FAIL an out-of-turn message was accepted (exit $rc): $out"; fail=1; }
+echo "out-of-turn message ($notme while $holder holds the floor) refused with exit 6"
 [ "$fail" = 0 ] && echo "t4 PASS" || echo "t4 FAIL"
 exit $fail

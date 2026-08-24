@@ -11,5 +11,5 @@ for t in "${tests[@]}"; do
   printf '\n──── %s ────\n' "$t"
   bash "$DIR/$t" || { echo "FAILED: $t"; rc=1; }
 done
-printf '\n%s\n' "$([ $rc = 0 ] && echo 'все тесты прошли' || echo 'ЕСТЬ ПАДЕНИЯ')"
+printf '\n%s\n' "$([ $rc = 0 ] && echo 'all tests passed' || echo 'THERE ARE FAILURES')"
 exit $rc

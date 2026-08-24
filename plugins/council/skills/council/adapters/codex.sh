@@ -8,9 +8,9 @@
 adapter_cmd() {
   local room="$1" proto="$2" skill="$3"
   printf 'exec codex -s workspace-write -a never --add-dir %q --add-dir %q \\\n' "$room" "$skill"
-  printf '  %q\n' "Прочитай $proto и следуй ему буквально. Начинай."
+  printf '  %q\n' "Read $proto and follow it literally. Begin."
 }
 adapter_notes() {
-  printf 'codex (%s): первый запуск в незнакомом каталоге спросит доверие к нему.\n' "$1"
-  printf '            пока вы не ответите, участник держит слово и выглядит зависшим.\n'
+  printf 'codex (%s): the first launch in an unfamiliar directory asks you to trust it.\n' "$1"
+  printf '            until you answer, the participant holds the floor and looks wedged.\n'
 }

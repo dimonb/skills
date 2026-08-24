@@ -25,8 +25,8 @@ if [ "${BASH_VERSINFO[0]:-0}" -lt 5 ] && [ -z "${COUNCIL_BASH_REEXEC:-}" ]; then
     _v=$("$_p" -c 'echo ${BASH_VERSINFO[0]}' 2>/dev/null) || continue
     [ "${_v:-0}" -ge 5 ] && exec env COUNCIL_BASH_REEXEC=1 "$_p" "$0" "$@"
   done
-  echo "council: нужен bash >= 5, а этот — ${BASH_VERSION:-неизвестный}." >&2
-  echo "         macOS несёт bash 3.2 как /bin/bash; поставьте современный (brew install bash)." >&2
+  echo "council: needs bash >= 5, this one is ${BASH_VERSION:-unknown}." >&2
+  echo "         macOS ships bash 3.2 as /bin/bash; install a modern one (brew install bash)." >&2
   exit 70
 fi
 
@@ -34,42 +34,42 @@ fi
 # through a symlink, and plain `pwd` reports the logical path it was reached by. Handing
 # that to a participant is not cosmetic: Codex REFUSES a writable root that is a symlink,
 # so the participant launches, reads its protocol, and then cannot run a single council
-# command — reported by a live participant as "песочница отвергает writable root … потому
-# что это симлинк".
+# command — reported by a live participant as "the sandbox rejects the writable root …
+# because it is a symlink".
 SKILL="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
 
 usage() {
   cat <<'USAGE'
 council.sh <verb> [options]
 
-  Комната
+  The room
     up      --scenario <name> --agents <spec> [--room <name>] [--turns N]
-            [--cwd <dir>] [--me <peer>] [<повестка>|@файл]
+            [--cwd <dir>] [--me <peer>] [<agenda>|@file]
     down    [--room <name>] [--purge]
-    rooms                                 какие комнаты есть и в каком они состоянии
+    rooms                                 which rooms exist and what state they are in
 
-  Участник (внутри комнаты)
-    recv    [--timeout N] [--peek] [--until-floor]     код 4 = таймаут, зови снова
-    send    --act <act> [--refs '["id"]'] [--hand] "<текст>"
-    floor                                              чей ход и сколько держит
+  Participant (inside a room)
+    recv    [--timeout N] [--peek] [--until-floor]     exit 4 = timeout, call again
+    send    --act <act> [--refs '["id"]'] [--hand] "<text>"
+    floor                                              who holds it and for how long
 
-  Смотреть
-    status  [--room <name>]        блок супервизора; код 0 = комната закрыта
-    claims                         граф аргументов
-    verdict [--json]               вердикт: код 0 закрыта, 1 открыта, 2 залипла
-    order   [--ids]                тотальный порядок сообщений
-    transcript                     стенограмма для человека
+  Looking on
+    status  [--room <name>]        the supervisor block; exit 0 = the room is closed
+    claims                         the argument graph
+    verdict [--json]               verdict: exit 0 closed, 1 open, 2 stuck
+    order   [--ids]                the total order of messages
+    transcript                     the transcript, for a human
 
-  Арбитр
-    decide  [--force]              записать ADR на доску и закрыть комнату
-    say     <peer> "<текст>"       сказать участнику вне очереди, в его терминал
+  Chair
+    decide  [--force]              write the ADR on the board and close the room
+    say     <peer> "<text>"        speak to a participant out of band, in its terminal
 
-  Общие опции: --room <name> --me <peer>
-  Акты: propose amend object support concede withdraw overrule msg notice decide done
+  Common options: --room <name> --me <peer>
+  Acts: propose amend object support concede withdraw overrule msg notice decide done
 
-Коды возврата означают СТАТУС, а не успех. `verdict` возвращает 1 на живой комнате, и
-пайплайн вроде `council.sh status | grep -q X` под `set -o pipefail` прочитает это как
-провал grep. Это уже стоило одного ложного вердикта в тестах — не пайпите статус.
+Exit codes mean STATUS, not success. `verdict` returns 1 for a live room, so a pipeline like
+`council.sh status | grep -q X` under `set -o pipefail` reads that as a failing grep. It has
+already cost one false verdict in the tests — do not pipe status.
 USAGE
 }
 
@@ -88,17 +88,17 @@ room_base() {
 resolve_room() { # honours --room, then $COUNCIL_ROOM, then the only room there is
   local base
   if [ -n "${ROOM_NAME:-}" ]; then
-    base=$(room_base) || { echo "council: не в git-репозитории, задайте COUNCIL_ROOM" >&2; return 1; }
+    base=$(room_base) || { echo "council: not in a git repository, set COUNCIL_ROOM" >&2; return 1; }
     printf '%s/%s' "$base" "$ROOM_NAME"; return 0
   fi
   if [ -n "${COUNCIL_ROOM:-}" ]; then printf '%s' "$COUNCIL_ROOM"; return 0; fi
-  base=$(room_base) || { echo "council: не в git-репозитории, задайте COUNCIL_ROOM" >&2; return 1; }
+  base=$(room_base) || { echo "council: not in a git repository, set COUNCIL_ROOM" >&2; return 1; }
   local -a rooms=(); local d
   for d in "$base"/*/; do [ -d "$d" ] && rooms+=("${d%/}"); done
   case "${#rooms[@]}" in
     1) printf '%s' "${rooms[0]}" ;;
-    0) echo "council: комнат нет. Создайте: council.sh up --scenario ... --agents ..." >&2; return 1 ;;
-    *) echo "council: комнат несколько, укажите --room:" >&2
+    0) echo "council: no rooms. Create one: council.sh up --scenario ... --agents ..." >&2; return 1 ;;
+    *) echo "council: several rooms, name one with --room:" >&2
        printf '  %s\n' "${rooms[@]##*/}" >&2; return 1 ;;
   esac
 }
@@ -125,10 +125,10 @@ if [ "$VERB" = rooms ]; then . "$SKILL/lib/up.sh"; council_rooms; exit $?; fi
 
 COUNCIL_ROOM=$(resolve_room) || exit 1
 export COUNCIL_ROOM
-[ -d "$COUNCIL_ROOM" ] || { echo "council: нет такой комнаты: $COUNCIL_ROOM" >&2; exit 1; }
+[ -d "$COUNCIL_ROOM" ] || { echo "council: no such room: $COUNCIL_ROOM" >&2; exit 1; }
 . "$SKILL/lib/lib.sh"
 
-need_me() { [ -n "${COUNCIL_ME:-}" ] || { echo "council: кто вы? задайте COUNCIL_ME или --me <peer>" >&2; exit 2; }; }
+need_me() { [ -n "${COUNCIL_ME:-}" ] || { echo "council: who are you? set COUNCIL_ME or --me <peer>" >&2; exit 2; }; }
 
 case "$VERB" in
   send)   need_me; . "$SKILL/lib/verbs.sh"; v_send "$@" ;;
@@ -142,5 +142,5 @@ case "$VERB" in
   decide) need_me; . "$SKILL/lib/verbs.sh"; v_decide "$@" ;;
   say)    . "$SKILL/lib/up.sh"; council_say "$@" ;;
   down)   . "$SKILL/lib/up.sh"; council_down "$@" ;;
-  *) echo "council: неизвестный глагол '$VERB'" >&2; usage >&2; exit 2 ;;
+  *) echo "council: unknown verb '$VERB'" >&2; usage >&2; exit 2 ;;
 esac

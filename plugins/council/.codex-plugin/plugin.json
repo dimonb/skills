@@ -33,9 +33,9 @@
       "Write"
     ],
     "defaultPrompt": [
-      "Обсудить этот выбор в комнате из claude, codex и agy",
+      "Argue this choice out in a room of claude, codex and agy",
       "Show me the status of the council room",
-      "Разобрать это изменение: автор и ревьюер — разные агенты"
+      "Review this change: author and reviewer are different agents"
     ]
   }
 }

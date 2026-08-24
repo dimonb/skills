@@ -11,10 +11,10 @@
 adapter_cmd() {
   local room="$1" proto="$2" skill="$3"
   printf 'exec agy --add-dir %q --add-dir %q \\\n' "$room" "$skill"
-  printf '  -i %q\n' "Прочитай $proto и следуй ему буквально. Начинай."
+  printf '  -i %q\n' "Read $proto and follow it literally. Begin."
 }
 adapter_notes() {
-  printf 'agy (%s): первый запуск спросит доверие к папке и разрешение на команду.\n' "$1"
-  printf '          выберите «always allow … commands that start with» (цифра в меню),\n'
-  printf '          иначе участник будет держать слово, ожидая вашего клика.\n'
+  printf 'agy (%s): the first launch asks to trust the directory and to allow the command.\n' "$1"
+  printf '          pick "always allow … commands that start with" (a number in the menu),\n'
+  printf '          or the participant will hold the floor waiting for your click.\n'
 }

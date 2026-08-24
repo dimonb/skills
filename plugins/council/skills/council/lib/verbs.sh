@@ -12,7 +12,7 @@ v_send() { # --act A [--refs J] [--hand] "<text>"
       *) text="$1"; shift ;;
     esac
   done
-  [ -n "$text" ] || { echo "council send: пустая реплика" >&2; return 2; }
+  [ -n "$text" ] || { echo "council send: empty message" >&2; return 2; }
   c_send ${a+"${a[@]}"} --text "$text"
 }
 
@@ -23,7 +23,7 @@ v_recv() { # [--timeout N] [--peek] [--until-floor]
       --timeout) timeout="$2"; shift 2 ;;
       --peek) peek=1; shift ;;
       --until-floor) until_floor=1; shift ;;
-      *) echo "council recv: неизвестный аргумент $1" >&2; return 2 ;;
+      *) echo "council recv: unknown argument $1" >&2; return 2 ;;
     esac
   done
   if [ "$peek" = 1 ]; then c_drain && return 0; return 4; fi
@@ -55,7 +55,7 @@ v_recv() { # [--timeout N] [--peek] [--until-floor]
 v_floor() {
   local t f last age
   if [ "$(c_barrier)" = open ]; then
-    printf 'round=0 (барьер) собрано=%s/%s ждём=%s conflicts=%s\n' \
+    printf 'round=0 (barrier) posted=%s/%s waiting=%s conflicts=%s\n' \
       "$(c_round0 | wc -l | tr -d ' ')" "$(c_npeers)" \
       "$(comm -23 <(c_peers | sort) <(c_round0 | jq -r .from | sort) | paste -sd, -)" \
       "$(c_conflicts)"
@@ -70,7 +70,7 @@ v_floor() {
 v_order() { if [ "${1:-}" = "--ids" ]; then c_canon | jq -r '.id'; else c_canon; fi; }
 
 v_transcript() {
-  c_canon | jq -r '"[\(.from) \(.act)\(if (.refs|length)>0 then " →"+(.refs|join(",")) else "" end)\(if .valid then "" else " (вне очереди)" end)] \(.text)"'
+  c_canon | jq -r '"[\(.from) \(.act)\(if (.refs|length)>0 then " →"+(.refs|join(",")) else "" end)\(if .valid then "" else " (out of turn)" end)] \(.text)"'
 }
 
 _graph() { c_canon | jq -s -f "$SKILL/lib/claims.jq"; }
@@ -79,21 +79,21 @@ v_claims() {
   local g; g=$(_graph) || return 1
   [ "${1:-}" = "--raw" ] && { printf '%s\n' "$g"; return 0; }
   printf '%s' "$g" | jq -r '
-    "ходов: \(.turns)   последнее содержательное заявление на ходу: \(.last_claim_turn)",
-    (if .decided then "РЕШЕНО сообщением \(.decided)" else empty end),
+    "turns: \(.turns)   last substantive claim at turn: \(.last_claim_turn)",
+    (if .decided then "DECIDED by message \(.decided)" else empty end),
     "",
     ( .proposals[]
-      | "предложение \(.id) от \(.from)\(if .dead then "  [снято: \(.dead_by)]" else "" end)"
+      | "proposal \(.id) from \(.from)\(if .dead then "  [dropped: \(.dead_by)]" else "" end)"
       , "  \(.current_text)"
-      , (if (.amends|length) > 0 then "  правки: \(.amends|join(", "))" else empty end)
+      , (if (.amends|length) > 0 then "  amendments: \(.amends|join(", "))" else empty end)
       , ( . as $p | .objections[]
           | if .closed_by != null
-            then "  ✓ закрыто  \(.id) (\(.from)) — \(.closed_act) от \(.closed_by_who): \(.text)"
+            then "  ✓ closed  \(.id) (\(.from)) — \(.closed_act) from \(.closed_by_who): \(.text)"
             elif $p.dead
-            then "  · снято вместе с предложением: \(.id) (\(.from)): \(.text)"
-            else "  ✗ ОТКРЫТО \(.id) (\(.from)): \(.text)" end )
+            then "  · dropped with its proposal: \(.id) (\(.from)): \(.text)"
+            else "  ✗ OPEN \(.id) (\(.from)): \(.text)" end )
       , "" ),
-    "открытых возражений: \(.open|length)"'
+    "open objections: \(.open|length)"'
 }
 
 # The verdict is COMPUTED. "We agree" here means: no open objection, and a full lap in
@@ -105,8 +105,8 @@ v_verdict() {
   read -r _gt last decided live open <<<"$(printf '%s' "$g" | jq -r '[.turns, .last_claim_turn, (.decided // "-"), (.live|length), (.open|length)] | @tsv')"
   # Turns come from c_turns, not from the graph: the graph counts turn-claiming messages
   # and knows nothing about a completed barrier round, which consumes a whole lap without
-  # any of its positions claiming a turn. Mixing the two produced a room "минус один ход
-  # без новых заявлений" — a negative age that no branch below reads correctly.
+  # any of its positions claiming a turn. Mixing the two produced a room "minus one turn
+  # with nothing new said" — a negative age that no branch below reads correctly.
   turns=$(c_turns)
   since=$(( turns - (last < 0 ? 0 : last) )); lap=$n
   if   [ "$decided" != "-" ]; then v=$(c_slurp "$ROOM/board/status"); [ "$v" = 0 ] && v=decided
@@ -121,7 +121,7 @@ v_verdict() {
       '{verdict:$v, turns:.turns, budget:$budget, since_last_claim:$since, lap:$lap,
         live:(.live|length), open:(.open|length), open_ids:[.open[].id], decided:.decided}'
   else
-    printf '%s  ходов %s/%s  без новых заявлений %s из %s  живых предложений %s  открытых возражений %s\n' \
+    printf '%s  turns %s/%s  nothing new for %s turns (lap %s)  live proposals %s  open objections %s\n' \
       "$v" "$turns" "$budget" "$since" "$lap" "$live" "$open"
   fi
   case "$v" in decided|unresolved) return 0 ;; stuck) return 2 ;; *) return 1 ;; esac
@@ -135,29 +135,29 @@ v_status() {
   held=$([ "$last" = 0 ] && echo 0 || echo $(( ($(c_ms) - last) / 1000 )))
   conf=$(c_conflicts)
   printf '=== council %s ===\n' "$(basename "$ROOM")"
-  [ "$(c_barrier)" = open ] && floor="— (барьер)"
-  printf 'режим %s · участники %s · ходов %s/%s · слово: %s (держит %sс) · конфликтов ходов: %s\n' \
+  [ "$(c_barrier)" = open ] && floor="— (barrier)"
+  printf 'mode %s · participants %s · turns %s/%s · floor: %s (held %ss) · turn conflicts: %s\n' \
     "$(jq -r .mode "$ROOM/roster.json")" "$(c_peers | paste -sd, -)" "$t" \
     "$(printf '%s' "$j" | jq -r .budget)" "$floor" "$held" "$conf"
-  printf 'вердикт: %s (без новых заявлений %s из %s)\n' "$verd" \
+  printf 'verdict: %s (nothing new for %s turns, lap %s)\n' "$verd" \
     "$(printf '%s' "$j" | jq -r .since_last_claim)" "$(printf '%s' "$j" | jq -r .lap)"
   if [ "$(c_barrier)" = open ]; then
-    printf 'ОТКРЫТЫЙ КРУГ: собрано %s/%s, ждём %s — их позиции никто ещё не видит\n' \
+    printf 'OPEN ROUND: posted %s/%s, waiting for %s — nobody sees their positions yet\n' \
       "$(c_round0 | wc -l | tr -d ' ')" "$(c_npeers)" \
       "$(comm -23 <(c_peers | sort) <(c_round0 | jq -r .from | sort) | paste -sd, -)"
   fi
   printf '%s' "$g" | jq -r '
-    if (.live|length) == 0 then "на столе: ничего" else (.live[] | "на столе: \(.id) от \(.from) — \(.current_text[0:90])") end,
-    (if (.open|length) > 0 then (.open[] | "  ✗ ОТКРЫТО \(.id) (\(.from)): \(.text[0:90])") else "  открытых возражений нет" end)'
+    if (.live|length) == 0 then "on the table: nothing" else (.live[] | "on the table: \(.id) from \(.from) — \(.current_text[0:90])") end,
+    (if (.open|length) > 0 then (.open[] | "  ✗ OPEN \(.id) (\(.from)): \(.text[0:90])") else "  no open objections" end)'
   case "$verd" in
-    stuck) alarms="$alarms 🛑 STUCK: круг прошёл, никто ничего нового не сказал, а возражения открыты" ;;
-    ready-to-decide) alarms="$alarms ✅ можно решать: council.sh decide" ;;
-    unresolved) alarms="$alarms 🛑 бюджет ходов исчерпан — писать честный unresolved" ;;
+    stuck) alarms="$alarms 🛑 STUCK: a whole lap and nothing new was said, while objections are open" ;;
+    ready-to-decide) alarms="$alarms ✅ ready to decide: council.sh decide" ;;
+    unresolved) alarms="$alarms 🛑 the turn budget is spent — write an honest unresolved" ;;
   esac
-  [ "$conf" -gt 0 ] && alarms="$alarms ⚠️ $conf реплик проиграли конфликт хода (автор должен взять слово заново)"
-  [ "$held" -gt "${COUNCIL_STALL_SECS:-900}" ] && alarms="$alarms 🛑 STALL: слово у $floor уже ${held}с — проверьте его терминал, он может ждать разрешения"
-  printf 'тревоги:%s\n' "${alarms:- —}"
-  printf 'последние реплики:\n'
+  [ "$conf" -gt 0 ] && alarms="$alarms ⚠️ $conf messages lost a turn conflict (their authors must take the floor again)"
+  [ "$held" -gt "${COUNCIL_STALL_SECS:-900}" ] && alarms="$alarms 🛑 STALL: $floor has held the floor for ${held}s — check its terminal, it may be sitting on a permission prompt"
+  printf 'alarms:%s\n' "${alarms:- —}"
+  printf 'last messages:\n'
   v_transcript | tail -3 | sed 's/^/  /'
   case "$verd" in decided|unresolved) return 0 ;; *) return 1 ;; esac
 }
@@ -170,44 +170,44 @@ v_decide() {
   j=$(v_verdict --json); verd=$(printf '%s' "$j" | jq -r .verdict)
   case "$verd" in
     ready-to-decide) ;;
-    decided) echo "council: комната уже решена" >&2; return 3 ;;
-    *) [ "$force" = 1 ] || { echo "council: вердикт '$verd', решение не созрело. --force запишет честный unresolved." >&2; return 2; } ;;
+    decided) echo "council: this room is already decided" >&2; return 3 ;;
+    *) [ "$force" = 1 ] || { echo "council: verdict '$verd', the decision is not ripe. --force writes an honest unresolved." >&2; return 2; } ;;
   esac
   g=$(_graph); out="$ROOM/board/decision.md"
   status=$([ "$verd" = ready-to-decide ] && echo decided || echo unresolved)
   {
-    printf '# Решение комнаты `%s`\n\n' "$(basename "$ROOM")"
-    printf '* статус: **%s** (вердикт на момент записи: `%s`)\n' "$status" "$verd"
-    printf '* участники: %s\n' "$(c_peers | paste -sd, - | sed 's/,/, /g')"
-    printf '* режим: %s, правило: %s\n' "$(jq -r .mode "$ROOM/roster.json")" "$(jq -r .decide_by "$ROOM/roster.json")"
-    printf '* ходов: %s из %s\n' "$(printf '%s' "$j" | jq -r .turns)" "$(printf '%s' "$j" | jq -r .budget)"
-    printf '* записал: %s, %s\n\n' "$ME" "$(c_now)"
-    [ -f "$ROOM/agenda.md" ] && { printf '## Вопрос\n\n'; cat "$ROOM/agenda.md"; printf '\n'; }
-    printf '## Решение\n\n'
+    printf '# Decision of room `%s`\n\n' "$(basename "$ROOM")"
+    printf '* status: **%s** (verdict when written: `%s`)\n' "$status" "$verd"
+    printf '* participants: %s\n' "$(c_peers | paste -sd, - | sed 's/,/, /g')"
+    printf '* mode: %s, rule: %s\n' "$(jq -r .mode "$ROOM/roster.json")" "$(jq -r .decide_by "$ROOM/roster.json")"
+    printf '* turns: %s of %s\n' "$(printf '%s' "$j" | jq -r .turns)" "$(printf '%s' "$j" | jq -r .budget)"
+    printf '* written by: %s, %s\n\n' "$ME" "$(c_now)"
+    [ -f "$ROOM/agenda.md" ] && { printf '## The question\n\n'; cat "$ROOM/agenda.md"; printf '\n'; }
+    printf '## The decision\n\n'
     if [ "$status" = decided ]; then
       printf '%s\n\n' "$(printf '%s' "$g" | jq -r '.live[0].current_text')"
-      printf '_(предложение `%s` от %s)_\n\n' "$(printf '%s' "$g" | jq -r '.live[0].id')" "$(printf '%s' "$g" | jq -r '.live[0].from')"
+      printf '_(proposal `%s` from %s)_\n\n' "$(printf '%s' "$g" | jq -r '.live[0].id')" "$(printf '%s' "$g" | jq -r '.live[0].from')"
     else
-      printf 'Не принято: комната не сошлась.\n\n'
+      printf 'Not accepted: the room did not converge.\n\n'
     fi
-    printf '## Возражения и как они закрывались\n\n'
+    printf '## Objections, and how they were closed\n\n'
     printf '%s' "$g" | jq -r '
-      if ([.proposals[].objections[]] | length) == 0 then "* (возражений не было)" else
+      if ([.proposals[].objections[]] | length) == 0 then "* (there were no objections)" else
       (.proposals[] | . as $p | .objections[]
        | if .closed_by != null
-         then "* ✓ **\(.from)** на `\(.id)`: \(.text)\n  * закрыто `\(.closed_by)` — \(.closed_act) от \(.closed_by_who)"
-         elif $p.dead then "* · **\(.from)** на `\(.id)`: \(.text)\n  * отпало вместе с предложением `\($p.id)`"
-         else "* ✗ **\(.from)** на `\(.id)`: \(.text)\n  * **осталось открытым**" end) end'
+         then "* ✓ **\(.from)** on `\(.id)`: \(.text)\n  * closed by `\(.closed_by)` — \(.closed_act) from \(.closed_by_who)"
+         elif $p.dead then "* · **\(.from)** on `\(.id)`: \(.text)\n  * fell with proposal `\($p.id)`"
+         else "* ✗ **\(.from)** on `\(.id)`: \(.text)\n  * **left open**" end) end'
     printf '\n'
     if [ "$status" != decided ]; then
-      printf '## Осталось открытым\n\n'
-      printf '%s' "$g" | jq -r 'if (.open|length) == 0 then "* (открытых возражений нет — комната упёрлась в бюджет ходов)" else (.open[] | "* `\(.id)` от \(.from): \(.text)") end'
+      printf '## Left open\n\n'
+      printf '%s' "$g" | jq -r 'if (.open|length) == 0 then "* (no open objections — the room ran out of turns)" else (.open[] | "* `\(.id)` from \(.from): \(.text)") end'
       printf '\n'
     fi
-    printf '## Стенограмма\n\n'
+    printf '## Transcript\n\n'
     v_transcript | sed 's/^/* /'
   } > "$out"
   printf '%s' "$status" > "$ROOM/board/status"
-  c_send --act decide --text "решение записано: $status (board/decision.md)" >/dev/null
+  c_send --act decide --text "decision written: $status (board/decision.md)" >/dev/null
   printf '%s\n' "$out"
 }

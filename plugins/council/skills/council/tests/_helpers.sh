@@ -27,7 +27,7 @@ verdict1() { COUNCIL_ROOM="$ROOM" bash "$CLI" verdict | cut -d' ' -f1; }
 say_floor() { # <act> <refs-json> <text>
   local who
   who=$(COUNCIL_ROOM="$ROOM" bash "$CLI" floor | sed -n 's/.*floor=\([^ ]*\).*/\1/p')
-  [ -n "$who" ] || { echo "say_floor: не смог определить, чей ход" >&2; return 1; }
+  [ -n "$who" ] || { echo "say_floor: could not work out whose turn it is" >&2; return 1; }
   COUNCIL_ROOM="$ROOM" COUNCIL_ME="$who" bash "$CLI" send --act "$1" --refs "$2" "$3" >/dev/null || return $?
   printf '%s' "$who"
 }

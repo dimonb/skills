@@ -71,10 +71,10 @@ council_up() {
       *)          agenda="$1"; shift ;;
     esac
   done
-  [ -n "$scenario" ] || { echo "council up: нужен --scenario (есть: $(ls "$SKILL/scenarios" | sed 's/\.md$//' | paste -sd, -))" >&2; return 2; }
-  [ -n "$agents" ]   || { echo "council up: нужен --agents, например claude,codex,agy" >&2; return 2; }
+  [ -n "$scenario" ] || { echo "council up: needs --scenario (available: $(ls "$SKILL/scenarios" | sed 's/\.md$//' | paste -sd, -))" >&2; return 2; }
+  [ -n "$agents" ]   || { echo "council up: needs --agents, for example claude,codex,agy" >&2; return 2; }
   local sf="$SKILL/scenarios/$scenario.md"
-  [ -f "$sf" ] || { echo "council up: нет сценария '$scenario'" >&2; return 2; }
+  [ -f "$sf" ] || { echo "council up: no such scenario '$scenario'" >&2; return 2; }
   eval "$(_scenario_meta "$sf")"
   [ -n "$turns" ] && SC_TURNS="$turns"
   cwd="${cwd:-$(pwd -P)}"
@@ -93,12 +93,12 @@ council_up() {
     case "$spec" in *=*) name="${spec%%=*}"; kind="${spec#*=}" ;; *) name="$spec"; kind="$spec" ;; esac
     local u="$name" k=2
     while printf '%s\n' ${peers+"${peers[@]}"} | grep -qx "$u"; do u="$name-$k"; k=$((k+1)); done
-    [ -f "$SKILL/adapters/$kind.sh" ] || { echo "council up: нет адаптера для '$kind' (есть: $(ls "$SKILL/adapters" | sed 's/\.sh$//' | paste -sd, -))" >&2; return 2; }
+    [ -f "$SKILL/adapters/$kind.sh" ] || { echo "council up: no adapter for '$kind' (available: $(ls "$SKILL/adapters" | sed 's/\.sh$//' | paste -sd, -))" >&2; return 2; }
     peers+=("$u"); kinds+=("$kind")
     roles+=("$(printf '%s\n' $SC_ROLES | sed -n "$((i+1))p")"); [ -n "${roles[$i]}" ] || roles[$i]=any
     i=$((i+1))
   done
-  [ "${#peers[@]}" -ge 2 ] || { echo "council up: комната из одного участника — это монолог" >&2; return 2; }
+  [ "${#peers[@]}" -ge 2 ] || { echo "council up: a room with one participant is a monologue" >&2; return 2; }
 
   _mkroom "$room" "${peers[@]}" || return 1
   ROOM="$room"   # term.sh pins the container inside the room
@@ -113,12 +113,12 @@ council_up() {
       order_rotate:true, turn_deadline_ms:180000, turns_budget:$turns,
       round_deadline_ms:$rdl, created_at:$at}' \
     > "$room/roster.json"
-  printf '%s\n' "${agenda:-（повестка не задана）}" > "$room/agenda.md"
+  printf '%s\n' "${agenda:-(no agenda given)}" > "$room/agenda.md"
 
   # protocols: the channel rules are one file for everyone, the scenario adds only the role
   local chan; chan=$(cat "$SKILL/protocol/_channel.md")
   for i in "${!peers[@]}"; do
-    { printf '%s\n' "$chan"; printf '\n## Твоя роль: %s\n\n' "${roles[$i]}"; _role_block "$sf" "${roles[$i]}"; } \
+    { printf '%s\n' "$chan"; printf '\n## Your role: %s\n\n' "${roles[$i]}"; _role_block "$sf" "${roles[$i]}"; } \
       | sed -e "s#__ROOM__#$room#g" -e "s#__ME__#${peers[$i]}#g" -e "s#__SKILL__#$SKILL#g" \
             -e "s#__PEERS__#$(printf '%s\n' "${peers[@]}" | paste -sd, - | sed 's/,/, /g')#g" \
       > "$room/protocol-${peers[$i]}.md"
@@ -144,25 +144,25 @@ council_up() {
       } > "$launcher" )
     chmod +x "$launcher"
     if ct_launch "$p" "$cwd" "$launcher"; then started=$((started+1))
-    else echo "council up: не смог запустить участника $p" >&2; fi
+    else echo "council up: could not launch participant $p" >&2; fi
   done
 
-  printf 'КОМНАТА: %s\n' "$room"
-  printf 'сценарий %s · режим %s · правило %s · бюджет %s ходов\n' "$scenario" "$SC_MODE" "$SC_DECIDE" "$SC_TURNS"
-  [ "$SC_MODE" = roundtable ] && printf 'первый круг идёт барьером: позиции пишутся одновременно и не видны друг другу, пока не соберутся все\n'
+  printf 'ROOM: %s\n' "$room"
+  printf 'scenario %s · mode %s · rule %s · budget %s turns\n' "$scenario" "$SC_MODE" "$SC_DECIDE" "$SC_TURNS"
+  [ "$SC_MODE" = roundtable ] && printf 'the first lap runs as a barrier: positions are written at once and nobody sees anyone else until the round completes\n'
   true
-  printf 'участники: '; for i in "${!peers[@]}"; do printf '%s(%s/%s) ' "${peers[$i]}" "${kinds[$i]}" "${roles[$i]}"; done; printf '\n'
-  printf 'терминалов поднято: %s в контейнере %s\n' "$started" "$(ct_container)"
-  [ -n "$me" ] && printf 'вы участвуете сами как: %s\n' "$me"
+  printf 'participants: '; for i in "${!peers[@]}"; do printf '%s(%s/%s) ' "${peers[$i]}" "${kinds[$i]}" "${roles[$i]}"; done; printf '\n'
+  printf 'terminals started: %s in container %s\n' "$started" "$(ct_container)"
+  [ -n "$me" ] && printf 'you take part yourself as: %s\n' "$me"
   for i in "${!kinds[@]}"; do
     ( . "$SKILL/adapters/${kinds[$i]}.sh"; adapter_notes "${peers[$i]}" )
   done | sort -u
-  printf '\nследить:  council.sh status --room %s\nсказать:  council.sh say <peer> "..." --room %s\n' "$rname" "$rname"
+  printf '\nwatch:  council.sh status --room %s\nspeak:  council.sh say <peer> "..." --room %s\n' "$rname" "$rname"
 }
 
 council_rooms() {
   local base; base=$(room_base) || return 1
-  [ -d "$base" ] || { echo "комнат нет"; return 0; }
+  [ -d "$base" ] || { echo "no rooms"; return 0; }
   local d
   for d in "$base"/*/; do
     [ -d "$d" ] || continue
@@ -175,9 +175,9 @@ council_rooms() {
 # The out-of-band channel: the room reaches a participant that is IN recv; this reaches one
 # that is busy working. Flattened to one line — a literal newline submits early.
 council_say() {
-  local peer="${1:?council say: кому}"; shift
+  local peer="${1:?council say: to whom}"; shift
   local text; case "${1:-}" in @*) text=$(cat "${1#@}") ;; *) text="$*" ;; esac
-  [ -n "$text" ] || { echo "council say: пустое сообщение" >&2; return 2; }
+  [ -n "$text" ] || { echo "council say: empty message" >&2; return 2; }
   . "$SKILL/lib/term.sh"
   local one; one=$(printf '[supervisor] %s' "$text" | tr '\n' ' ')
   # Confirm by counting our own marker in the pane, not by diffing its last lines: an agent
@@ -186,13 +186,13 @@ council_say() {
   # busy pane, so this says "sent" rather than pretending to certainty.
   local nb na full
   nb=$(ct_capture "$peer" 2>/dev/null | grep -c '\[supervisor\]')
-  ct_type "$peer" "$one" || { echo "council say: у участника '$peer' нет живого терминала" >&2; return 3; }
+  ct_type "$peer" "$one" || { echo "council say: participant '$peer' has no live terminal" >&2; return 3; }
   sleep 0.3; ct_submit "$peer"; sleep 1.5
   full=$(ct_capture "$peer" 2>/dev/null); na=$(printf '%s' "$full" | grep -c '\[supervisor\]')
   if [ "$na" -gt "$nb" ]; then
-    printf '%s\n' "$full" | grep -q 'to be submitted after' && echo "queued (участник занят, доставится на границе хода)" || echo "delivered"
+    printf '%s\n' "$full" | grep -q 'to be submitted after' && echo "queued (the participant is busy; it lands on the next turn boundary)" || echo "delivered"
   else
-    echo "sent, но подтверждения в панели нет — посмотрите терминал участника"
+    echo "sent, but the pane shows no confirmation — look at the terminal of that participant"
   fi
 }
 
@@ -201,15 +201,15 @@ council_down() {
   . "$SKILL/lib/term.sh"
   local p
   for p in $(jq -r '.order[]' "$ROOM/roster.json"); do
-    ct_kill "$p" 2>/dev/null && echo "закрыт терминал: $p"
+    ct_kill "$p" 2>/dev/null && echo "terminal closed: $p"
   done
   local keep="$ROOM/state/keeper.pid"
   [ -s "$keep" ] && kill "$(cat "$keep")" 2>/dev/null
   if [ "$purge" = 1 ]; then
     # The room IS the record — the ADR and the transcript live in it. Deleting it throws
     # away the only durable output the room produced, so it takes an explicit flag.
-    rm -rf "$ROOM"; echo "комната удалена: $ROOM"
+    rm -rf "$ROOM"; echo "room deleted: $ROOM"
   else
-    echo "комната сохранена: $ROOM  (решение: $ROOM/board/decision.md)"
+    echo "room kept: $ROOM  (decision: $ROOM/board/decision.md)"
   fi
 }
