@@ -140,7 +140,7 @@ v_claims() {
 # The verdict is COMPUTED. "We agree" here means: no open objection, and a full lap in
 # which nobody added a proposal, an amendment or an objection. Not a mood anyone reports.
 v_verdict() {
-  local g n budget turns last decided live open since lap v
+  local g n budget turns last decided live open since tal lap v
   g=$(_graph) || return 1
   n=$(c_npeers); budget=$(jq -r '.turns_budget // 30' "$ROOM/roster.json")
   read -r _gt last decided live open <<<"$(printf '%s' "$g" | jq -r '[.turns, .last_claim_turn, (.decided // "-"), (.live|length), (.open|length)] | @tsv')"
@@ -149,12 +149,32 @@ v_verdict() {
   # any of its positions claiming a turn. Mixing the two produced a room "minus one turn
   # with nothing new said" — a negative age that no branch below reads correctly.
   turns=$(c_turns)
-  since=$(( turns - (last < 0 ? 0 : last) )); lap=$n
+  lap=$n
+  # `tal` is how many turns had been consumed when the last new claim landed, so that
+  # `since` is a count of turns MINUS a count of turns. `last` is the turn a claim stamped
+  # and turns are stamped 0-based, so the claim's own turn is the (last + 1)-th consumed:
+  # subtracting the index from the count made a claim posted this very instant read as one
+  # turn of silence, and both thresholds below then fired a whole turn early — half a lap
+  # in a two-peer room, which is how `stuck` came to alarm on the lap a fresh objection
+  # had just landed in.
+  # A closed barrier round is the other half of it: its opening positions are claims, yet
+  # they stamp no turn, so the raw maximum is -1 and `since` degenerated to the whole turn
+  # count. The room then reported a full lap of silence at the instant every participant
+  # had just spoken. c_turns already counts that round as one lap, so the claims in it sit
+  # at exactly `n` turns consumed.
+  tal=-1
+  if [ "$last" -ge 0 ]; then
+    tal=$(( last + 1 ))
+  elif [ "$(c_barrier)" = closed ] &&
+       [ "$(c_round0 | jq -s '[.[] | select(.act == "propose" or .act == "amend" or .act == "object")] | length')" -gt 0 ]; then
+    tal=$n
+  fi
+  since=$(( tal < 0 ? turns : turns - tal ))
   if   [ "$decided" != "-" ]; then v=$(c_slurp "$ROOM/board/status"); [ "$v" = 0 ] && v=decided
   elif [ "$turns" -ge "$budget" ]; then v=unresolved
   elif [ "$live" = 0 ]; then v=no-proposal
-  elif [ "$open" -gt 0 ] && [ "$last" -ge 0 ] && [ "$since" -ge "$lap" ]; then v=stuck
-  elif [ "$open" = 0 ] && [ "$live" = 1 ] && [ "$last" -ge 0 ] && [ "$since" -ge "$lap" ]; then v=ready-to-decide
+  elif [ "$open" -gt 0 ] && [ "$tal" -ge 0 ] && [ "$since" -ge "$lap" ]; then v=stuck
+  elif [ "$open" = 0 ] && [ "$live" = 1 ] && [ "$tal" -ge 0 ] && [ "$since" -ge "$lap" ]; then v=ready-to-decide
   else v=deliberating
   fi
   if [ "${1:-}" = "--json" ]; then
