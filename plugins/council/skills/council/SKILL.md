@@ -149,6 +149,7 @@ council.sh up --scenario debate --agents claude,codex,agy "question"   # or @fil
 council.sh status | claims | verdict | order | transcript | floor
 council.sh agenda | protocol | decision   # the room's own files, through the entrypoint
 council.sh say <peer> "..."        # out of band, into that participant's terminal
+council.sh relaunch <peer>         # put one seat back up, mid-room
 council.sh decide [--force]        # write the ADR and close the room
 council.sh down [--purge]          # close terminals; the room (the record) survives
 council.sh rooms                   # what exists and where each room stands
@@ -175,6 +176,37 @@ which carries the blanket flag instead, but worth knowing before you go and writ
 permission question for some agents. That is why `agenda`, `protocol` and `decision` are verbs
 rather than paths, and why the protocol tells every participant to read the room through the
 command.
+
+## Restarting one seat
+
+A participant dies, or is killed to pick up new permissions, or hits a context ceiling.
+`up` would create a *new* room and `down` closes them all, so putting one seat back is its
+own verb:
+
+```bash
+council.sh relaunch codex            # closes its terminal if one is still there, starts it again
+council.sh relaunch codex --cwd DIR  # only for a room created before the cwd was recorded
+```
+
+**The room survives it cleanly, and that is worth saying out loud.** The lane, the cursor
+and the floor are all derived from the log, so a fresh process re-reads its protocol and
+carries on from wherever the room stands; an objection the dead participant had filed is
+still exactly as open, or as closed, as it was. Nothing has to be replayed by hand.
+
+**Do not hand-roll this.** Calling the launcher through the terminal backend directly —
+`agtermctl session new --command <room>/state/launch-<peer>.sh` — looks like the whole
+job and is not: the command runs with no login shell, so the agent CLI is not on the
+resulting `PATH`, `exec` fails with 127, and the session closes within a second. From the
+outside it looks exactly like the backend silently refusing to create a session, and
+nothing is logged anywhere the caller can see. `relaunch` goes through the same wrapper
+the first launch used (`zsh -lc 'exec …'`) and the same pinned container.
+
+It also puts the **keeper** back if it is missing — `down` kills it along with the
+terminals, and a seat restarted into a room with no keeper looks perfectly healthy while
+every bell rung at it is lost.
+
+The one peer it cannot restart is the seat *you* took with `--me`: that participant was
+never given a terminal, so there is no launcher to run, and it says so.
 
 ## Scenarios and roles
 

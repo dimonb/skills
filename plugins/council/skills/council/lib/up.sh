@@ -2,6 +2,27 @@
 # up.sh — creating, listing, driving and tearing down a room.
 
 # --- create ---------------------------------------------------------------------
+# The keeper holds every bell open read-write for the life of the room. Without it a bell
+# rung at a participant that is not currently in `recv` either blocks its sender or is
+# lost; with it, it is buffered and delivered the instant that participant listens.
+#
+# Idempotent, and called from `relaunch` as well as from room creation on purpose: `down`
+# kills the keeper, so a seat started back up in a torn-down room would otherwise look
+# perfectly healthy while every bell rung at it went nowhere.
+_keeper_ensure() { # <room-dir> <peer>...
+  local room="$1"; shift
+  local keep="$room/state/keeper.pid" p
+  [ -s "$keep" ] && kill -0 "$(cat "$keep")" 2>/dev/null && return 0
+  # Detach it from the caller's stdio COMPLETELY. A background process that keeps the
+  # caller's stdout open holds any pipe reading it open too: `council.sh ... | tail`
+  # then never sees EOF and hangs forever, with nothing wrong upstream. Cost one
+  # mystifying "the suite hangs" during development.
+  ( exec >/dev/null 2>&1 <&-
+    for p in "$@"; do exec {fd}<> "$room/bell/$p.fifo"; done
+    while [ -d "$room" ]; do sleep 5; done ) &
+  echo $! > "$keep"
+}
+
 _mkroom() { # <room-dir> <peer>...
   local room="$1"; shift
   mkdir -p "$room"/{bell,state,board,log,lane,cursor} || return 1
@@ -12,20 +33,7 @@ _mkroom() { # <room-dir> <peer>...
     for q in "$@"; do [ "$q" = "$p" ] || printf 0 > "$room/cursor/$p/$q"; done
     printf 0 > "$room/state/$p.seq"; printf 0 > "$room/state/$p.lamport"
   done
-  # The keeper holds every bell open read-write for the life of the room. Without it a
-  # bell rung at a participant that is not currently in `recv` either blocks its sender or
-  # is lost; with it, it is buffered and delivered the instant that participant listens.
-  local keep="$room/state/keeper.pid"
-  if [ ! -s "$keep" ] || ! kill -0 "$(cat "$keep")" 2>/dev/null; then
-    # Detach it from the caller's stdio COMPLETELY. A background process that keeps the
-    # caller's stdout open holds any pipe reading it open too: `council.sh ... | tail`
-    # then never sees EOF and hangs forever, with nothing wrong upstream. Cost one
-    # mystifying "the suite hangs" during development.
-    ( exec >/dev/null 2>&1 <&-
-      for p in "$@"; do exec {fd}<> "$room/bell/$p.fifo"; done
-      while [ -d "$room" ]; do sleep 5; done ) &
-    echo $! > "$keep"
-  fi
+  _keeper_ensure "$room" "$@"
 }
 
 _scenario_meta() { # <file> -> shell assignments
@@ -105,13 +113,16 @@ council_up() {
   local peers_json; peers_json=$(for i in "${!peers[@]}"; do
       jq -n --arg n "${peers[$i]}" --arg k "${kinds[$i]}" --arg r "${roles[$i]}" '{name:$n,kind:$k,role:$r}'
     done | jq -s .)
+  # `cwd` is recorded because `relaunch` needs it: a seat put back up must start where the
+  # room started, and re-deriving it from wherever the supervisor happens to be standing
+  # would silently move that participant to another directory.
   jq -n --argjson order "$(printf '%s\n' "${peers[@]}" | jq -R . | jq -s .)" \
         --argjson peers "$peers_json" --arg mode "$SC_MODE" --arg dec "$SC_DECIDE" \
         --argjson turns "$SC_TURNS" --arg sc "$scenario" --arg at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
-        --argjson rdl "$SC_RDEADLINE" \
+        --argjson rdl "$SC_RDEADLINE" --arg cwd "$cwd" \
     '{order:$order, peers:$peers, scenario:$sc, mode:$mode, decide_by:$dec,
       order_rotate:true, turn_deadline_ms:180000, turns_budget:$turns,
-      round_deadline_ms:$rdl, created_at:$at}' \
+      round_deadline_ms:$rdl, cwd:$cwd, created_at:$at}' \
     > "$room/roster.json"
   printf '%s\n' "${agenda:-(no agenda given)}" > "$room/agenda.md"
 
@@ -201,6 +212,58 @@ council_say() {
   else
     echo "sent, but the pane shows no confirmation — look at the terminal of that participant"
   fi
+}
+
+# Put one seat back up. The room survives a participant restart cleanly — the lane, the
+# cursor and the floor are all derived from the log, so a fresh process re-reads the
+# protocol and carries on, and an objection the dead participant had filed stays exactly as
+# open or as closed as it was. What does NOT survive is hand-rolling the launch: calling
+# `agtermctl session new --command state/launch-<peer>.sh` directly gives the child no login
+# shell, so the agent CLI is not on its PATH, `exec` fails with 127, and the session closes
+# within a second with nothing logged anywhere the caller can see. That is why this goes
+# through ct_launch, which wraps the launcher the same way the first launch did.
+council_relaunch() {
+  local peer="" cwd=""
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --cwd) cwd="${2:-}"; shift 2 ;;
+      -*)    echo "council relaunch: unknown option $1" >&2; return 2 ;;
+      *)     [ -n "$peer" ] && { echo "council relaunch: one participant at a time" >&2; return 2; }
+             peer="$1"; shift ;;
+    esac
+  done
+  [ -n "$peer" ] || { echo "council relaunch: which participant? (roster: $(jq -r '.order | join(", ")' "$ROOM/roster.json"))" >&2; return 2; }
+  jq -e --arg p "$peer" '.order | index($p)' "$ROOM/roster.json" >/dev/null 2>&1 \
+    || { echo "council relaunch: '$peer' is not in this room (roster: $(jq -r '.order | join(", ")' "$ROOM/roster.json"))" >&2; return 2; }
+
+  local launcher="$ROOM/state/launch-$peer.sh"
+  [ -f "$launcher" ] || {
+    echo "council relaunch: no launcher for '$peer' — that seat was never given a terminal." >&2
+    echo "                  it is the seat you took yourself with --me, so there is nothing to restart." >&2
+    return 3; }
+
+  [ -n "$cwd" ] || cwd=$(jq -r '.cwd // empty' "$ROOM/roster.json")
+  [ -n "$cwd" ] || { echo "council relaunch: this room predates the recorded cwd — pass --cwd <dir>" >&2; return 2; }
+  [ -d "$cwd" ] || { echo "council relaunch: no such directory: $cwd" >&2; return 2; }
+
+  . "$SKILL/lib/term.sh"
+  # A seat can be relaunched after `down`, which killed the keeper along with the terminals.
+  # Without it every bell rung at this participant is lost while the room looks healthy.
+  local -a roster=(); local q
+  while IFS= read -r q; do [ -n "$q" ] && roster+=("$q"); done < <(jq -r '.order[]' "$ROOM/roster.json")
+  _keeper_ensure "$ROOM" "${roster[@]}"
+  # Close whatever still answers to this peer BEFORE starting the replacement. A terminal
+  # is addressed by name, and ct_launch does not check whether that name is taken: launching
+  # over a live one leaves two sessions called the same thing, of which ct_target keeps the
+  # first — quite possibly the one that is already dead. The common case has nothing to
+  # close (the participant died), and ct_kill then simply reports no live terminal; the
+  # agterm backend also keeps a crashed session listed on purpose (`--wait`, so the crash
+  # stays readable), and that stale entry is exactly what this clears.
+  ct_kill "$peer" 2>/dev/null && echo "terminal closed: $peer"
+  ct_launch "$peer" "$cwd" "$launcher" \
+    || { echo "council relaunch: could not start a terminal for '$peer'" >&2; return 1; }
+  printf 'relaunched: %s in container %s (cwd %s)\n' "$peer" "$(ct_container)" "$cwd"
+  printf 'it re-reads %s and rejoins where the log stands.\n' "$ROOM/protocol-$peer.md"
 }
 
 council_down() {
