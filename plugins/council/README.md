@@ -43,10 +43,20 @@ A new scenario is one markdown file: front-matter plus a block per role. No code
 
 ## A note on permissions
 
-Agents differ in how they grant a participant the right to run the room's one command.
-Claude Code and Codex take it declaratively at launch. Antigravity asks interactively, per
-command prefix — grant *always allow commands that start with `bash <skill>/council.sh`*
-once, or that participant will sit on a permission prompt while holding the floor.
+Agents differ in how they let a participant act. Claude Code and Codex take it declaratively
+at launch. Antigravity asks interactively, and about two separate things — the **command** it
+runs, and every **file** it opens.
+
+Commands have a persisted allowlist; file reads have none at all, and no flag scopes them.
+What decides whether it asks about a file is not the directory but whether it was *told* the
+path or worked it out itself. So the room hands participants verbs instead of locations —
+`council.sh agenda`, `protocol`, `decision` — and the Antigravity seat launches with the
+blanket `--dangerously-skip-permissions`, which covers what a participant reads *outside* the
+room. That flag applies only to sessions this skill starts.
+
+Miss a grant and that participant sits on a prompt while holding the floor, which from the
+room is indistinguishable from a wedged session. Nothing here edits an agent's settings file
+for you.
 
 Full documentation, including the failure modes that are worth knowing before they cost
 you an evening: [`skills/council/SKILL.md`](skills/council/SKILL.md).

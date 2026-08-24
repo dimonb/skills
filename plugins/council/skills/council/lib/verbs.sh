@@ -2,6 +2,47 @@
 # verbs.sh — the reading and speaking verbs. Sourced by council.sh with the room and the
 # transport already in scope.
 
+# --- the room's own files, read through the entrypoint --------------------------
+# A participant should not have to open a file in the room by path. What governs the prompt
+# is not the directory: it is whether the agent was TOLD the path or DERIVED it. A path named
+# in a launch prompt is read without asking; one the participant works out for itself — the
+# agenda, the board — raises "allow access to this file?" every time, with no "always" in the
+# menu and no grant that persists (measured in dimonb/skills#7 and #18). While it is up the
+# participant holds the floor, and from inside the room that is indistinguishable from one
+# that is thinking.
+#
+# So the room's own readable files get verbs. A verb is a command, and commands DO have a
+# persisted grant — which is the whole reason this skill has one entrypoint.
+
+v_protocol() {
+  # The one file a participant cannot be handed by a launcher: the peer sitting in the room
+  # as `--me` has no launcher at all (`up` skips it), so without this verb its own protocol
+  # is reachable only by the path the rest of this file tells it not to use.
+  need_me
+  [ -f "$ROOM/protocol-$ME.md" ] || {
+    printf 'council: no protocol for %s in this room\n' "$ME" >&2
+    return 2
+  }
+  cat "$ROOM/protocol-$ME.md"
+}
+
+v_agenda() {
+  # A missing agenda is not an error: `up` writes this same placeholder when it is given
+  # no agenda, and a room built by hand for a test has no file at all. A participant that
+  # reads a non-zero exit as breakage stops instead of speaking.
+  if [ -f "$ROOM/agenda.md" ]; then cat "$ROOM/agenda.md"; else printf '(no agenda given)\n'; fi
+}
+
+v_decision() {
+  # Exit 1 while the room is still open — a STATUS, the same way `verdict` reports a live
+  # room, not a failure.
+  [ -f "$ROOM/board/decision.md" ] || {
+    printf 'council: no decision yet — the room is still open (council.sh verdict)\n'
+    return 1
+  }
+  cat "$ROOM/board/decision.md"
+}
+
 v_send() { # --act A [--refs J] [--hand] "<text>"
   local -a a=(); local text=""
   while [ $# -gt 0 ]; do
@@ -208,6 +249,6 @@ v_decide() {
     v_transcript | sed 's/^/* /'
   } > "$out"
   printf '%s' "$status" > "$ROOM/board/status"
-  c_send --act decide --text "decision written: $status (board/decision.md)" >/dev/null
+  c_send --act decide --text "decision written: $status (council.sh decision)" >/dev/null
   printf '%s\n' "$out"
 }
