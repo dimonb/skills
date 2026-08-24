@@ -257,6 +257,16 @@ perl -pi -e 's/^  "state": "need-issue/  "sate": "need-issue/' "$CORE"
 expect_fail "state enum not found in the core skill"
 git checkout -- "$CORE"
 
+# 12 — a council test that builds its room at a path fixed by its own name. This is the shape
+# every test had before the run root existed, so it is the shape a new test copied from an old
+# checkout would carry. Untracked, so the restore cannot remove it: delete it explicitly.
+cat > plugins/council/skills/council/tests/t99-probe.sh <<'PROBE'
+#!/usr/bin/env bash
+R="${TMPDIR:-/tmp}/council-test/t99"; rm -rf "$R"
+PROBE
+expect_fail "council test naming a fixed temp room path"
+rm -f plugins/council/skills/council/tests/t99-probe.sh
+
 echo
 echo "assertions proven: $pass   not caught: $nocatch"
 [ "$nocatch" -eq 0 ] || exit 1

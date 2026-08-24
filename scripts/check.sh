@@ -10,6 +10,7 @@
 # 6. ship's forge reference files do not carry a copy of the pipeline state enum
 # 7. no non-generic strings (structural patterns only; no dependency on any untracked file)
 # 8. no non-Latin script in any tracked file (the checkable half of "English everywhere")
+# 9. council tests build their rooms under the per-run root, never a path fixed by test name
 set -uo pipefail
 cd "$(dirname "$0")/.."
 ROOT_P=$(pwd -P)          # physical repo root; see the symlink containment check below
@@ -229,6 +230,25 @@ if [ "$g" -eq 0 ]; then
   echo "FAIL: non-Latin script in tracked files (AGENTS.md: English everywhere):"; printf '%s\n' "$nonlatin"; rc=1
 elif [ "$g" -gt 1 ]; then
   fail "English check could not run (git grep rc=$g): $nonlatin"
+fi
+
+# ------------------- 9. council test rooms come from the run root, never a fixed path
+# A room path fixed by the test's own name let two concurrent suites delete each other's rooms
+# mid-run. The collision did not surface as an I/O error — it surfaced as an asymmetric protocol
+# failure ("the participants disagreed about who won turn 1"), which is convincing false evidence
+# against the very transport the suite exists to verify. A harness bug that frames the code under
+# test is worse than the bug it hides, so it gets a gate rather than a comment.
+#
+# Only the two files that CREATE the run root may name the shared temp parent. Every test builds
+# under $COUNCIL_TEST_ROOT, or makes its own `mktemp -d`. Matched by SHAPE, not against a list of
+# test names, so a test added later is covered without anyone remembering to edit this.
+tests_dir=plugins/council/skills/council/tests
+if [ -d "$tests_dir" ]; then
+  while IFS= read -r f; do
+    case "${f##*/}" in _helpers.sh|run-all.sh) continue ;; esac
+    grep -qE 'TMPDIR|council-test' "$f" \
+      && fail "council test names a fixed temp path instead of \$COUNCIL_TEST_ROOT: $f"
+  done < <(git ls-files --cached --others --exclude-standard "$tests_dir/*.sh")
 fi
 
 [ $rc -eq 0 ] && echo "check: OK"
