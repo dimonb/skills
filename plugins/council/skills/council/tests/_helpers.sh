@@ -16,26 +16,38 @@ if [ -z "${COUNCIL_TEST_ROOT:-}" ]; then
   COUNCIL_TEST_ROOT_OWNED=1
 fi
 
-# Stop the keeper of the room this test built, then drop the root if this test owns it. A room
-# is the only record of what a failure looked like, so a non-zero exit keeps it and says where.
-# Keepers of any other room in the root exit by themselves once the rm has taken their room.
+# EVERY room's keeper, not just the last one. A test may build several — t7 builds two — and a
+# single variable here left the earlier keepers running. Each holds three fifos open and loops
+# for as long as its room exists, so they have to be tracked to be stopped.
+ROOM_KEEPERS=()
+
+# Take the keepers down and remove the root this test owns, on EVERY exit path. A keeper polls
+# `while [ -d "$room" ]` (lib/up.sh), so removing the root reaps them within five seconds
+# anyway; killing them first makes it immediate and also covers a root this test does not own.
+# Nothing else will ever do it: one root per run means no later run reuses this path, so a root
+# left behind here is a directory and a live process that survive until the machine reboots.
 _council_test_cleanup() {
   local rc=$?
-  kill "$(cat "${ROOM_KEEPER:-}" 2>/dev/null)" 2>/dev/null
-  if [ "${COUNCIL_TEST_ROOT_OWNED:-0}" = 1 ]; then
-    if [ "$rc" = 0 ]; then rm -rf "$COUNCIL_TEST_ROOT"
-    else echo "rooms kept for inspection: $COUNCIL_TEST_ROOT" >&2; fi
+  local k
+  if [ "${#ROOM_KEEPERS[@]}" -gt 0 ]; then
+    for k in "${ROOM_KEEPERS[@]}"; do kill "$(cat "$k" 2>/dev/null)" 2>/dev/null; done
   fi
+  [ "${COUNCIL_TEST_ROOT_OWNED:-0}" = 1 ] && rm -rf "$COUNCIL_TEST_ROOT"
   return $rc
 }
 trap _council_test_cleanup EXIT
+# INT and TERM only exit, which fires the EXIT trap: one implementation of the cleanup, run
+# once. Without them a test that is killed — by a ceiling in run-all.sh, or by hand — skips
+# cleanup altogether, which is exactly how a room outlives the suite that made it.
+trap 'exit 130' INT
+trap 'exit 143' TERM
 
 mkroom() { # <dir> <peer>... — a room with no terminals attached
   local room="$1"; shift
   rm -rf "$room"
   ( SKILL="$SKILL"; . "$SKILL/lib/up.sh"; _mkroom "$room" "$@" )
-  # the EXIT trap installed above kills this keeper, or it outlives the run
   ROOM_KEEPER="$room/state/keeper.pid"
+  ROOM_KEEPERS+=("$ROOM_KEEPER")
   printf '%s\n' "$@" | jq -R . | jq -s --argjson t 30 \
     '{order:., mode:"token", decide_by:"unanimous", order_rotate:true,
       turn_deadline_ms:3000, turns_budget:$t, created_at:"test"}' > "$room/roster.json"
