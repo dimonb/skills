@@ -1,6 +1,6 @@
 {
   "name": "council",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Run a multi-agent discussion room: several agent sessions (Claude Code, Codex, Antigravity) argue one question in background terminals by a strict protocol — speaking in turn, objecting with references, closing objections mechanically — and the room writes a decision record when it converges, or an honest unresolved one when it does not.",
   "author": {
     "name": "dimonb",
