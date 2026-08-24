@@ -47,6 +47,13 @@
                 | select( [ (.refs // [])[] ] | any( IN($objd[].id) or . == $p.id ) ) ] ) as $yield
     | { id: $p.id, from: $p.from, text: $p.text,
         current_text: ( ($amends | last | .text) // $p.text ),
+        # The proposal AS AMENDED, in order: the original, then every amendment that
+        # carried it. `current_text` is only the LAST amendment, so a decision rendered
+        # from it silently dropped every accepted item the final amendment did not repeat.
+        # The messages arrive from c_canon already sorted by (lamport, from), so appending
+        # $amends preserves the order they were spoken in.
+        revisions: ( [ { id: $p.id, from: $p.from, act: "propose", text: $p.text } ]
+                     + [ $amends[] | { id: .id, from: .from, act: "amend", text: .text } ] ),
         amends: ($amends | map(.id)),
         dead: ((($wd | length) + ($yield | length)) > 0),
         dead_by: (($wd + $yield) | (.[0].id // null)),

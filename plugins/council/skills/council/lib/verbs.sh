@@ -203,6 +203,20 @@ v_status() {
   case "$verd" in decided|unresolved) return 0 ;; *) return 1 ;; esac
 }
 
+# The agenda's gist: its first heading if it has one, else its first non-blank line. A
+# detailed agenda used to be embedded whole at the top, so the record opened with two
+# screens of prompt before the decision; a long one is now summarised here and quoted in
+# full at the end. A one-line agenda is its own gist and stays inline, unquoted twice.
+_agenda_gist() { # <file>
+  local h
+  h=$(sed -n 's/^#\{1,6\}[[:space:]]\{1,\}//p' "$1" | head -1)
+  [ -n "$h" ] || h=$(grep -m1 -v '^[[:space:]]*$' "$1")
+  printf '%s' "$h"
+}
+_agenda_is_long() { # <file> — more than one non-blank line
+  [ "$(grep -c -v '^[[:space:]]*$' "$1")" -gt 1 ]
+}
+
 # The ADR is the room's OUTPUT. A room that did not converge writes an `unresolved` record
 # listing what is still open — a valid outcome, never something to paper over.
 v_decide() {
@@ -223,11 +237,38 @@ v_decide() {
     printf '* mode: %s, rule: %s\n' "$(jq -r .mode "$ROOM/roster.json")" "$(jq -r .decide_by "$ROOM/roster.json")"
     printf '* turns: %s of %s\n' "$(printf '%s' "$j" | jq -r .turns)" "$(printf '%s' "$j" | jq -r .budget)"
     printf '* written by: %s, %s\n\n' "$ME" "$(c_now)"
-    [ -f "$ROOM/agenda.md" ] && { printf '## The question\n\n'; cat "$ROOM/agenda.md"; printf '\n'; }
+    if [ -f "$ROOM/agenda.md" ]; then
+      printf '## The question\n\n'
+      if _agenda_is_long "$ROOM/agenda.md"; then
+        printf '%s\n\n' "$(_agenda_gist "$ROOM/agenda.md")"
+        printf 'The agenda is [`agenda.md`](../agenda.md), quoted in full at the end of this record.\n\n'
+      else
+        cat "$ROOM/agenda.md"; printf '\n'
+      fi
+    fi
     printf '## The decision\n\n'
     if [ "$status" = decided ]; then
-      printf '%s\n\n' "$(printf '%s' "$g" | jq -r '.live[0].current_text')"
-      printf '_(proposal `%s` from %s)_\n\n' "$(printf '%s' "$g" | jq -r '.live[0].id')" "$(printf '%s' "$g" | jq -r '.live[0].from')"
+      # The decision is the proposal AS AMENDED, under headings that say which part is
+      # which. Rendering `current_text` here recorded only the final amendment, in the
+      # amendment's own voice, so accepted items the amendment did not restate appeared
+      # nowhere and the decision could only be reconstructed from the transcript.
+      printf '%s\n\n' "$(printf '%s' "$g" | jq -r '.live[0]
+        | if (.amends|length) == 0 then .text
+          else ( [ .revisions[]
+                   | if .act == "propose"
+                     then "### As proposed (`\(.id)`, from \(.from))\n\n\(.text)"
+                     else "### Amendment `\(.id)`, from \(.from)\n\n\(.text)" end ]
+                 | join("\n\n") )
+          end')"
+      # Name the amendments as well as the proposal: the ids are what lets a reader index
+      # this decision back into the transcript, and the amendments are usually where the
+      # decision actually got its final shape.
+      printf '%s\n\n' "$(printf '%s' "$g" | jq -r '.live[0]
+        | "_(proposal `\(.id)` from \(.from)"
+          + (if (.amends|length) > 0
+             then ", as amended by " + ([.amends[] | "`\(.)`"] | join(", "))
+             else "" end)
+          + ")_"')"
     else
       printf 'Not accepted: the room did not converge.\n\n'
     fi
@@ -247,6 +288,10 @@ v_decide() {
     fi
     printf '## Transcript\n\n'
     v_transcript | sed 's/^/* /'
+    if [ -f "$ROOM/agenda.md" ] && _agenda_is_long "$ROOM/agenda.md"; then
+      printf '\n## The agenda in full\n\n'
+      cat "$ROOM/agenda.md"
+    fi
   } > "$out"
   printf '%s' "$status" > "$ROOM/board/status"
   c_send --act decide --text "decision written: $status (council.sh decision)" >/dev/null

@@ -1,0 +1,106 @@
+#!/usr/bin/env bash
+# t9 — the decision record must be readable on its own.
+#   * "## The decision" carries the ORIGINAL proposal and every amendment, under headings
+#     that say which is which. It used to render `current_text` — the last amendment only —
+#     so accepted items that the final amendment did not restate appeared nowhere, and the
+#     decision had to be reconstructed from the transcript;
+#   * the provenance line names the amendment ids, so the transcript can be indexed back
+#     from the decision;
+#   * a long agenda is summarised with a link and quoted in full at the END, instead of
+#     opening the record with two screens of prompt. A one-line agenda stays inline.
+set -uo pipefail
+DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+. "$DIR/_helpers.sh"
+R="${TMPDIR:-/tmp}/council-test/t9"; rm -rf "$R"
+mkroom "$R" a b
+export COUNCIL_ROOM="$R" ROOM="$R"
+fail=0
+
+# The id of the message just sent. A peer's Nth message is `<peer>-N`, so a test that
+# hard-codes `-1` silently points at the wrong message once a peer speaks twice.
+sid() { # <act> <refs-json> <text>
+  say_floor "$1" "$2" "$3" >/dev/null || return $?
+  bash "$CLI" order --ids | tail -1
+}
+
+printf 'Which storage layout?\n' > "$R/agenda.md"
+p=$(sid  propose '[]'            "ITEM-ONE one lane per author. ITEM-TWO no locks. ITEM-FIVE a janitor sweeps orphaned tokens.")
+o1=$(sid object  "[\"$p\"]"      "A reader would scan N directories on every poll.")
+a1=$(sid amend   "[\"$p\",\"$o1\"]" "AMEND-THREE a reader probes upward from its cursor instead.")
+o2=$(sid object  "[\"$p\"]"      "The janitor has no deadline.")
+a2=$(sid amend   "[\"$p\",\"$o2\"]" "AMEND-FOUR the janitor finishes within 24 h.")
+for i in 1 2 3 4; do sid msg '[]' "Nothing further from me ($i)." >/dev/null; done
+
+[ "$(bash "$CLI" verdict | cut -d' ' -f1)" = ready-to-decide ] || {
+  echo "FAIL expected ready-to-decide"; bash "$CLI" claims; exit 1; }
+
+# The graph carries the whole revision chain, in order — and `current_text` keeps its old
+# meaning, because claims/status and t8 are written against it.
+g=$(bash "$CLI" claims --raw)
+# `// []` on the array: without it, a graph that has no `revisions` at all makes jq abort
+# with "cannot iterate over null" and the assertion below reports an empty string through a
+# screen of jq noise, instead of saying plainly what was missing.
+q() { printf '%s' "$g" | jq -r ".proposals[] | select(.id==\"$p\") | $1"; }
+revs=$(q '[(.revisions // [])[].id] | join(",")')
+[ "$revs" = "$p,$a1,$a2" ] || { echo "FAIL revisions are not original-then-amendments-in-order: '$revs'"; fail=1; }
+acts=$(q '[(.revisions // [])[].act] | join(",")')
+[ "$acts" = "propose,amend,amend" ] || { echo "FAIL revision acts: '$acts'"; fail=1; }
+[ "$(q '(.revisions // [])[0].text')" = "$(q '.text')" ] || { echo "FAIL the first revision is not the original proposal"; fail=1; }
+[ "$(q '.current_text')" = "AMEND-FOUR the janitor finishes within 24 h." ] || {
+  echo "FAIL current_text changed meaning: '$(q '.current_text')'"; fail=1; }
+echo "the graph carries the revision chain in order, and current_text is unchanged"
+
+OUT=$(COUNCIL_ME=a bash "$CLI" decide) || { echo "FAIL decide refused"; exit 1; }
+dec=$(sed -n '/^## The decision/,/^## Objections/p' "$OUT")
+
+# Quotable on its own: every accepted item is in the decision section, not only in the
+# transcript. This is the assertion the old renderer failed.
+for want in ITEM-ONE ITEM-TWO ITEM-FIVE AMEND-THREE AMEND-FOUR; do
+  printf '%s\n' "$dec" | grep -q "$want" || { echo "FAIL the decision section is missing $want"; fail=1; }
+done
+printf '%s\n' "$dec" | grep -q '^### As proposed' || { echo "FAIL no 'As proposed' heading"; fail=1; }
+printf '%s\n' "$dec" | grep -q "^### Amendment .$a1" || { echo "FAIL no heading naming amendment $a1"; fail=1; }
+printf '%s\n' "$dec" | grep -q "^### Amendment .$a2" || { echo "FAIL no heading naming amendment $a2"; fail=1; }
+echo "the decision records the proposal as amended, under headings that say which is which"
+
+printf '%s\n' "$dec" | grep -q "as amended by .$a1., .$a2." || {
+  echo "FAIL the provenance line does not name the amendment ids"; fail=1; }
+echo "the provenance line names the amendments that carried the proposal"
+
+# A one-line agenda is its own gist: inline, and never quoted a second time.
+grep -q 'Which storage layout?' "$OUT" || { echo "FAIL the one-line agenda is missing"; fail=1; }
+grep -q '^## The agenda in full' "$OUT" && { echo "FAIL a one-line agenda was quoted twice"; fail=1; }
+echo "a one-line agenda stays inline"
+
+# A long agenda: the gist plus a link at the top, the full text at the end.
+# mkroom's EXIT trap only remembers the LAST room, so retire this keeper by hand before
+# opening the second room, or it outlives the run.
+kill "$(cat "$R/state/keeper.pid" 2>/dev/null)" 2>/dev/null
+R2="${TMPDIR:-/tmp}/council-test/t9-long"; rm -rf "$R2"
+mkroom "$R2" a b
+export COUNCIL_ROOM="$R2" ROOM="$R2"
+cat > "$R2/agenda.md" <<'AGENDA'
+# Where should the room keep its history?
+
+Background a reader does not need before the decision itself.
+
+* one constraint
+* another constraint
+AGENDA
+sid propose '[]' "One lane per author, total order by Lamport clock." >/dev/null
+for i in 1 2 3; do sid msg '[]' "Agreed ($i)." >/dev/null; done
+OUT2=$(COUNCIL_ME=a bash "$CLI" decide) || { echo "FAIL decide refused in the long-agenda room"; exit 1; }
+
+head=$(sed -n '/^## The question/,/^## The decision/p' "$OUT2")
+printf '%s\n' "$head" | grep -q 'Where should the room keep its history?' || {
+  echo "FAIL the record does not open with the agenda's first heading"; fail=1; }
+printf '%s\n' "$head" | grep -q 'agenda.md' || { echo "FAIL no link to the agenda"; fail=1; }
+printf '%s\n' "$head" | grep -q 'another constraint' && {
+  echo "FAIL the whole agenda is still embedded at the top"; fail=1; }
+grep -q '^## The agenda in full' "$OUT2" || { echo "FAIL the agenda is not quoted in full at the end"; fail=1; }
+printf '%s\n' "$(sed -n '/^## The agenda in full/,$p' "$OUT2")" | grep -q 'another constraint' || {
+  echo "FAIL the full agenda section lost the agenda's body"; fail=1; }
+echo "a long agenda opens as a heading plus a link, and is quoted in full at the end"
+
+[ "$fail" = 0 ] && echo "t9 PASS" || echo "t9 FAIL"
+exit $fail
