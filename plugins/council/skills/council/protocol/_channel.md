@@ -18,6 +18,7 @@ it alone.
     council.sh status                             whose turn, what is on the table, what is open
     council.sh claims                             the objection graph
     council.sh decision                           the record (exit 1 = not written yet, not an error)
+    council.sh transcript                         everything said so far, in order
 
 **Exit code 4 from `recv` is NOT an error.** It means "nobody said anything within the
 timeout". The only correct reaction is to call `recv` again. Do not fix it, do not treat it
@@ -41,6 +42,22 @@ needs one, so the next lap is about that: if someone else's position is better t
 drop yours (`concede --refs '["<your position>"]'`); if yours holds something the surviving
 one lacks, put that in as an `amend`. A room with N live proposals and no objections looks
 like agreement but will never become a decision.
+
+## First: is the room already running?
+
+**Before your first message, run `council.sh status`. If the room is not empty, read
+`council.sh transcript` before you speak.**
+
+You may be starting into an argument that is already well under way — a seat is sometimes
+restarted mid-room, and a restarted process has read none of it. `recv` will not catch you
+up: it hands you what your cursor has not consumed, and your cursor belongs to the seat, not
+to the process, so everything the previous process consumed is already behind it. The room's
+own state is intact — the floor, the lanes and every objection's open-or-closed state are
+derived from the log — but your knowledge of it is not, and nobody else can tell the
+difference between a participant that has read the argument and one that is guessing.
+
+Read the transcript, and `council.sh claims` for what is still open. Then take your turn. Do
+not re-propose something already conceded, and do not answer an objection you have not read.
 
 ## How the conversation works
 

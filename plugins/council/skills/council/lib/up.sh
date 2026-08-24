@@ -85,7 +85,13 @@ council_up() {
   [ -f "$sf" ] || { echo "council up: no such scenario '$scenario'" >&2; return 2; }
   eval "$(_scenario_meta "$sf")"
   [ -n "$turns" ] && SC_TURNS="$turns"
-  cwd="${cwd:-$(pwd -P)}"
+  # Resolve it here, once. The value is recorded in the roster and later baked into a
+  # regenerated launcher's `cd` line by `relaunch`, so a RELATIVE one would be re-resolved
+  # against whatever directory the supervisor happened to be standing in — `--cwd .` passes
+  # every check and silently puts the participant somewhere else entirely.
+  local cwd_in="${cwd:-$(pwd -P)}"
+  cwd=$(cd "$cwd_in" 2>/dev/null && pwd -P) \
+    || { echo "council up: no such directory: $cwd_in" >&2; return 2; }
 
   local base; base=$(room_base) || return 1
   local rname="${ROOM_NAME:-$scenario}" room="$base/${ROOM_NAME:-$scenario}" n=2
@@ -113,9 +119,11 @@ council_up() {
   local peers_json; peers_json=$(for i in "${!peers[@]}"; do
       jq -n --arg n "${peers[$i]}" --arg k "${kinds[$i]}" --arg r "${roles[$i]}" '{name:$n,kind:$k,role:$r}'
     done | jq -s .)
-  # `cwd` is recorded because `relaunch` needs it: a seat put back up must start where the
-  # room started, and re-deriving it from wherever the supervisor happens to be standing
-  # would silently move that participant to another directory.
+  # `cwd` is recorded because `relaunch` bakes it into the `cd` line of the launcher it
+  # regenerates, so it decides where a restarted participant RUNS. Re-deriving it then, from
+  # wherever the supervisor happened to be standing, would silently move that seat to another
+  # directory — and a supervisor is very often standing in a different worktree of the same
+  # repo, which resolves to the same room.
   jq -n --argjson order "$(printf '%s\n' "${peers[@]}" | jq -R . | jq -s .)" \
         --argjson peers "$peers_json" --arg mode "$SC_MODE" --arg dec "$SC_DECIDE" \
         --argjson turns "$SC_TURNS" --arg sc "$scenario" --arg at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
@@ -126,35 +134,25 @@ council_up() {
     > "$room/roster.json"
   printf '%s\n' "${agenda:-(no agenda given)}" > "$room/agenda.md"
 
-  # protocols: the channel rules are one file for everyone, the scenario adds only the role
-  local chan; chan=$(cat "$SKILL/protocol/_channel.md")
+  # Every participant gets a protocol, including the seat the human took with --me. Only the
+  # ones that get a TERMINAL get a launcher, which is what makes the launcher's existence the
+  # record of that, and what `relaunch` reads it as.
   for i in "${!peers[@]}"; do
-    { printf '%s\n' "$chan"; printf '\n## Your role: %s\n\n' "${roles[$i]}"; _role_block "$sf" "${roles[$i]}"; } \
-      | sed -e "s#__ROOM__#$room#g" -e "s#__ME__#${peers[$i]}#g" -e "s#__SKILL__#$SKILL#g" \
-            -e "s#__PEERS__#$(printf '%s\n' "${peers[@]}" | paste -sd, - | sed 's/,/, /g')#g" \
-      > "$room/protocol-${peers[$i]}.md"
+    _write_protocol "$room" "${peers[$i]}" "${roles[$i]}" "$sf" "${peers[@]}"
   done
 
-  # launchers: the LAUNCHER exports the room, never the participant. A participant that has
-  # to set up its own environment gets it wrong in the order it happens to read things —
-  # observed, in the probe that produced this design, on the very first command.
   . "$SKILL/lib/term.sh"
   local started=0
   for i in "${!peers[@]}"; do
     # Separate statements on purpose: a `local a=… b=$a` reads $a before it is assigned
     # under `set -u`, which fails with an unbound-variable error naming a variable you can
     # see being set on the same line.
-    local p kind launcher
-    p="${peers[$i]}"; kind="${kinds[$i]}"; launcher="$room/state/launch-$p.sh"
+    local p kind
+    p="${peers[$i]}"; kind="${kinds[$i]}"
     if [ "$p" = "$me" ]; then continue; fi
-    ( . "$SKILL/adapters/$kind.sh"
-      { printf '#!/usr/bin/env bash\n'
-        printf 'export COUNCIL_ROOM=%q COUNCIL_ME=%q\n' "$room" "$p"
-        printf 'cd %q || exit 1\n' "$cwd"
-        adapter_cmd "$room" "$room/protocol-$p.md" "$SKILL"
-      } > "$launcher" )
-    chmod +x "$launcher"
-    if ct_launch "$p" "$cwd" "$launcher"; then started=$((started+1))
+    _write_launcher "$room" "$p" "$kind" "$cwd" \
+      || { echo "council up: could not write the launcher for $p" >&2; continue; }
+    if ct_launch "$p" "$cwd" "$room/state/launch-$p.sh"; then started=$((started+1))
     else echo "council up: could not launch participant $p" >&2; fi
   done
 
@@ -214,37 +212,110 @@ council_say() {
   fi
 }
 
-# Put one seat back up. The room survives a participant restart cleanly — the lane, the
-# cursor and the floor are all derived from the log, so a fresh process re-reads the
-# protocol and carries on, and an objection the dead participant had filed stays exactly as
-# open or as closed as it was. What does NOT survive is hand-rolling the launch: calling
-# `agtermctl session new --command state/launch-<peer>.sh` directly gives the child no login
-# shell, so the agent CLI is not on its PATH, `exec` fails with 127, and the session closes
-# within a second with nothing logged anywhere the caller can see. That is why this goes
-# through ct_launch, which wraps the launcher the same way the first launch did.
+# The two files a participant is launched with. Both are generated from the roster and the
+# skill, and NOTHING is read back out of the room — which is what lets `relaunch` regenerate
+# them instead of trusting what is on disk. `up` calls them too, so there is one generator
+# per file rather than a copy in each verb that would drift.
+#
+# The LAUNCHER exports the room, never the participant. A participant that has to set up its
+# own environment gets it wrong in the order it happens to read things — observed, in the
+# probe that produced this design, on the very first command.
+_write_launcher() { # <room> <peer> <kind> <cwd>
+  local room="$1" peer="$2" kind="$3" cwd="$4"
+  ( . "$SKILL/adapters/$kind.sh"
+    { printf '#!/usr/bin/env bash\n'
+      printf 'export COUNCIL_ROOM=%q COUNCIL_ME=%q\n' "$room" "$peer"
+      printf 'cd %q || exit 1\n' "$cwd"
+      adapter_cmd "$room" "$room/protocol-$peer.md" "$SKILL"
+    } > "$room/state/launch-$peer.sh" ) || return 1
+  chmod +x "$room/state/launch-$peer.sh"
+}
+
+# The channel rules are one file for everyone; the scenario adds only the role.
+_write_protocol() { # <room> <peer> <role> <scenario-file> <peer>...
+  local room="$1" peer="$2" role="$3" sf="$4"; shift 4
+  local chan; chan=$(cat "$SKILL/protocol/_channel.md")
+  { printf '%s\n' "$chan"; printf '\n## Your role: %s\n\n' "$role"; _role_block "$sf" "$role"; } \
+    | sed -e "s#__ROOM__#$room#g" -e "s#__ME__#$peer#g" -e "s#__SKILL__#$SKILL#g" \
+          -e "s#__PEERS__#$(printf '%s\n' "$@" | paste -sd, - | sed 's/,/, /g')#g" \
+    > "$room/protocol-$peer.md"
+}
+
+# Put one seat back up.
+#
+# What survives a restart and what does not, because the difference matters and the docs now
+# say it out loud: the floor, the lanes and every objection's open-or-closed state are
+# derived from the log, so the ROOM is untouched. That seat's own knowledge is not — a fresh
+# process has never read a word of the argument, and its cursors are files that outlived it,
+# so `recv` hands it nothing. `protocol/_channel.md` therefore tells every participant to
+# read the transcript when it starts into a room that is already running.
+#
+# Two things this does that a hand-rolled launch does not.
+#
+# Handing the launcher straight to the terminal backend — `agtermctl session new --command
+# <room>/state/launch-<peer>.sh` — runs it with no login shell, so the agent CLI is not on
+# the resulting PATH, `exec` fails with 127, and the session closes within a second with
+# nothing logged anywhere the caller can see. It reads as the backend silently refusing.
+# ct_launch wraps it the same way the first launch did.
+#
+# And the launcher and protocol are REGENERATED rather than re-run. Every participant is
+# handed the room as a writable root (`--add-dir <room>`, all three adapters), so those two
+# files are writable by the other agents in the room — and a scenario deliberately makes
+# them adversarial. Re-executing a stored launcher would run whatever a participant put
+# there, in a login shell, unsandboxed, in the human's own process tree. Regenerating also
+# picks up adapter changes made since the room opened, which is what "killed to pick up new
+# permissions" actually asks for. The cost, which is documented where the verb is: a
+# hand-edited launcher or protocol is DISCARDED.
 council_relaunch() {
   local peer="" cwd=""
   while [ $# -gt 0 ]; do
     case "$1" in
-      --cwd) cwd="${2:-}"; shift 2 ;;
+      # `[ $# -ge 2 ]`, not `${2:-}`: defaulting the value dodges the unbound-variable error
+      # and then `shift 2` fails silently with one argument left, so `$#` never falls and the
+      # loop spins at 100% CPU forever, printing nothing. A supervisor that ran
+      # `relaunch <peer> --cwd $dir` with $dir empty would hang until something killed it.
+      --cwd) [ $# -ge 2 ] || { echo "council relaunch: --cwd needs a directory" >&2; return 2; }
+             cwd="$2"; shift 2 ;;
       -*)    echo "council relaunch: unknown option $1" >&2; return 2 ;;
       *)     [ -n "$peer" ] && { echo "council relaunch: one participant at a time" >&2; return 2; }
              peer="$1"; shift ;;
     esac
   done
-  [ -n "$peer" ] || { echo "council relaunch: which participant? (roster: $(jq -r '.order | join(", ")' "$ROOM/roster.json"))" >&2; return 2; }
+  local names; names=$(jq -r '.order | join(", ")' "$ROOM/roster.json")
+  [ -n "$peer" ] || { echo "council relaunch: which participant? (roster: $names)" >&2; return 2; }
   jq -e --arg p "$peer" '.order | index($p)' "$ROOM/roster.json" >/dev/null 2>&1 \
-    || { echo "council relaunch: '$peer' is not in this room (roster: $(jq -r '.order | join(", ")' "$ROOM/roster.json"))" >&2; return 2; }
+    || { echo "council relaunch: '$peer' is not in this room (roster: $names)" >&2; return 2; }
 
-  local launcher="$ROOM/state/launch-$peer.sh"
-  [ -f "$launcher" ] || {
+  # The launcher's CONTENT is untrusted and about to be overwritten, but its EXISTENCE is
+  # still the only record of which seats were given a terminal: `up` writes one for every
+  # participant except the one the human took with --me.
+  [ -f "$ROOM/state/launch-$peer.sh" ] || {
     echo "council relaunch: no launcher for '$peer' — that seat was never given a terminal." >&2
     echo "                  it is the seat you took yourself with --me, so there is nothing to restart." >&2
     return 3; }
 
+  local kind role scenario
+  kind=$(jq -r --arg p "$peer" '.peers[]? | select(.name==$p) | .kind' "$ROOM/roster.json" | head -1)
+  role=$(jq -r --arg p "$peer" '.peers[]? | select(.name==$p) | .role' "$ROOM/roster.json" | head -1)
+  scenario=$(jq -r '.scenario // empty' "$ROOM/roster.json")
+  [ -n "$kind" ] && [ -n "$scenario" ] \
+    || { echo "council relaunch: this room does not record which agent plays '$peer' — it cannot be regenerated" >&2; return 2; }
+  [ -f "$SKILL/adapters/$kind.sh" ] \
+    || { echo "council relaunch: this skill has no adapter for '$kind' any more" >&2; return 2; }
+  local sf="$SKILL/scenarios/$scenario.md"
+  [ -f "$sf" ] \
+    || { echo "council relaunch: this skill has no scenario '$scenario' any more — the protocol cannot be regenerated" >&2; return 2; }
+  [ -n "$role" ] || role=any
+
+  # The cwd is BAKED INTO the regenerated launcher's `cd` line, so it decides where the
+  # participant runs — not merely where its terminal opens. That is why it is recorded in the
+  # roster at `up` rather than re-derived from wherever the supervisor happens to be standing,
+  # and why it is resolved to an absolute path before anyone stores or uses it.
   [ -n "$cwd" ] || cwd=$(jq -r '.cwd // empty' "$ROOM/roster.json")
   [ -n "$cwd" ] || { echo "council relaunch: this room predates the recorded cwd — pass --cwd <dir>" >&2; return 2; }
-  [ -d "$cwd" ] || { echo "council relaunch: no such directory: $cwd" >&2; return 2; }
+  local cwd_in="$cwd"
+  cwd=$(cd "$cwd_in" 2>/dev/null && pwd -P) \
+    || { echo "council relaunch: no such directory: $cwd_in" >&2; return 2; }
 
   . "$SKILL/lib/term.sh"
   # A seat can be relaunched after `down`, which killed the keeper along with the terminals.
@@ -252,18 +323,24 @@ council_relaunch() {
   local -a roster=(); local q
   while IFS= read -r q; do [ -n "$q" ] && roster+=("$q"); done < <(jq -r '.order[]' "$ROOM/roster.json")
   _keeper_ensure "$ROOM" "${roster[@]}"
-  # Close whatever still answers to this peer BEFORE starting the replacement. A terminal
-  # is addressed by name, and ct_launch does not check whether that name is taken: launching
-  # over a live one leaves two sessions called the same thing, of which ct_target keeps the
-  # first — quite possibly the one that is already dead. The common case has nothing to
-  # close (the participant died), and ct_kill then simply reports no live terminal; the
-  # agterm backend also keeps a crashed session listed on purpose (`--wait`, so the crash
-  # stays readable), and that stale entry is exactly what this clears.
+  # Close whatever still answers to this peer BEFORE regenerating and starting the
+  # replacement. A terminal is addressed by name, and ct_launch does not check whether that
+  # name is taken: launching over a live one leaves two sessions called the same thing, of
+  # which ct_target keeps the first — quite possibly the one that is already dead. Closing
+  # first also means the old process cannot write back over the inputs between the
+  # regeneration and the launch. The common case has nothing to close (the participant
+  # died), and ct_kill then simply reports no live terminal; the agterm backend keeps a
+  # crashed session listed on purpose (`--wait`, so the crash stays readable), and that
+  # stale entry is exactly what this clears.
   ct_kill "$peer" 2>/dev/null && echo "terminal closed: $peer"
-  ct_launch "$peer" "$cwd" "$launcher" \
+  _write_launcher "$ROOM" "$peer" "$kind" "$cwd" \
+    || { echo "council relaunch: could not write the launcher for '$peer'" >&2; return 1; }
+  _write_protocol "$ROOM" "$peer" "$role" "$sf" "${roster[@]}" \
+    || { echo "council relaunch: could not write the protocol for '$peer'" >&2; return 1; }
+  ct_launch "$peer" "$cwd" "$ROOM/state/launch-$peer.sh" \
     || { echo "council relaunch: could not start a terminal for '$peer'" >&2; return 1; }
-  printf 'relaunched: %s in container %s (cwd %s)\n' "$peer" "$(ct_container)" "$cwd"
-  printf 'it re-reads %s and rejoins where the log stands.\n' "$ROOM/protocol-$peer.md"
+  printf 'relaunched: %s (%s/%s) in container %s, cwd %s\n' "$peer" "$kind" "$role" "$(ct_container)" "$cwd"
+  printf 'launcher and protocol regenerated; it reads the transcript and rejoins where the log stands.\n'
 }
 
 council_down() {
