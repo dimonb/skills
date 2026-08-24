@@ -5,12 +5,36 @@ export LC_ALL=C
 SKILL="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"
 CLI="$SKILL/council.sh"
 
+# One root per RUN, not one per test name. Two suites at once — the normal case on a machine
+# driving a fleet of sessions — otherwise delete each other's rooms mid-drain, and the failure
+# lands on whichever test was unlucky rather than on the one that caused it. run-all.sh exports
+# this so every test of a run shares a root; a test started on its own makes its own.
+if [ -z "${COUNCIL_TEST_ROOT:-}" ]; then
+  mkdir -p "${TMPDIR:-/tmp}/council-test" || exit 1
+  COUNCIL_TEST_ROOT=$(mktemp -d "${TMPDIR:-/tmp}/council-test/run.XXXXXXXX") || exit 1
+  export COUNCIL_TEST_ROOT
+  COUNCIL_TEST_ROOT_OWNED=1
+fi
+
+# Stop the keeper of the room this test built, then drop the root if this test owns it. A room
+# is the only record of what a failure looked like, so a non-zero exit keeps it and says where.
+# Keepers of any other room in the root exit by themselves once the rm has taken their room.
+_council_test_cleanup() {
+  local rc=$?
+  kill "$(cat "${ROOM_KEEPER:-}" 2>/dev/null)" 2>/dev/null
+  if [ "${COUNCIL_TEST_ROOT_OWNED:-0}" = 1 ]; then
+    if [ "$rc" = 0 ]; then rm -rf "$COUNCIL_TEST_ROOT"
+    else echo "rooms kept for inspection: $COUNCIL_TEST_ROOT" >&2; fi
+  fi
+  return $rc
+}
+trap _council_test_cleanup EXIT
+
 mkroom() { # <dir> <peer>... — a room with no terminals attached
   local room="$1"; shift
   rm -rf "$room"
   ( SKILL="$SKILL"; . "$SKILL/lib/up.sh"; _mkroom "$room" "$@" )
-  # kill the room's keeper when this test exits, or it outlives the run
-  trap 'kill "$(cat "$ROOM_KEEPER" 2>/dev/null)" 2>/dev/null' EXIT
+  # the EXIT trap installed above kills this keeper, or it outlives the run
   ROOM_KEEPER="$room/state/keeper.pid"
   printf '%s\n' "$@" | jq -R . | jq -s --argjson t 30 \
     '{order:., mode:"token", decide_by:"unanimous", order_rotate:true,

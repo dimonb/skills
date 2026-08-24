@@ -7,7 +7,7 @@ set -uo pipefail
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 . "$DIR/_helpers.sh"
 N=${1:-170}                       # messages per peer
-R="${TMPDIR:-/tmp}/council-test/t1"; rm -rf "$R"
+R="$COUNCIL_TEST_ROOT/t1"; rm -rf "$R"
 mkroom "$R" a b c
 export COUNCIL_ROOM="$R" ROOM="$R"
 

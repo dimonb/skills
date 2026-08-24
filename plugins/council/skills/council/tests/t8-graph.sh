@@ -7,7 +7,7 @@
 set -uo pipefail
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 . "$DIR/_helpers.sh"
-R="${TMPDIR:-/tmp}/council-test/t8"; rm -rf "$R"
+R="$COUNCIL_TEST_ROOT/t8"; rm -rf "$R"
 mkroom "$R" a b
 export COUNCIL_ROOM="$R" ROOM="$R"
 fail=0

@@ -7,7 +7,7 @@ set -uo pipefail
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 . "$DIR/_helpers.sh"
 TURNS=${1:-24}
-R="${TMPDIR:-/tmp}/council-test/t3"; rm -rf "$R"
+R="$COUNCIL_TEST_ROOT/t3"; rm -rf "$R"
 mkroom "$R" a b c
 export COUNCIL_ROOM="$R" ROOM="$R"
 DEADLINE=$(jq -r .turn_deadline_ms "$R/roster.json")

@@ -6,7 +6,7 @@
 set -uo pipefail
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 . "$DIR/_helpers.sh"
-R="${TMPDIR:-/tmp}/council-test/t6"; rm -rf "$R"
+R="$COUNCIL_TEST_ROOT/t6"; rm -rf "$R"
 mkroom "$R" a b c
 export COUNCIL_ROOM="$R" ROOM="$R"
 jq '.turns_budget = 9' "$R/roster.json" > "$R/roster.tmp" && mv "$R/roster.tmp" "$R/roster.json"
