@@ -11,17 +11,16 @@ mkroom "$R" a b c
 export COUNCIL_ROOM="$R" ROOM="$R"
 jq '.turns_budget = 9' "$R/roster.json" > "$R/roster.tmp" && mv "$R/roster.tmp" "$R/roster.json"
 echo "Брать ли на себя ещё один режим расписания?" > "$R/agenda.md"
-say() { COUNCIL_ME="$1" bash "$CLI" send --act "$2" --refs "$3" "$4" >/dev/null; }
 v() { bash "$CLI" verdict | cut -d' ' -f1; }
 fail=0
 
-say a propose '[]'      "Добавить режим swarm сразу вместе с token."
-say b object  '["a-1"]' "Swarm требует правила стабильности, иначе доставка врёт про порядок. Это отдельная работа."
+prop=$(say_floor propose '[]' "Добавить режим swarm сразу вместе с token.")
+say_floor object '["'"$prop"'-1"]' "Swarm требует правила стабильности, иначе доставка врёт про порядок. Это отдельная работа." >/dev/null
 echo "возражение поставлено: $(v)"
 # круг вежливого эха: три хода, ни одного нового заявления
-say c msg '[]' "Понимаю обе стороны."
-say a msg '[]' "Да, вопрос непростой."
-say b msg '[]' "Согласен, что непростой."
+say_floor msg '[]' "Понимаю обе стороны." >/dev/null
+say_floor msg '[]' "Да, вопрос непростой." >/dev/null
+say_floor msg '[]' "Согласен, что непростой." >/dev/null
 echo "после круга эха:    $(v)"
 [ "$(v)" = stuck ] || { echo "FAIL ждал stuck, получил $(v)"; fail=1; }
 bash "$CLI" status > "$R/log/status.stuck" 2>&1
@@ -29,10 +28,7 @@ grep -q "STUCK" "$R/log/status.stuck" || { echo "FAIL status не поднял �
 COUNCIL_ME=a bash "$CLI" decide >/dev/null 2>&1 && { echo "FAIL decide согласился решать залипшую комнату"; fail=1; }
 echo "decide на залипшей комнате: отказался (правильно)"
 # добиваем бюджет
-say c msg '[]' "Ну да."
-say a msg '[]' "Ага."
-say b msg '[]' "Мгм."
-say c msg '[]' "Всё ещё думаю."
+for _t in "Ну да." "Ага." "Мгм." "Всё ещё думаю."; do say_floor msg '[]' "$_t" >/dev/null; done
 echo "после бюджета:      $(v)"
 [ "$(v)" = unresolved ] || { echo "FAIL ждал unresolved, получил $(v)"; fail=1; }
 OUT=$(COUNCIL_ME=a bash "$CLI" decide --force) || { echo "FAIL --force не записал unresolved"; fail=1; }

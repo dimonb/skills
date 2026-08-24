@@ -27,7 +27,7 @@ export COUNCIL_ROOM="$R" ROOM="$R"
   done ) & LP=$!
 sleep 1
 ( export COUNCIL_ME=a; . "$SKILL/lib/lib.sh"
-  for ((i=1;i<=N;i++)); do c_send --text "p$i" >/dev/null; sleep 0.15; done )
+  for ((i=1;i<=N;i++)); do c_send --hand --text "p$i" >/dev/null; sleep 0.15; done )
 wait $LP
 awk '{w[NR]=$1; p[NR]=$2} END{
   n=asort(w); m=asort(p);

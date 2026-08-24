@@ -29,11 +29,22 @@
           | { id: $o.id, from: $o.from, text: $o.text, hand: ($o.hand // false),
               closed_by: ($c.id // null), closed_act: ($c.act // null),
               closed_by_who: ($c.from // null) } ] ) as $objd
-    | ( [ $m[] | select(.act == "amend" and ((.refs // []) | index($p.id)) != null) ] ) as $amends
+    # An amend belongs to ONE proposal: the first proposal-typed id it references. Its other
+    # refs are the objections it closes. Counting it for every proposal it mentions made a
+    # single amendment rewrite two rival positions at once, so a room showed two different
+    # participants proposing the same words — observed live, and it misleads a human before
+    # it misleads any code.
+    | ( [ $m[] | select(.act == "amend")
+          | select( [ (.refs // [])[] | select( IN($props[].id) ) ] | first == $p.id ) ] ) as $amends
     | ( [ $m[] | select(.act == "withdraw" and .from == $p.from
                         and ((.refs // []) | index($p.id)) != null) ] ) as $wd
+    # `concede` means the sender yields, so from a proposal's own author it kills the
+    # proposal — whether it points at an objection ("you are right") or at the proposal
+    # itself ("I withdraw my position in favour of yours"). The second form was missing,
+    # and a live participant used exactly it: the room recorded the concession and then
+    # went on reporting two live proposals, one of which nobody was defending any more.
     | ( [ $m[] | select(.act == "concede" and .from == $p.from)
-                | select( [ (.refs // [])[] ] | any( IN($objd[].id) ) ) ] ) as $yield
+                | select( [ (.refs // [])[] ] | any( IN($objd[].id) or . == $p.id ) ) ] ) as $yield
     | { id: $p.id, from: $p.from, text: $p.text,
         current_text: ( ($amends | last | .text) // $p.text ),
         amends: ($amends | map(.id)),

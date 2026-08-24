@@ -30,7 +30,13 @@ if [ "${BASH_VERSINFO[0]:-0}" -lt 5 ] && [ -z "${COUNCIL_BASH_REEXEC:-}" ]; then
   exit 70
 fi
 
-SKILL="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# PHYSICAL path, deliberately. This repo (and any dogfooding checkout) reaches the skill
+# through a symlink, and plain `pwd` reports the logical path it was reached by. Handing
+# that to a participant is not cosmetic: Codex REFUSES a writable root that is a symlink,
+# so the participant launches, reads its protocol, and then cannot run a single council
+# command — reported by a live participant as "песочница отвергает writable root … потому
+# что это симлинк".
+SKILL="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
 
 usage() {
   cat <<'USAGE'

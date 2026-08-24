@@ -38,6 +38,13 @@ c_ring() { local f="$ROOM/bell/$1.fifo"; [ -p "$f" ] || return 0; ( printf '.' >
 # and a fork each is what turned a millisecond wake into a quarter-second one.
 c_slurp()   { local v=""; [ -f "$1" ] || { printf 0; return; }; read -r v < "$1" 2>/dev/null; printf '%s' "${v:-0}"; }
 c_lamport() { c_slurp "$ROOM/state/$ME.lamport"; }
+# The highest clock anywhere in the room, mine included.
+c_max_lamport() {
+  local mine disk
+  mine=$(c_lamport)
+  disk=$({ c_all 2>/dev/null || true; } | jq -s 'if length == 0 then 0 else (max_by(.lamport).lamport) end')
+  [ "${disk:-0}" -gt "$mine" ] && printf '%s' "$disk" || printf '%s' "$mine"
+}
 c_seq()     { c_slurp "$ROOM/state/$ME.seq"; }
 c_cursor()  { c_slurp "$ROOM/cursor/$ME/$1"; }
 
@@ -48,6 +55,51 @@ c_deps_json() {
   done
   printf '{%s}' "${out%,}"
 }
+
+# --- the opening barrier (mode: roundtable) -------------------------------------
+# Turn-taking rotates the anchor; it does not remove it. In a room of two or three the
+# second speaker still sees the first position before forming its own — which is exactly
+# the case `debate` exists for. So a roundtable room runs its FIRST lap as a barrier:
+# everyone writes a position without waiting for a turn, and nobody READS anyone else's
+# until the round is complete. After that lap the room is turn-taking again, so no
+# delivery-stability rule is needed: from there on only one participant speaks at a time.
+#
+# The barrier is held on the READ side, and its state is derived from the log — every
+# participant computes the same answer without asking anyone.
+c_mode()   { jq -r '.mode // "token"' "$ROOM/roster.json"; }
+c_quorum() { jq -r '.round_quorum // empty' "$ROOM/roster.json"; }
+
+# Positions posted in the opening round, as JSON lines.
+c_round0() { { c_all 2>/dev/null || true; } | jq -c 'select(.round == 0)'; }
+
+# open | closed. Closed for good once everyone has posted, or once the deadline has passed
+# with a quorum — one participant that never starts must not hold the room forever.
+c_barrier() {
+  [ "$(c_mode)" = roundtable ] || { printf 'closed'; return; }
+  local n posted quorum first deadline
+  n=$(c_npeers)
+  posted=$(c_round0 | wc -l | tr -d ' ')
+  [ "$posted" -ge "$n" ] && { printf 'closed'; return; }
+  # A quorum below 2 is not a quorum: at N=2 the N-1 default would let ONE position plus a
+  # deadline close the round, which is the barrier deleting itself. (Raised, blind and
+  # independently, by a Codex participant inside the very room deciding this question.)
+  quorum=$(c_quorum); [ -n "$quorum" ] || quorum=$(( n - 1 )); [ "$quorum" -lt 2 ] && quorum=2
+  first=$(c_round0 | jq -s 'if length == 0 then 0 else (min_by(.sent_ms).sent_ms) end')
+  deadline=$(jq -r '.round_deadline_ms // 600000' "$ROOM/roster.json")
+  [ "$first" = 0 ] && { printf 'open'; return; }
+  local age=$(( $(c_ms) - first ))
+  if [ "$age" -gt "$deadline" ] && [ "$posted" -ge "$quorum" ]; then
+    printf 'closed'
+  elif [ "$age" -gt $(( deadline * 2 )) ]; then
+    # The backstop. With the quorum clamped to 2, an N=2 room whose partner never speaks
+    # would otherwise wait forever — the freeze the deadline exists to prevent, moved one
+    # step down. Past twice the deadline the round closes with whatever it has.
+    printf 'closed'
+  else
+    printf 'open'
+  fi
+}
+c_posted_round0() { c_round0 | jq -r --arg me "$ME" 'select(.from == $me) | .id' | head -1; }
 
 # --- send ----------------------------------------------------------------------
 # c_send --act A [--refs '["id"]'] [--to '["*"]'] [--hand] [--text T]
@@ -63,20 +115,48 @@ c_send() {
       *) echo "c_send: unknown arg $1" >&2; return 2 ;;
     esac
   done
-  local seq lam id f deps turn
+  local seq lam id f deps turn round=null
   seq=$(( $(c_seq) + 1 ))
-  lam=$(( $(c_lamport) + 1 ))
+  # My clock must dominate everything I am about to COUNT, not merely everything I have
+  # read. c_turns counts messages on disk, so a participant can legitimately stamp turn 22
+  # while its own clock still sits below the author of turn 21 — and then the canonical
+  # (lamport, from) order disagrees with the turn order, which makes a transcript show a
+  # reply before what it replies to. Observing a message by counting it is still observing
+  # it, so the clock rises to match.
+  lam=$(( $(c_max_lamport) + 1 ))
   deps=$(c_deps_json)
-  # Which turn this message claims. A hand (raised out of turn) claims none.
-  # Two peers CAN claim the same turn — see c_canon for how that is settled.
-  if [ "$hand" = true ]; then turn=null; else turn=$(c_turns); fi
+  # Which turn this message claims. A hand (raised out of turn) claims none, and neither
+  # does an opening position: the whole point of the barrier round is that N participants
+  # write at once, so making them compete for turn 0 would demote all but one of them.
+  if [ "$hand" = true ]; then
+    turn=null
+  elif [ "$(c_barrier)" = open ]; then
+    if [ -n "$(c_posted_round0)" ]; then
+      echo "council: круг ещё не собран — свою позицию вы уже высказали, ждите остальных" >&2
+      return 5
+    fi
+    round=0; turn=null
+  else
+    turn=$(c_turns)
+    # Check the floor AT STAMP TIME, not before composing. A participant that legitimately
+    # held the floor a moment ago may have lost it while it was writing, and it would then
+    # stamp the next FREE turn — no conflict for c_canon to settle, and the room silently
+    # stops being turn-taking. (Every message after the first such slip reads as
+    # out-of-turn: caught exactly that way, by t3, once the check became slow enough to
+    # widen the window.) `skip` is exempt: it is by definition spoken for somebody else.
+    if [ "$act" != skip ] && [ "$(c_floor_at "$turn")" != "$ME" ]; then
+      echo "council: слово уже не ваше (ход $turn у $(c_floor_at "$turn")) — заберите входящее и ждите своей очереди" >&2
+      return 6
+    fi
+  fi
   id="$ME-$seq"
   f=$(printf '%s/lane/%s/%06d.json' "$ROOM" "$ME" "$seq")
   jq -n --arg id "$id" --arg from "$ME" --argjson lam "$lam" --argjson deps "$deps" \
         --arg act "$act" --argjson refs "$refs" --argjson to "$to" --argjson hand "$hand" \
         --arg text "$text" --arg at "$(c_now)" --argjson ms "$(c_ms)" --argjson turn "$turn" \
+        --argjson round "$round" \
     '{id:$id,from:$from,lamport:$lam,deps:$deps,act:$act,refs:$refs,to:$to,
-      hand:$hand,turn:$turn,text:$text,created_at:$at,sent_ms:$ms}' | c_atomic "$f" || return 1
+      hand:$hand,turn:$turn,round:$round,text:$text,created_at:$at,sent_ms:$ms}' | c_atomic "$f" || return 1
   # my own counters — only I write them, so no ordering hazard with the message file
   printf '%s' "$seq" | c_atomic "$ROOM/state/$ME.seq"
   printf '%s' "$lam" | c_atomic "$ROOM/state/$ME.lamport"
@@ -107,18 +187,33 @@ c_new_files() {
 # Consume everything pending: print it in total order, advance cursors and my clock.
 # Returns 1 (and prints nothing) when the inbox is empty.
 c_drain() {
-  local -a files=(); local -A hi=(); local f p n
-  while IFS= read -r f; do
-    files+=("$f")
-    p="${f%/*}"; p="${p##*/}"          # .../lane/<peer>/NNNNNN.json
-    n="${f##*/}"; n=$((10#${n%.json}))
-    [ "${hi[$p]:-0}" -lt "$n" ] && hi[$p]=$n
-  done < <(c_new_files)
+  local -a files=(); local f
+  while IFS= read -r f; do files+=("$f"); done < <(c_new_files)
   [ "${#files[@]}" -gt 0 ] || return 1
+  # While the opening barrier is open, an opening position is WITHHELD from every other
+  # participant — that is the whole mechanism. A lane stops at its withheld message rather
+  # than skipping it, so nothing is lost and the cursor never runs past unread words.
+  local open=false; [ "$(c_barrier)" = open ] && open=true
   local batch
-  batch=$(cat "${files[@]}" | jq -s -c 'sort_by(.lamport, .from)[]') || return 1
+  batch=$(cat "${files[@]}" | jq -s -c --argjson open "$open" --arg me "$ME" '
+    def seqof: (.id | split("-") | last | tonumber);
+    [ group_by(.from)[]
+      | sort_by(seqof)
+      | (if $open then
+           (. as $g | ($g | map(.round == 0 and .from != $me) | index(true)) as $i
+            | if $i == null then $g else $g[0:$i] end)
+         else . end)
+      | .[] ]
+    | sort_by(.lamport, .from)[]') || return 1
+  [ -n "$batch" ] || return 1
   printf '%s\n' "$batch"
-  for p in "${!hi[@]}"; do printf '%s' "${hi[$p]}" | c_atomic "$ROOM/cursor/$ME/$p"; done
+  # Cursors follow what was RELEASED, not what was found on disk.
+  local p hi
+  while IFS=$'\t' read -r p hi; do
+    [ -n "$p" ] && printf '%s' "$hi" | c_atomic "$ROOM/cursor/$ME/$p"
+  done < <(printf '%s\n' "$batch" | jq -s -r '
+    def seqof: (.id | split("-") | last | tonumber);
+    group_by(.from)[] | [ (.[0].from), (map(seqof) | max) ] | @tsv')
   local seen mine
   seen=$(printf '%s\n' "$batch" | jq -s 'max_by(.lamport).lamport')
   mine=$(c_lamport)
@@ -168,7 +263,14 @@ c_canon() {
 }
 
 # A message consumes a turn unless it was raised out of turn, or lost a turn conflict.
-c_turns() { c_canon | jq -s '[.[] | select(.hand == false and .turn != null and .valid)] | length'; }
+# A CLOSED barrier round counts as one whole lap: turn-taking then resumes at lap 1, with
+# the rotation already applied, and the opening positions never compete for a turn.
+c_turns() {
+  local base=0
+  if [ "$(c_mode)" = roundtable ] && [ "$(c_barrier)" = closed ]; then base=$(c_npeers); fi
+  local n; n=$(c_canon | jq -s '[.[] | select(.hand == false and .turn != null and .valid)] | length')
+  echo $(( base + n ))
+}
 
 # The floor is a pure function of the log: no token file to lose or duplicate.
 # Order rotates one step per lap so the same peer is not always the anchor.

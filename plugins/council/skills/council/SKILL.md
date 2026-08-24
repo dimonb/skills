@@ -53,9 +53,10 @@ Three invariants replace every lock:
   derives the same sequence without asking anyone.
 
 Reaction is a **doorbell**: a one-byte write into the recipient's fifo, which a sleeping
-`recv` wakes on. Measured on the reference machine: the bell itself is **0.7 ms** at the
-median, end-to-end delivery **56 ms** (two `jq` spawns, not the wire). A poll loop would
-be 0–5 s. A keeper process holds every bell open read-write for the life of the room, so a
+`recv` wakes on. Measured on the reference machine: the bell itself is **sub-millisecond** (0.3 ms median
+from the write to a sleeping reader waking), and end-to-end delivery **~60 ms** — of which
+25 ms is the sender publishing and 39 ms the reader parsing, i.e. `jq` spawns rather than
+the wire. A poll loop would be 0–5 s. A keeper process holds every bell open read-write for the life of the room, so a
 bell rung at a participant that is not currently listening is buffered rather than lost,
 and the ring itself is backgrounded so a dead participant can never wedge a sender.
 
@@ -64,8 +65,10 @@ and single-writer, so probing `cursor+1, cursor+2, …` until the first missing 
 O(new). The globbing version was O(everything ever said), and it did not merely run slow:
 readers fell behind, and **the order in which a participant received messages diverged
 from the final transcript in ~30% of cases** under load. Fixing the scan took that from
-`0/101/133` inversions to `0/0/0`. Inversions are not structurally impossible — they are
-simply absent while readers keep up. In turn-taking mode only one participant speaks at a
+`0/101/133` inversions to single digits — repeated runs of 510 messages from three
+concurrent writers land anywhere between `0/0/0` and `0/4/5`. Inversions are not
+structurally impossible; they shrink to whatever the readers' lag is, which is why the
+number moves between runs and why nothing asserts it is zero. In turn-taking mode only one participant speaks at a
 time, so they cannot arise; any future free-for-all mode needs an explicit stability rule.
 
 ## Turn discipline: a floor with no token
@@ -82,6 +85,14 @@ log**, never dropped — and their authors take the floor again. Deterministic, 
 for every reader, still no lock. (This hole was found by a Codex participant inside a
 council room, in one turn; three transport tests had missed it.)
 
+The floor is also checked **at stamp time, not before composing**. A participant that held
+the floor a moment ago may have lost it while writing, and it would otherwise stamp the
+next *free* turn — no duplicate for the settlement rule to catch, and the room quietly
+stops being turn-taking from there on. Such a send is refused with exit 6; the participant
+is told to drain and wait. (`skip` is exempt: it is spoken on somebody else's behalf.)
+That check is what makes duplicate claims rare rather than routine — the settlement rule
+still matters, because a `skip` can race the holder it is skipping.
+
 A participant that goes silent does not freeze the room: once the floor holder is overdue,
 **the next participant in order — and only that one** — may write a `skip`, which consumes
 the missing turn and moves on.
@@ -97,13 +108,25 @@ answer it.
 | `propose` | put something on the table |
 | `amend --refs '["<proposal>","<objection>"]'` | a revision; referencing an objection **closes** it |
 | `object --refs '["<id>"]'` | must name a specific id, or there is nothing to close |
-| `concede --refs '["<id>"]'` | **the sender yields** |
+| `concede --refs '["<id>"]'` | **the sender yields**: pointing at an objection accepts it, pointing at your own proposal withdraws it in favour of somebody else's |
 | `withdraw` · `support` · `overrule` (chair) · `msg` · `notice` · `skip` · `decide` | |
 
 `concede` always means the same thing, and who sends it decides what falls: from the
 objection's author it closes the objection; from the proposal's author it kills the
-proposal. An objection also closes on `withdraw` by its author, on an `amend` that
-references it, or on the chair's `overrule`.
+proposal — whether it points at an objection or at the proposal itself. An objection also
+closes on `withdraw` by its author, on an `amend` that references it, or on the chair's
+`overrule`.
+
+An `amend` belongs to **one** proposal — the first proposal-typed id it references; its
+other refs are the objections it closes. (Referencing two proposals used to apply the
+amendment to both, so a room displayed two participants proposing the same words.)
+
+A barrier round puts **N proposals** on the table at once, one per participant, and
+`ready-to-decide` wants exactly one. That is the work of the lap after the barrier: yield
+the ones you no longer defend (`concede` your own), and fold what is worth keeping into
+the survivor with `amend`. A roundtable room that never does this sits at
+`deliberating` with N live proposals and no open objection, which reads as agreement and
+is not.
 
 **Verdicts** (`council.sh verdict`, and the alarms in `status`):
 
@@ -145,12 +168,14 @@ room would stall on approval prompts. One script is one allowlist entry.
 The channel rules are one file for everyone (`protocol/_channel.md`); a scenario adds only
 the roles. `up` renders them into `protocol-<peer>.md`.
 
-* `debate` — proposer vs critic (+ a third angle). The default for a design fork.
+* `debate` — proposer vs critic (+ a third angle), opening lap on a barrier. The
+  default for a design fork.
 * `review` — author vs reviewer; the author owns writes, the reviewer only reads.
 * `freeform` — rules and an agenda, no roles.
 
 A new scenario is one markdown file with front-matter (`mode`, `decide_by`, `turns`,
-`roles`) and a `## role: <name>` block each. No code changes.
+`roles`, and `round_deadline_ms` for a barrier round) and a `## role: <name>` block each.
+No code changes.
 
 Roles and agents are independent: `--agents arch=claude,impl=codex,sec=agy` names the
 participants and says which CLI plays each.
@@ -180,19 +205,35 @@ not: it accepts the message, prints `Queued message …`, returns 0 — and deli
 (`council.sh say`) arrives in seconds. Judge that channel by delivery, never by its exit
 code.
 
-## Decided but not built yet
+## Modes: turn-taking, and the opening barrier
 
-A council room of `claude` + `codex` argued its own schedule and killed the position that
-turn-taking is enough: **rotation moves the anchor, it does not remove it** — in a two- or
-three-participant room the second speaker still sees the first position before forming
-its own, which is precisely the case `debate` and `review` are for. The room settled on a
-limited `roundtable`: **the first lap only** runs as a barrier (independent positions,
-quorum on a deadline), and everything after it is turn-taking as today. That keeps the
-anchor off the opening positions without needing a delivery-stability rule, because after
-the first lap only one participant speaks at a time again.
+`token` (the default) is plain turn-taking. `roundtable` adds one thing in front of it:
+**the first lap runs as a barrier**.
 
-It is **not implemented**: `mode` accepts `token`, and a scenario asking for anything else
-gets turn-taking. The decision record is in the room that produced it.
+Rotation moves the anchor, it does not remove it — in a room of two or three the second
+speaker still sees the first position before forming its own, which is exactly the case
+`debate` exists for. So in a roundtable room every participant writes its opening position
+without waiting for a turn, and **nobody reads anyone else's until the round is complete**.
+`recv` withholds them; a lane stops at its withheld message instead of skipping past it, so
+nothing is lost and no cursor runs ahead of unread words. A second message in an open round
+is refused (exit 5) rather than queued.
+
+When the last position lands, all of them are released at once, in the room's one order.
+The round then counts as **one whole lap**, and everything after it is turn-taking, so no
+delivery-stability rule is needed: from there on only one participant speaks at a time.
+Opening positions carry no turn number, so they never compete for one.
+
+A participant that never posts does not hold the room: past `round_deadline_ms` (default
+10 min, from the first position) with a quorum present (default N−1, never below 2) the
+round closes without it. `status` shows `ОТКРЫТЫЙ КРУГ: собрано k/N, ждём …` while it is
+open — the one state in which a long-held floor is normal rather than a stall.
+
+The `debate` scenario runs `roundtable`; `review` stays turn-taking, because there the
+author's proposal *is* the subject and a blind first lap would have nothing to be about.
+
+*(This design was itself decided by a council room of `claude` and `codex`, which killed
+the position that turn-taking is enough. The decision record is in the room that produced
+it.)*
 
 ## Supervising a room
 
