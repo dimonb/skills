@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# t9 — the decision record must be readable on its own.
+# t10 — the decision record must be readable on its own.
 #   * "## The decision" carries the ORIGINAL proposal and every amendment, under headings
 #     that say which is which. It used to render `current_text` — the last amendment only —
 #     so accepted items that the final amendment did not restate appeared nowhere, and the
@@ -11,7 +11,7 @@
 set -uo pipefail
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 . "$DIR/_helpers.sh"
-R="${TMPDIR:-/tmp}/council-test/t9"; rm -rf "$R"
+R="${TMPDIR:-/tmp}/council-test/t10"; rm -rf "$R"
 mkroom "$R" a b
 export COUNCIL_ROOM="$R" ROOM="$R"
 fail=0
@@ -76,7 +76,7 @@ echo "a one-line agenda stays inline"
 # mkroom's EXIT trap only remembers the LAST room, so retire this keeper by hand before
 # opening the second room, or it outlives the run.
 kill "$(cat "$R/state/keeper.pid" 2>/dev/null)" 2>/dev/null
-R2="${TMPDIR:-/tmp}/council-test/t9-long"; rm -rf "$R2"
+R2="${TMPDIR:-/tmp}/council-test/t10-long"; rm -rf "$R2"
 mkroom "$R2" a b
 export COUNCIL_ROOM="$R2" ROOM="$R2"
 cat > "$R2/agenda.md" <<'AGENDA'
@@ -102,5 +102,5 @@ printf '%s\n' "$(sed -n '/^## The agenda in full/,$p' "$OUT2")" | grep -q 'anoth
   echo "FAIL the full agenda section lost the agenda's body"; fail=1; }
 echo "a long agenda opens as a heading plus a link, and is quoted in full at the end"
 
-[ "$fail" = 0 ] && echo "t9 PASS" || echo "t9 FAIL"
+[ "$fail" = 0 ] && echo "t10 PASS" || echo "t10 FAIL"
 exit $fail
