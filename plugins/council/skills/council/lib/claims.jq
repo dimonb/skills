@@ -13,8 +13,13 @@
 | [ $m[] | select(.act == "propose") ] as $props
 | [ $m[] | select(.act == "object")  ] as $objs
 | ( $m | map(select(.act == "decide")) | (.[0].id // null) ) as $decided
+# `.turn` is written by another participant and is coerced before it is compared: jq sorts
+# strings ABOVE numbers, so one message carrying a string turn would win this `max` and be
+# reported as the room's last claim no matter what really happened. lib.sh normalises on
+# read (see C_UNTRUSTED); this repeats it because the value decides an ordering here, and a
+# graph that is only correct while its caller remembers to sanitise is the wrong shape.
 | ( [ $m[] | select(.act == "propose" or .act == "amend" or .act == "object")
-      | (.turn // -1) ] | max ) as $last_claim
+      | (if (.turn | type) == "number" then .turn else -1 end) ] | max ) as $last_claim
 | ( [ $m[] | select(.hand == false and .turn != null and .valid) ] | length ) as $turns
 | [ $props[]
     | . as $p

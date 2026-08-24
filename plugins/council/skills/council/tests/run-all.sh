@@ -39,7 +39,7 @@ PER_TEST_SECS="${COUNCIL_TEST_TIMEOUT:-600}"
 # while the current test keeps going — but only until this same ceiling group-kills it. Turning it
 # on means processes that outlive everyone, which is the failure the ceiling exists to prevent.
 
-tests=(t4-conflict.sh t7-roundtable.sh t8-graph.sh t11-decision.sh t14-verbs.sh t5-converge.sh t6-stuck.sh t9-lap.sh t3-token.sh t13-relaunch.sh)
+tests=(t4-conflict.sh t7-roundtable.sh t8-graph.sh t11-decision.sh t14-verbs.sh t5-converge.sh t6-stuck.sh t9-lap.sh t9b-untrusted.sh t3-token.sh t13-relaunch.sh)
 [ "$FULL" = 1 ] && tests+=(t1-order.sh t2-latency.sh t2b-wake.sh t2c-bell.sh)
 rc=0
 for t in "${tests[@]}"; do
