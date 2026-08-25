@@ -187,9 +187,12 @@ file carries non-Latin script; and that no council test names the shared temp pa
 building its rooms under the suite's per-run root.
 
 `make check-test` exists because a gate that has never failed can be vacuous and look
-identical to one that works. It injects 42 violations, one at a time, and requires the gate to
-fail each time — covering **every** failure path in `check.sh`, with each probe constructed so
-that only the assertion it names can fire. Writing and re-running it has found six real bugs
+identical to one that works. It proves 43 assertions — a clean baseline plus 42 injected
+violations, one at a time, each of which the gate must catch — covering **every assertion** in
+`check.sh`, with each probe constructed so that only the assertion it names can fire. Two
+failure paths are not probed, both of them the "could not scan" arms that fire only when
+`grep` itself errors; the leak check's equivalent arm is probed, so the technique is there if
+the other two are ever worth closing. Writing and re-running it has found six real bugs
 so far, including a broken symlink that slipped past an `[ -e ]` test, a leak check that never
 saw untracked files, a state/handler check that passed because `spec` is a prefix of
 `spec-review`, and probes of its own that fired the wrong check and so proved nothing.
