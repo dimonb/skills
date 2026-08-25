@@ -11,7 +11,11 @@
 set -uo pipefail
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 . "$DIR/_helpers.sh"
-R="${TMPDIR:-/tmp}/council-test/t14"; rm -rf "$R"
+# The room root belongs to the RUN, not to this test's name — two suites at once must not be
+# able to delete each other's rooms. `_helpers.sh` owns it and reaps it; the fallback is only
+# for a checkout whose helper does not export it yet, so this file runs either way.
+: "${COUNCIL_TEST_ROOT:=$(mktemp -d)}"
+R="$COUNCIL_TEST_ROOT/t14"; rm -rf "$R"
 mkroom "$R" a b c
 export COUNCIL_ROOM="$R" ROOM="$R"
 v() { bash "$CLI" verdict | cut -d' ' -f1; }
