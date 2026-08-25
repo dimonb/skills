@@ -27,7 +27,7 @@ producing polite agreement.
 
 ```
 <git-common-dir>/council/<room>/
-  roster.json            participants, roles, mode, decision rule, turn budget
+  roster.json            participants, roles, mode, decision rule, turn budget, the cwd
   agenda.md              the question
   protocol-<peer>.md     what each participant was told (channel rules + its role)
   lane/<peer>/NNNNNN.json    ← exactly ONE writer per lane, ever
@@ -149,6 +149,7 @@ council.sh up --scenario debate --agents claude,codex,agy "question"   # or @fil
 council.sh status | claims | verdict | order | transcript | floor
 council.sh agenda | protocol | decision   # the room's own files, through the entrypoint
 council.sh say <peer> "..."        # out of band, into that participant's terminal
+council.sh relaunch <peer>         # put one seat back up, mid-room
 council.sh decide [--force]        # write the ADR and close the room
 council.sh down [--purge]          # close terminals; the room (the record) survives
 council.sh rooms                   # what exists and where each room stands
@@ -175,6 +176,113 @@ which carries the blanket flag instead, but worth knowing before you go and writ
 permission question for some agents. That is why `agenda`, `protocol` and `decision` are verbs
 rather than paths, and why the protocol tells every participant to read the room through the
 command.
+
+## Restarting one seat
+
+A participant dies, or is killed to pick up new permissions, or hits a context ceiling.
+`up` would create a *new* room and `down` closes them all, so putting one seat back is its
+own verb:
+
+```bash
+council.sh relaunch codex            # closes its terminal if one is still there, starts it again
+council.sh relaunch codex --cwd DIR  # run it somewhere other than the room's recorded cwd
+```
+
+### What survives the restart, and what does not
+
+**The room survives it completely.** The floor, the lanes and every objection's
+open-or-closed state are derived from the log, so an objection the dead participant had
+filed is still exactly as open, or as closed, as it was. Nothing about the room has to be
+rebuilt.
+
+**That seat's knowledge does not.** The new process has read none of the argument, and its
+cursors are files that outlived it, so `recv` hands it nothing — from inside, a room
+twenty turns deep looks brand new. This is why `protocol/_channel.md` carries a section
+telling *every* participant, relaunched or not, to read `council.sh transcript` when it
+starts into a room that is not empty — and to skip that when the opening barrier is still
+open, because `transcript` does not respect the barrier and `recv` does. The room is not
+replayed to a restarted seat, and it is not made to be: a cursor has exactly one writer,
+which is the participant itself, and that invariant is what lets the whole transport work
+without a lock.
+
+### The launcher and the protocol are regenerated, not re-run
+
+`relaunch` rewrites `state/launch-<peer>.sh` and `protocol-<peer>.md` from the roster and
+this skill before starting anything. Two reasons.
+
+Every participant is handed the room as a **writable root** (`--add-dir <room>`, in all
+three adapters) — and a scenario deliberately makes those agents adversarial to each other.
+Both of those files live in the room. Re-executing a stored launcher would run whatever
+another participant had put there, in a login shell, in your own process tree — and the
+protocol file is what the agent is launched on: `claude` takes it as its system prompt,
+`codex` and `agy` are told to read it and follow it literally.
+
+The values regeneration reads out of `roster.json` — which agent plays the seat, the
+scenario, the role, the participant names — are checked to be bare names before use. They
+select a file to source and a file to render, and `roster.json` is in the room too.
+
+### The room is not a trust boundary
+
+**Do not read any of the above as containment, because it is not.** Measured, all three
+adapters, writing to a path outside the repo entirely — outside the working directory and
+outside every `--add-dir`:
+
+| adapter | wrote where it was told |
+|---|---|
+| `claude --permission-mode auto` | yes |
+| `codex -s workspace-write -a never` | yes |
+| `agy --dangerously-skip-permissions` | yes |
+
+`--add-dir` is an allowlist **addition**, not a restriction, and this skill launches every
+participant with approval prompts turned off on purpose — that is what keeps a room running
+unattended. So a participant is an agent running **as you**, and everything you can reach, it
+can reach: the roster, another seat's launcher, `council.sh` itself, your home directory.
+
+That makes regeneration and the checks above **blast-radius reduction, not a boundary**. They
+remove the traversal and sed-injection forms. They do **not** close the supervisor-triggered
+path in general: `--add-dir <skill>` makes this skill's own `adapters/` directory writable, so
+a participant can drop a plausibly-named file there and have the roster point a seat at it,
+and an ordinary `council.sh relaunch <peer>` will source it. That is measured, not theorised.
+
+Nothing here makes a room safe to share with a participant you would not trust with your
+shell. Run rooms accordingly. The trust model itself is an open question, not a settled one;
+it is being argued rather than assumed.
+
+The second reason is the ordinary one: a regenerated launcher picks up **adapter changes
+made since the room opened**, which is exactly what "killed to pick up new permissions"
+asks for. A stored launcher would bring the seat back with the command line it had when
+the room was created.
+
+**The cost, and you will not discover it any other way: a hand-edited launcher or protocol
+is discarded.** If you tuned a participant's protocol by hand, `relaunch` throws that away
+and writes the generated one.
+
+### `--cwd`
+
+Without it, `relaunch` uses **the directory recorded in the room's `roster.json`**, which is
+where `up` was pointed when the room opened. Pass `--cwd` to override it.
+
+It decides where the participant actually **runs** — the regenerated launcher `cd`s there
+before exec'ing the agent — not merely where its terminal window opens. A room created
+before the cwd was recorded has nothing to fall back on and asks for `--cwd` explicitly
+rather than guessing.
+
+### The rest
+
+**Do not hand-roll this.** Calling the launcher through the terminal backend directly —
+`agtermctl session new --command <room>/state/launch-<peer>.sh` — looks like the whole
+job and is not: the command runs with no login shell, so the agent CLI is not on the
+resulting `PATH`, `exec` fails with 127, and the session closes within a second. From the
+outside it looks exactly like the backend silently refusing to create a session, and
+nothing is logged anywhere the caller can see. `relaunch` goes through the same wrapper
+the first launch used (`zsh -lc 'exec …'`) and the same pinned container.
+
+It also puts the **keeper** back if it is missing — `down` kills it along with the
+terminals, and a seat restarted into a room with no keeper looks perfectly healthy while
+every bell rung at it is lost.
+
+The one peer it cannot restart is the seat *you* took with `--me`: that participant was
+never given a terminal, so there is no launcher, and it says so.
 
 ## Scenarios and roles
 
@@ -290,9 +398,14 @@ produced one false test result during development. Do not pipe status through a 
 ## Failure modes worth knowing before they cost you a night
 
 * **A participant that consumed your message and then went quiet is usually not thinking.**
-  Look at its terminal: on `agy` it is probably a permission prompt; on any of them it may
-  be a context ceiling. The room cannot tell the difference — `status` can only tell you
-  the floor has been held a long time.
+  Look at its terminal. On `codex` it may be the trust-this-directory prompt; `agy` is
+  launched with permissions skipped and no longer prompts at all. Otherwise it is a context
+  ceiling, or a process that is simply gone. The room cannot tell the difference — `status`
+  can only tell you the floor has been held a long time. **A prompt and a dead seat need
+  opposite fixes.** Answer a prompt *in that participant's terminal*, where it carries on
+  with its context intact: restarting closes the very terminal holding the prompt, and the
+  fresh session stops at the same one. A context ceiling, or a seat that is genuinely gone,
+  is `council.sh relaunch <peer>`.
 * **A permission prompt for a FILE is not the same prompt as one for a command**, and the
   grant that settles the command class does nothing for it — on `agy` nothing settles the file
   class at all. What decides it is whether the agent was *told* the path or *derived* it, so

@@ -54,6 +54,7 @@ council.sh <verb> [options]
   The room
     up      --scenario <name> --agents <spec> [--room <name>] [--turns N]
             [--cwd <dir>] [--me <peer>] [<agenda>|@file]
+    relaunch <peer> [--cwd <dir>]         put one seat back up, in place, mid-room
     down    [--room <name>] [--purge]
     rooms                                 which rooms exist and what state they are in
 
@@ -158,6 +159,7 @@ case "$VERB" in
   status) . "$SKILL/lib/verbs.sh"; v_status ;;
   decide) need_me; . "$SKILL/lib/verbs.sh"; v_decide "$@" ;;
   say)    . "$SKILL/lib/up.sh"; council_say "$@" ;;
+  relaunch) . "$SKILL/lib/up.sh"; council_relaunch "$@" ;;
   down)   . "$SKILL/lib/up.sh"; council_down "$@" ;;
   *) echo "council: unknown verb '$VERB'" >&2; usage >&2; exit 2 ;;
 esac

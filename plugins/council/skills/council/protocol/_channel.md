@@ -18,6 +18,7 @@ it alone.
     council.sh status                             whose turn, what is on the table, what is open
     council.sh claims                             the objection graph
     council.sh decision                           the record (exit 1 = not written yet, not an error)
+    council.sh transcript                         everything said so far, in order
 
 **Exit code 4 from `recv` is NOT an error.** It means "nobody said anything within the
 timeout". The only correct reaction is to call `recv` again. Do not fix it, do not treat it
@@ -42,9 +43,30 @@ drop yours (`concede --refs '["<your position>"]'`); if yours holds something th
 one lacks, put that in as an `amend`. A room with N live proposals and no objections looks
 like agreement but will never become a decision.
 
+## Starting into a room that is already running
+
+**If `status` says `OPEN ROUND`, stop here — the section above is your case.** Post your
+position first and read nothing: the barrier is the point, and `transcript` and `claims` do
+not respect it, so reading them would hand you exactly what `recv` is withholding. Catch up
+when the round releases.
+
+**Otherwise, if the room is not empty, read `council.sh transcript` before you speak.**
+
+You may be starting into an argument that is already well under way — a seat is sometimes
+restarted mid-room, and a restarted process has read none of it. `recv` will not catch you
+up: it hands you what your cursor has not consumed, and your cursor belongs to the seat, not
+to the process, so everything the previous process consumed is already behind it. The room's
+own state is intact — the floor, the lanes and every objection's open-or-closed state are
+derived from the log — but your knowledge of it is not, and nobody else can tell the
+difference between a participant that has read the argument and one that is guessing.
+
+Read the transcript, and `council.sh claims` for what is still open. Then take your turn. Do
+not re-propose something already conceded, and do not answer an objection you have not read.
+
 ## How the conversation works
 
-After that the room is turn-taking: whoever holds the floor speaks. The floor is computed
+Once the opening round has closed — or from the start, in a room that never had one — the
+room is turn-taking: whoever holds the floor speaks. The floor is computed
 from the log, so **drain your inbox before speaking**: if you have not read someone's lane
 to the end you will count turns wrong and speak on top of the real holder of the floor. Such
 a conflict settles itself (the lowest `(lamport, from)` wins), but your message becomes
@@ -83,8 +105,9 @@ added a proposal, an amendment or an objection. Therefore:
 * **Reach the room through the command, never by path — neither reading nor writing.** Some
   agents treat every file opened in the room as a separate permission question, and you would
   stop on it while holding the floor, which the room cannot tell apart from a wedged session.
-  `agenda`, `protocol` and `decision` are the whole of what you might want to read;
-  everything else is in `status` and `claims`. Writing into the room by hand is worse than
+  `agenda`, `protocol`, `decision` and — when you start into a room that is already running —
+  `transcript` are the whole of what you might want to read; everything else is in `status`
+  and `claims`. Writing into the room by hand is worse than
   slow: a stray file in a message lane is read as a message and can reset everyone's count of
   whose turn it is.
 * Do not edit anything outside the room unless your role explicitly says otherwise.
