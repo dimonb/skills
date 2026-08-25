@@ -270,6 +270,15 @@ PROBE
 expect_fail "council test naming a fixed temp room path"
 rm -f plugins/council/skills/council/tests/t99-probe.sh
 
+# 13 — and check 9 must fail LOUDLY when grep cannot scan, not read the error as "no violation".
+# Same technique as the leak-check probe above: break the check's own pattern to an invalid ERE,
+# so grep exits >1 on every file and only the error arm can fire. Without this probe the arm is
+# vacuous — reverting it to the old `grep -q ... && fail` one-liner still passes check-test.
+cp scripts/check.sh "$SCRATCH/check9.bak"
+perl -pi -e "s/'TMPDIR\|council-test'/'(unclosed'/" scripts/check.sh
+expect_fail "council-test scan fails LOUDLY when grep errors (not open)"
+cp "$SCRATCH/check9.bak" scripts/check.sh
+
 echo
 echo "assertions proven: $pass   not caught: $nocatch"
 [ "$nocatch" -eq 0 ] || exit 1

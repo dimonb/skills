@@ -29,13 +29,15 @@ trap 'rm -rf "$COUNCIL_TEST_ROOT"' EXIT
 TIMEOUT_BIN=$(command -v timeout || command -v gtimeout || true)
 PER_TEST_SECS="${COUNCIL_TEST_TIMEOUT:-600}"
 [ -n "$TIMEOUT_BIN" ] || echo "note: no timeout(1) on PATH — a wedged test will not be capped"
-# --foreground keeps the test in this shell's process group, so a terminal Ctrl-C still reaches
-# it. Without it timeout puts the test in a group of its own, and an interrupt kills the runner
-# while the test survives detached — the exact orphan this ceiling exists to prevent. Probed
-# rather than assumed, since not every timeout(1) has the flag.
-TIMEOUT_ARGS=(-k 10)
-[ -n "$TIMEOUT_BIN" ] && "$TIMEOUT_BIN" --foreground 1 true 2>/dev/null \
-  && TIMEOUT_ARGS=(--foreground -k 10)
+# Deliberately NOT --foreground, though it is tempting. That flag keeps the test in this shell's
+# process group so a terminal Ctrl-C reaches it — but it also stops timeout signalling the GROUP,
+# and a wedged test has background children the test's own EXIT trap knows nothing about: t3
+# SIGSTOPs a peer, t2 and t2b leave listeners holding bell fifos on a shell-local counter. Neither
+# is in ROOM_KEEPERS, and neither dies when the root is removed. Measured: with the flag the
+# ceiling left 3 of 3 peers alive, one SIGSTOPped and reapable only by SIGKILL; without it, none.
+# So the trade is bounded against unbounded. Leaving the flag off means a Ctrl-C kills the runner
+# while the current test keeps going — but only until this same ceiling group-kills it. Turning it
+# on means processes that outlive everyone, which is the failure the ceiling exists to prevent.
 
 tests=(t4-conflict.sh t7-roundtable.sh t8-graph.sh t11-decision.sh t14-verbs.sh t5-converge.sh t6-stuck.sh t3-token.sh t13-relaunch.sh)
 [ "$FULL" = 1 ] && tests+=(t1-order.sh t2-latency.sh t2b-wake.sh t2c-bell.sh)
@@ -44,7 +46,7 @@ for t in "${tests[@]}"; do
   printf '\n──── %s ────\n' "$t"
   if [ -n "$TIMEOUT_BIN" ]; then
     # -k: a test that ignores the TERM still goes, ten seconds later.
-    "$TIMEOUT_BIN" "${TIMEOUT_ARGS[@]}" "$PER_TEST_SECS" bash "$DIR/$t"; st=$?
+    "$TIMEOUT_BIN" -k 10 "$PER_TEST_SECS" bash "$DIR/$t"; st=$?
   else
     bash "$DIR/$t"; st=$?
   fi
