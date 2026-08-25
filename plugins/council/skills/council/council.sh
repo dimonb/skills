@@ -8,6 +8,15 @@
 # measured, in the probe that produced this design: one participant held the floor for
 # 626 seconds because it was waiting on a permission prompt, which from the outside is
 # indistinguishable from a wedged session. One entrypoint = one allowlist entry.
+#
+# Two caveats that one entrypoint does NOT buy, both learned from a live room:
+#   * a prefix grant only matches if the agent runs the command as written. `agy` prepends
+#     the environment inline (`COUNCIL_ROOM=… COUNCIL_ME=… bash …`) even though its launcher
+#     already exported both, so a grant on `bash <skill>/council.sh` never matches. A seat this
+#     skill launches does not need one — see adapters/agy.sh for what it carries instead;
+#   * a command grant says nothing about FILE reads. A path the participant DERIVES is a
+#     separate permission question for some agents, which is why `protocol`, `agenda` and
+#     `decision` are verbs here rather than paths in the protocol.
 set -uo pipefail
 export LC_ALL=C
 export PATH="/opt/homebrew/bin:/usr/local/bin:$PATH"
@@ -52,6 +61,9 @@ council.sh <verb> [options]
     recv    [--timeout N] [--peek] [--until-floor]     exit 4 = timeout, call again
     send    --act <act> [--refs '["id"]'] [--hand] "<text>"
     floor                                              who holds it and for how long
+    protocol                                           your own role and the channel rules
+    agenda                                             the question — read this first
+    decision                                           the record, once the room has closed
 
   Looking on
     status  [--room <name>]        the supervisor block; exit 0 = the room is closed
@@ -66,6 +78,8 @@ council.sh <verb> [options]
 
   Common options: --room <name> --me <peer>
   Acts: propose amend object support concede withdraw overrule msg notice decide done
+
+`decision` returns 1 while the room is still open — that is a status, not a failure.
 
 Exit codes mean STATUS, not success. `verdict` returns 1 for a live room, so a pipeline like
 `council.sh status | grep -q X` under `set -o pipefail` reads that as a failing grep. It has
@@ -134,6 +148,9 @@ case "$VERB" in
   send)   need_me; . "$SKILL/lib/verbs.sh"; v_send "$@" ;;
   recv)   need_me; . "$SKILL/lib/verbs.sh"; v_recv "$@" ;;
   floor)  . "$SKILL/lib/verbs.sh"; v_floor ;;
+  protocol) . "$SKILL/lib/verbs.sh"; v_protocol ;;
+  agenda) . "$SKILL/lib/verbs.sh"; v_agenda ;;
+  decision) . "$SKILL/lib/verbs.sh"; v_decision ;;
   order)  . "$SKILL/lib/verbs.sh"; v_order "$@" ;;
   transcript) . "$SKILL/lib/verbs.sh"; v_transcript ;;
   claims) . "$SKILL/lib/verbs.sh"; v_claims "$@" ;;

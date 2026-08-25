@@ -154,9 +154,16 @@ council_up() {
   printf 'participants: '; for i in "${!peers[@]}"; do printf '%s(%s/%s) ' "${peers[$i]}" "${kinds[$i]}" "${roles[$i]}"; done; printf '\n'
   printf 'terminals started: %s in container %s\n' "$started" "$(ct_container)"
   [ -n "$me" ] && printf 'you take part yourself as: %s\n' "$me"
+  # De-duplicate by adapter KIND, never with `sort -u` over the lines. These notes are
+  # multi-line, and sorting them lifts every continuation line above the line it continues:
+  # under LC_ALL=C an indented line sorts before the sentence it belongs to, so the one
+  # instruction the human has to act on came out shuffled and unreadable.
+  local shown=""
   for i in "${!kinds[@]}"; do
+    case " $shown " in *" ${kinds[$i]} "*) continue ;; esac
+    shown="$shown ${kinds[$i]}"
     ( . "$SKILL/adapters/${kinds[$i]}.sh"; adapter_notes "${peers[$i]}" )
-  done | sort -u
+  done
   printf '\nwatch:  council.sh status --room %s\nspeak:  council.sh say <peer> "..." --room %s\n' "$rname" "$rname"
 }
 

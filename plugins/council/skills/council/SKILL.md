@@ -147,13 +147,17 @@ is not.
 ```bash
 council.sh up --scenario debate --agents claude,codex,agy "question"   # or @file
 council.sh status | claims | verdict | order | transcript | floor
+council.sh agenda | protocol | decision   # the room's own files, through the entrypoint
 council.sh say <peer> "..."        # out of band, into that participant's terminal
 council.sh decide [--force]        # write the ADR and close the room
 council.sh down [--purge]          # close terminals; the room (the record) survives
 council.sh rooms                   # what exists and where each room stands
 ```
 
-Participants use exactly two: `recv --until-floor` and `send --act …`.
+Participants use `agenda` (and `protocol`, if they need their role again) at the start, then
+`recv --until-floor` and `send --act …` for the rest of the room, and `decision` once it
+closes. Those five are everything that would otherwise have been a path; `status` and `claims`
+cover looking at the room itself.
 
 `--room <name>` selects among several rooms; `--me <peer>` says who you are — pass it to
 `up` as well when you intend to sit in the room yourself, and that participant gets no
@@ -162,6 +166,15 @@ terminal because it is you.
 **One entrypoint, on purpose.** A participant's permission allowlist matches the literal
 start of a command, so eight scripts would need eight grants and the first lap of every
 room would stall on approval prompts. One script is one allowlist entry.
+
+Two things one entrypoint does **not** buy, both learned from a live room. A prefix grant only
+matches if the agent runs the command *as written*, and `agy` prepends the environment inline,
+so a grant on `bash <skill>/council.sh` never matches it — moot for a council-launched seat,
+which carries the blanket flag instead, but worth knowing before you go and write one. And a
+**command** grant says nothing about **file** reads: opening a room file by path is a separate
+permission question for some agents. That is why `agenda`, `protocol` and `decision` are verbs
+rather than paths, and why the protocol tells every participant to read the room through the
+command.
 
 ## Scenarios and roles
 
@@ -186,18 +199,46 @@ participants and says which CLI plays each.
 |---|---|---|---|
 | `claude` | `--permission-mode auto --add-dir <room>` | declarative | — |
 | `codex` | `-s workspace-write -a never --add-dir <room>` | declarative, per-run | writes to a room outside its cwd; shell tool tolerates a block of **>200 s**, so `recv --timeout 180` is safe; `-a` does not exist on `codex exec` |
-| `agy` | `--add-dir <room> -i` | **interactive, per command prefix** | `--sandbox` is not a policy, it just refuses; the only unattended flag is a blanket one |
+| `agy` | `--dangerously-skip-permissions --add-dir <room> -i <protocol text>` | **interactive: a persisted allowlist for commands, nothing at all for file reads** | `--sandbox` is not a policy, it just refuses; the protocol is handed over as argv, not as a path |
 
-`agy` needs one grant of the form *always allow commands that start with
-`bash <skill>/council.sh`* — give it once and the room runs unattended. Miss it and the
-participant sits on a permission prompt **holding the floor**, which from the outside is
-indistinguishable from a wedged session (measured: 626 s). This is why `status` calls out
-a long-held floor and why the turn deadline and `skip` exist.
+`agy` asks about **commands** and about **file reads**, and the two work nothing alike. Either
+one stalls the room the same way: the participant sits on a prompt **holding the floor**, which
+from the outside is indistinguishable from a wedged session (measured: 626 s). This is why
+`status` calls out a long-held floor and why the turn deadline and `skip` exist.
 
-**Both `codex` and `agy` gate the first launch in an unfamiliar directory on a
-trust-this-directory prompt**, and until it is answered the participant holds the floor
-while looking, from the room, exactly like a wedged session. `up` prints the caveat for
-each adapter; `status` flags a long-held floor. Answer it once per directory.
+*Commands* have a persisted allowlist — *always allow … commands that start with `<prefix>`* —
+but the prefix it stores must match what `agy` actually runs, and it does not run the bare
+command. It prepends the environment inline, `COUNCIL_ROOM=… COUNCIL_ME=… bash …`, even though
+`state/launch-<peer>.sh` already exported both, so a grant written as `bash <skill>/council.sh`
+never matches.
+
+*File reads* have **no grant at all**: the menu offers `1. Yes / 2. No` with no "always", and
+there is no per-run flag. What decides whether it asks is not the directory but **whether the
+agent was told the path or worked it out itself** — a path named in the launch prompt is read
+silently, a path the participant derives prompts every time. Adding the room to
+`trustedWorkspaces` does **not** help; that was tried in the room it was meant to fix.
+(Measured in [#7](https://github.com/dimonb/skills/issues/7) and
+[#18](https://github.com/dimonb/skills/pull/18) — both of the above.)
+
+So the launch passes the blanket `--dangerously-skip-permissions`, which applies to sessions
+this skill starts and never to an interactive `agy`. It is a workaround, and the room is built
+to need less of it: **a participant is never handed a path to a file in the room** (it is told
+which room it is in, and nothing below that). The protocol
+arrives as argv (as it always did for `claude`, via its system prompt), and the agenda, the
+role and the record are verbs — `council.sh agenda`, `protocol`, `decision` — which ride the
+command grant. What still needs the flag is everything *outside* the room: a `review`
+participant reading the codebase derives those paths itself, and nothing persists a grant for
+them. Solve that and the flag can go.
+
+`codex` keeps its `Read <path>` launch prompt, because its permission is declarative
+(`-s workspace-write -a never --add-dir <room>`) and covers that read without ever asking. The
+rule above is about agents that ask per file.
+
+**Both `codex` and `agy` also gate the first launch in an unfamiliar directory on a
+trust-this-directory prompt** — the blanket flag does not answer that one — and until it is
+answered the participant holds the floor while looking, from the room, exactly like a wedged
+session. `up` prints the caveat for each adapter; `status` flags a long-held floor. Answer it
+once per directory.
 
 `codex queue --thread` looks like a native way to wake a busy Codex participant. It is
 not: it accepts the message, prints `Queued message …`, returns 0 — and delivered it
@@ -252,6 +293,11 @@ produced one false test result during development. Do not pipe status through a 
   Look at its terminal: on `agy` it is probably a permission prompt; on any of them it may
   be a context ceiling. The room cannot tell the difference — `status` can only tell you
   the floor has been held a long time.
+* **A permission prompt for a FILE is not the same prompt as one for a command**, and the
+  grant that settles the command class does nothing for it — on `agy` nothing settles the file
+  class at all. What decides it is whether the agent was *told* the path or *derived* it, so
+  the fix is to stop making participants derive paths: give them a verb, not a location. For
+  an agent that asks per file, a path in an instruction is a stall waiting to happen.
 * **An empty room is a normal state, not an error.** Reporting "nothing here" through an
   exit code once killed the very first `send` into a fresh room, because the caller ran
   under `set -e` with `pipefail`.
