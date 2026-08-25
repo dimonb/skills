@@ -13,16 +13,6 @@
 set -uo pipefail
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 . "$DIR/_helpers.sh"
-# The run root is supplied by the caller. #25 makes run-all.sh export one per run and
-# _helpers.sh reap it; until that lands nobody sets it, so this makes one and removes it
-# again at the end. `mktemp -d` is the shape the gate sanctions for a test that has to make
-# its own. Note the BSD mktemp ignores the caller's temp-directory variable, so this root is
-# not necessarily under a scratch directory the caller chose.
-if [ -z "${COUNCIL_TEST_ROOT:-}" ]; then
-  COUNCIL_TEST_ROOT=$(mktemp -d) || exit 1
-  export COUNCIL_TEST_ROOT
-  COUNCIL_TEST_ROOT_MINE=1
-fi
 R="$COUNCIL_TEST_ROOT/t9b-untrusted"; rm -rf "$R"
 mkroom "$R" a b
 export COUNCIL_ROOM="$R" ROOM="$R"
@@ -114,5 +104,4 @@ p=$(say_floor propose '[]' "An ordinary proposal.")
             || { echo "FAIL a normal send broke"; fail=1; }
 
 [ "$fail" = 0 ] && echo "t9b PASS" || echo "t9b FAIL"
-[ -n "${COUNCIL_TEST_ROOT_MINE:-}" ] && rm -rf "$COUNCIL_TEST_ROOT"
 exit $fail
