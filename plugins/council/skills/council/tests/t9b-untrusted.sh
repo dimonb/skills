@@ -13,7 +13,16 @@
 set -uo pipefail
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 . "$DIR/_helpers.sh"
-: "${COUNCIL_TEST_ROOT:=$(mktemp -d)}"   # set and reaped by _helpers.sh; this is the standalone case
+# The run root is supplied by the caller. #25 makes run-all.sh export one per run and
+# _helpers.sh reap it; until that lands nobody sets it, so this makes one and removes it
+# again at the end. `mktemp -d` is the shape the gate sanctions for a test that has to make
+# its own. Note the BSD mktemp ignores the caller's temp-directory variable, so this root is
+# not necessarily under a scratch directory the caller chose.
+if [ -z "${COUNCIL_TEST_ROOT:-}" ]; then
+  COUNCIL_TEST_ROOT=$(mktemp -d) || exit 1
+  export COUNCIL_TEST_ROOT
+  COUNCIL_TEST_ROOT_MINE=1
+fi
 R="$COUNCIL_TEST_ROOT/t9b-untrusted"; rm -rf "$R"
 mkroom "$R" a b
 export COUNCIL_ROOM="$R" ROOM="$R"
@@ -87,11 +96,23 @@ else
   echo "FAIL a string .lamport reordered the room (first message is $first_id, want a-1)"; fail=1
 fi
 
-# --- 4. the room still works normally afterwards --------------------------------
+# --- 4. a wrong-typed .hand must not buy a free turn ----------------------------
+# `.hand` decides whether a message consumes a turn. `select(.hand == false ...)` excludes
+# anything that is not the boolean false, while `(.hand // false)` still counts the message
+# valid -- so an uncoerced non-boolean is a message that takes no turn and never loses a
+# turn conflict. Its author can post for as long as it likes and the floor never moves on.
+rm -rf "$R"; mkroom "$R" a b; echo "q" > "$R/agenda.md"
+craft a hand '"no"'
+fl=$(bash "$CLI" floor)
+case "$fl" in *"turns=1"*) echo "ok   a wrong-typed .hand still consumed its turn" ;;
+  *) echo "FAIL a wrong-typed .hand dodged turn accounting: $fl"; fail=1 ;; esac
+
+# --- 5. the room still works normally afterwards --------------------------------
 rm -rf "$R"; mkroom "$R" a b; echo "q" > "$R/agenda.md"
 p=$(say_floor propose '[]' "An ordinary proposal.")
 [ -n "$p" ] && echo "ok   an ordinary room still sends and reads" \
             || { echo "FAIL a normal send broke"; fail=1; }
 
 [ "$fail" = 0 ] && echo "t9b PASS" || echo "t9b FAIL"
+[ -n "${COUNCIL_TEST_ROOT_MINE:-}" ] && rm -rf "$COUNCIL_TEST_ROOT"
 exit $fail

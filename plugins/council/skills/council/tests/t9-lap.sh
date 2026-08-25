@@ -12,7 +12,16 @@
 set -uo pipefail
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 . "$DIR/_helpers.sh"
-: "${COUNCIL_TEST_ROOT:=$(mktemp -d)}"   # set and reaped by _helpers.sh; this is the standalone case
+# The run root is supplied by the caller. #25 makes run-all.sh export one per run and
+# _helpers.sh reap it; until that lands nobody sets it, so this makes one and removes it
+# again at the end. `mktemp -d` is the shape the gate sanctions for a test that has to make
+# its own. Note the BSD mktemp ignores the caller's temp-directory variable, so this root is
+# not necessarily under a scratch directory the caller chose.
+if [ -z "${COUNCIL_TEST_ROOT:-}" ]; then
+  COUNCIL_TEST_ROOT=$(mktemp -d) || exit 1
+  export COUNCIL_TEST_ROOT
+  COUNCIL_TEST_ROOT_MINE=1
+fi
 fail=0
 
 want()  { # <what> <expected-since> <expected-verdict>
@@ -110,11 +119,41 @@ say_floor msg '[]' "Still nothing here either." >/dev/null
 # Gating the threshold on the last STAMPED turn left this room `deliberating` until the
 # budget forced an `unresolved` record on a room that had in fact converged.
 want "a FULL lap past the barrier" 2 ready-to-decide
-if COUNCIL_ME=a bash "$CLI" decide >/dev/null 2>&1; then
+
+# The turn count every reader reports must be the same number, and it must include the
+# barrier lap. The graph does not know about that lap, so a reader taking its count is short
+# by the whole opening round -- which is what the decision record used to write down.
+jt=$(bash "$CLI" verdict --json | jq -r .turns)
+[ "$jt" = 4 ] && echo "  ok   verdict --json counts the barrier lap (turns=4)" \
+              || { echo "  FAIL verdict --json turns=$jt, want 4"; fail=1; }
+ct=$(bash "$CLI" claims | head -1)
+case "$ct" in *"turns: 4"*) echo "  ok   claims reports the same turns as verdict" ;;
+  *) echo "  FAIL claims disagrees with verdict: $ct"; fail=1 ;; esac
+
+if OUT=$(COUNCIL_ME=a bash "$CLI" decide 2>/dev/null); then
   echo "  ok   the room can write its decision record"
+  # The record is the durable artefact; a room that spent its budget must not write down
+  # that it had turns in hand.
+  if grep -q '^\* turns: 4 of ' "$OUT"; then
+    echo "  ok   the decision record counts the barrier lap too"
+  else
+    echo "  FAIL the record's turn count is wrong: $(grep '^\* turns:' "$OUT")"; fail=1
+  fi
 else
   echo "  FAIL decide refused a roundtable room that had converged"; fail=1
 fi
 
+# A room where nobody ever claimed anything takes the `no claim at all` fallback, and it is
+# the one verdict the suite otherwise never visits.
+echo "--- token mode, 2 peers: a room with no claim at all ---"
+R4="$COUNCIL_TEST_ROOT/t9-noclaim"; rm -rf "$R4"
+mkroom "$R4" a b
+export COUNCIL_ROOM="$R4" ROOM="$R4"
+echo "Should the room keep a lap counter?" > "$R4/agenda.md"
+say_floor msg '[]' "Just talking." >/dev/null
+say_floor msg '[]' "Still just talking." >/dev/null
+want "nothing was ever claimed" 2 no-proposal
+
 [ "$fail" = 0 ] && echo "t9 PASS" || echo "t9 FAIL"
+[ -n "${COUNCIL_TEST_ROOT_MINE:-}" ] && rm -rf "$COUNCIL_TEST_ROOT"
 exit $fail
