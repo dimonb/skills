@@ -105,8 +105,9 @@ added a proposal, an amendment or an objection. Therefore:
 * **Reach the room through the command, never by path — neither reading nor writing.** Some
   agents treat every file opened in the room as a separate permission question, and you would
   stop on it while holding the floor, which the room cannot tell apart from a wedged session.
-  `agenda`, `protocol` and `decision` are the whole of what you might want to read;
-  everything else is in `status` and `claims`. Writing into the room by hand is worse than
+  `agenda`, `protocol`, `decision` and — when you start into a room that is already running —
+  `transcript` are the whole of what you might want to read; everything else is in `status`
+  and `claims`. Writing into the room by hand is worse than
   slow: a stray file in a message lane is read as a message and can reset everyone's count of
   whose turn it is.
 * Do not edit anything outside the room unless your role explicitly says otherwise.
