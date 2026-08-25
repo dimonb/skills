@@ -418,11 +418,14 @@ produced one false test result during development. Do not pipe status through a 
   written to `board/status`, not re-derived from the presence of a `decide` message.
 * **`support` closes nothing.** A room can lap forever on agreement while an objection
   stays open; that is exactly what `stuck` is for.
-* **The recorded decision is the proposal AS AMENDED**, under headings that say which part
-  is the original and which is each amendment. The record used to render the latest message
-  text, which — since an `amend` is how an objection closes — was the last amendment alone,
-  in the amendment's own voice: every accepted item it did not restate appeared nowhere, and
-  the decision could only be reconstructed from the transcript.
+* **The recorded decision is the proposal AS AMENDED** — the original followed by each
+  amendment, under headings that say which is which. A proposal nobody amended is recorded as
+  plain text, with no headings. The record used to render the latest message text, which —
+  since an `amend` is how an objection closes — was the last amendment alone, in the
+  amendment's own voice: every accepted item it did not restate appeared nowhere, and the
+  decision could only be reconstructed from the transcript.
+* **A long agenda is summarised at the top of the record and quoted in full at the end**, so
+  the decision is not pushed below two screens of prompt. A one-line agenda stays inline.
 
 ## Files
 

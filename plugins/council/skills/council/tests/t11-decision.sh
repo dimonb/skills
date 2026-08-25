@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# t10 — the decision record must be readable on its own.
+# t11 — the decision record must be readable on its own.
 #   * "## The decision" carries the ORIGINAL proposal and every amendment, under headings
 #     that say which is which. It used to render `current_text` — the last amendment only —
 #     so accepted items that the final amendment did not restate appeared nowhere, and the
@@ -11,7 +11,7 @@
 set -uo pipefail
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 . "$DIR/_helpers.sh"
-R="${TMPDIR:-/tmp}/council-test/t10"; rm -rf "$R"
+R="${TMPDIR:-/tmp}/council-test/t11"; rm -rf "$R"
 mkroom "$R" a b
 export COUNCIL_ROOM="$R" ROOM="$R"
 fail=0
@@ -50,7 +50,13 @@ acts=$(q '[(.revisions // [])[].act] | join(",")')
   echo "FAIL current_text changed meaning: '$(q '.current_text')'"; fail=1; }
 echo "the graph carries the revision chain in order, and current_text is unchanged"
 
-OUT=$(COUNCIL_ME=a bash "$CLI" decide) || { echo "FAIL decide refused"; exit 1; }
+# Decide as whoever holds the floor. Deciding as a fixed peer leaves v_decide's own trailing
+# `decide` message refused, which prints "the floor is no longer yours" into the middle of a
+# PASSING test and leaves the room readable as ready-to-decide although the record is written.
+decider() { bash "$CLI" floor | sed -n 's/.*floor=\([^ ]*\).*/\1/p'; }
+OUT=$(COUNCIL_ME=$(decider) bash "$CLI" decide) || { echo "FAIL decide refused"; exit 1; }
+[ "$(bash "$CLI" verdict | cut -d' ' -f1)" = decided ] || {
+  echo "FAIL the room does not read back as decided"; fail=1; }
 dec=$(sed -n '/^## The decision/,/^## Objections/p' "$OUT")
 
 # Quotable on its own: every accepted item is in the decision section, not only in the
@@ -76,7 +82,7 @@ echo "a one-line agenda stays inline"
 # mkroom's EXIT trap only remembers the LAST room, so retire this keeper by hand before
 # opening the second room, or it outlives the run.
 kill "$(cat "$R/state/keeper.pid" 2>/dev/null)" 2>/dev/null
-R2="${TMPDIR:-/tmp}/council-test/t10-long"; rm -rf "$R2"
+R2="${TMPDIR:-/tmp}/council-test/t11-long"; rm -rf "$R2"
 mkroom "$R2" a b
 export COUNCIL_ROOM="$R2" ROOM="$R2"
 cat > "$R2/agenda.md" <<'AGENDA'
@@ -89,7 +95,20 @@ Background a reader does not need before the decision itself.
 AGENDA
 sid propose '[]' "One lane per author, total order by Lamport clock." >/dev/null
 for i in 1 2 3; do sid msg '[]' "Agreed ($i)." >/dev/null; done
-OUT2=$(COUNCIL_ME=a bash "$CLI" decide) || { echo "FAIL decide refused in the long-agenda room"; exit 1; }
+OUT2=$(COUNCIL_ME=$(decider) bash "$CLI" decide) || { echo "FAIL decide refused in the long-agenda room"; exit 1; }
+
+# This room's proposal carried with NO amendment — the most common successful outcome, and a
+# different branch of the renderer from the amended one above. Without these two assertions
+# the branch is executed but never checked: emptying it writes a blank decision section while
+# board/status still says `decided`, and the whole suite stays green.
+dec2=$(sed -n '/^## The decision/,/^## Objections/p' "$OUT2")
+printf '%s\n' "$dec2" | grep -q 'One lane per author' || {
+  echo "FAIL an unamended proposal is missing from the decision section"; fail=1; }
+printf '%s\n' "$dec2" | grep -q 'as amended by' && {
+  echo "FAIL an unamended proposal claims amendments"; fail=1; }
+printf '%s\n' "$dec2" | grep -q '^### ' && {
+  echo "FAIL an unamended proposal was given revision headings"; fail=1; }
+echo "an unamended proposal is recorded as plain text, with no headings and no amendment claim"
 
 head=$(sed -n '/^## The question/,/^## The decision/p' "$OUT2")
 printf '%s\n' "$head" | grep -q 'Where should the room keep its history?' || {
@@ -102,5 +121,41 @@ printf '%s\n' "$(sed -n '/^## The agenda in full/,$p' "$OUT2")" | grep -q 'anoth
   echo "FAIL the full agenda section lost the agenda's body"; fail=1; }
 echo "a long agenda opens as a heading plus a link, and is quoted in full at the end"
 
-[ "$fail" = 0 ] && echo "t10 PASS" || echo "t10 FAIL"
+# The gist directly, over the shapes a room record actually gets. The end-to-end fixture
+# above opens with a heading, so heading-first and opening-line semantics coincide there and
+# it cannot see the difference: picking "the file's first heading" instead of the opening
+# line recorded a later section as the question, and every assertion above still passed.
+. "$SKILL/lib/verbs.sh"
+G="${TMPDIR:-/tmp}/council-test/t11-gist"; rm -rf "$G"; mkdir -p "$G"
+gist_is() { # <name> <want> <agenda-text>
+  printf '%s' "$3" > "$G/a.md"
+  local got; got=$(_agenda_gist "$G/a.md")
+  [ "$got" = "$2" ] || { echo "FAIL gist of $1: want '$2', got '$got'"; fail=1; }
+}
+gist_is "a question above a later section" "Should we adopt X or Y?" \
+  "Should we adopt X or Y?
+
+## Background
+
+lots of stuff"
+gist_is "a heading-first agenda" "Where should the room keep its history?" \
+  "# Where should the room keep its history?
+
+Background."
+gist_is "a comment at column zero in a fenced block" "How often should the janitor run?" \
+  "How often should the janitor run?
+
+\`\`\`sh
+# poll every 500ms
+sleep 0.5
+\`\`\`"
+gist_is "leading blank lines and an indented question" "Should we adopt X or Y?" \
+  "
+
+    Should we adopt X or Y?
+
+More."
+echo "the gist is the agenda's opening line, not the first heading found anywhere in it"
+
+[ "$fail" = 0 ] && echo "t11 PASS" || echo "t11 FAIL"
 exit $fail
