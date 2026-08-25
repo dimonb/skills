@@ -13,7 +13,8 @@
 set -uo pipefail
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 . "$DIR/_helpers.sh"
-R="${TMPDIR:-/tmp}/council-test/t9b-untrusted"; rm -rf "$R"
+: "${COUNCIL_TEST_ROOT:=$(mktemp -d)}"   # set and reaped by _helpers.sh; this is the standalone case
+R="$COUNCIL_TEST_ROOT/t9b-untrusted"; rm -rf "$R"
 mkroom "$R" a b
 export COUNCIL_ROOM="$R" ROOM="$R"
 echo "Does the room trust what it reads?" > "$R/agenda.md"

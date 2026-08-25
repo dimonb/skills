@@ -12,6 +12,7 @@
 set -uo pipefail
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 . "$DIR/_helpers.sh"
+: "${COUNCIL_TEST_ROOT:=$(mktemp -d)}"   # set and reaped by _helpers.sh; this is the standalone case
 fail=0
 
 want()  { # <what> <expected-since> <expected-verdict>
@@ -28,7 +29,7 @@ want()  { # <what> <expected-since> <expected-verdict>
 }
 
 echo "--- token mode, 2 peers: a claim just made is not silence ---"
-R="${TMPDIR:-/tmp}/council-test/t9a"; rm -rf "$R"
+R="$COUNCIL_TEST_ROOT/t9-token"; rm -rf "$R"
 mkroom "$R" a b
 export COUNCIL_ROOM="$R" ROOM="$R"
 echo "Should the room keep a lap counter?" > "$R/agenda.md"
@@ -59,7 +60,7 @@ want "a new claim resets it at once" 0 deliberating
 # reached the other way: the window has to reset in the tick the objection lands, not on
 # the message after it.
 echo "--- token mode, 2 peers: a hand-raised objection is a fresh claim ---"
-R1b="${TMPDIR:-/tmp}/council-test/t9ab"; rm -rf "$R1b"
+R1b="$COUNCIL_TEST_ROOT/t9-hand"; rm -rf "$R1b"
 mkroom "$R1b" a b
 export COUNCIL_ROOM="$R1b" ROOM="$R1b"
 echo "Should the room keep a lap counter?" > "$R1b/agenda.md"
@@ -72,7 +73,7 @@ COUNCIL_ME=b bash "$CLI" send --act object --hand \
 want "a hand-raised objection resets it" 0 deliberating
 
 echo "--- roundtable mode, 2 peers: the barrier round is claims, not silence ---"
-R2="${TMPDIR:-/tmp}/council-test/t9b"; rm -rf "$R2"
+R2="$COUNCIL_TEST_ROOT/t9-barrier"; rm -rf "$R2"
 mkroom "$R2" a b
 export COUNCIL_ROOM="$R2" ROOM="$R2"
 jq '.mode = "roundtable"' "$R2/roster.json" > "$R2/r.tmp" && mv "$R2/r.tmp" "$R2/roster.json"
@@ -90,7 +91,7 @@ say_floor msg '[]' "Noted." >/dev/null
 want "one turn past the barrier" 1 deliberating
 
 echo "--- roundtable mode, 2 peers: the barrier round alone can ripen a decision ---"
-R3="${TMPDIR:-/tmp}/council-test/t9c"; rm -rf "$R3"
+R3="$COUNCIL_TEST_ROOT/t9-ripen"; rm -rf "$R3"
 mkroom "$R3" a b
 export COUNCIL_ROOM="$R3" ROOM="$R3"
 jq '.mode = "roundtable"' "$R3/roster.json" > "$R3/r.tmp" && mv "$R3/r.tmp" "$R3/roster.json"
