@@ -43,10 +43,14 @@ drop yours (`concede --refs '["<your position>"]'`); if yours holds something th
 one lacks, put that in as an `amend`. A room with N live proposals and no objections looks
 like agreement but will never become a decision.
 
-## First: is the room already running?
+## Starting into a room that is already running
 
-**Before your first message, run `council.sh status`. If the room is not empty, read
-`council.sh transcript` before you speak.**
+**If `status` says `OPEN ROUND`, stop here — the section above is your case.** Post your
+position first and read nothing: the barrier is the point, and `transcript` and `claims` do
+not respect it, so reading them would hand you exactly what `recv` is withholding. Catch up
+when the round releases.
+
+**Otherwise, if the room is not empty, read `council.sh transcript` before you speak.**
 
 You may be starting into an argument that is already well under way — a seat is sometimes
 restarted mid-room, and a restarted process has read none of it. `recv` will not catch you
@@ -61,7 +65,8 @@ not re-propose something already conceded, and do not answer an objection you ha
 
 ## How the conversation works
 
-After that the room is turn-taking: whoever holds the floor speaks. The floor is computed
+Once the opening round has closed — or from the start, in a room that never had one — the
+room is turn-taking: whoever holds the floor speaks. The floor is computed
 from the log, so **drain your inbox before speaking**: if you have not read someone's lane
 to the end you will count turns wrong and speak on top of the real holder of the floor. Such
 a conflict settles itself (the lowest `(lamport, from)` wins), but your message becomes

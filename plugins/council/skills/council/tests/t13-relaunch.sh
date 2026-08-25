@@ -83,6 +83,22 @@ case "$got" in /*) ;; *) echo "FAIL the recorded cwd is not absolute: $got"; fai
 [ -f "$ROOM/state/launch-claude.sh" ] || { echo "FAIL up wrote no launcher for claude"; fail=1; }
 [ -f "$ROOM/state/launch-codex.sh" ] && { echo "FAIL up wrote a launcher for the --me seat"; fail=1; }
 
+# A relative --cwd resolved under an exported CDPATH, in its own throwaway room. `cd` searches
+# CDPATH for an operand that does not start with `.` or `/`, and then ECHOES the directory it
+# found — so a resolution that forgets `CDPATH=` captures TWO lines naming the WRONG
+# directory. The launcher then carries `cd $'a\nb'` and the agent dies on launch with nothing
+# logged, which is the single failure this skill spends the most words warning about.
+mkdir -p "$REPO/sub" "$ROOT/decoy/sub"
+( cd "$REPO" && CDPATH="$ROOT/decoy" bash "$CLI" --room cdp up \
+    --scenario debate --agents claude,codex --cwd sub "cdpath" ) >"$ROOT/cdp.log" 2>&1
+cdp=$(jq -r '.cwd // "<missing>"' "$REPO/.git/council/cdp/roster.json" 2>/dev/null)
+[ "$cdp" = "$REPO_P/sub" ] \
+  || { echo "FAIL a relative --cwd under CDPATH recorded '$cdp', expected '$REPO_P/sub'"; fail=1; }
+[ "$(printf '%s' "$cdp" | wc -l | tr -d ' ')" = 0 ] \
+  || { echo "FAIL the recorded cwd is more than one line: $cdp"; fail=1; }
+ck="$REPO/.git/council/cdp/state/keeper.pid"
+[ -s "$ck" ] && kill -9 "$(cat "$ck")" 2>/dev/null
+
 # --- the roster is the authority on who has a seat -------------------------------
 if want 2 "a peer that is not in the room" bash "$CLI" relaunch nosuch; then
   says 'not in this room' "the message does not say the peer is unknown"
@@ -119,6 +135,9 @@ printf '\nINJECTED-PROTOCOL\n'        >> "$ROOM/protocol-claude.md"
 # rather than not at all.
 want 1 "a room with no terminal backend" bash "$CLI" relaunch claude \
   && says 'backend' "the failure does not blame the backend"
+# It got that far on the RECORDED cwd, not by falling through the missing-cwd branch — which
+# would otherwise be an exit-2 path that never reaches regeneration at all.
+no_say 'predates the recorded cwd' "relaunch did not use the cwd the roster recorded"
 grep -q 'INJECTED-LAUNCHER' "$ROOM/state/launch-claude.sh" \
   && { echo "FAIL relaunch carried a tampered launcher forward instead of regenerating it"; fail=1; }
 grep -q 'INJECTED-PROTOCOL' "$ROOM/protocol-claude.md" \

@@ -197,11 +197,13 @@ rebuilt.
 
 **That seat's knowledge does not.** The new process has read none of the argument, and its
 cursors are files that outlived it, so `recv` hands it nothing — from inside, a room
-twenty turns deep looks brand new. This is why `protocol/_channel.md` opens by telling
-*every* participant to check `status` and read `council.sh transcript` if the room is not
-empty. The room is not replayed to a restarted seat, and it is not made to be: a cursor has
-exactly one writer, which is the participant itself, and that invariant is what lets the
-whole transport work without a lock.
+twenty turns deep looks brand new. This is why `protocol/_channel.md` carries a section
+telling *every* participant, relaunched or not, to read `council.sh transcript` when it
+starts into a room that is not empty — and to skip that when the opening barrier is still
+open, because `transcript` does not respect the barrier and `recv` does. The room is not
+replayed to a restarted seat, and it is not made to be: a cursor has exactly one writer,
+which is the participant itself, and that invariant is what lets the whole transport work
+without a lock.
 
 ### The launcher and the protocol are regenerated, not re-run
 
@@ -211,10 +213,17 @@ this skill before starting anything. Two reasons.
 Every participant is handed the room as a **writable root** (`--add-dir <room>`, in all
 three adapters) — and a scenario deliberately makes those agents adversarial to each other.
 Both of those files live in the room. Re-executing a stored launcher would run whatever
-another participant had put there, in a login shell, unsandboxed, in your own process tree,
-and the protocol file is fed to the agent as its system prompt. Worth knowing plainly: the
-room is a shared writable area between agents that are arguing, and `--add-dir <skill>`
-means `council.sh` itself is writable by them too. Regenerating closes the room half.
+another participant had put there, in a login shell, unsandboxed, in your own process tree —
+and the protocol file is what the agent is launched on: `claude` takes it as its system
+prompt, `codex` and `agy` are told to read it and follow it literally.
+
+**What this does and does not buy, stated plainly, because the honest version is shorter
+than the reassuring one.** Regenerating removes the stored-launcher path. It does not make
+the room trustworthy, and nothing in this verb could: `roster.json` is the input regeneration
+reads and it lives in the room too, and `--add-dir <skill>` means `council.sh` itself is
+writable by every participant. The room is a shared writable area between agents that a
+scenario deliberately makes adversarial, and that is a property of the design, not of this
+verb.
 
 The second reason is the ordinary one: a regenerated launcher picks up **adapter changes
 made since the room opened**, which is exactly what "killed to pick up new permissions"

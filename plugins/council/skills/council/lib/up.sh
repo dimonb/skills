@@ -89,8 +89,14 @@ council_up() {
   # regenerated launcher's `cd` line by `relaunch`, so a RELATIVE one would be re-resolved
   # against whatever directory the supervisor happened to be standing in — `--cwd .` passes
   # every check and silently puts the participant somewhere else entirely.
+  #
+  # `CDPATH=` and `--` are both load-bearing. With CDPATH exported, `cd sub` searches it and
+  # then ECHOES the directory it found, so the substitution captures two lines naming the
+  # wrong directory; the launcher gets a `cd $'a\nb'` that dies on launch with nothing
+  # logged, which is the failure this file spends the most words warning about. `--` stops a
+  # directory named like an option: `--cwd -` otherwise resolves to $OLDPWD and echoes that.
   local cwd_in="${cwd:-$(pwd -P)}"
-  cwd=$(cd "$cwd_in" 2>/dev/null && pwd -P) \
+  cwd=$(CDPATH= cd -- "$cwd_in" 2>/dev/null && pwd -P) \
     || { echo "council up: no such directory: $cwd_in" >&2; return 2; }
 
   local base; base=$(room_base) || return 1
@@ -314,7 +320,7 @@ council_relaunch() {
   [ -n "$cwd" ] || cwd=$(jq -r '.cwd // empty' "$ROOM/roster.json")
   [ -n "$cwd" ] || { echo "council relaunch: this room predates the recorded cwd — pass --cwd <dir>" >&2; return 2; }
   local cwd_in="$cwd"
-  cwd=$(cd "$cwd_in" 2>/dev/null && pwd -P) \
+  cwd=$(CDPATH= cd -- "$cwd_in" 2>/dev/null && pwd -P) \
     || { echo "council relaunch: no such directory: $cwd_in" >&2; return 2; }
 
   . "$SKILL/lib/term.sh"
@@ -328,10 +334,12 @@ council_relaunch() {
   # name is taken: launching over a live one leaves two sessions called the same thing, of
   # which ct_target keeps the first — quite possibly the one that is already dead. Closing
   # first also means the old process cannot write back over the inputs between the
-  # regeneration and the launch. The common case has nothing to close (the participant
-  # died), and ct_kill then simply reports no live terminal; the agterm backend keeps a
-  # crashed session listed on purpose (`--wait`, so the crash stays readable), and that
-  # stale entry is exactly what this clears.
+  # regeneration and the launch.
+  #
+  # What you see here differs by backend, and both are normal. On agterm a crashed
+  # participant leaves its session LISTED (`--wait`, so the crash stays readable), so this
+  # finds it and prints `terminal closed`. On tmux the window died with the process, so
+  # ct_kill simply reports no live terminal and prints nothing. Neither blocks the launch.
   ct_kill "$peer" 2>/dev/null && echo "terminal closed: $peer"
   _write_launcher "$ROOM" "$peer" "$kind" "$cwd" \
     || { echo "council relaunch: could not write the launcher for '$peer'" >&2; return 1; }
