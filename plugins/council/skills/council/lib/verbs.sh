@@ -119,8 +119,16 @@ _graph() { c_canon | jq -s -f "$SKILL/lib/claims.jq"; }
 v_claims() {
   local g; g=$(_graph) || return 1
   [ "${1:-}" = "--raw" ] && { printf '%s\n' "$g"; return 0; }
-  printf '%s' "$g" | jq -r '
-    "turns: \(.turns)   last substantive claim at turn: \(.last_claim_turn)",
+  # Turns from c_turns here too. The graph counts turn-claiming messages only, so in a
+  # roundtable room it is short by the whole opening lap, and `claims` and `verdict` printed
+  # two different turn counts for one room.
+  #
+  # The second field is the turn a claim STAMPED, which is not the window `verdict` reports
+  # and no longer has anything to do with it: a barrier position and a `--hand` claim stamp
+  # no turn, so this reads -1 in rooms whose every claim is real. Labelled for what it is,
+  # rather than left looking like a contradiction of the verdict line.
+  printf '%s' "$g" | jq -r --argjson turns "$(c_turns)" '
+    "turns: \($turns)   last claim that stamped a turn: \(.last_claim_turn)",
     (if .decided then "DECIDED by message \(.decided)" else empty end),
     "",
     ( .proposals[]
@@ -140,26 +148,36 @@ v_claims() {
 # The verdict is COMPUTED. "We agree" here means: no open objection, and a full lap in
 # which nobody added a proposal, an amendment or an objection. Not a mood anyone reports.
 v_verdict() {
-  local g n budget turns last decided live open since lap v
+  local g n budget turns decided live open since win lap v
   g=$(_graph) || return 1
   n=$(c_npeers); budget=$(jq -r '.turns_budget // 30' "$ROOM/roster.json")
-  read -r _gt last decided live open <<<"$(printf '%s' "$g" | jq -r '[.turns, .last_claim_turn, (.decided // "-"), (.live|length), (.open|length)] | @tsv')"
-  # Turns come from c_turns, not from the graph: the graph counts turn-claiming messages
+  read -r decided live open <<<"$(printf '%s' "$g" | jq -r '[(.decided // "-"), (.live|length), (.open|length)] | @tsv')"
+  # Turns come from c_turns, never from the graph: the graph counts turn-claiming messages
   # and knows nothing about a completed barrier round, which consumes a whole lap without
   # any of its positions claiming a turn. Mixing the two produced a room "minus one turn
-  # with nothing new said" — a negative age that no branch below reads correctly.
+  # with nothing new said" — a negative age that no branch below reads correctly. The JSON
+  # further down kept emitting the graph's count long after this was written, which is how
+  # a roundtable room's decision record came to report its turns short by a whole lap.
   turns=$(c_turns)
-  since=$(( turns - (last < 0 ? 0 : last) )); lap=$n
+  lap=$n
+  # The window is a count of turns minus a count of turns, both taken from one reading of
+  # the log (see c_turns_since_last_claim). `win` is -1 only when the room holds no claim
+  # at all, which is also what gates the two thresholds below: a claim that stamped no turn
+  # -- a barrier position, or an objection raised with `--hand` -- is still a claim, and
+  # keying the gate on a stamped turn left a roundtable room unable to converge at all.
+  win=$(c_turns_since_last_claim)
+  since=$(( win < 0 ? turns : win ))
   if   [ "$decided" != "-" ]; then v=$(c_slurp "$ROOM/board/status"); [ "$v" = 0 ] && v=decided
   elif [ "$turns" -ge "$budget" ]; then v=unresolved
   elif [ "$live" = 0 ]; then v=no-proposal
-  elif [ "$open" -gt 0 ] && [ "$last" -ge 0 ] && [ "$since" -ge "$lap" ]; then v=stuck
-  elif [ "$open" = 0 ] && [ "$live" = 1 ] && [ "$last" -ge 0 ] && [ "$since" -ge "$lap" ]; then v=ready-to-decide
+  elif [ "$open" -gt 0 ] && [ "$win" -ge 0 ] && [ "$since" -ge "$lap" ]; then v=stuck
+  elif [ "$open" = 0 ] && [ "$live" = 1 ] && [ "$win" -ge 0 ] && [ "$since" -ge "$lap" ]; then v=ready-to-decide
   else v=deliberating
   fi
   if [ "${1:-}" = "--json" ]; then
-    printf '%s' "$g" | jq -c --arg v "$v" --argjson since "$since" --argjson lap "$lap" --argjson budget "$budget" \
-      '{verdict:$v, turns:.turns, budget:$budget, since_last_claim:$since, lap:$lap,
+    printf '%s' "$g" | jq -c --arg v "$v" --argjson turns "$turns" --argjson since "$since" \
+      --argjson lap "$lap" --argjson budget "$budget" \
+      '{verdict:$v, turns:$turns, budget:$budget, since_last_claim:$since, lap:$lap,
         live:(.live|length), open:(.open|length), open_ids:[.open[].id], decided:.decided}'
   else
     printf '%s  turns %s/%s  nothing new for %s turns (lap %s)  live proposals %s  open objections %s\n' \

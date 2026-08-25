@@ -26,6 +26,42 @@ c_now()    { date -u +%Y-%m-%dT%H:%M:%SZ; }
 # bash 5 gives us sub-second time without spawning anything.
 c_ms()     { local t=${EPOCHREALTIME/./}; echo $(( 10#$t / 1000 )); }
 
+# --- trusting nothing another participant wrote ---------------------------------
+# Every numeric field below arrives in a file some OTHER participant wrote, so none of it
+# is believed on read. A value of the wrong type is treated as ABSENT rather than trusted:
+# `.turn` and `.round` fall back to null, `.lamport` and `.sent_ms` to 0, and `.hand` to a
+# real boolean.
+#
+# Two different things go wrong without this, and they are worth naming separately.
+#
+# jq's total order sorts strings ABOVE every number, so one message carrying a string
+# `.turn` or `.lamport` wins every `max` and every `sort_by` in the room and takes the
+# ordering over -- no exploit needed, a typo does it.
+#
+# And such a value then reaches bash arithmetic, which EVALUATES what it is handed rather
+# than merely parsing it. A lane file whose `.turn` is `turns[$(...)]` ran commands in the
+# shell of whoever read the room. Coercing at the two places a LANE MESSAGE enters the
+# process -- c_all and c_drain -- means no consumer downstream has to remember a check,
+# which is the version that decays: the next consumer is written by someone who never saw
+# this comment.
+#
+# READ THIS BEFORE YOU TRUST IT. What is covered is the five fields above, of a lane
+# message, and nothing else. It is NOT a room-wide guarantee, and the room is writable by
+# every participant, not just its own lane. Values read by c_slurp -- `state/*.lamport`,
+# `state/*.seq`, `cursor/*` -- and the numerics in `roster.json` are NOT coerced and still
+# reach `$(( ))` with no integer test: each of those is a live way to run a command in a
+# reader's shell, on the default branch and here. Separately, `.from` is interpolated into a
+# path in c_drain without being checked against the roster, which is not execution but does
+# let one participant make another create or truncate a file outside the room. All of it is
+# tracked separately rather than fixed in the change that added this note. So: adding an
+# arithmetic use of anything that did not come through `_untrusted` still needs its own gate.
+C_UNTRUSTED='def _untrusted: map(
+    .turn    |= (if type == "number" then . else null end)
+  | .round   |= (if type == "number" then . else null end)
+  | .lamport |= (if type == "number" then . else 0 end)
+  | .sent_ms |= (if type == "number" then . else 0 end)
+  | .hand     = (.hand == true)); '
+
 # write-then-rename: same directory, so the rename is atomic on any sane fs.
 c_atomic() { local p="$1" t="$1.tmp.$$"; cat > "$t" && mv -f "$t" "$p"; }
 
@@ -43,7 +79,13 @@ c_max_lamport() {
   local mine disk
   mine=$(c_lamport)
   disk=$({ c_all 2>/dev/null || true; } | jq -s 'if length == 0 then 0 else (max_by(.lamport).lamport) end')
-  [ "${disk:-0}" -gt "$mine" ] && printf '%s' "$disk" || printf '%s' "$mine"
+  # c_send feeds this straight into `lam=$(( ... + 1 ))`, so the value read off DISK leaves
+  # here as an integer or not at all. `mine` does not: it comes from state/<me>.lamport
+  # through c_slurp, which checks nothing, and it is what this function returns whenever the
+  # comparison below is false or errors. That path still reaches the arithmetic ungated --
+  # see the note above C_UNTRUSTED, and do not read this gate as covering the function.
+  case "$disk" in ''|*[!0-9]*) disk=0 ;; esac
+  [ "$disk" -gt "$mine" ] && printf '%s' "$disk" || printf '%s' "$mine"
 }
 c_seq()     { c_slurp "$ROOM/state/$ME.seq"; }
 c_cursor()  { c_slurp "$ROOM/cursor/$ME/$1"; }
@@ -85,6 +127,7 @@ c_barrier() {
   # independently, by a Codex participant inside the very room deciding this question.)
   quorum=$(c_quorum); [ -n "$quorum" ] || quorum=$(( n - 1 )); [ "$quorum" -lt 2 ] && quorum=2
   first=$(c_round0 | jq -s 'if length == 0 then 0 else (min_by(.sent_ms).sent_ms) end')
+  case "$first" in ''|*[!0-9]*) first=0 ;; esac
   deadline=$(jq -r '.round_deadline_ms // 600000' "$ROOM/roster.json")
   [ "$first" = 0 ] && { printf 'open'; return; }
   local age=$(( $(c_ms) - first ))
@@ -195,9 +238,10 @@ c_drain() {
   # than skipping it, so nothing is lost and the cursor never runs past unread words.
   local open=false; [ "$(c_barrier)" = open ] && open=true
   local batch
-  batch=$(cat "${files[@]}" | jq -s -c --argjson open "$open" --arg me "$ME" '
+  batch=$(cat "${files[@]}" | jq -s -c --argjson open "$open" --arg me "$ME" "$C_UNTRUSTED"'
     def seqof: (.id | split("-") | last | tonumber);
-    [ group_by(.from)[]
+    _untrusted
+    | [ group_by(.from)[]
       | sort_by(seqof)
       | (if $open then
            (. as $g | ($g | map(.round == 0 and .from != $me) | index(true)) as $i
@@ -233,7 +277,7 @@ c_all() {
   local -a files=(); local f
   for f in "$ROOM"/lane/*/[0-9]*.json; do [ -e "$f" ] && files+=("$f"); done
   [ "${#files[@]}" -gt 0 ] || return 1
-  cat "${files[@]}" | jq -s -c 'sort_by(.lamport, .from)[]'
+  cat "${files[@]}" | jq -s -c "$C_UNTRUSTED"'_untrusted | sort_by(.lamport, .from)[]'
 }
 
 # --- canonicalisation ----------------------------------------------------------
@@ -272,6 +316,40 @@ c_turns() {
   echo $(( base + n ))
 }
 
+# How many turns have gone by since the last NEW claim; -1 when the room holds no claim.
+#
+# ONE pass over the canonical log, deliberately. "turns consumed now" and "turns consumed
+# when the last claim landed" have to be read from the SAME snapshot, or their difference
+# is not a measurement of anything. Deriving the second from the graph's `last_claim_turn`
+# got that wrong three separate ways.
+#
+# It was off by one: `last_claim_turn` is the turn a claim STAMPED, turns are stamped from
+# zero, so a claim posted this very instant read as one turn of silence and both thresholds
+# fired a whole turn early -- half a lap in a two-peer room.
+#
+# It could not see a claim that stamps no turn, and two kinds do not: an opening position
+# in a barrier round, and anything raised out of turn with `--hand`. A hand-raised
+# objection therefore left the window untouched, and `stuck` fired in the very tick that
+# objection arrived -- a false alarm on the one signal a supervisor is told to act on,
+# which is how a supervisor is taught to ignore it.
+#
+# And the barrier lap had to be added back by the caller, from a SECOND reading of
+# `c_barrier` taken after `c_turns` had already taken its own. Those two disagree if the
+# round closes between them, and the counter goes negative. Here the base cancels: both
+# counts are on one scale, so it never enters the subtraction at all.
+c_turns_since_last_claim() {
+  local n
+  n=$(c_canon | jq -s '
+    reduce .[] as $x ({n: 0, last: null};
+      (.n + (if ($x.hand == false and $x.turn != null and $x.valid) then 1 else 0 end)) as $n
+      | { n: $n,
+          last: (if ($x.act == "propose" or $x.act == "amend" or $x.act == "object")
+                 then $n else .last end) })
+    | if .last == null then -1 else .n - .last end')
+  case "$n" in -1) ;; ''|*[!0-9]*) n=-1 ;; esac
+  printf '%s' "$n"
+}
+
 # The floor is a pure function of the log: no token file to lose or duplicate.
 # Order rotates one step per lap so the same peer is not always the anchor.
 c_floor_at() { # <turns-consumed>
@@ -287,8 +365,11 @@ c_next_after() { # who speaks after the current holder
 # When did the current holder get the floor? Timestamp of the last turn-consuming
 # message — derived from the log, so no extra state to keep in sync.
 c_last_turn_ms() {
-  c_canon | jq -s 'map(select(.hand == false and .turn != null and .valid))
-                   | if length == 0 then 0 else (max_by(.lamport).sent_ms) end'
+  local ms
+  ms=$(c_canon | jq -s 'map(select(.hand == false and .turn != null and .valid))
+                        | if length == 0 then 0 else (max_by(.lamport).sent_ms) end')
+  case "$ms" in ''|*[!0-9]*) ms=0 ;; esac
+  printf '%s' "$ms"
 }
 
 # How many turns claimed a slot somebody else won — the number the supervisor watches.
