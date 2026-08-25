@@ -15,9 +15,10 @@ set -uo pipefail
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 . "$DIR/_helpers.sh"
 
-# A private root per run. The suite's runner hands one down; standalone, make our own. Never
-# a path built from this test's own name — two concurrent runs then delete each other's rooms,
-# which is what made a red t3 mean nothing for most of a day.
+# A private root per run. `COUNCIL_TEST_ROOT` is an optional override — nothing in the suite
+# sets it yet — and otherwise we make our own. Never a path built from this test's own name:
+# two concurrent runs then delete each other's rooms, which is what made a red t3 mean nothing
+# for most of a day.
 _own_root=""
 if [ -z "${COUNCIL_TEST_ROOT:-}" ]; then
   COUNCIL_TEST_ROOT=$(mktemp -d) || { echo "t13 FAIL: no temp dir"; exit 1; }
@@ -29,8 +30,8 @@ fail=0
 cleanup() {
   [ -n "${ROOM:-}" ] && [ -s "$ROOM/state/keeper.pid" ] && kill -9 "$(cat "$ROOM/state/keeper.pid")" 2>/dev/null
   rm -rf "$ROOT"
-  # Only reap the root if we made it: when the runner supplies one it reaps it itself, and
-  # removing it here would take the other tests' rooms with it.
+  # Only reap the root if we made it. A root handed down by a runner is that runner's to
+  # remove, and taking it here would delete the other tests' rooms with it.
   [ -n "$_own_root" ] && rm -rf "$_own_root"
   return 0
 }
@@ -232,6 +233,39 @@ grep -q 'ORIGINAL' "$ROOT/victim.txt" \
 rm -f "$ROOM/protocol-claude.md"; ln -s "$ROOT/made-up.md" "$ROOM/protocol-claude.md"
 run_capped 10 bash "$CLI" relaunch claude
 [ -f "$ROOT/made-up.md" ] && { echo "FAIL a symlinked protocol created a file outside the room"; fail=1; }
+
+# A roster whose `.order` is not an array. `jq '.order | index($p)'` looked like a membership
+# test and SUBSTRING-matches on a string, while `.order[]` then errors and leaves the peer list
+# empty — so one crafted string both admitted a traversing name and skipped every per-name
+# check behind it. It is also a plain bug with nobody attacking: the protocol renders with no
+# participants and the keeper comes back holding no fifos.
+tamper '.order = "zz../../../../../../../elsewhere/targetzz"'
+printf 'UNTOUCHED\n' > "$ROOT/victim2.txt"
+want 2 "a roster whose participant list is not an array" bash "$CLI" relaunch claude \
+  && says 'usable participant list' "the refusal does not name the roster"
+grep -q 'UNTOUCHED' "$ROOT/victim2.txt" \
+  || { echo "FAIL a non-array roster let relaunch write outside the room"; fail=1; }
+restore_roster
+
+# A parent directory swapped for a symlink: a rename cannot be redirected at the destination,
+# but every write below a linked parent still lands elsewhere.
+mv "$ROOM/state" "$ROOM/state-real" && ln -s "$ROOT/elsewhere" "$ROOM/state"
+mkdir -p "$ROOT/elsewhere"
+want 1 "a room whose state/ is a symlink" bash "$CLI" relaunch claude \
+  && says 'symlink' "the refusal does not mention the symlink"
+rm -f "$ROOM/state"; mv "$ROOM/state-real" "$ROOM/state"
+
+# --- `up` must not create a room whose seats relaunch will refuse ----------------
+# The producer and the consumer have to agree about what a name may be, or a room opens
+# normally and then has no recovery verb — a failure that surfaces only in the emergency the
+# verb exists for.
+( cd "$REPO" && bash "$CLI" --room bad up --scenario debate --agents 'gpt5.1=codex,claude' "x" ) \
+  >"$ROOT/bad.log" 2>&1
+rc=$?
+[ "$rc" = 2 ] || { echo "FAIL up accepted a participant name relaunch will refuse (exit $rc)"; fail=1; }
+grep -q 'not a usable participant name' "$ROOT/bad.log" \
+  || { echo "FAIL up's refusal does not name the problem; log:"; cat "$ROOT/bad.log"; fail=1; }
+[ -d "$REPO/.git/council/bad" ] && { echo "FAIL up left a room behind after refusing"; fail=1; }
 
 [ "$fail" = 0 ] && echo "t13 PASS" || echo "t13 FAIL"
 exit $fail

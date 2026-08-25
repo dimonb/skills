@@ -239,10 +239,14 @@ unattended. So a participant is an agent running **as you**, and everything you 
 can reach: the roster, another seat's launcher, `council.sh` itself, your home directory.
 
 That makes regeneration and the checks above **blast-radius reduction, not a boundary**. They
-remove the easiest path — the one a supervisor triggers by following the documented recovery
-— and they do not make the room safe to share with a participant you would not trust with
-your shell. Run rooms accordingly. The trust model itself is an open question, not a settled
-one; it is being argued rather than assumed.
+remove the traversal and sed-injection forms. They do **not** close the supervisor-triggered
+path in general: `--add-dir <skill>` makes this skill's own `adapters/` directory writable, so
+a participant can drop a plausibly-named file there and have the roster point a seat at it,
+and an ordinary `council.sh relaunch <peer>` will source it. That is measured, not theorised.
+
+Nothing here makes a room safe to share with a participant you would not trust with your
+shell. Run rooms accordingly. The trust model itself is an open question, not a settled one;
+it is being argued rather than assumed.
 
 The second reason is the ordinary one: a regenerated launcher picks up **adapter changes
 made since the room opened**, which is exactly what "killed to pick up new permissions"

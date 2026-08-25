@@ -1,6 +1,29 @@
 #!/usr/bin/env bash
 # up.sh — creating, listing, driving and tearing down a room.
 
+# A participant name, an adapter kind, a scenario, a role. Bare word only.
+#
+# These reach a file that gets SOURCED, a file that gets rendered, a path that gets written,
+# and a `#`-delimited sed program. `up` checks a name before it ever enters a room, and
+# `relaunch` checks again on the way out, because between those two the roster is a file every
+# participant can write. Under LC_ALL=C this rejects `..`, `/`, `#`, `&`, backslash, newline,
+# quotes and everything else outside the set; a leading `-` is accepted and is harmless here,
+# since every sink is either path-prefixed or a quoted operand.
+_plain_name() { case "$1" in ''|*[!A-Za-z0-9_-]*) return 1 ;; *) return 0 ;; esac; }
+
+# A rename cannot be redirected by a symlink at the destination, but it can still land inside
+# one if a PARENT directory is a link — swap `state/` for a link to somewhere else and every
+# write below it goes there. Cheap to check, and there is no legitimate reason for either of
+# these to be anything but a real directory.
+_room_dirs_sane() { # <room>
+  local room="$1" d
+  for d in "$room" "$room/state"; do
+    [ -L "$d" ] && { echo "council: $d is a symlink — refusing to write a room through it" >&2; return 1; }
+    [ -d "$d" ] || { echo "council: $d is not a directory" >&2; return 1; }
+  done
+  return 0
+}
+
 # --- create ---------------------------------------------------------------------
 # The keeper holds every bell open read-write for the life of the room. Without it a bell
 # rung at a participant that is not currently in `recv` either blocks its sender or is
@@ -111,6 +134,15 @@ council_up() {
   for spec in "${SPECS[@]}"; do
     spec="${spec// /}"; [ -n "$spec" ] || continue
     case "$spec" in *=*) name="${spec%%=*}"; kind="${spec#*=}" ;; *) name="$spec"; kind="$spec" ;; esac
+    # Check the name HERE, where the user typed it and can fix it, not later. A name is built
+    # into file paths and interpolated into the sed program that renders every protocol, so a
+    # `#` in one corrupts the whole room's protocols at creation; and a name `relaunch` will
+    # not accept produces a room that opens normally and then has no recovery verb — a
+    # failure that surfaces only in the emergency the verb exists for.
+    _plain_name "$name" || {
+      echo "council up: '$name' is not a usable participant name (from --agents)" >&2
+      echo "            letters, digits, '_' and '-' only" >&2; return 2; }
+    _plain_name "$kind" || { echo "council up: '$kind' is not a usable agent kind (from --agents)" >&2; return 2; }
     local u="$name" k=2
     while printf '%s\n' ${peers+"${peers[@]}"} | grep -qx "$u"; do u="$name-$k"; k=$((k+1)); done
     [ -f "$SKILL/adapters/$kind.sh" ] || { echo "council up: no adapter for '$kind' (available: $(ls "$SKILL/adapters" | sed 's/\.sh$//' | paste -sd, -))" >&2; return 2; }
@@ -228,31 +260,38 @@ council_say() {
 # probe that produced this design, on the very first command.
 _write_launcher() { # <room> <peer> <kind> <cwd>
   local room="$1" peer="$2" kind="$3" cwd="$4"
-  # `rm -f` first, and not for tidiness: `>` FOLLOWS a symlink and writes through it, and the
-  # `chmod +x` below then marks the target executable. A participant that replaces this path
-  # with a link to a file outside the room gets that file overwritten with a runnable script
-  # the next time the seat is relaunched. Unlinking makes the redirect create a fresh file.
-  rm -f "$room/state/launch-$peer.sh"
+  _room_dirs_sane "$room" || return 1
+  # Write a fresh temp file and RENAME it into place, rather than redirecting onto the name.
+  # `>` follows a symlink and writes through it, and the `chmod +x` then marks the target
+  # executable — so a participant that replaces this path with a link to a file outside the
+  # room gets that file overwritten with a runnable script on the next relaunch. `rm -f` first
+  # is not enough either: it closes the plant-and-wait case but not a racer re-creating the
+  # link between the unlink and the open. `mv -f` REPLACES a symlink at the destination
+  # instead of following it, and it is atomic, so there is no window to win.
+  local tmp="$room/state/.launch-$peer.$$"
   ( . "$SKILL/adapters/$kind.sh"
     { printf '#!/usr/bin/env bash\n'
       printf 'export COUNCIL_ROOM=%q COUNCIL_ME=%q\n' "$room" "$peer"
       printf 'cd %q || exit 1\n' "$cwd"
       adapter_cmd "$room" "$room/protocol-$peer.md" "$SKILL"
-    } > "$room/state/launch-$peer.sh" ) || return 1
-  chmod +x "$room/state/launch-$peer.sh"
+    } > "$tmp" ) || { rm -f "$tmp"; return 1; }
+  chmod +x "$tmp" && mv -f "$tmp" "$room/state/launch-$peer.sh" || { rm -f "$tmp"; return 1; }
 }
 
 # The channel rules are one file for everyone; the scenario adds only the role.
 _write_protocol() { # <room> <peer> <role> <scenario-file> <peer>...
   local room="$1" peer="$2" role="$3" sf="$4"; shift 4
+  _room_dirs_sane "$room" || return 1
   # Same reason as the launcher, and worse here: this path had no existence check at all, so a
-  # symlink pointing at a file that does not exist yet gets that file CREATED.
-  rm -f "$room/protocol-$peer.md"
+  # symlink pointing at a file that does not exist yet gets that file CREATED. Write-then-
+  # rename for the same reason too.
+  local tmp="$room/.protocol-$peer.$$"
   local chan; chan=$(cat "$SKILL/protocol/_channel.md")
   { printf '%s\n' "$chan"; printf '\n## Your role: %s\n\n' "$role"; _role_block "$sf" "$role"; } \
     | sed -e "s#__ROOM__#$room#g" -e "s#__ME__#$peer#g" -e "s#__SKILL__#$SKILL#g" \
           -e "s#__PEERS__#$(printf '%s\n' "$@" | paste -sd, - | sed 's/,/, /g')#g" \
-    > "$room/protocol-$peer.md"
+    > "$tmp" || { rm -f "$tmp"; return 1; }
+  mv -f "$tmp" "$room/protocol-$peer.md" || { rm -f "$tmp"; return 1; }
 }
 
 # Put one seat back up.
@@ -295,10 +334,41 @@ council_relaunch() {
              peer="$1"; shift ;;
     esac
   done
-  local names; names=$(jq -r '.order | join(", ")' "$ROOM/roster.json")
+  # Read the roster ONCE, as an array, and do membership against that array.
+  #
+  # `jq -e '.order | index($p)'` looked like a membership test and is not: on a STRING `.order`
+  # it does SUBSTRING matching and succeeds, while `jq -r '.order[]'` then errors and leaves
+  # the peer list empty — so a roster written as one string both passed the check for a
+  # traversing peer name and skipped every per-name check that follows it. A non-array `.order`
+  # is also a plain bug with nobody attacking: the protocol renders with no participants and
+  # the keeper comes back holding zero fifos, which is the silent bell loss this file exists
+  # to prevent.
+  jq -e '(.order | type) == "array"' "$ROOM/roster.json" >/dev/null 2>&1 \
+    || { echo "council relaunch: this room's roster has no usable participant list" >&2; return 2; }
+  local -a roster=(); local q
+  while IFS= read -r q; do [ -n "$q" ] && roster+=("$q"); done < <(jq -r '.order[]' "$ROOM/roster.json")
+  [ "${#roster[@]}" -ge 1 ] \
+    || { echo "council relaunch: this room's roster lists no participants" >&2; return 2; }
+  # Validate every name HERE, before any of them is built into a path or interpolated into the
+  # sed program that renders a protocol. `$peer` needs no separate check: it has to equal one
+  # of these to get past the membership test below, so checking them covers it — and a guard
+  # with no case that can fail is a guard nobody will notice breaking.
+  for q in "${roster[@]}"; do
+    _plain_name "$q" \
+      || { echo "council relaunch: roster holds an implausible participant name ('$q') — refusing to render a protocol from it" >&2; return 2; }
+  done
+  local names; names=$(printf '%s, ' "${roster[@]}"); names=${names%, }
+
   [ -n "$peer" ] || { echo "council relaunch: which participant? (roster: $names)" >&2; return 2; }
-  jq -e --arg p "$peer" '.order | index($p)' "$ROOM/roster.json" >/dev/null 2>&1 \
+  local found=0
+  for q in "${roster[@]}"; do [ "$q" = "$peer" ] && { found=1; break; }; done
+  [ "$found" = 1 ] \
     || { echo "council relaunch: '$peer' is not in this room (roster: $names)" >&2; return 2; }
+
+  # Before anything reads a path under the room. A symlinked `state/` would otherwise be
+  # followed by the launcher check below, which then reports "no launcher" — the wrong
+  # diagnosis for a room that has been tampered with.
+  _room_dirs_sane "$ROOM" || return 1
 
   # The launcher's CONTENT is untrusted and about to be overwritten, but its EXISTENCE is
   # still the only record of which seats were given a terminal: `up` writes one for every
@@ -316,10 +386,6 @@ council_relaunch() {
   # removes the easiest path, not the participant's ability to reach you. A participant is an
   # agent running as you with approval prompts turned off by construction — see the trust
   # note in SKILL.md. This is blast-radius reduction, not containment.
-  _plain() { case "$1" in ''|*[!A-Za-z0-9_-]*) return 1 ;; *) return 0 ;; esac; }
-
-  local -a roster=(); local q
-  while IFS= read -r q; do [ -n "$q" ] && roster+=("$q"); done < <(jq -r '.order[]' "$ROOM/roster.json")
   local kind role scenario
   kind=$(jq -r --arg p "$peer" '.peers[]? | select(.name==$p) | .kind' "$ROOM/roster.json" | head -1)
   role=$(jq -r --arg p "$peer" '.peers[]? | select(.name==$p) | .role' "$ROOM/roster.json" | head -1)
@@ -328,25 +394,22 @@ council_relaunch() {
     || { echo "council relaunch: this room does not record which agent plays '$peer' — it cannot be regenerated" >&2; return 2; }
   # A bare name only. `..` in either of these reaches out of the skill and picks a file the
   # participant planted; both are then sourced or rendered by the supervisor.
-  _plain "$kind" \
+  #
+  # This closes the traversal, and not the class: `--add-dir <skill>` makes adapters/ itself
+  # writable, so a participant can plant a bare-named file INSIDE it and have `.kind` point
+  # here. Measured, and left standing on purpose — it belongs to that grant, not to this verb.
+  _plain_name "$kind" \
     || { echo "council relaunch: roster names an implausible agent kind for '$peer' — refusing to source it" >&2; return 2; }
-  _plain "$scenario" \
+  _plain_name "$scenario" \
     || { echo "council relaunch: roster names an implausible scenario — refusing to render from it" >&2; return 2; }
   [ -n "$role" ] && [ "$role" != null ] || role=any
-  _plain "$role" \
+  _plain_name "$role" \
     || { echo "council relaunch: roster names an implausible role for '$peer'" >&2; return 2; }
   [ -f "$SKILL/adapters/$kind.sh" ] \
     || { echo "council relaunch: this skill has no adapter for '$kind' any more" >&2; return 2; }
   local sf="$SKILL/scenarios/$scenario.md"
   [ -f "$sf" ] \
     || { echo "council relaunch: this skill has no scenario '$scenario' any more — the protocol cannot be regenerated" >&2; return 2; }
-  # Peer names are interpolated into a `#`-delimited sed program when the protocol is
-  # rendered, so a name carrying `#` breaks out of the s-command into arbitrary sed script.
-  for q in "${roster[@]}"; do
-    _plain "$q" \
-      || { echo "council relaunch: roster holds an implausible participant name ('$q') — refusing to render a protocol from it" >&2; return 2; }
-  done
-
   # The cwd is BAKED INTO the regenerated launcher's `cd` line, so it decides where the
   # participant runs — not merely where its terminal opens. That is why it is recorded in the
   # roster at `up` rather than re-derived from wherever the supervisor happens to be standing,
