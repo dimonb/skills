@@ -213,17 +213,36 @@ this skill before starting anything. Two reasons.
 Every participant is handed the room as a **writable root** (`--add-dir <room>`, in all
 three adapters) — and a scenario deliberately makes those agents adversarial to each other.
 Both of those files live in the room. Re-executing a stored launcher would run whatever
-another participant had put there, in a login shell, unsandboxed, in your own process tree —
-and the protocol file is what the agent is launched on: `claude` takes it as its system
-prompt, `codex` and `agy` are told to read it and follow it literally.
+another participant had put there, in a login shell, in your own process tree — and the
+protocol file is what the agent is launched on: `claude` takes it as its system prompt,
+`codex` and `agy` are told to read it and follow it literally.
 
-**What this does and does not buy, stated plainly, because the honest version is shorter
-than the reassuring one.** Regenerating removes the stored-launcher path. It does not make
-the room trustworthy, and nothing in this verb could: `roster.json` is the input regeneration
-reads and it lives in the room too, and `--add-dir <skill>` means `council.sh` itself is
-writable by every participant. The room is a shared writable area between agents that a
-scenario deliberately makes adversarial, and that is a property of the design, not of this
-verb.
+The values regeneration reads out of `roster.json` — which agent plays the seat, the
+scenario, the role, the participant names — are checked to be bare names before use. They
+select a file to source and a file to render, and `roster.json` is in the room too.
+
+### The room is not a trust boundary
+
+**Do not read any of the above as containment, because it is not.** Measured, all three
+adapters, writing to a path outside the repo entirely — outside the working directory and
+outside every `--add-dir`:
+
+| adapter | wrote where it was told |
+|---|---|
+| `claude --permission-mode auto` | yes |
+| `codex -s workspace-write -a never` | yes |
+| `agy --dangerously-skip-permissions` | yes |
+
+`--add-dir` is an allowlist **addition**, not a restriction, and this skill launches every
+participant with approval prompts turned off on purpose — that is what keeps a room running
+unattended. So a participant is an agent running **as you**, and everything you can reach, it
+can reach: the roster, another seat's launcher, `council.sh` itself, your home directory.
+
+That makes regeneration and the checks above **blast-radius reduction, not a boundary**. They
+remove the easiest path — the one a supervisor triggers by following the documented recovery
+— and they do not make the room safe to share with a participant you would not trust with
+your shell. Run rooms accordingly. The trust model itself is an open question, not a settled
+one; it is being argued rather than assumed.
 
 The second reason is the ordinary one: a regenerated launcher picks up **adapter changes
 made since the room opened**, which is exactly what "killed to pick up new permissions"

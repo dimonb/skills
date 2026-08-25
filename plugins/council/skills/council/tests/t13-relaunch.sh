@@ -15,15 +15,24 @@ set -uo pipefail
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 . "$DIR/_helpers.sh"
 
-# A private root per run. The rest of the suite shares one fixed path per test name, which
-# makes two concurrent runs delete each other's rooms; that is filed separately, and there is
-# no reason for a new test to add another instance of it.
-ROOT=$(mktemp -d "${TMPDIR:-/tmp}/council-t13.XXXXXX") || { echo "t13 FAIL: no temp dir"; exit 1; }
+# A private root per run. The suite's runner hands one down; standalone, make our own. Never
+# a path built from this test's own name — two concurrent runs then delete each other's rooms,
+# which is what made a red t3 mean nothing for most of a day.
+_own_root=""
+if [ -z "${COUNCIL_TEST_ROOT:-}" ]; then
+  COUNCIL_TEST_ROOT=$(mktemp -d) || { echo "t13 FAIL: no temp dir"; exit 1; }
+  _own_root="$COUNCIL_TEST_ROOT"
+fi
+ROOT="$COUNCIL_TEST_ROOT/t13"
 REPO="$ROOT/repo"; mkdir -p "$REPO"
 fail=0
 cleanup() {
   [ -n "${ROOM:-}" ] && [ -s "$ROOM/state/keeper.pid" ] && kill -9 "$(cat "$ROOM/state/keeper.pid")" 2>/dev/null
   rm -rf "$ROOT"
+  # Only reap the root if we made it: when the runner supplies one it reaps it itself, and
+  # removing it here would take the other tests' rooms with it.
+  [ -n "$_own_root" ] && rm -rf "$_own_root"
+  return 0
 }
 trap cleanup EXIT
 
@@ -178,6 +187,51 @@ else
     echo "keeper restarted: $old -> $new"
   fi
 fi
+
+# --- the four paths regeneration opened, and closed ------------------------------
+# `roster.json` lives in the room, so a participant can write it — and relaunch reads which
+# adapter to SOURCE, which scenario to RENDER and which names to interpolate into a sed
+# program out of it. Each of these ran for real before the values were checked. None of this
+# is containment (a participant is unconfined either way — see SKILL.md); it removes the path
+# a supervisor triggers by following the documented recovery.
+tamper() { jq "$1" "$ROOM/roster.json" > "$ROOM/rt" && mv "$ROOM/rt" "$ROOM/roster.json"; }
+restore_roster() { cp "$ROOT/roster.keep" "$ROOM/roster.json"; }
+cp "$ROOM/roster.json" "$ROOT/roster.keep"
+
+printf '#!/usr/bin/env bash\ntouch %s\nadapter_cmd() { printf "exec true\\n"; }\n' \
+  "$ROOT/PWNED" > "$ROOM/pwn.sh"
+tamper "$(printf '(.peers[] | select(.name=="claude") | .kind) = "%s"' \
+  "../../../../../../../../../..$ROOM/pwn")"
+want 2 "a roster naming a traversing adapter kind" bash "$CLI" relaunch claude \
+  && says 'implausible agent kind' "the refusal does not name the kind"
+[ -f "$ROOT/PWNED" ] && { echo "FAIL a roster-supplied adapter path was SOURCED"; fail=1; }
+restore_roster
+
+tamper '(.peers[] | select(.name=="claude") | .role) = "../../pwn"'
+want 2 "a roster naming a traversing role" bash "$CLI" relaunch claude
+restore_roster
+
+tamper '.scenario = "../../pwn"'
+want 2 "a roster naming a traversing scenario" bash "$CLI" relaunch claude \
+  && says 'implausible scenario' "the refusal does not name the scenario"
+restore_roster
+
+tamper "$(printf '.order += ["zz#w %s/sedout"]' "$ROOT")"
+want 2 "a peer name that breaks out of the sed program" bash "$CLI" relaunch claude \
+  && says 'implausible participant name' "the refusal does not name the participant"
+ls "$ROOT"/sedout* >/dev/null 2>&1 && { echo "FAIL a crafted peer name reached sed as script"; fail=1; }
+restore_roster
+
+# `>` follows a symlink and `chmod +x` marks its target executable; the protocol path had no
+# existence check at all, so a link there even CREATED the file it pointed at.
+printf 'ORIGINAL\n' > "$ROOT/victim.txt"
+rm -f "$ROOM/state/launch-claude.sh"; ln -s "$ROOT/victim.txt" "$ROOM/state/launch-claude.sh"
+run_capped 10 bash "$CLI" relaunch claude
+grep -q 'ORIGINAL' "$ROOT/victim.txt" \
+  || { echo "FAIL a symlinked launcher was written through to its target"; fail=1; }
+rm -f "$ROOM/protocol-claude.md"; ln -s "$ROOT/made-up.md" "$ROOM/protocol-claude.md"
+run_capped 10 bash "$CLI" relaunch claude
+[ -f "$ROOT/made-up.md" ] && { echo "FAIL a symlinked protocol created a file outside the room"; fail=1; }
 
 [ "$fail" = 0 ] && echo "t13 PASS" || echo "t13 FAIL"
 exit $fail

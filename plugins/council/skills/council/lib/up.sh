@@ -228,6 +228,11 @@ council_say() {
 # probe that produced this design, on the very first command.
 _write_launcher() { # <room> <peer> <kind> <cwd>
   local room="$1" peer="$2" kind="$3" cwd="$4"
+  # `rm -f` first, and not for tidiness: `>` FOLLOWS a symlink and writes through it, and the
+  # `chmod +x` below then marks the target executable. A participant that replaces this path
+  # with a link to a file outside the room gets that file overwritten with a runnable script
+  # the next time the seat is relaunched. Unlinking makes the redirect create a fresh file.
+  rm -f "$room/state/launch-$peer.sh"
   ( . "$SKILL/adapters/$kind.sh"
     { printf '#!/usr/bin/env bash\n'
       printf 'export COUNCIL_ROOM=%q COUNCIL_ME=%q\n' "$room" "$peer"
@@ -240,6 +245,9 @@ _write_launcher() { # <room> <peer> <kind> <cwd>
 # The channel rules are one file for everyone; the scenario adds only the role.
 _write_protocol() { # <room> <peer> <role> <scenario-file> <peer>...
   local room="$1" peer="$2" role="$3" sf="$4"; shift 4
+  # Same reason as the launcher, and worse here: this path had no existence check at all, so a
+  # symlink pointing at a file that does not exist yet gets that file CREATED.
+  rm -f "$room/protocol-$peer.md"
   local chan; chan=$(cat "$SKILL/protocol/_channel.md")
   { printf '%s\n' "$chan"; printf '\n## Your role: %s\n\n' "$role"; _role_block "$sf" "$role"; } \
     | sed -e "s#__ROOM__#$room#g" -e "s#__ME__#$peer#g" -e "s#__SKILL__#$SKILL#g" \
@@ -300,18 +308,44 @@ council_relaunch() {
     echo "                  it is the seat you took yourself with --me, so there is nothing to restart." >&2
     return 3; }
 
+  # Everything below comes out of roster.json, which lives IN the room — so every participant
+  # can write it, and these values choose a file to source, a file to render, and a directory
+  # to run in. Validate the shape before use, never after.
+  #
+  # Be clear about what this buys, because the measured answer is smaller than it looks: it
+  # removes the easiest path, not the participant's ability to reach you. A participant is an
+  # agent running as you with approval prompts turned off by construction — see the trust
+  # note in SKILL.md. This is blast-radius reduction, not containment.
+  _plain() { case "$1" in ''|*[!A-Za-z0-9_-]*) return 1 ;; *) return 0 ;; esac; }
+
+  local -a roster=(); local q
+  while IFS= read -r q; do [ -n "$q" ] && roster+=("$q"); done < <(jq -r '.order[]' "$ROOM/roster.json")
   local kind role scenario
   kind=$(jq -r --arg p "$peer" '.peers[]? | select(.name==$p) | .kind' "$ROOM/roster.json" | head -1)
   role=$(jq -r --arg p "$peer" '.peers[]? | select(.name==$p) | .role' "$ROOM/roster.json" | head -1)
   scenario=$(jq -r '.scenario // empty' "$ROOM/roster.json")
   [ -n "$kind" ] && [ -n "$scenario" ] \
     || { echo "council relaunch: this room does not record which agent plays '$peer' — it cannot be regenerated" >&2; return 2; }
+  # A bare name only. `..` in either of these reaches out of the skill and picks a file the
+  # participant planted; both are then sourced or rendered by the supervisor.
+  _plain "$kind" \
+    || { echo "council relaunch: roster names an implausible agent kind for '$peer' — refusing to source it" >&2; return 2; }
+  _plain "$scenario" \
+    || { echo "council relaunch: roster names an implausible scenario — refusing to render from it" >&2; return 2; }
+  [ -n "$role" ] && [ "$role" != null ] || role=any
+  _plain "$role" \
+    || { echo "council relaunch: roster names an implausible role for '$peer'" >&2; return 2; }
   [ -f "$SKILL/adapters/$kind.sh" ] \
     || { echo "council relaunch: this skill has no adapter for '$kind' any more" >&2; return 2; }
   local sf="$SKILL/scenarios/$scenario.md"
   [ -f "$sf" ] \
     || { echo "council relaunch: this skill has no scenario '$scenario' any more — the protocol cannot be regenerated" >&2; return 2; }
-  [ -n "$role" ] || role=any
+  # Peer names are interpolated into a `#`-delimited sed program when the protocol is
+  # rendered, so a name carrying `#` breaks out of the s-command into arbitrary sed script.
+  for q in "${roster[@]}"; do
+    _plain "$q" \
+      || { echo "council relaunch: roster holds an implausible participant name ('$q') — refusing to render a protocol from it" >&2; return 2; }
+  done
 
   # The cwd is BAKED INTO the regenerated launcher's `cd` line, so it decides where the
   # participant runs — not merely where its terminal opens. That is why it is recorded in the
@@ -326,8 +360,6 @@ council_relaunch() {
   . "$SKILL/lib/term.sh"
   # A seat can be relaunched after `down`, which killed the keeper along with the terminals.
   # Without it every bell rung at this participant is lost while the room looks healthy.
-  local -a roster=(); local q
-  while IFS= read -r q; do [ -n "$q" ] && roster+=("$q"); done < <(jq -r '.order[]' "$ROOM/roster.json")
   _keeper_ensure "$ROOM" "${roster[@]}"
   # Close whatever still answers to this peer BEFORE regenerating and starting the
   # replacement. A terminal is addressed by name, and ct_launch does not check whether that
