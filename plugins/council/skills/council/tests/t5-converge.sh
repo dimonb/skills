@@ -4,7 +4,7 @@
 set -uo pipefail
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 . "$DIR/_helpers.sh"
-R="${TMPDIR:-/tmp}/council-test/t5"; rm -rf "$R"
+R="$COUNCIL_TEST_ROOT/t5"; rm -rf "$R"
 mkroom "$R" a b c
 export COUNCIL_ROOM="$R" ROOM="$R"
 echo "Where should the room keep its history?" > "$R/agenda.md"

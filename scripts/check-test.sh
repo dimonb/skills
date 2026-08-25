@@ -47,7 +47,10 @@ restore() {
   done
   # shellcheck disable=SC2086
   git checkout -- $GUARDED 2>/dev/null || true
-  rm -rf docs/_probe.md "$SCRATCH" 2>/dev/null || true
+  # Untracked probe files: `git checkout --` cannot bring these back OR take them away, so an
+  # interrupt between writing one and its inline rm would leave it. A stray t99-probe.sh reds the
+  # gate on its own assertion and then blocks the next run on the dirty-tree guard above.
+  rm -rf docs/_probe.md "$SCRATCH" plugins/council/skills/council/tests/t99-probe.sh 2>/dev/null || true
   rmdir docs 2>/dev/null || true
 }
 trap restore EXIT
@@ -256,6 +259,25 @@ mv "$SCRATCH/agents-skills" .agents/skills
 perl -pi -e 's/^  "state": "need-issue/  "sate": "need-issue/' "$CORE"
 expect_fail "state enum not found in the core skill"
 git checkout -- "$CORE"
+
+# 12 — a council test that builds its room at a path fixed by its own name. This is the shape
+# every test had before the run root existed, so it is the shape a new test copied from an old
+# checkout would carry. Untracked, so the restore cannot remove it: delete it explicitly.
+cat > plugins/council/skills/council/tests/t99-probe.sh <<'PROBE'
+#!/usr/bin/env bash
+R="${TMPDIR:-/tmp}/council-test/t99"; rm -rf "$R"
+PROBE
+expect_fail "council test naming a fixed temp room path"
+rm -f plugins/council/skills/council/tests/t99-probe.sh
+
+# 13 — and check 9 must fail LOUDLY when grep cannot scan, not read the error as "no violation".
+# Same technique as the leak-check probe above: break the check's own pattern to an invalid ERE,
+# so grep exits >1 on every file and only the error arm can fire. Without this probe the arm is
+# vacuous — reverting it to the old `grep -q ... && fail` one-liner still passes check-test.
+cp scripts/check.sh "$SCRATCH/check9.bak"
+perl -pi -e "s/'TMPDIR\|council-test'/'(unclosed'/" scripts/check.sh
+expect_fail "council-test scan fails LOUDLY when grep errors (not open)"
+cp "$SCRATCH/check9.bak" scripts/check.sh
 
 echo
 echo "assertions proven: $pass   not caught: $nocatch"

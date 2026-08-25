@@ -182,12 +182,18 @@ directory, with at least one skill; that marketplace entries resolve and that **
 manifests offer the same plugins as `plugins/` on disk; that every packaged skill is
 symlinked for both agents, with the link resolving inside `plugins/` and no second copy of
 any `SKILL.md`; that no per-forge reference file carries a copy of the pipeline state enum
-and no state exists without a handler; and that no non-generic string is present.
+and no state exists without a handler; that no non-generic string is present; that no tracked
+file carries non-Latin script; and that no council test names the shared temp parent — a grep
+for the shape a test copied from an older checkout carries, not a proof about where its rooms
+are built.
 
 `make check-test` exists because a gate that has never failed can be vacuous and look
-identical to one that works. It injects 37 violations, one at a time, and requires the gate to
-fail each time — covering **every** failure path in `check.sh`, with each probe constructed so
-that only the assertion it names can fire. Writing and re-running it has found six real bugs
+identical to one that works. It proves 43 assertions — a clean baseline plus 42 injected
+violations, one at a time, each of which the gate must catch, with each probe constructed so
+that only the assertion it names can fire. Exactly one of `check.sh`'s failure paths is left
+unprobed: the English check's "could not scan" arm, which fires only when `git grep` itself
+errors. The leak check's and the council-test check's equivalent arms are both probed, so the
+technique is there if the last one is ever worth closing. Writing and re-running it has found six real bugs
 so far, including a broken symlink that slipped past an `[ -e ]` test, a leak check that never
 saw untracked files, a state/handler check that passed because `spec` is a prefix of
 `spec-review`, and probes of its own that fired the wrong check and so proved nothing.

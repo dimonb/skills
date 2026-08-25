@@ -11,7 +11,7 @@ DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 fail=0
 
 # ---------------------------------------------------------------- 1. the barrier holds
-R="${TMPDIR:-/tmp}/council-test/t7"; rm -rf "$R"
+R="$COUNCIL_TEST_ROOT/t7"; rm -rf "$R"
 mkroom "$R" a b c
 export COUNCIL_ROOM="$R" ROOM="$R"
 jq '.mode="roundtable" | .round_deadline_ms=600000' "$R/roster.json" > "$R/r.tmp" && mv "$R/r.tmp" "$R/roster.json"
@@ -58,7 +58,7 @@ conf=$(bash "$CLI" floor | sed -n 's/.*conflicts=\([0-9]*\).*/\1/p')
 echo "the round is one lap, token from there on: turns=$turns, conflicts=$conf"
 
 # ------------------------------------------- 4. a silent participant does not hold it
-R2="${TMPDIR:-/tmp}/council-test/t7b"; rm -rf "$R2"
+R2="$COUNCIL_TEST_ROOT/t7b"; rm -rf "$R2"
 mkroom "$R2" a b c
 ROOM="$R2"; export COUNCIL_ROOM="$R2"
 jq '.mode="roundtable" | .round_deadline_ms=1000 | .round_quorum=2' "$R2/roster.json" > "$R2/r.tmp" && mv "$R2/r.tmp" "$R2/roster.json"
