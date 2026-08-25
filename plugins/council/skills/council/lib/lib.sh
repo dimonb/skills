@@ -49,11 +49,12 @@ c_ms()     { local t=${EPOCHREALTIME/./}; echo $(( 10#$t / 1000 )); }
 # message, and nothing else. It is NOT a room-wide guarantee, and the room is writable by
 # every participant, not just its own lane. Values read by c_slurp -- `state/*.lamport`,
 # `state/*.seq`, `cursor/*` -- and the numerics in `roster.json` are NOT coerced and still
-# reach `$(( ))` with no integer test, and `.from` is interpolated into a path in c_drain
-# without being checked against the roster. Each of those is a live way to run a command in
-# a reader's shell, on the default branch and here; they are tracked separately rather than
-# fixed in the change that added this note. So: adding an arithmetic use of anything that
-# did not come through `_untrusted` still needs its own gate.
+# reach `$(( ))` with no integer test: each of those is a live way to run a command in a
+# reader's shell, on the default branch and here. Separately, `.from` is interpolated into a
+# path in c_drain without being checked against the roster, which is not execution but does
+# let one participant make another create or truncate a file outside the room. All of it is
+# tracked separately rather than fixed in the change that added this note. So: adding an
+# arithmetic use of anything that did not come through `_untrusted` still needs its own gate.
 C_UNTRUSTED='def _untrusted: map(
     .turn    |= (if type == "number" then . else null end)
   | .round   |= (if type == "number" then . else null end)
@@ -78,8 +79,11 @@ c_max_lamport() {
   local mine disk
   mine=$(c_lamport)
   disk=$({ c_all 2>/dev/null || true; } | jq -s 'if length == 0 then 0 else (max_by(.lamport).lamport) end')
-  # c_send feeds this straight into `lam=$(( ... + 1 ))`, so it leaves here as an integer
-  # or not at all -- see the note above C_UNTRUSTED.
+  # c_send feeds this straight into `lam=$(( ... + 1 ))`, so the value read off DISK leaves
+  # here as an integer or not at all. `mine` does not: it comes from state/<me>.lamport
+  # through c_slurp, which checks nothing, and it is what this function returns whenever the
+  # comparison below is false or errors. That path still reaches the arithmetic ungated --
+  # see the note above C_UNTRUSTED, and do not read this gate as covering the function.
   case "$disk" in ''|*[!0-9]*) disk=0 ;; esac
   [ "$disk" -gt "$mine" ] && printf '%s' "$disk" || printf '%s' "$mine"
 }

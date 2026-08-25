@@ -119,8 +119,16 @@ _graph() { c_canon | jq -s -f "$SKILL/lib/claims.jq"; }
 v_claims() {
   local g; g=$(_graph) || return 1
   [ "${1:-}" = "--raw" ] && { printf '%s\n' "$g"; return 0; }
-  printf '%s' "$g" | jq -r '
-    "turns: \(.turns)   last substantive claim at turn: \(.last_claim_turn)",
+  # Turns from c_turns here too. The graph counts turn-claiming messages only, so in a
+  # roundtable room it is short by the whole opening lap, and `claims` and `verdict` printed
+  # two different turn counts for one room.
+  #
+  # The second field is the turn a claim STAMPED, which is not the window `verdict` reports
+  # and no longer has anything to do with it: a barrier position and a `--hand` claim stamp
+  # no turn, so this reads -1 in rooms whose every claim is real. Labelled for what it is,
+  # rather than left looking like a contradiction of the verdict line.
+  printf '%s' "$g" | jq -r --argjson turns "$(c_turns)" '
+    "turns: \($turns)   last claim that stamped a turn: \(.last_claim_turn)",
     (if .decided then "DECIDED by message \(.decided)" else empty end),
     "",
     ( .proposals[]
