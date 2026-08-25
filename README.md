@@ -182,10 +182,12 @@ directory, with at least one skill; that marketplace entries resolve and that **
 manifests offer the same plugins as `plugins/` on disk; that every packaged skill is
 symlinked for both agents, with the link resolving inside `plugins/` and no second copy of
 any `SKILL.md`; that no per-forge reference file carries a copy of the pipeline state enum
-and no state exists without a handler; and that no non-generic string is present.
+and no state exists without a handler; that no non-generic string is present; that no tracked
+file carries non-Latin script; and that no council test names the shared temp parent instead of
+building its rooms under the suite's per-run root.
 
 `make check-test` exists because a gate that has never failed can be vacuous and look
-identical to one that works. It injects 37 violations, one at a time, and requires the gate to
+identical to one that works. It injects 42 violations, one at a time, and requires the gate to
 fail each time — covering **every** failure path in `check.sh`, with each probe constructed so
 that only the assertion it names can fire. Writing and re-running it has found six real bugs
 so far, including a broken symlink that slipped past an `[ -e ]` test, a leak check that never

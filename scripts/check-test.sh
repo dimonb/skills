@@ -47,7 +47,10 @@ restore() {
   done
   # shellcheck disable=SC2086
   git checkout -- $GUARDED 2>/dev/null || true
-  rm -rf docs/_probe.md "$SCRATCH" 2>/dev/null || true
+  # Untracked probe files: `git checkout --` cannot bring these back OR take them away, so an
+  # interrupt between writing one and its inline rm would leave it. A stray t99-probe.sh reds the
+  # gate on its own assertion and then blocks the next run on the dirty-tree guard above.
+  rm -rf docs/_probe.md "$SCRATCH" plugins/council/skills/council/tests/t99-probe.sh 2>/dev/null || true
   rmdir docs 2>/dev/null || true
 }
 trap restore EXIT

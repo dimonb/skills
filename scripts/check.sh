@@ -10,7 +10,7 @@
 # 6. ship's forge reference files do not carry a copy of the pipeline state enum
 # 7. no non-generic strings (structural patterns only; no dependency on any untracked file)
 # 8. no non-Latin script in any tracked file (the checkable half of "English everywhere")
-# 9. council tests build their rooms under the per-run root, never a path fixed by test name
+# 9. no council test names the shared temp parent (the pre-run-root shape); see §9 for its limits
 set -uo pipefail
 cd "$(dirname "$0")/.."
 ROOT_P=$(pwd -P)          # physical repo root; see the symlink containment check below
@@ -239,15 +239,29 @@ fi
 # against the very transport the suite exists to verify. A harness bug that frames the code under
 # test is worse than the bug it hides, so it gets a gate rather than a comment.
 #
-# Only the two files that CREATE the run root may name the shared temp parent. Every test builds
-# under $COUNCIL_TEST_ROOT, or makes its own `mktemp -d`. Matched by SHAPE, not against a list of
-# test names, so a test added later is covered without anyone remembering to edit this.
+# Only the two files that CREATE the run root may name the shared temp parent; every other test
+# builds under $COUNCIL_TEST_ROOT, or makes its own `mktemp -d`.
+#
+# What this actually catches, stated honestly because a green gate is otherwise read as coverage:
+# it is a grep for the PRE-RUN-ROOT SHAPE — a path spelled with `TMPDIR` or `council-test` — which
+# is the shape a test copied from an older checkout carries, and the one that caused the incident.
+# It is NOT a proof that a room derives from the run root. A test inventing some other fixed path
+# (`R=/tmp/mine`) would reintroduce the collision and pass, and a test merely mentioning `TMPDIR`
+# in a comment is rejected though it is harmless. Both were measured; a cleverer matcher was tried
+# and was worse, losing the near-miss `council-test-t99` and rejecting legitimate tests that need
+# no temp directory at all. So: a heuristic against the shape that actually recurs, not a linter.
 tests_dir=plugins/council/skills/council/tests
 if [ -d "$tests_dir" ]; then
   while IFS= read -r f; do
     case "${f##*/}" in _helpers.sh|run-all.sh) continue ;; esac
-    grep -qE 'TMPDIR|council-test' "$f" \
-      && fail "council test names a fixed temp path instead of \$COUNCIL_TEST_ROOT: $f"
+    # grep exits 0 on a match, 1 on none, and >1 on an error. Reading an error as "no match" is
+    # how a check reports success having scanned nothing — the same trap section 7 guards against.
+    grep -qE 'TMPDIR|council-test' "$f"
+    case $? in
+      0) fail "council test names a fixed temp path instead of \$COUNCIL_TEST_ROOT: $f" ;;
+      1) ;;
+      *) fail "could not scan council test for a fixed temp path: $f" ;;
+    esac
   done < <(git ls-files --cached --others --exclude-standard "$tests_dir/*.sh")
 fi
 
