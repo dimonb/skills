@@ -11,7 +11,15 @@
 set -uo pipefail
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 . "$DIR/_helpers.sh"
-R="${TMPDIR:-/tmp}/council-test/t11"; rm -rf "$R"
+# A private root per run. `COUNCIL_TEST_ROOT` is an optional override, and otherwise we make
+# our own. Never a path built from this test's own name: two concurrent runs then delete each
+# other's rooms, which is what made a red t3 mean nothing for most of a day.
+_own_root=""
+if [ -z "${COUNCIL_TEST_ROOT:-}" ]; then
+  COUNCIL_TEST_ROOT=$(mktemp -d) || { echo "t11 FAIL: no temp dir"; exit 1; }
+  _own_root="$COUNCIL_TEST_ROOT"
+fi
+R="$COUNCIL_TEST_ROOT/t11"; rm -rf "$R"
 mkroom "$R" a b
 export COUNCIL_ROOM="$R" ROOM="$R"
 fail=0
@@ -82,7 +90,7 @@ echo "a one-line agenda stays inline"
 # mkroom's EXIT trap only remembers the LAST room, so retire this keeper by hand before
 # opening the second room, or it outlives the run.
 kill "$(cat "$R/state/keeper.pid" 2>/dev/null)" 2>/dev/null
-R2="${TMPDIR:-/tmp}/council-test/t11-long"; rm -rf "$R2"
+R2="$COUNCIL_TEST_ROOT/t11-long"; rm -rf "$R2"
 mkroom "$R2" a b
 export COUNCIL_ROOM="$R2" ROOM="$R2"
 # The question is the OPENING LINE and a heading comes later, which is the shape that broke:
@@ -135,7 +143,7 @@ echo "a long agenda opens as a heading plus a link, and is quoted in full at the
 # it cannot see the difference: picking "the file's first heading" instead of the opening
 # line recorded a later section as the question, and every assertion above still passed.
 . "$SKILL/lib/verbs.sh"
-G="${TMPDIR:-/tmp}/council-test/t11-gist"; rm -rf "$G"; mkdir -p "$G"
+G="$COUNCIL_TEST_ROOT/t11-gist"; rm -rf "$G"; mkdir -p "$G"
 gist_is() { # <name> <want> <agenda-text>
   printf '%s' "$3" > "$G/a.md"
   local got; got=$(_agenda_gist "$G/a.md")
@@ -185,6 +193,12 @@ gist_is "a hash number is not a heading" "#12 should we adopt X?" \
 
 More."
 echo "the gist is the agenda's opening line, not the first heading found anywhere in it"
+
+# Only reap the root if we made it: one handed down by a runner is that runner's to remove,
+# and taking it here would delete the other tests' rooms with it. Retire the second room's
+# keeper first, so it is not left polling a directory that is about to go.
+[ -s "$R2/state/keeper.pid" ] && kill "$(cat "$R2/state/keeper.pid")" 2>/dev/null
+[ -n "$_own_root" ] && rm -rf "$_own_root"
 
 [ "$fail" = 0 ] && echo "t11 PASS" || echo "t11 FAIL"
 exit $fail
