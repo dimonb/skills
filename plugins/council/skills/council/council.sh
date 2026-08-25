@@ -12,11 +12,11 @@
 # Two caveats that one entrypoint does NOT buy, both learned from a live room:
 #   * a prefix grant only matches if the agent runs the command as written. `agy` prepends
 #     the environment inline (`COUNCIL_ROOM=… COUNCIL_ME=… bash …`) even though its launcher
-#     already exported both, so a grant on `bash <skill>/council.sh` never matches and the
-#     grant has to name the command heads that agent actually produces — see adapters/agy.sh;
-#   * a command grant says nothing about FILE reads. Opening a room file by path is a
-#     separate permission question for some agents, which is why `agenda` and `decision`
-#     are verbs here rather than paths in the protocol.
+#     already exported both, so a grant on `bash <skill>/council.sh` never matches. A seat this
+#     skill launches does not need one — see adapters/agy.sh for what it carries instead;
+#   * a command grant says nothing about FILE reads. A path the participant DERIVES is a
+#     separate permission question for some agents, which is why `protocol`, `agenda` and
+#     `decision` are verbs here rather than paths in the protocol.
 set -uo pipefail
 export LC_ALL=C
 export PATH="/opt/homebrew/bin:/usr/local/bin:$PATH"

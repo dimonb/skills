@@ -156,7 +156,8 @@ council.sh rooms                   # what exists and where each room stands
 
 Participants use `agenda` (and `protocol`, if they need their role again) at the start, then
 `recv --until-floor` and `send --act …` for the rest of the room, and `decision` once it
-closes. Those five are the whole surface — nothing else needs a path into the room.
+closes. Those five are everything that would otherwise have been a path; `status` and `claims`
+cover looking at the room itself.
 
 `--room <name>` selects among several rooms; `--me <peer>` says who you are — pass it to
 `up` as well when you intend to sit in the room yourself, and that participant gets no
@@ -166,12 +167,14 @@ terminal because it is you.
 start of a command, so eight scripts would need eight grants and the first lap of every
 room would stall on approval prompts. One script is one allowlist entry.
 
-Two things one entrypoint does **not** buy, both learned from a live room. A prefix grant
-only matches if the agent runs the command *as written* — `agy` prepends the environment
-inline, so its grant has to be written differently (below). And a **command** grant says
-nothing about **file** reads: opening a room file by path is a separate permission question
-for some agents. That is why `agenda` and `decision` are verbs rather than paths, and why
-the protocol tells every participant to read the room through the command.
+Two things one entrypoint does **not** buy, both learned from a live room. A prefix grant only
+matches if the agent runs the command *as written*, and `agy` prepends the environment inline,
+so a grant on `bash <skill>/council.sh` never matches it — moot for a council-launched seat,
+which carries the blanket flag instead, but worth knowing before you go and write one. And a
+**command** grant says nothing about **file** reads: opening a room file by path is a separate
+permission question for some agents. That is why `agenda`, `protocol` and `decision` are verbs
+rather than paths, and why the protocol tells every participant to read the room through the
+command.
 
 ## Scenarios and roles
 
@@ -219,7 +222,8 @@ silently, a path the participant derives prompts every time. Adding the room to
 
 So the launch passes the blanket `--dangerously-skip-permissions`, which applies to sessions
 this skill starts and never to an interactive `agy`. It is a workaround, and the room is built
-to need less of it: **a participant is never handed a path into the room.** The protocol
+to need less of it: **a participant is never handed a path to a file in the room** (it is told
+which room it is in, and nothing below that). The protocol
 arrives as argv (as it always did for `claude`, via its system prompt), and the agenda, the
 role and the record are verbs — `council.sh agenda`, `protocol`, `decision` — which ride the
 command grant. What still needs the flag is everything *outside* the room: a `review`

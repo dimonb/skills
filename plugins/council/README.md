@@ -54,9 +54,12 @@ path or worked it out itself. So the room hands participants verbs instead of lo
 blanket `--dangerously-skip-permissions`, which covers what a participant reads *outside* the
 room. That flag applies only to sessions this skill starts.
 
-Miss a grant and that participant sits on a prompt while holding the floor, which from the
-room is indistinguishable from a wedged session. Nothing here edits an agent's settings file
-for you.
+What still stops a room is the **first launch in a directory the agent has not seen**: both
+Codex and Antigravity ask you to trust it, and the blanket flag does not answer that one.
+Until you do, the participant holds the floor and looks, from the room, exactly like a wedged
+session. Answer it once per directory.
+
+Nothing here edits an agent's settings file for you.
 
 Full documentation, including the failure modes that are worth knowing before they cost
 you an evening: [`skills/council/SKILL.md`](skills/council/SKILL.md).

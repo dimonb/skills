@@ -1,12 +1,13 @@
 #!/usr/bin/env bash
 # t14 — the read-only verbs that keep a participant off the room's paths.
 #
-# A room lives inside the git dir, and an agent whose file trust follows the working tree
-# asks permission for every read in there — which stalls the participant while it holds the
-# floor. `agenda` and `decision` exist so those reads travel the entrypoint instead, so what
-# this test guards is their CONTRACT: what they print, and what they exit with. A wrong exit
-# code here is not cosmetic — a participant that reads one as breakage stops instead of
-# speaking, which is the failure the verbs were added to remove.
+# A path a participant DERIVES for itself raises a file-access prompt on some agents — every
+# time, with no "always" in the menu and no grant that persists — while a path it was TOLD is
+# read silently. Where the room sits is not what decides it (measured in dimonb/skills#7 and
+# #18). So the room's readable files get verbs, and what this test guards is their CONTRACT:
+# what they print, and what they exit with. A wrong exit code here is not cosmetic — a
+# participant that reads one as breakage stops instead of speaking, which is the failure the
+# verbs were added to remove.
 set -uo pipefail
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 . "$DIR/_helpers.sh"
