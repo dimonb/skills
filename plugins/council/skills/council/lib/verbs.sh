@@ -203,19 +203,24 @@ v_status() {
   case "$verd" in decided|unresolved) return 0 ;; *) return 1 ;; esac
 }
 
-# The agenda's gist: its OPENING line, with any heading marker stripped from that line. A
-# detailed agenda used to be embedded whole at the top, so the record opened with two
-# screens of prompt before the decision; a long one is summarised here and quoted in full at
-# the end. A one-line agenda is its own gist and stays inline, unquoted twice.
+# The agenda's gist: its opening (first non-blank) line, with a heading marker stripped from
+# that line. A detailed agenda used to be embedded whole at the top, so the record opened
+# with two screens of prompt before the decision; a long one is summarised here and quoted in
+# full at the end. A one-line agenda is its own gist and stays inline, unquoted twice.
 #
 # Take the opening line, never "the file's first heading" — that picks up a later section.
 # An agenda stating the question on line 1 and continuing `## Background` recorded
 # "Background" as the question, with the real one appearing only at the very bottom of the
 # record, below the transcript; a `#` comment at column zero inside a fenced code block was
 # mistaken for the heading the same way.
+#
+# The marker strip demands whitespace after the hashes, because that is what makes a heading
+# a heading. Accepting none of it both mangled lines that are not headings (`#!/usr/bin/env
+# bash`, `#12 ...`) and MANUFACTURED one: `#\{1,6\}` stops at six, so eight hashes came out as
+# `## ...`, an exact section marker of this record, sitting above the real sections.
 _agenda_gist() { # <file>
   sed -e '/^[[:space:]]*$/d' -e 'q' "$1" \
-    | sed -e 's/^[[:space:]]*//' -e 's/^#\{1,6\}[[:space:]]*//' -e 's/[[:space:]]*$//'
+    | sed -e 's/^[[:space:]]*//' -e 's/^#\{1,6\}[[:space:]]\{1,\}//' -e 's/[[:space:]]*$//'
 }
 _agenda_is_long() { # <file> — more than one non-blank line
   [ "$(grep -c -v '^[[:space:]]*$' "$1")" -gt 1 ]

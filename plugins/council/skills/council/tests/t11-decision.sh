@@ -85,8 +85,15 @@ kill "$(cat "$R/state/keeper.pid" 2>/dev/null)" 2>/dev/null
 R2="${TMPDIR:-/tmp}/council-test/t11-long"; rm -rf "$R2"
 mkroom "$R2" a b
 export COUNCIL_ROOM="$R2" ROOM="$R2"
+# The question is the OPENING LINE and a heading comes later, which is the shape that broke:
+# scanning the file for its first heading recorded "Background" as the question. A
+# heading-first agenda cannot see that difference — both readings return the same string — so
+# a fixture shaped that way leaves the whole record-level assertion blind, and the bug could
+# come back at the call site with the suite still green.
 cat > "$R2/agenda.md" <<'AGENDA'
-# Where should the room keep its history?
+Where should the room keep its history?
+
+## Background
 
 Background a reader does not need before the decision itself.
 
@@ -112,7 +119,9 @@ echo "an unamended proposal is recorded as plain text, with no headings and no a
 
 head=$(sed -n '/^## The question/,/^## The decision/p' "$OUT2")
 printf '%s\n' "$head" | grep -q 'Where should the room keep its history?' || {
-  echo "FAIL the record does not open with the agenda's first heading"; fail=1; }
+  echo "FAIL the record does not open with the agenda's opening line"; fail=1; }
+printf '%s\n' "$head" | grep -q 'Background' && {
+  echo "FAIL the record opens with a later section heading, not the question"; fail=1; }
 printf '%s\n' "$head" | grep -q 'agenda.md' || { echo "FAIL no link to the agenda"; fail=1; }
 printf '%s\n' "$head" | grep -q 'another constraint' && {
   echo "FAIL the whole agenda is still embedded at the top"; fail=1; }
@@ -153,6 +162,26 @@ gist_is "leading blank lines and an indented question" "Should we adopt X or Y?"
   "
 
     Should we adopt X or Y?
+
+More."
+# Written with ANSI-C quoting so the trailing blanks sit MID-LINE in this source file: typed
+# at the end of a line they are silently eaten by any editor that trims whitespace, and the
+# assertion then passes whether or not the trim it is guarding still exists.
+gist_is "trailing whitespace on the opening line" "Should we adopt X or Y?" \
+  $'Should we adopt X or Y? \t \n\nMore.'
+# A heading is hashes followed by SPACE. Without that requirement the strip both mangles
+# lines that are not headings and manufactures one: six-hash-max stripping turned eight
+# hashes into `## ...`, a section marker of this very record, above the real sections.
+gist_is "eight hashes are not a heading" "######## Objections, and how they were closed" \
+  "######## Objections, and how they were closed
+
+More."
+gist_is "a shebang is not a heading" "#!/usr/bin/env bash" \
+  "#!/usr/bin/env bash
+
+More."
+gist_is "a hash number is not a heading" "#12 should we adopt X?" \
+  "#12 should we adopt X?
 
 More."
 echo "the gist is the agenda's opening line, not the first heading found anywhere in it"
