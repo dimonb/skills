@@ -179,6 +179,17 @@ total_pend=0
 # no escalation, which is indistinguishable from waiting on CI. This column is what
 # makes that visible before it happens.
 ctx_of() {
+  # TWO footer formats, because the client changed one under us and the change was
+  # silent: older builds print a session token total ("512k tokens"), current ones
+  # print a percentage ("98% context used"). Parsing only the first is how this
+  # column read "—" for a whole night while a child sat at 98% — the one signal
+  # Step 5 depends on, disabled by a cosmetic upstream change, with no error
+  # anywhere. Prefer the percentage when present: it needs no assumption about the
+  # model's context window, which the token form silently hardcodes in ctx_band.
+  local pct
+  pct=$(printf '%s\n' "$1" | grep -oE '[0-9]+% context used' | grep -oE '^[0-9]+' | sort -n | tail -1)
+  if [ -n "$pct" ]; then printf '%s%%' "$pct"; return; fi
+
   local max=0 v n
   while read -r n; do
     [ -z "$n" ] && continue
@@ -196,6 +207,16 @@ ctx_of() {
 ctx_band() {
   local n="$1"
   case "$n" in —) printf 'ok'; return ;; esac
+  # Percentage form. Banded lower than the token thresholds below look, because
+  # compaction is itself an API call that needs working room: ⚠️ has to arrive
+  # while there is still some left, not at the ceiling.
+  case "$n" in
+    *%) local p=${n%\%}
+        if [ "$p" -ge 80 ] 2>/dev/null; then printf 'crit'
+        elif [ "$p" -ge 65 ] 2>/dev/null; then printf 'warn'
+        else printf 'ok'; fi
+        return ;;
+  esac
   local v=${n%k}
   if [ "${n}" = "${v}" ]; then printf 'ok'; return; fi
   if [ "$v" -ge 550 ] 2>/dev/null; then printf 'crit'
@@ -237,7 +258,17 @@ for slot in "${SLOTS[@]}"; do
   # `?` counts as IN FLIGHT, never as finished. The window is alive and the pane is
   # moving; an unresolvable state means the lookup failed, not that the work ended.
   # Treating it as terminal is what stopped a monitor 60 seconds into a fresh run.
-  case "$state" in opened|"no MR yet"|"?") inflight=$((inflight+1)) ;; esac
+  # A LIVE TERMINAL IS IN FLIGHT, whatever the forge says. `merged` means one MR
+  # ended, not that the child did: a ship session that lands a spec change and
+  # continues to its implementation outlives its first MR by design. Counting only
+  # the MR state here reported "nothing in flight — monitor stopped" over a child
+  # that was mid implementation, and took the STALL detector down with it, so the
+  # supervisor got two green signals while the session sat with an unsubmitted line
+  # in its box. Teardown is the supervisor's act; the absence of a terminal is the
+  # honest end signal. (A dead terminal never reaches here — it `continue`s above —
+  # so this counts live sessions only, and the monitor still exits once every
+  # terminal is gone.)
+  inflight=$((inflight+1))
 
   ctx=$(ctx_of "$b"); band=$(ctx_band "$ctx")
   case "$band" in warn) ctx="⚠️ $ctx" ;; crit) ctx="🛑 $ctx" ;; esac
