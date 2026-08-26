@@ -188,7 +188,7 @@ for the shape a test copied from an older checkout carries, not a proof about wh
 are built.
 
 `make check-test` exists because a gate that has never failed can be vacuous and look
-identical to one that works. It proves 43 assertions — a clean baseline plus 42 injected
+identical to one that works. It proves 45 assertions — a clean baseline plus 44 injected
 violations, one at a time, each of which the gate must catch, with each probe constructed so
 that only the assertion it names can fire. Exactly one of `check.sh`'s failure paths is left
 unprobed: the English check's "could not scan" arm, which fires only when `git grep` itself

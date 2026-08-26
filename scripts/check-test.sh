@@ -279,6 +279,26 @@ perl -pi -e "s/'TMPDIR\|council-test'/'(unclosed'/" scripts/check.sh
 expect_fail "council-test scan fails LOUDLY when grep errors (not open)"
 cp "$SCRATCH/check9.bak" scripts/check.sh
 
+# 14 — and the same two failure modes one level UP, in check 9's file listing, which is where
+# they hid while the grep arm above was already probed. Both are edited into check.sh rather
+# than reproduced for real (by renaming the tests directory) on purpose: an interrupted run
+# leaves only a modified script, which the restore trap's `git checkout --` undoes, whereas an
+# interrupted `git mv` leaves a renamed directory staged in the index that it cannot undo.
+#
+# 14a — the listing itself errors. Invalid pathspec magic makes `git ls-files` exit 128 while
+# leaving the rest of the gate untouched, so only the listing arm can fire.
+cp scripts/check.sh "$SCRATCH/check9-list.bak"
+perl -pi -e 's{--exclude-standard "\$tests_dir/\*\.sh"}{--exclude-standard ":(nomagic)\$tests_dir/*.sh"}' scripts/check.sh
+expect_fail "council-test listing fails LOUDLY when git ls-files errors (not open)"
+cp "$SCRATCH/check9-list.bak" scripts/check.sh
+
+# 14b — the listing succeeds and matches nothing, which is what a moved or renamed tests
+# directory looks like: zero iterations, no error anywhere, and the assertion silently gone.
+cp scripts/check.sh "$SCRATCH/check9-empty.bak"
+perl -pi -e 's{^tests_dir=plugins/council/skills/council/tests$}{tests_dir=plugins/council/skills/council/tests-moved-away}' scripts/check.sh
+expect_fail "council-test scan fails LOUDLY when it inspects no file at all"
+cp "$SCRATCH/check9-empty.bak" scripts/check.sh
+
 echo
 echo "assertions proven: $pass   not caught: $nocatch"
 [ "$nocatch" -eq 0 ] || exit 1
