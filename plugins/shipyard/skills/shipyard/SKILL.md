@@ -384,8 +384,16 @@ sits in the input box, nothing happens. In the report it reads as `⏸ idle/wait
 `esc —`, which is exactly what a healthy child waiting on CI looks like. One ran that way
 for **8.5 hours** overnight before it was noticed.
 
-**The tell is the `ctx` column**: the footer carries the session total, and the report
-surfaces it as `⚠️` from 400k and `🛑` from 550k. The footer also starts showing
+**The tell is the `ctx` column**, and the footer states it in one of TWO forms — the
+client changed this under us, silently. Older builds print a session token total, which
+the report bands as `⚠️` from 400k and `🛑` from 550k; current ones print a percentage
+(`98% context used`), banded `⚠️` from 65% and `🛑` from 80%. The percentage is preferred
+when both are present, because it needs no assumption about the model's window size —
+the token thresholds hardcode one, and on a 1M-token model they are simply wrong.
+
+Reading only the token form is not a cosmetic gap: this column showed `—` for a whole
+night while a child sat at 98%, so the one signal this step depends on was switched off
+by a rename, with no error anywhere. The footer also starts showing
 `/clear to save NNNk tokens` — that hint means the ceiling is close, not that `/clear` is
 the answer.
 
@@ -470,7 +478,7 @@ name — once it holds no ship sessions. The change's feature branch can go afte
 | session | ▶️ running / ⏸ idle-wait (snapshot diff) / ⛔ no terminal |
 | MR state / stage | forge state (opened/merged/closed) + ship's pipeline stage |
 | esc | open escalations for this slot |
-| ctx | child context usage; `⚠️` ≥400k, `🛑` ≥550k — compact it (Step 5) |
+| ctx | child context usage; `⚠️` ≥65% / ≥400k, `🛑` ≥80% / ≥550k — compact it (Step 5) |
 | last line | last meaningful line of the screen |
 
 ⏸ idle-wait is **normal** for ship: it waits on CI or on a self-review round and re-wakes
