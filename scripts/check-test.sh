@@ -285,10 +285,15 @@ cp "$SCRATCH/check9.bak" scripts/check.sh
 # leaves only a modified script, which the restore trap's `git checkout --` undoes, whereas an
 # interrupted `git mv` leaves a renamed directory staged in the index that it cannot undo.
 #
-# 14a — the listing itself errors. Invalid pathspec magic makes `git ls-files` exit 128 while
-# leaving the rest of the gate untouched, so only the listing arm can fire.
+# 14a — the listing itself errors. `exit 128` inside the command substitution, and NOT the
+# obvious broken pathspec: a bad pathspec makes git fatal before printing anything, so the empty
+# listing lands on 14b's arm and the probe still reds with the listing arm DELETED — vacuous, and
+# caught by the wrong assertion's message. Forcing the status while leaving the output intact
+# keeps `scanned` non-zero, so nothing but the listing arm can explain the failure. It is also
+# the one case the counter can never see: paths emitted, then a non-zero exit. Kill condition:
+# revert check 9 to `done < <(git ls-files …)` and this probe must report NOT CAUGHT.
 cp scripts/check.sh "$SCRATCH/check9-list.bak"
-perl -pi -e 's{--exclude-standard "\$tests_dir/\*\.sh"}{--exclude-standard ":(nomagic)\$tests_dir/*.sh"}' scripts/check.sh
+perl -pi -e 's{"\$tests_dir/\*\.sh"\)}{"\$tests_dir/*.sh"; exit 128)}' scripts/check.sh
 expect_fail "council-test listing fails LOUDLY when git ls-files errors (not open)"
 cp "$SCRATCH/check9-list.bak" scripts/check.sh
 

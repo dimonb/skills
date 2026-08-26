@@ -259,6 +259,9 @@ fi
 # directory guard, and the loop counts what it actually inspected: a check that scanned nothing
 # has not held, it has abstained, and those are not the same result.
 tests_dir=plugins/council/skills/council/tests
+# stderr is deliberately NOT folded in with `2>&1`, unlike sections 7 and 8: a missing directory
+# makes `git ls-files` warn and still exit 0, and that captured warning would enter the loop as a
+# filename — firing the grep-error arm and leaving the count below vacuous with nothing saying so.
 tests_list=$(git ls-files --cached --others --exclude-standard "$tests_dir/*.sh")
 g=$?
 if [ "$g" -ne 0 ]; then
