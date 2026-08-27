@@ -510,8 +510,15 @@ rm -f plugins/ship/skills/ship/_probe.sh
 # 20 — and check 5 must say the listing found nothing rather than pass having asserted nothing.
 # Repointed inside check.sh, like 14b: `git ls-files -s` over a pathspec matching no tracked file
 # warns about nothing and exits 0, so this lands on the empty arm and only on it.
+#
+# This anchor and probe 21's match the ASSIGNMENT (`^skills_ls=$(git ...)$`) rather than the exact
+# command, which is looser than every other anchor in this file and deliberate. What these two
+# probes care about is that the listing is replaced; the flags on it are not their subject, and
+# pinning them cost two silent no-ops in two consecutive commits — each caught only because a
+# no-op reports NOT CAUGHT rather than passing. Renaming the variable still breaks it loudly,
+# which is the property worth keeping.
 cp scripts/check.sh "$SCRATCH/check5-empty.bak"
-perl -pi -e 's{^skills_ls=\$\(git -c core\.quotePath=false ls-files -s -- \$SKILL_LINK_DIRS\)$}{skills_ls=\$(git ls-files -s -- .claude/skills-moved-away)}' scripts/check.sh
+perl -pi -e 's{^skills_ls=\$\(git .*\)$}{skills_ls=\$(git ls-files -s -- .claude/skills-moved-away)}' scripts/check.sh
 expect_fail "project skill listing fails LOUDLY when it lists nothing" \
   "no tracked entry under"
 cp "$SCRATCH/check5-empty.bak" scripts/check.sh
@@ -521,7 +528,7 @@ cp "$SCRATCH/check5-empty.bak" scripts/check.sh
 # so the status has to be forced — and forcing it while the output stays non-empty is what stops
 # the empty arm from explaining the failure instead.
 cp scripts/check.sh "$SCRATCH/check5-rc.bak"
-perl -pi -e 's{^skills_ls=\$\(git -c core\.quotePath=false ls-files -s -- \$SKILL_LINK_DIRS\)$}{skills_ls=\$(git ls-files -s -- \$SKILL_LINK_DIRS; exit 128)}' scripts/check.sh
+perl -pi -e 's{^skills_ls=\$\(git .*\)$}{skills_ls=\$(git ls-files -s -- \$SKILL_LINK_DIRS; exit 128)}' scripts/check.sh
 expect_fail "project skill listing fails LOUDLY when git ls-files errors" \
   "could not list tracked project skill entries"
 cp "$SCRATCH/check5-rc.bak" scripts/check.sh
