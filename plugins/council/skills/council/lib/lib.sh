@@ -115,13 +115,25 @@ c_ring() { local f="$ROOM/bell/$1.fifo"; [ -p "$f" ] || return 0; ( printf '.' >
 #   In a cursor that means messages the reader has already consumed are handed to it AGAIN
 #   -- re-delivery, not loss, since octal can only ever under-read the same digits.
 #
-#   `$(( 08 + 1 ))` is an error instead, because 8 is not an octal digit -- and where that
-#   error lands decides how it fails. At the top level of a verb, which is where c_send runs,
-#   it EXITS council.sh: rc 1, no lane file written, and that participant cannot speak again
-#   until someone repairs `state/<me>.seq`. Inside a substitution it kills only that subshell,
-#   and the one that matters is `< <(c_new_files)` in c_drain: the file list comes back EMPTY,
-#   c_drain reports an empty inbox, and the lane goes deaf for good with nothing said. The
-#   quiet half is the dangerous one. Measured, both, on bash 5.3.
+#   `$(( 08 + 1 ))` is an error instead, because 8 is not an octal digit. What it COSTS is
+#   what matters, and that is given here as observed behaviour rather than as a rule about
+#   bash: three attempts to state the mechanism were each wrong in a different way, and a
+#   confident wrong sentence in this block is worse than no sentence. Observed, on bash 5.3,
+#   running this code with the gate removed:
+#
+#     in c_send -- no lane file is written, and `state/<me>.seq` is left holding the poison,
+#     so that seat cannot speak again until someone repairs it by hand.
+#
+#     in c_new_files, which runs inside the `< <( )` feeding c_drain -- the poisoned peer and
+#     every peer AFTER it in roster order drop out of the file list. That is the whole list
+#     whenever the poisoned peer is the first to emit, which in a room of two always holds,
+#     so c_drain reports an empty inbox and that lane goes deaf.
+#
+#   Both print the same diagnostic on stderr, so noise is not what separates them. What does
+#   is the status the caller sees: `send` returns 1, an obvious failure, while `recv` returns
+#   4 -- which council.sh's usage and protocol/_channel.md both document as "timeout, call
+#   again", the one status a participant is explicitly told to retry and NOT to treat as an
+#   error. That is what makes the drain half the dangerous one.
 #
 #   c_ms above already carries this idiom for exactly the same reason.
 c_slurp()   { local v=""; [ -f "$1" ] || { printf 0; return; }; read -r v < "$1" 2>/dev/null
