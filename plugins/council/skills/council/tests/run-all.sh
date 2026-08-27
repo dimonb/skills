@@ -29,12 +29,26 @@ trap 'rm -rf "$COUNCIL_TEST_ROOT"' EXIT
 TIMEOUT_BIN=$(command -v timeout || command -v gtimeout || true)
 PER_TEST_SECS="${COUNCIL_TEST_TIMEOUT:-600}"
 [ -n "$TIMEOUT_BIN" ] || echo "note: no timeout(1) on PATH — a wedged test will not be capped"
+
+# Every test runs at a lower scheduling priority, and this is not politeness — it is what keeps
+# the suite from being the reason its own assertions fail. A test room is a handful of concurrent
+# shells per participant, so several suites at once (the normal case on a machine driving a fleet)
+# saturate the box; and a saturated box does not produce a clean "too slow" failure, it produces
+# an asymmetric protocol failure that reads as a transport bug. Niceness is inherited, so this
+# covers each test's own children too. COUNCIL_TEST_NICE=0 turns it off for a timing measurement
+# that wants the machine as it really is.
+NICE=()
+if [ "${COUNCIL_TEST_NICE:-10}" != 0 ] && command -v nice >/dev/null 2>&1; then
+  NICE=(nice -n "${COUNCIL_TEST_NICE:-10}")
+fi
 # Deliberately NOT --foreground, though it is tempting. That flag keeps the test in this shell's
 # process group so a terminal Ctrl-C reaches it — but it also stops timeout signalling the GROUP,
-# and a wedged test has background children the test's own EXIT trap knows nothing about: t3
-# SIGSTOPs a peer, t2 and t2b leave listeners holding bell fifos on a shell-local counter. Neither
-# is in ROOM_KEEPERS, and neither dies when the root is removed. Measured: with the flag the
-# ceiling left 3 of 3 peers alive, one SIGSTOPped and reapable only by SIGKILL; without it, none.
+# and the group is the only thing that reaches a test wedged past its own cleanup. The EXIT trap
+# in _helpers.sh now reaps the test's background jobs, SIGSTOPped ones included, so the two
+# mechanisms overlap on every path where the test's shell still runs its trap — but a shell
+# killed with SIGKILL runs nothing, and that is the case the group signal exists for. Measured
+# before the trap covered them: with the flag the ceiling left 3 of 3 peers alive, one SIGSTOPped
+# and reapable only by SIGKILL; without it, none.
 # So the trade is bounded against unbounded. Leaving the flag off means a Ctrl-C kills the runner
 # while the current test keeps going — but only until this same ceiling group-kills it. Turning it
 # on means processes that outlive everyone, which is the failure the ceiling exists to prevent.
@@ -46,9 +60,11 @@ for t in "${tests[@]}"; do
   printf '\n──── %s ────\n' "$t"
   if [ -n "$TIMEOUT_BIN" ]; then
     # -k: a test that ignores the TERM still goes, ten seconds later.
-    "$TIMEOUT_BIN" -k 10 "$PER_TEST_SECS" bash "$DIR/$t"; st=$?
+    # nice OUTSIDE timeout: the ceiling inherits the priority and passes it on, and a niced
+    # `timeout` still fires on schedule — it sleeps, it does not spin.
+    ${NICE[@]+"${NICE[@]}"} "$TIMEOUT_BIN" -k 10 "$PER_TEST_SECS" bash "$DIR/$t"; st=$?
   else
-    bash "$DIR/$t"; st=$?
+    ${NICE[@]+"${NICE[@]}"} bash "$DIR/$t"; st=$?
   fi
   case "$st" in
     0)       ;;
