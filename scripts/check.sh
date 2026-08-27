@@ -10,7 +10,7 @@
 #    and no second copy of any SKILL.md
 # 6. ship's forge reference files do not carry a copy of the pipeline state enum
 # 7. no non-generic strings (structural patterns only; no dependency on any untracked file)
-# 8. no non-Latin script in any tracked file (the checkable half of "English everywhere")
+# 8. no non-Latin script in any file, untracked included (the checkable half of "English")
 # 9. no council test names the shared temp parent (the pre-run-root shape); see §9 for its limits
 # 10. every council test on disk is registered in run-all.sh, so none silently stops running
 set -uo pipefail
@@ -342,7 +342,7 @@ deny="$deny"'|TZ=[A-Za-z]+/[A-Za-z_]+'
 hits=$(git grep --untracked -nIiE "$deny" -- . ':!scripts/check.sh' ':!scripts/check-test.sh' 2>&1)
 g=$?
 if [ "$g" -eq 0 ]; then
-  echo "FAIL: non-generic strings in tracked files:"; printf '%s\n' "$hits"; rc=1
+  echo "FAIL: non-generic strings:"; printf '%s\n' "$hits"; rc=1
 elif [ "$g" -gt 1 ]; then
   fail "leak check could not run (git grep rc=$g): $hits"
 fi
@@ -363,7 +363,7 @@ fi
 nonlatin=$(git grep --untracked -nIP '\p{Cyrillic}|\p{Greek}|\p{Han}|\p{Hiragana}|\p{Katakana}|\p{Hangul}|\p{Arabic}|\p{Hebrew}|\p{Devanagari}|\p{Thai}|\p{Armenian}|\p{Georgian}' -- . 2>&1)
 g=$?
 if [ "$g" -eq 0 ]; then
-  echo "FAIL: non-Latin script in tracked files (AGENTS.md: English everywhere):"; printf '%s\n' "$nonlatin"; rc=1
+  echo "FAIL: non-Latin script (AGENTS.md: English everywhere):"; printf '%s\n' "$nonlatin"; rc=1
 elif [ "$g" -gt 1 ]; then
   fail "English check could not run (git grep rc=$g): $nonlatin"
 fi

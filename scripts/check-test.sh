@@ -555,9 +555,9 @@ ln -sfn ../../plugins/ship/skills/gone .claude/skills/_probe-skill
 expect_fail "unstaged packaged-skill link that resolves nowhere" \
   "link is not staged and does not resolve into plugins/"
 
-# 22c — and one resolving OUTSIDE the repo, which a substring test on the link text would accept.
-# The other branch of the same `case`, and the shape that would let an agent opened in a clone
-# read an out-of-tree SKILL.md as instructions.
+# 22c — and one resolving OUTSIDE the repo, which a substring test on the link text would
+# accept. The same branch as 22b reached with a target that resolves rather than an empty one, and
+# the shape that would let an agent opened in a clone read an out-of-tree SKILL.md as instructions.
 mkdir -p "$SCRATCH/outside/_probe-skill"
 printf -- '---\nname: _probe-skill\ndescription: A probe skill.\n---\n' \
   > "$SCRATCH/outside/_probe-skill/SKILL.md"
@@ -593,6 +593,23 @@ printf -- '---\nname: %s\ndescription: A probe skill.\n---\n' "$NONASCII" \
 ln -sfn "../../plugins/ship/skills/$NONASCII" ".claude/skills/$NONASCII"
 ln -sfn "../../plugins/ship/skills/$NONASCII" ".agents/skills/$NONASCII"
 expect_pass "packaged skill whose directory name is not ASCII"
+
+# 23c — and the same links COMMITTED, which is the only way to reach check 5's own `ls-files -s`
+# listing. That listing is the fifth and last place the quoting flag has to be, and it is the one
+# site with no probe: the other four are covered by 23 and 23b, while this one was covered only by
+# accident, through probe 20's and probe 21's anchors happening to contain the flag's literal text
+# until those anchors were loosened. Drop `$GIT_Q` from that line and the gate prints four
+# fabricated failures — `broken symlink` and `symlink target is outside this repo's plugins/`,
+# twice each, about C-quoted paths that do not exist. Same throwaway index as probe 5a: the repo's
+# own index is untouched and the link blobs are hashed without `-w`.
+cp "$(git rev-parse --git-path index)" "$SCRATCH/fake-index-nonascii"
+for d in .claude/skills .agents/skills; do
+  GIT_INDEX_FILE="$SCRATCH/fake-index-nonascii" git update-index --add --cacheinfo \
+    "120000,$(printf '%s' "../../plugins/ship/skills/$NONASCII" | git hash-object --stdin),$d/$NONASCII"
+done
+export GIT_INDEX_FILE="$SCRATCH/fake-index-nonascii"
+expect_pass "committed packaged-skill links whose directory name is not ASCII"
+unset GIT_INDEX_FILE
 rm -rf "plugins/ship/skills/$NONASCII" ".claude/skills/$NONASCII" ".agents/skills/$NONASCII"
 
 # 24 — the predicate must fail CLOSED. Forced inside check.sh, like probes 14a and 21: only the

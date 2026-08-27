@@ -201,8 +201,8 @@ are built; and that every council test on disk appears in the list `run-all.sh` 
 walks, so a test cannot land and then silently stop running.
 
 `make check-test` exists because a gate that has never failed can be vacuous and look
-identical to one that works. It proves 67 assertions — a clean baseline, 59 injected
-violations one at a time, each probe aiming to fire only the assertion it names, and 7 cases
+identical to one that works. It proves 68 assertions — a clean baseline, 59 injected
+violations one at a time, each probe aiming to fire only the assertion it names, and 8 cases
 that require the gate to stay **green**. Every failure path in `check.sh` now has one, including
 every arm that fires when a matcher errors, or finds nothing to inspect, instead of finding a
 violation — an unprobed arm of that kind reports success having inspected nothing, which is
