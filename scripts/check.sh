@@ -5,8 +5,8 @@
 # 2. every SKILL.md has name+description frontmatter, and its name matches its directory
 # 3. every plugin manifest is valid JSON, both manifests exist, names agree with the dir
 # 4. marketplace entries resolve, and both manifests offer the same plugins as plugins/ on disk
-# 5. dogfooding: both agents linked to every packaged skill, links contained in plugins/,
-#    and no second copy of any SKILL.md
+# 5. dogfooding: every COMMITTED entry in a project skills dir is a symlink into plugins/,
+#    both agents linked to every packaged skill, and no second copy of any SKILL.md
 # 6. ship's forge reference files do not carry a copy of the pipeline state enum
 # 7. no non-generic strings (structural patterns only; no dependency on any untracked file)
 # 8. no non-Latin script in any tracked file (the checkable half of "English everywhere")
@@ -95,30 +95,79 @@ disk=$(for d in plugins/*/; do [ -d "$d" ] && basename "${d%/}"; done | sort)
 
 # ------------------------------------------------------ 5. dogfooding: links, no copies
 for d in .claude/skills .agents/skills; do
-  [ -d "$d" ] || { fail "missing project skills dir: $d"; continue; }
-  for e in "$d"/*; do
-    # -e follows the link, so a BROKEN symlink is not -e. Test -L too or it is skipped.
-    [ -e "$e" ] || [ -L "$e" ] || continue
-    [ -L "$e" ] || { fail "not a symlink (would be a second copy): $e"; continue; }
+  [ -d "$d" ] || fail "missing project skills dir: $d"
+done
+
+# The shape assertions below are driven by what git RECORDS, not by what the filesystem happens
+# to hold. "One source of truth per skill" is a statement about COMMITTED content, so an
+# untracked directory someone keeps under a project skills dir cannot violate it: it is not in
+# the repository, it reaches nobody else, and it shadows nothing in a clone. Iterating the
+# filesystem instead (`for e in "$d"/*`) failed on one, and that blocked every commit in the
+# repo until the directory was moved -- over local state the repo does not own.
+#
+# Asserting the git MODE states the real rule directly rather than by proxy: `120000` is git's
+# symlink mode, and a committed entry recorded as anything else IS the second copy. That makes
+# the check indifferent to local state by construction instead of by an exclusion list, and it
+# reaches a copy committed one level down (`.claude/skills/x/SKILL.md`) as well.
+#
+# Deliberately narrower than checks 1 and 2, which DO read untracked files. That is not an
+# inconsistency: a new script or SKILL.md is part of the change being made, and catching it
+# before `git add` is the point. Incidental local state is not part of any change.
+skills_ls=$(git ls-files -s -- .claude/skills .agents/skills)
+skills_rc=$?
+if [ "$skills_rc" -ne 0 ]; then
+  # Never read "could not list" as "nothing to report" -- the trap sections 7 to 10 each guard.
+  fail "could not list tracked project skill entries (git ls-files rc=$skills_rc)"
+elif [ -z "$skills_ls" ]; then
+  # A listing that matched nothing has not held, it has abstained. Nothing else here would say
+  # so: the "packaged skill has both links" loop below reads the FILESYSTEM, so links present on
+  # disk but dropped from the index satisfy it while every assertion above silently stops.
+  fail "no tracked entry under .claude/skills or .agents/skills at all (dropped from the index?)"
+else
+  while IFS= read -r line; do
+    [ -n "$line" ] || continue
+    mode=${line%% *}
+    e=${line#*$'\t'}                    # `git ls-files -s` prints "<mode> <sha> <stage>\t<path>"
+    [ "$mode" = 120000 ] \
+      || { fail "committed but not a symlink (would be a second copy): $e"; continue; }
     [ -f "$e/SKILL.md" ] || fail "broken symlink: $e"
     # Assert CONTAINMENT of the resolved target, not a substring of the link text: a
     # substring test accepts `../../../../../tmp/plugins/x/skills/x` and any absolute path
     # containing `/plugins/`, and an agent opened in a clone would read that out-of-tree
     # SKILL.md as instructions. Resolve it and require it to be under this repo's plugins/.
     # Compare PHYSICAL against PHYSICAL. `$PWD` is the LOGICAL path `cd` set, so matching a
-    # `pwd -P` result against it fails on every checkout reached through a symlink — a clone
+    # `pwd -P` result against it fails on every checkout reached through a symlink -- a clone
     # under /tmp on macOS (/tmp -> /private/tmp), a symlinked home, an automounted project
-    # dir — and the message then names a target that is plainly inside the repo.
+    # dir -- and the message then names a target that is plainly inside the repo.
     tgt=$(cd "$e" 2>/dev/null && pwd -P)
     case "$tgt" in
       "$ROOT_P/plugins/"*) ;;
       *) fail "symlink target is outside this repo's plugins/: $e -> ${tgt:-<unresolved>}" ;;
     esac
-  done
-done
-# A SKILL.md anywhere but plugins/ is a duplicated source of truth (tracked or not).
+  done <<< "$skills_ls"
+fi
+
+# Untracked entries get a NOTE, never a failure. Staying silent would be defensible -- they
+# cannot violate a rule about committed content -- but someone who expected their local skill to
+# be checked should learn here that it is not, rather than read a green gate as coverage.
+untracked_skills=$(git ls-files --others --exclude-standard --directory \
+  -- .claude/skills .agents/skills)
+while IFS= read -r e; do
+  [ -n "$e" ] || continue
+  echo "note: untracked entry ${e%/} is local state and is ignored by this check"
+done <<< "$untracked_skills"
+
+# A SKILL.md anywhere but plugins/ is a duplicated source of truth (tracked or not). The two
+# project skills directories are exempt HERE because they are covered above instead, and more
+# precisely: a committed SKILL.md under one of them is not mode 120000, so the mode assertion
+# names it as the second copy it is, while an untracked one is the local state the note reports.
+# Without this exemption a local skill reddened the gate TWICE -- the `--others` reach of this
+# loop is the other half of the same false positive, not a separate one.
 while IFS= read -r f; do
-  case "$f" in plugins/*) ;; *) fail "SKILL.md outside plugins/ (the packaged copy is the only source of truth): $f" ;; esac
+  case "$f" in
+    plugins/*|.claude/skills/*|.agents/skills/*) ;;
+    *) fail "SKILL.md outside plugins/ (the packaged copy is the only source of truth): $f" ;;
+  esac
 done < <(git ls-files --cached --others --exclude-standard '*SKILL.md')
 # Every packaged skill must HAVE both links. Validating only the links that exist lets a new
 # skill ship with no dogfooding at all, which is the invariant this check is here to protect.

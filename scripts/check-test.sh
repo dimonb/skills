@@ -6,6 +6,10 @@
 # satisfies — and look exactly like a gate that works. So each case here injects ONE
 # violation, requires the gate to fail, and restores.
 #
+# A few cases run the other way and require the gate to stay GREEN. A check that reds on
+# something the repo does not own is the same defect seen from the other side: it blocks every
+# commit until the local state is moved, and a red gate never says which of the two it is.
+#
 # Every bug this file has caught was real:
 #   * a broken symlink slipped past an `[ -e ]` guard (-e follows the link);
 #   * the leak check never saw untracked files (plain `git grep` is tracked-only);
@@ -52,7 +56,7 @@ restore() {
   # Untracked probe files: `git checkout --` cannot bring these back OR take them away, so an
   # interrupt between writing one and its inline rm would leave it. A stray t99-probe.sh reds the
   # gate on its own assertion and then blocks the next run on the dirty-tree guard above.
-  rm -rf docs/_probe.md "$SCRATCH" \
+  rm -rf docs/_probe.md "$SCRATCH" .claude/skills/_probe-local \
     "$TESTS_DIR/t99-probe.sh" "$TESTS_DIR/t98-unregistered.sh" "$TESTS_DIR/nested" 2>/dev/null || true
   rmdir docs 2>/dev/null || true
 }
@@ -68,11 +72,10 @@ pass=0; nocatch=0
 # probe keeps reporting `caught` over an assertion that no longer exists. Both of check 10's
 # diagnostic arms were vacuous in this way when they were written, and nothing said so.
 #
-# Pass $2 for any probe whose arm has a neighbour that can substitute for it. EIGHT probes below
-# still need one and do not have it — the two hollow-plugin probes, `second copy of a SKILL.md`,
-# `broken dogfooding symlink`, `SKILL.md with no name:`, `missing marketplace manifest`,
-# `invalid JSON in a marketplace manifest` and `missing project skills dir`. Delete the arm any of
-# them names and this suite still reports it caught, so those eight arms have no kill test. They
+# Pass $2 for any probe whose arm has a neighbour that can substitute for it. FIVE probes below
+# still need one and do not have it — the two hollow-plugin probes, `SKILL.md with no name:`,
+# `missing marketplace manifest` and `invalid JSON in a marketplace manifest`. Delete the arm any
+# of them names and this suite still reports it caught, so those five arms have no kill test. They
 # are pre-existing and tracked in the follow-up issue rather than pinned here; do not read the
 # absence of a $2 as evidence that a probe does not need one.
 expect_fail() {
@@ -88,6 +91,17 @@ expect_fail() {
   else
     echo "caught:     $1   ->  $(grep -m1 '^FAIL' "$SCRATCH/out" | cut -c1-80)"
     pass=$((pass+1))
+  fi
+}
+
+# The mirror of expect_fail, for the cases where the gate must NOT red. $1 is the label.
+expect_pass() {
+  if make check >"$SCRATCH/out" 2>&1; then
+    echo "green:      $1"
+    pass=$((pass+1))
+  else
+    echo "REDDENED:   $1   ->  $(grep -m1 '^FAIL' "$SCRATCH/out" | cut -c1-80)"
+    nocatch=$((nocatch+1))
   fi
 }
 
@@ -151,16 +165,24 @@ PY
 expect_fail "the two marketplace manifests list different plugins"
 git checkout -- .agents/plugins/marketplace.json
 
-# 5a — a real file where a symlink belongs, i.e. a second copy of a SKILL.md
-rm .claude/skills/ship
-mkdir -p .claude/skills/ship
-cp "$CORE" .claude/skills/ship/SKILL.md
-expect_fail "second copy of a SKILL.md instead of a symlink"
-rm -rf .claude/skills/ship; link ship .claude/skills
+# 5a — an entry COMMITTED under a project skills directory as something other than a symlink,
+# i.e. a second copy in the making. The check reads the INDEX, so reproducing this for real means
+# staging a mutation, and the restore trap's `git checkout --` cannot undo a staged add — the
+# destructive shape the guard at the top of this file exists to prevent. So the pathspec is
+# WIDENED inside check.sh instead, to a tracked path whose entries are ordinary files: same
+# assertion, same input shape, and no index to put back. Only the mode arm can fire — the real
+# symlinks still pass all three assertions, and nothing else in the gate reads that pathspec.
+# The limit, stated because a probe that passes is otherwise read as full coverage: this proves
+# the mode arm fires on a non-symlink entry, not that the pathspec names the right directories.
+cp scripts/check.sh "$SCRATCH/check5-mode.bak"
+perl -pi -e 's{^skills_ls=\$\(git ls-files -s -- \.claude/skills \.agents/skills\)$}{skills_ls=\$(git ls-files -s -- .claude/skills .agents/skills scripts)}' scripts/check.sh
+expect_fail "committed project skill entry that is not a symlink" \
+  "committed but not a symlink"
+cp "$SCRATCH/check5-mode.bak" scripts/check.sh
 
 # 5b — a broken symlink. `[ -e ]` follows the link, so this is the case that once slipped.
 ln -sfn ../../plugins/ship/skills/gone .claude/skills/ship
-expect_fail "broken dogfooding symlink"
+expect_fail "broken dogfooding symlink" "broken symlink"
 link ship .claude/skills
 
 # 5c — a symlink that resolves OUTSIDE the repo but whose text contains `/plugins/`, which a
@@ -171,9 +193,11 @@ ln -sfn "$SCRATCH/plugins/ship/skills/ship" .claude/skills/ship
 expect_fail "symlink target outside the repo"
 link ship .claude/skills
 
-# 5d — a packaged skill with no symlink at all
+# 5d — a packaged skill with no symlink at all. Removing the link leaves the INDEX entry
+# behind, so check 5's own "broken symlink" arm reds too; $2 is what keeps this probe reporting
+# on the arm it names rather than on that neighbour.
 rm .agents/skills/shipyard
-expect_fail "packaged skill with no dogfooding symlink"
+expect_fail "packaged skill with no dogfooding symlink" "has no symlink at"
 link shipyard .agents/skills
 
 # 6a — a pipeline state name copied into a per-forge reference file
@@ -287,8 +311,10 @@ printf 'oops' >> .agents/plugins/marketplace.json
 expect_fail "invalid JSON in a marketplace manifest"
 git checkout -- .agents/plugins/marketplace.json
 
+# Moving the directory leaves its index entries behind, so check 5's link assertions and the
+# packaged-skill loop red as well; $2 pins this probe to the arm it names.
 mv .agents/skills "$SCRATCH/agents-skills"
-expect_fail "missing project skills dir"
+expect_fail "missing project skills dir" "missing project skills dir"
 mv "$SCRATCH/agents-skills" .agents/skills
 
 perl -pi -e 's/^  "state": "need-issue/  "sate": "need-issue/' "$CORE"
@@ -399,8 +425,44 @@ expect_fail "test-list comparison fails LOUDLY when comm errors (not open)" \
   "could not compare the test list"
 cp "$SCRATCH/check10-comm.bak" scripts/check.sh
 
+# 19 — the false positive check 5 exists to NOT have: an untracked entry under a project
+# skills directory must leave the gate GREEN. It is not in the repository, it reaches nobody else
+# and it shadows nothing in a clone, so it cannot violate "one source of truth per skill" — and
+# failing on one blocked every commit in the repo until the directory was moved.
+mkdir -p .claude/skills/_probe-local
+expect_pass "untracked directory under a project skills dir"
+
+# ...and with a SKILL.md in it, which is the natural thing to keep there. That file reddened a
+# SECOND assertion — the `--others` reach of "SKILL.md outside plugins/" — so an empty directory
+# alone leaves half the false positive unproven. Its frontmatter is valid and its name matches
+# the directory on purpose: checks 1 and 2 DO read untracked files by design, and this probe is
+# not about relaxing them.
+printf -- '---\nname: _probe-local\ndescription: A local, unversioned skill.\n---\n' \
+  > .claude/skills/_probe-local/SKILL.md
+expect_pass "untracked local skill with a SKILL.md in it"
+rm -rf .claude/skills/_probe-local
+
+# 20 — and check 5 must say the listing found nothing rather than pass having asserted nothing.
+# Repointed inside check.sh, like 14b: `git ls-files --cached` over a pathspec matching no tracked
+# file warns about nothing and exits 0, so this lands on the empty arm and only on it.
+cp scripts/check.sh "$SCRATCH/check5-empty.bak"
+perl -pi -e 's{^skills_ls=\$\(git ls-files -s -- \.claude/skills \.agents/skills\)$}{skills_ls=\$(git ls-files -s -- .claude/skills-moved-away)}' scripts/check.sh
+expect_fail "project skill listing fails LOUDLY when it lists nothing" \
+  "no tracked entry under"
+cp "$SCRATCH/check5-empty.bak" scripts/check.sh
+
+# 21 — and it must not read a listing that ERRORED as an empty one. `exit 128` inside the
+# substitution, like 14a: a pathspec matching nothing is not an error (probe 20 depends on that),
+# so the status has to be forced — and forcing it while the output stays non-empty is what stops
+# the empty arm from explaining the failure instead.
+cp scripts/check.sh "$SCRATCH/check5-rc.bak"
+perl -pi -e 's{^skills_ls=\$\(git ls-files -s -- \.claude/skills \.agents/skills\)$}{skills_ls=\$(git ls-files -s -- .claude/skills .agents/skills; exit 128)}' scripts/check.sh
+expect_fail "project skill listing fails LOUDLY when git ls-files errors" \
+  "could not list tracked project skill entries"
+cp "$SCRATCH/check5-rc.bak" scripts/check.sh
+
 echo
-echo "assertions proven: $pass   not caught: $nocatch"
+echo "assertions proven: $pass   not proven: $nocatch"
 [ "$nocatch" -eq 0 ] || exit 1
 make check >/dev/null 2>&1 || { echo "gate not green after restore"; exit 1; }
 echo "check-test: OK"
