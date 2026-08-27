@@ -137,20 +137,31 @@ CTX_WINDOWS=(200000 1000000)
 # than anything listed has to be able to say so, and no inference may overrule them. A value that
 # is not a positive integer of tokens is REFUSED OUT LOUD rather than ignored — a silently dead
 # escape hatch is worse than none, because the operator believes the band they are looking at is
-# the one they configured.
+# the one they configured. The refusal lives in ctx_check_env, the precedence in ctx_window.
+
+# The malformed-override warning, RAISED ONCE, FROM THE CALLER'S OWN SHELL.
+#
+# It cannot live in ctx_window. ctx_window is reached only as $(ctx_window ...) inside
+# $(ctx_probe ...) — two nested command substitutions — so a "have I warned yet" flag set there is
+# written in a grandchild shell that exits immediately, and the warning fires once per slot on
+# every tick regardless. That is not a hypothesis: 15 probes through the real call shape emitted
+# 15 warnings both before and after such a flag was added, while 15 direct calls emitted 1 —
+# which is exactly why the flag looked like it worked. A per-slot warning defeats --only-changed,
+# the flag SKILL.md calls what makes this monitor liveable.
+#
+# So the caller runs this ONCE, in its own shell, before the per-slot loop. ctx_window stays
+# silent and pure, and the check becomes directly assertable — which the in-function flag was not:
+# deleting it left the whole suite green, because every ctx_window call in t2 is its own subshell.
+ctx_check_env() {
+  if [ -n "${SHIPYARD_CTX_WINDOW:-}" ] && ! [[ "$SHIPYARD_CTX_WINDOW" =~ ^[1-9][0-9]*$ ]]; then
+    echo "warning: SHIPYARD_CTX_WINDOW='$SHIPYARD_CTX_WINDOW' is not a positive integer of tokens — ignored, inferring instead" >&2
+  fi
+}
+
 ctx_window() {
   local peak="$1" w
   if [[ "${SHIPYARD_CTX_WINDOW:-}" =~ ^[1-9][0-9]*$ ]]; then
     printf '%s' "$SHIPYARD_CTX_WINDOW"; return
-  fi
-  # ONCE PER PROCESS, not once per slot. ctx_window runs inside the per-slot loop, which runs
-  # before --only-changed decides whether to print anything — so warning every call meant a single
-  # typo emitted one stderr line per slot on every tick, for ever, including the ticks that were
-  # supposed to be silent. That defeats the flag SKILL.md calls "what makes this monitor liveable":
-  # the operator gets woken by the warning about the variable they set to stop being woken.
-  if [ -n "${SHIPYARD_CTX_WINDOW:-}" ] && [ -z "${_ctx_window_warned:-}" ]; then
-    _ctx_window_warned=1
-    echo "warning: SHIPYARD_CTX_WINDOW='$SHIPYARD_CTX_WINDOW' is not a positive integer of tokens — ignored, inferring instead" >&2
   fi
   for w in "${CTX_WINDOWS[@]}"; do
     if [ "$peak" -le "$w" ] 2>/dev/null; then printf '%s' "$w"; return; fi

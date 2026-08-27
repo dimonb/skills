@@ -33,18 +33,50 @@ ok "override above the whole list" "2000000" "$(SHIPYARD_CTX_WINDOW=2000000 ctx_
 # --- a malformed override is REFUSED OUT LOUD, never silently ignored -----------------------
 # A silently dead escape hatch is worse than none: the operator believes the band they are
 # looking at is the one they configured.
+#
+# The warning lives in ctx_check_env, NOT in ctx_window, and that split is load-bearing rather
+# than tidiness — see the comment above ctx_check_env. ctx_window runs once per slot, two
+# command substitutions deep, so it must stay SILENT: a warning there cannot be suppressed, and
+# a "have I warned yet" flag there cannot survive its own subshell.
 for bad in "1M" "1000k" "0" "-5" " 400000" "abc" "400_000"; do
   got=$(SHIPYARD_CTX_WINDOW="$bad" ctx_window 100000 2>/dev/null)
   ok "malformed override '$bad' falls back to the inference" "200000" "$got"
-  warn=$(SHIPYARD_CTX_WINDOW="$bad" ctx_window 100000 2>&1 >/dev/null | head -1)
+  warn=$(SHIPYARD_CTX_WINDOW="$bad" ctx_check_env 2>&1 >/dev/null | head -1)
   case "$warn" in
     warning:*"$bad"*) ok "malformed override '$bad' warns on stderr" "yes" "yes" ;;
     *)                ok "malformed override '$bad' warns on stderr" "yes" "no: [$warn]" ;;
   esac
+  warn=$(SHIPYARD_CTX_WINDOW="$bad" ctx_window 100000 2>&1 >/dev/null)
+  ok "malformed override '$bad' is silent in ctx_window" "" "$warn"
 done
 
 # An UNSET override must not warn — only a set-but-invalid one.
-warn=$(ctx_window 100000 2>&1 >/dev/null)
+warn=$(ctx_check_env 2>&1 >/dev/null)
 ok "unset override is silent" "" "$warn"
+# Nor may a VALID one.
+warn=$(SHIPYARD_CTX_WINDOW=400000 ctx_check_env 2>&1 >/dev/null)
+ok "valid override is silent" "" "$warn"
+
+# --- THE WARNING FIRES ONCE PER PROCESS, NOT ONCE PER SLOT ----------------------------------
+# The regression this block exists for, and the reason the check is a function of its own.
+# An earlier fix put a "have I warned yet" flag INSIDE ctx_window. It was inert:
+# shipyard-report.sh reaches it as $(ctx_window ...) nested in $(ctx_probe ...), so the flag was
+# assigned in a grandchild shell that exited immediately. It measured as fixed only because it
+# was measured with DIRECT calls — 15 of those warn once, while 15 probes through the real call
+# shape warned 15 times, before and after the flag alike.
+#
+# Every assertion above also runs in its own command substitution, so none of them can tell the
+# two apart. This one drives the shape shipyard-report.sh actually uses, in ONE shell, and counts.
+drive='
+  . "$1/shipyard-ctx.sh"
+  export CLAUDE_CONFIG_DIR=/nonexistent-so-the-probe-falls-through-to-the-pane
+  ctx_check_env
+  for t in 1 2 3; do for s in 1 2 3 4 5; do
+    read -r a b <<<"$(ctx_probe "$s" "accept edits 172188 tokens")"
+  done; done
+  : "${a:-}" "${b:-}"
+'
+n=$(SHIPYARD_CTX_WINDOW=1M bash -c "$drive" _ "$SKILL_DIR" 2>&1 >/dev/null | grep -c '^warning:')
+ok "15 probes in one shell warn exactly once" "1" "$n"
 
 done_ t2-window

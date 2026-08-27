@@ -191,6 +191,13 @@ declare -a SIG
 inflight=0
 total_pend=0
 
+# ONCE, HERE, IN THIS SHELL — never from inside the loop below. The per-slot ctx call is
+# $(ctx_probe ...), which nests $(ctx_window ...): a warning raised down there fires once per
+# slot on every tick and cannot be suppressed from within, because the flag that would suppress
+# it dies with its own subshell. That is measured, not feared, and it defeats --only-changed,
+# which decides whether to print anything only AFTER this loop has already written to stderr.
+ctx_check_env
+
 for slot in "${SLOTS[@]}"; do
   [ -z "$slot" ] && continue
   addr=$(shipyard_slot_addr "$slot")
