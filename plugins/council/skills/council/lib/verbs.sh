@@ -150,7 +150,9 @@ v_claims() {
 v_verdict() {
   local g n budget turns decided live open since win lap v
   g=$(_graph) || return 1
-  n=$(c_npeers); budget=$(jq -r '.turns_budget // 30' "$ROOM/roster.json")
+  # Type-checked, not `// 30`: a string is truthy in jq, so the alternative never fires and
+  # the value reaches `[ -ge ]` and `--argjson` below. roster.json is peer-writable.
+  n=$(c_npeers); budget=$(jq -r 'if (.turns_budget|type) == "number" then .turns_budget else 30 end' "$ROOM/roster.json")
   read -r decided live open <<<"$(printf '%s' "$g" | jq -r '[(.decided // "-"), (.live|length), (.open|length)] | @tsv')"
   # Turns come from c_turns, never from the graph: the graph counts turn-claiming messages
   # and knows nothing about a completed barrier round, which consumes a whole lap without
@@ -167,7 +169,7 @@ v_verdict() {
   # keying the gate on a stamped turn left a roundtable room unable to converge at all.
   win=$(c_turns_since_last_claim)
   since=$(( win < 0 ? turns : win ))
-  if   [ "$decided" != "-" ]; then v=$(c_slurp "$ROOM/board/status"); [ "$v" = 0 ] && v=decided
+  if   [ "$decided" != "-" ]; then v=$(c_slurp_raw "$ROOM/board/status"); [ "$v" = 0 ] && v=decided
   elif [ "$turns" -ge "$budget" ]; then v=unresolved
   elif [ "$live" = 0 ]; then v=no-proposal
   elif [ "$open" -gt 0 ] && [ "$win" -ge 0 ] && [ "$since" -ge "$lap" ]; then v=stuck

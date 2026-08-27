@@ -45,16 +45,17 @@ c_ms()     { local t=${EPOCHREALTIME/./}; echo $(( 10#$t / 1000 )); }
 # which is the version that decays: the next consumer is written by someone who never saw
 # this comment.
 #
-# READ THIS BEFORE YOU TRUST IT. What is covered is the five fields above, of a lane
-# message, and nothing else. It is NOT a room-wide guarantee, and the room is writable by
-# every participant, not just its own lane. Values read by c_slurp -- `state/*.lamport`,
-# `state/*.seq`, `cursor/*` -- and the numerics in `roster.json` are NOT coerced and still
-# reach `$(( ))` with no integer test: each of those is a live way to run a command in a
-# reader's shell, on the default branch and here. Separately, `.from` is interpolated into a
-# path in c_drain without being checked against the roster, which is not execution but does
-# let one participant make another create or truncate a file outside the room. All of it is
-# tracked separately rather than fixed in the change that added this note. So: adding an
-# arithmetic use of anything that did not come through `_untrusted` still needs its own gate.
+# READ THIS BEFORE YOU TRUST IT. What is covered is the five fields above, of a LANE
+# MESSAGE, and nothing else. It is NOT a room-wide guarantee, and the room is writable by
+# every participant, not just its own lane. The other numeric room inputs are gated at their
+# own readers rather than here -- `state/*.lamport`, `state/*.seq` and `cursor/*` in c_slurp,
+# and the `roster.json` numerics in c_quorum, c_barrier and v_verdict. Each of those was a
+# live way to run a command in a reader's shell until it was gated, because they reach
+# `$(( ))` and `$(( ))` evaluates. Separately, `.from` is interpolated into a path in c_drain
+# without being checked against the roster, which is not execution but does let one
+# participant make another create or truncate a file outside the room; that one is still open
+# and tracked on its own. So: adding an arithmetic use of anything that did not come through
+# `_untrusted` or one of those readers still needs its own gate.
 C_UNTRUSTED='def _untrusted: map(
     .turn    |= (if type == "number" then . else null end)
   | .round   |= (if type == "number" then . else null end)
@@ -70,20 +71,34 @@ c_atomic() { local p="$1" t="$1.tmp.$$"; cat > "$t" && mv -f "$t" "$p"; }
 # fifo has no reader can never wedge the sender and can never leave us a zombie.
 c_ring() { local f="$ROOM/bell/$1.fifo"; [ -p "$f" ] || return 0; ( printf '.' > "$f" & ) ; }
 
-# Read with the builtin, not `cat`: these three are on the hot path of every drain,
-# and a fork each is what turned a millisecond wake into a quarter-second one.
-c_slurp()   { local v=""; [ -f "$1" ] || { printf 0; return; }; read -r v < "$1" 2>/dev/null; printf '%s' "${v:-0}"; }
+# Read with the builtin, not `cat`: these are on the hot path of every drain, and a fork
+# each is what turned a millisecond wake into a quarter-second one. That is also why the
+# gate below is inlined rather than layered over c_slurp_raw -- a wrapper would pay back
+# the fork this comment exists to avoid.
+#
+# Every file read here is written by ANOTHER participant, and every caller but one feeds
+# the result to `$(( ))`, which EVALUATES what it is handed rather than merely parsing it.
+# So an integer gate is the DEFAULT, not something each numeric caller remembers: a reader
+# added later that reaches for c_slurp is safe without knowing this, and the one caller
+# that wants a WORD has to ask for c_slurp_raw by name. Wrong-typed is treated as ABSENT
+# (0), the same rule _untrusted applies to a lane message.
+c_slurp()   { local v=""; [ -f "$1" ] || { printf 0; return; }; read -r v < "$1" 2>/dev/null
+              case "$v" in ''|*[!0-9]*) v=0 ;; esac; printf '%s' "$v"; }
+# Verbatim, for the one room file that legitimately holds a word rather than a number:
+# board/status, compared as decided|unresolved. A numeric gate there would map BOTH onto 0
+# and report a room that ran out of turns as decided. Nothing may do arithmetic on this.
+c_slurp_raw() { local v=""; [ -f "$1" ] || { printf 0; return; }; read -r v < "$1" 2>/dev/null; printf '%s' "${v:-0}"; }
 c_lamport() { c_slurp "$ROOM/state/$ME.lamport"; }
 # The highest clock anywhere in the room, mine included.
 c_max_lamport() {
   local mine disk
   mine=$(c_lamport)
   disk=$({ c_all 2>/dev/null || true; } | jq -s 'if length == 0 then 0 else (max_by(.lamport).lamport) end')
-  # c_send feeds this straight into `lam=$(( ... + 1 ))`, so the value read off DISK leaves
-  # here as an integer or not at all. `mine` does not: it comes from state/<me>.lamport
-  # through c_slurp, which checks nothing, and it is what this function returns whenever the
-  # comparison below is false or errors. That path still reaches the arithmetic ungated --
-  # see the note above C_UNTRUSTED, and do not read this gate as covering the function.
+  # c_send feeds this straight into `lam=$(( ... + 1 ))`, so BOTH paths out of here have to
+  # be integers -- the value read off disk, gated on the next line, and `mine`, which is what
+  # this function returns whenever the comparison below is false or errors. `mine` is gated
+  # at its source now, in c_slurp; it used to arrive unchecked, and a crafted
+  # state/<peer>.lamport therefore ran a command in the shell of whoever sent next.
   case "$disk" in ''|*[!0-9]*) disk=0 ;; esac
   [ "$disk" -gt "$mine" ] && printf '%s' "$disk" || printf '%s' "$mine"
 }
@@ -109,7 +124,11 @@ c_deps_json() {
 # The barrier is held on the READ side, and its state is derived from the log — every
 # participant computes the same answer without asking anyone.
 c_mode()   { jq -r '.mode // "token"' "$ROOM/roster.json"; }
-c_quorum() { jq -r '.round_quorum // empty' "$ROOM/roster.json"; }
+# roster.json lives in the room, so every participant can write it -- and both numbers
+# below reach bash: the quorum a `[ -lt ]`, the deadline a `$(( deadline * 2 ))`. `// empty`
+# and `// 600000` do NOT defend that, because a STRING is truthy in jq and sails through the
+# alternative operator untouched. Ask for the type instead, and treat anything else as absent.
+c_quorum() { jq -r 'if (.round_quorum|type) == "number" then .round_quorum else empty end' "$ROOM/roster.json"; }
 
 # Positions posted in the opening round, as JSON lines.
 c_round0() { { c_all 2>/dev/null || true; } | jq -c 'select(.round == 0)'; }
@@ -128,7 +147,7 @@ c_barrier() {
   quorum=$(c_quorum); [ -n "$quorum" ] || quorum=$(( n - 1 )); [ "$quorum" -lt 2 ] && quorum=2
   first=$(c_round0 | jq -s 'if length == 0 then 0 else (min_by(.sent_ms).sent_ms) end')
   case "$first" in ''|*[!0-9]*) first=0 ;; esac
-  deadline=$(jq -r '.round_deadline_ms // 600000' "$ROOM/roster.json")
+  deadline=$(jq -r 'if (.round_deadline_ms|type) == "number" then .round_deadline_ms else 600000 end' "$ROOM/roster.json")
   [ "$first" = 0 ] && { printf 'open'; return; }
   local age=$(( $(c_ms) - first ))
   if [ "$age" -gt "$deadline" ] && [ "$posted" -ge "$quorum" ]; then
