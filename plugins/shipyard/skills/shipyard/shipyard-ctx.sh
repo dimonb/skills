@@ -110,6 +110,25 @@ ctx_totals() {
 # entry is silently ignored and the correction does nothing — with no error anywhere.
 CTX_WINDOWS=(200000 1000000)
 
+# The malformed-override warning, RAISED ONCE, FROM THE CALLER'S OWN SHELL.
+#
+# It cannot live in ctx_window. ctx_window is reached only as $(ctx_window ...) inside
+# $(ctx_probe ...) — two nested command substitutions — so a "have I warned yet" flag set there is
+# written in a grandchild shell that exits immediately, and the warning fires once per slot on
+# every tick regardless. That is not a hypothesis: 15 probes through the real call shape emitted
+# 15 warnings both before and after such a flag was added, while 15 direct calls emitted 1 —
+# which is exactly why the flag looked like it worked. A per-slot warning defeats --only-changed,
+# the flag SKILL.md calls what makes this monitor liveable.
+#
+# So the caller runs this ONCE, in its own shell, before the per-slot loop. ctx_window stays
+# silent and pure, and the check becomes directly assertable — which the in-function flag was not:
+# deleting it left the whole suite green, because every ctx_window call in t2 is its own subshell.
+ctx_check_env() {
+  if [ -n "${SHIPYARD_CTX_WINDOW:-}" ] && ! [[ "$SHIPYARD_CTX_WINDOW" =~ ^[1-9][0-9]*$ ]]; then
+    echo "warning: SHIPYARD_CTX_WINDOW='$SHIPYARD_CTX_WINDOW' is not a positive integer of tokens — ignored, inferring instead" >&2
+  fi
+}
+
 # The model's context window, in tokens. Nothing states it (see above), so it is INFERRED: a
 # single request that carried N tokens cannot have run on a window smaller than N, so the window
 # is the smallest known size that still fits the peak.
@@ -138,26 +157,6 @@ CTX_WINDOWS=(200000 1000000)
 # is not a positive integer of tokens is REFUSED OUT LOUD rather than ignored — a silently dead
 # escape hatch is worse than none, because the operator believes the band they are looking at is
 # the one they configured. The refusal lives in ctx_check_env, the precedence in ctx_window.
-
-# The malformed-override warning, RAISED ONCE, FROM THE CALLER'S OWN SHELL.
-#
-# It cannot live in ctx_window. ctx_window is reached only as $(ctx_window ...) inside
-# $(ctx_probe ...) — two nested command substitutions — so a "have I warned yet" flag set there is
-# written in a grandchild shell that exits immediately, and the warning fires once per slot on
-# every tick regardless. That is not a hypothesis: 15 probes through the real call shape emitted
-# 15 warnings both before and after such a flag was added, while 15 direct calls emitted 1 —
-# which is exactly why the flag looked like it worked. A per-slot warning defeats --only-changed,
-# the flag SKILL.md calls what makes this monitor liveable.
-#
-# So the caller runs this ONCE, in its own shell, before the per-slot loop. ctx_window stays
-# silent and pure, and the check becomes directly assertable — which the in-function flag was not:
-# deleting it left the whole suite green, because every ctx_window call in t2 is its own subshell.
-ctx_check_env() {
-  if [ -n "${SHIPYARD_CTX_WINDOW:-}" ] && ! [[ "$SHIPYARD_CTX_WINDOW" =~ ^[1-9][0-9]*$ ]]; then
-    echo "warning: SHIPYARD_CTX_WINDOW='$SHIPYARD_CTX_WINDOW' is not a positive integer of tokens — ignored, inferring instead" >&2
-  fi
-}
-
 ctx_window() {
   local peak="$1" w
   if [[ "${SHIPYARD_CTX_WINDOW:-}" =~ ^[1-9][0-9]*$ ]]; then

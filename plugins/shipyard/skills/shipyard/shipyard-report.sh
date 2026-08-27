@@ -193,9 +193,14 @@ total_pend=0
 
 # ONCE, HERE, IN THIS SHELL — never from inside the loop below. The per-slot ctx call is
 # $(ctx_probe ...), which nests $(ctx_window ...): a warning raised down there fires once per
-# slot on every tick and cannot be suppressed from within, because the flag that would suppress
-# it dies with its own subshell. That is measured, not feared, and it defeats --only-changed,
-# which decides whether to print anything only AFTER this loop has already written to stderr.
+# slot and cannot be suppressed from within, because the flag that would suppress it dies with
+# its own subshell. That is measured, not feared.
+#
+# What this buys is one line per TICK instead of one per SLOT. Be honest about what it does not
+# buy: this still runs before --only-changed decides whether to print, so a typo'd override puts
+# one stderr line on a tick that is documented as silent. Moving the call below that decision
+# would restore the silence and cost the validation on exactly the ticks nobody is watching,
+# which is the worse trade. t2-window.sh pins this call site, above the loop, for both reasons.
 ctx_check_env
 
 for slot in "${SLOTS[@]}"; do

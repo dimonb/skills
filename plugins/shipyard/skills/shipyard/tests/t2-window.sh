@@ -67,16 +67,45 @@ ok "valid override is silent" "" "$warn"
 #
 # Every assertion above also runs in its own command substitution, so none of them can tell the
 # two apart. This one drives the shape shipyard-report.sh actually uses, in ONE shell, and counts.
+# The drive REPORTS WHAT IT DID on stdout, and the assertions below check that too. Without it
+# this test cannot tell "15 probes produced no warning" from "no probes ran at all" — both read
+# as zero — so a renamed ctx_probe, a pane fixture that returns before ctx_window, or a syntax
+# error after the first line would all leave it green while measuring nothing. That is the
+# "reports success having asserted nothing" shape scripts/check.sh guards against by counting
+# what it inspected; the count and the last probe result are this suite's version of that.
 drive='
   . "$1/shipyard-ctx.sh"
   export CLAUDE_CONFIG_DIR=/nonexistent-so-the-probe-falls-through-to-the-pane
   ctx_check_env
+  n=0
   for t in 1 2 3; do for s in 1 2 3 4 5; do
     read -r a b <<<"$(ctx_probe "$s" "accept edits 172188 tokens")"
+    n=$((n+1))
   done; done
-  : "${a:-}" "${b:-}"
+  printf "%s %s %s\n" "$n" "${a:-}" "${b:-}"
 '
-n=$(SHIPYARD_CTX_WINDOW=1M bash -c "$drive" _ "$SKILL_DIR" 2>&1 >/dev/null | grep -c '^warning:')
+out=$(SHIPYARD_CTX_WINDOW=1M bash -c "$drive" _ "$SKILL_DIR" 2>"$CTX_TEST_DIR/drive.err")
+n=$(grep -c '^warning:' "$CTX_TEST_DIR/drive.err")
 ok "15 probes in one shell warn exactly once" "1" "$n"
+# ...and the probes actually ran, and actually reached ctx_window. 172188 against an inferred
+# 200000 window is 86%; if ctx_probe returned early the band would be empty instead.
+ok "the drive really ran 15 probes"          "15"          "$(printf '%s' "$out" | cut -d' ' -f1)"
+ok "the drive's probes really banded"        "86"          "$(printf '%s' "$out" | cut -d' ' -f2)"
+
+# --- THE CALL SITE ITSELF, not just the callee ----------------------------------------------
+# The fix above moved the warning out of ctx_window and into ctx_check_env, which only helps if
+# shipyard-report.sh actually calls it, ONCE, outside the per-slot loop. Nothing else asserts
+# that: deleting the call, or moving it back inside the loop, leaves every other check here
+# green — which is the same "the mutation was never applied to the call site" shape that let the
+# original defect ship. So the call site is pinned here explicitly.
+report="$SKILL_DIR/shipyard-report.sh"
+ok "shipyard-report.sh calls ctx_check_env once" "1" "$(grep -c '^ctx_check_env$' "$report")"
+call_line=$(grep -n '^ctx_check_env$' "$report" | cut -d: -f1)
+loop_line=$(grep -n '^for slot in ' "$report" | cut -d: -f1)
+if [ -n "$call_line" ] && [ -n "$loop_line" ] && [ "$call_line" -lt "$loop_line" ]; then
+  ok "the call is above the per-slot loop" "yes" "yes"
+else
+  ok "the call is above the per-slot loop" "yes" "no: call=$call_line loop=$loop_line"
+fi
 
 done_ t2-window
