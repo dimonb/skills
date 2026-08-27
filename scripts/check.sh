@@ -250,10 +250,29 @@ fi
 # in a comment is rejected though it is harmless. Both were measured; a cleverer matcher was tried
 # and was worse, losing the near-miss `council-test-t99` and rejecting legitimate tests that need
 # no temp directory at all. So: a heuristic against the shape that actually recurs, not a linter.
+#
+# The same trap lives one level up, in the FILE LISTING, and it bit this check twice. A process
+# substitution discards the lister's exit status, so a failing `git ls-files` silently becomes
+# zero iterations; and a `[ -d ]` guard around the loop skips it silently when the directory is
+# not where it is expected. Either way the assertion stops existing and the gate still prints
+# `check: OK`. So the listing runs BEFORE the loop with its status captured, there is no
+# directory guard, and the loop counts what it actually inspected: a check that scanned nothing
+# has not held, it has abstained, and those are not the same result.
 tests_dir=plugins/council/skills/council/tests
-if [ -d "$tests_dir" ]; then
+# stderr is deliberately NOT folded in with `2>&1`, unlike sections 7 and 8: a missing directory
+# makes `git ls-files` warn and still exit 0, and that captured warning would enter the loop as a
+# filename — firing the grep-error arm and leaving the count below vacuous with nothing saying so.
+tests_list=$(git ls-files --cached --others --exclude-standard "$tests_dir/*.sh")
+g=$?
+if [ "$g" -ne 0 ]; then
+  fail "could not list council tests (git ls-files rc=$g)"
+else
+  scanned=0
   while IFS= read -r f; do
+    # A here-string over an empty listing still yields one empty line.
+    [ -n "$f" ] || continue
     case "${f##*/}" in _helpers.sh|run-all.sh) continue ;; esac
+    scanned=$((scanned + 1))
     # grep exits 0 on a match, 1 on none, and >1 on an error. Reading an error as "no match" is
     # how a check reports success having scanned nothing — the same trap section 7 guards against.
     grep -qE 'TMPDIR|council-test' "$f"
@@ -262,7 +281,9 @@ if [ -d "$tests_dir" ]; then
       1) ;;
       *) fail "could not scan council test for a fixed temp path: $f" ;;
     esac
-  done < <(git ls-files --cached --others --exclude-standard "$tests_dir/*.sh")
+  done <<< "$tests_list"
+  [ "$scanned" -gt 0 ] \
+    || fail "scanned no council test at all — expected them under $tests_dir/ (moved? renamed?)"
 fi
 
 [ $rc -eq 0 ] && echo "check: OK"

@@ -279,6 +279,32 @@ perl -pi -e "s/'TMPDIR\|council-test'/'(unclosed'/" scripts/check.sh
 expect_fail "council-test scan fails LOUDLY when grep errors (not open)"
 cp "$SCRATCH/check9.bak" scripts/check.sh
 
+# 14 — and the same two failure modes one level UP, in check 9's file listing, which is where
+# they hid while the grep arm above was already probed. Both are edited into check.sh rather
+# than reproduced for real (by renaming the tests directory) on purpose: an interrupted run
+# leaves only a modified script, which the restore trap's `git checkout --` undoes, whereas an
+# interrupted `git mv` leaves a renamed directory staged in the index that it cannot undo.
+#
+# 14a — the listing itself errors. `exit 128` inside the command substitution, and NOT the
+# obvious broken pathspec: a bad pathspec makes git fatal before printing anything, so the empty
+# listing lands on 14b's arm and the probe still reds with the listing arm DELETED — vacuous, and
+# caught by the wrong assertion's message. Forcing the status while leaving the output intact
+# keeps the listing non-empty, so the zero-count arm cannot explain the failure and only the
+# listing arm can. It is also the one case the counter can never see: paths emitted, then a
+# non-zero exit — which no real `git ls-files` produces, but the arm keys on the status alone.
+# Kill condition: revert check 9 to `done < <(git ls-files …)` and this must report NOT CAUGHT.
+cp scripts/check.sh "$SCRATCH/check9-list.bak"
+perl -pi -e 's{"\$tests_dir/\*\.sh"\)}{"\$tests_dir/*.sh"; exit 128)}' scripts/check.sh
+expect_fail "council-test listing fails LOUDLY when git ls-files errors (not open)"
+cp "$SCRATCH/check9-list.bak" scripts/check.sh
+
+# 14b — the listing succeeds and matches nothing, which is what a moved or renamed tests
+# directory looks like: zero iterations, no error anywhere, and the assertion silently gone.
+cp scripts/check.sh "$SCRATCH/check9-empty.bak"
+perl -pi -e 's{^tests_dir=plugins/council/skills/council/tests$}{tests_dir=plugins/council/skills/council/tests-moved-away}' scripts/check.sh
+expect_fail "council-test scan fails LOUDLY when it inspects no file at all"
+cp "$SCRATCH/check9-empty.bak" scripts/check.sh
+
 echo
 echo "assertions proven: $pass   not caught: $nocatch"
 [ "$nocatch" -eq 0 ] || exit 1
