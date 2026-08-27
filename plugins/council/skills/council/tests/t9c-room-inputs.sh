@@ -94,6 +94,29 @@ for bad in '0.5' '1e400'; do
   fi
 done
 
+# --- 5b2. the other two c_int_field call sites ----------------------------------
+# The helper being right is not the same as every caller routing through it. Reverting either
+# of these two call sites on its own left the whole suite green, which is the same
+# zero-coverage shape that let the first version of the quorum gate ship unasserted.
+fresh
+jq '.mode = "roundtable" | .round_quorum = 1.5' \
+  "$R/roster.json" > "$R/roster.next" && mv "$R/roster.next" "$R/roster.json"
+COUNCIL_ME=a bash "$CLI" send --act propose "a position" >/dev/null 2>&1
+err=$(bash "$CLI" floor 2>&1 >/dev/null | grep -c 'integer expected' || true)
+if [ "$err" = 0 ]; then echo "ok   a non-integer round_quorum produced no bash diagnostic"
+else echo "FAIL a non-integer round_quorum reached the numeric test: $err diagnostic(s)"; fail=1; fi
+
+# `1e400` renders as 1E+400, which is not digits -- and it would otherwise land in the JSON a
+# supervisor and the decision record read, as the room's budget.
+for bad in '2.5' '1e400'; do
+  fresh
+  jq --argjson b "$bad" '.turns_budget = $b' \
+    "$R/roster.json" > "$R/roster.next" && mv "$R/roster.next" "$R/roster.json"
+  got=$(bash "$CLI" verdict --json 2>/dev/null | jq -r .budget)
+  if [ "$got" = 30 ]; then echo "ok   a non-integer turns_budget ($bad) fell back to the default"
+  else echo "FAIL a non-integer turns_budget ($bad) was believed: budget=$got"; fail=1; fi
+done
+
 # --- 5c. a wrong-typed round_quorum leaves no diagnostic on the floor path -------
 # The quorum reaches `[ "$quorum" -lt 2 ]`. `// empty` never fired for a string, because a
 # string is truthy in jq, so every floor/status/send/recv in a roundtable room used to carry
@@ -107,18 +130,21 @@ if [ "$err" = 0 ]; then echo "ok   a wrong-typed round_quorum produced no bash d
 else echo "FAIL a wrong-typed round_quorum reached the numeric test: $err diagnostic(s)"; fail=1; fi
 
 # --- 5d. a leading zero is not octal, and 08/09 are not fatal -------------------
-# Digits alone are not an integer to bash. `$(( 010 + 1 ))` is 9, so a cursor of `010`
-# SILENTLY skips messages 1..8; `$(( 08 + 1 ))` is a fatal error that kills the shell it runs
-# in, which empties c_drain's file list and deafens the lane for good. Both are the wedge #38
-# is about, arriving through the gate that was added to close it.
+# Digits alone are not an integer to bash, and the two failures differ. `$(( 010 + 1 ))` is 9
+# rather than 11, because a leading zero means octal, so the cursor is read too LOW and the
+# reader is handed messages it has already consumed -- octal can only ever under-read the
+# same digits, so this is re-delivery and never loss. `$(( 08 + 1 ))` is an error instead,
+# because 8 is not an octal digit, and it unwinds the subshell c_new_files runs in: the file
+# list comes back empty and the lane goes deaf for good. That second one is #38's wedge,
+# arriving through the gate that was added to close it.
 # Written straight into the lane rather than through `send`: twelve messages do not fit in
 # one participant's turns, and turn-taking is not what is under test here.
 lane12() { local i; for i in 1 2 3 4 5 6 7 8 9 10 11 12; do
              raw_msg a "$i" "$i" null msg '[]' "msg-$i"; done; }
 
-# `010` is decimal ten. Read as octal it is eight, so the reader would re-deliver msg-9 --
-# a message it has already consumed -- and, one file earlier in the sequence, skip past
-# unread ones. Assert on msg-9 specifically: it is the one the two readings disagree about.
+# `010` is decimal ten. Read as octal it is eight, so the reader would re-deliver msg-9 and
+# msg-10 -- messages it has already consumed. Assert on msg-9 specifically: it is the one the
+# two readings disagree about, and `grep '"text":"msg-9"'` cannot match msg-10 or later.
 fresh; lane12
 printf '010' > "$R/cursor/b/a"
 out=$(COUNCIL_ME=b bash "$CLI" recv --timeout 1 2>/dev/null)

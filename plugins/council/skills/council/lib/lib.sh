@@ -49,27 +49,34 @@ c_ms()     { local t=${EPOCHREALTIME/./}; echo $(( 10#$t / 1000 )); }
 # MESSAGE, and nothing else. It is NOT a room-wide guarantee, and the room is writable by
 # every participant, not just its own lane. The other numeric room inputs are gated at their
 # own readers rather than here -- `state/*.lamport`, `state/*.seq` and `cursor/*` in c_slurp,
-# and the `roster.json` numerics in c_quorum, c_barrier and v_verdict. Each of those was a
-# live way to run a command in a reader's shell until it was gated. Four of them reach
-# `$(( ))`, which EVALUATES: `state/*.lamport`, `state/*.seq`, `cursor/*` and
-# `round_deadline_ms`. `round_quorum` and `turns_budget` reach only a `[ -lt ]` / `[ -ge ]`,
-# which errors rather than evaluating -- they are gated against the same type confusion, but
-# they were never execution. Do not tidy one of those tests into `(( ))`, which would make it
-# one.
+# and the `roster.json` numerics in c_quorum, c_barrier and v_verdict.
+#
+# FOUR of those were a live way to run a command in a reader's shell until they were gated:
+# the four that reach `$(( ))`, which EVALUATES -- `state/*.lamport`, `state/*.seq`,
+# `cursor/*` and `round_deadline_ms`. `round_quorum` and `turns_budget` reach only a
+# `[ -lt ]` / `[ -ge ]`, and `[` does NOT evaluate its operands: it prints `integer expected`
+# and returns 2. They are gated against the same type confusion, but they were never
+# execution. Do not tidy either test into `(( ))` OR `[[ ]]` -- both evaluate, so either
+# conversion would turn a diagnostic into a shell. Measured, all three forms.
 #
 # Two message fields are consumed STRUCTURALLY rather than numerically, so no amount of
 # coercion here would have covered them: `.from`, which used to be interpolated into the
 # cursor path, and `.id`, which used to be parsed for a sequence number. c_drain takes both
-# from the PATH it read the file at now. `.id` is genuinely unused; `.from` is NOT -- it is
-# still the `(lamport, from)` tiebreak below, still c_posted_round0, still the author every
-# verb prints, and still the whole of claims.jq's rule for who may close an objection. It
-# remains a message's own unverified CLAIM of identity and must never be read as an
-# authenticated sender.
+# from the PATH it read the file at now, and neither is read by c_drain any more.
+#
+# That is NOT the same as either being unused, and both remain a message's own unverified
+# CLAIM. `.from` is still the `(lamport, from)` tiebreak below, still c_posted_round0, still
+# the author every verb prints, and still the whole of claims.jq's rule for who may close an
+# objection. `.id` is still c_canon's winner key -- `($win | index($m.id))` decides whether a
+# message counts as valid, so a forged `.id` matching a turn winner's is believed there --
+# still what c_posted_round0 returns, and still the target of every `.refs` lookup in
+# claims.jq. Neither may be read as an authenticated sender.
 #
 # So: adding an arithmetic use of anything that did not come through `_untrusted` or one of
 # those readers still needs its own gate, and so does any new use of a message field as a
-# PATH or as something that must parse. `.refs` and `.to` are not coerced here either, and
-# a wrong-typed one still aborts claims.jq and the transcript.
+# PATH or as something that must parse. `.refs` is not coerced here either, and a wrong-typed
+# one still aborts claims.jq and the transcript. `.to` is written by c_send and read nowhere,
+# which is a reason to gate it at the first reader that wants it, not a reason it is safe.
 C_UNTRUSTED='def _untrusted: map(
     .turn    |= (if type == "number" then . else null end)
   | .round   |= (if type == "number" then . else null end)
@@ -92,18 +99,25 @@ c_ring() { local f="$ROOM/bell/$1.fifo"; [ -p "$f" ] || return 0; ( printf '.' >
 #
 # Every file read here lives in a room every participant can write, so the single-writer
 # invariants at the top of this file are a protocol rule the filesystem does not enforce:
-# these are MY files, and a peer that ignores the rule can still put anything in them. Every
-# caller but one then feeds the result to `$(( ))`, which EVALUATES what it is handed rather
-# than merely parsing it. So an integer gate is the DEFAULT, not something each numeric
-# caller remembers: a reader added later that reaches for c_slurp is safe without knowing
-# this, and the one caller that wants a WORD has to ask for c_slurp_raw by name.
+# these are MY files, and a peer that ignores the rule can still put anything in them. The
+# results reach `$(( ))` in c_send and in c_new_files, and `$(( ))` EVALUATES what it is
+# handed rather than merely parsing it. So an integer gate is the DEFAULT, not something each
+# numeric caller remembers: a reader added later that reaches for c_slurp is safe without
+# knowing this, and the one caller that wants a WORD has to ask for c_slurp_raw by name.
 # Wrong-typed is treated as ABSENT (0), the same rule _untrusted applies to a lane message.
 #
-# `10#` is the second half of the gate and not decoration. Digits alone are not an integer
-# to bash: `$(( 010 + 1 ))` is 9, because a leading zero means OCTAL -- which silently skips
-# a message when it lands in a cursor -- and `$(( 08 + 1 ))` is a FATAL error that kills the
-# shell it runs in, which empties c_drain's file list and deafens a lane for good. c_ms above
-# already carries this idiom for exactly the same reason.
+# `10#` is the second half of the gate and not decoration, because digits alone are not an
+# integer to bash. Both effects are measured, on bash 5.3:
+#
+#   `$(( 010 + 1 ))` is 9, not 11: a leading zero means OCTAL, so the value is read too LOW.
+#   In a cursor that means messages the reader has already consumed are handed to it AGAIN
+#   -- re-delivery, not loss, since octal can only ever under-read the same digits.
+#
+#   `$(( 08 + 1 ))` is an error, because 8 is not an octal digit. It does not kill the shell:
+#   it unwinds the enclosing function and the substitution subshell, which is worse here than
+#   a loud death, because the subshell it unwinds is the one feeding `c_new_files` into
+#   c_drain. The file list comes back EMPTY and the lane goes deaf for good, with nothing
+#   said. c_ms above already carries this idiom for exactly the same reason.
 c_slurp()   { local v=""; [ -f "$1" ] || { printf 0; return; }; read -r v < "$1" 2>/dev/null
               case "$v" in ''|*[!0-9]*) v=0 ;; *) v=$((10#$v)) ;; esac; printf '%s' "$v"; }
 # Verbatim, for the one room file that legitimately holds a word rather than a number:
@@ -327,13 +341,16 @@ c_drain() {
   # advance the reader's cursor past a message it never saw. `null` is the silent one, since
   # `null + {...}` succeeds in jq where a number or a boolean errors. An object, an array and
   # a string all self-terminate, so dropping everything else removes the vector entirely; it
-  # also means one malformed document costs its own message rather than the whole batch.
+  # also means one non-object document costs its own message rather than the lane. `null` is
+  # the one shape that was never fatal here -- `null + {...}` succeeds, which is exactly why
+  # it was the silent one. Content jq cannot PARSE at all is a different case and is still
+  # not covered: it aborts the whole batch, as it did before this change.
   #
   # Deriving the lane as `split("/") | .[-2]` is what keeps the cursor write contained: the
   # value is one component of a split path, so it can never itself contain a `/`. `..` is the
-  # one component that still points upward, and the write survives it only because
-  # `cursor/<me>/` sits two levels inside the room -- so a future use of this value somewhere
-  # shallower needs its own gate.
+  # one component that still points upward, and one `..` climbs exactly one level -- the write
+  # survives because `cursor/<me>/` sits inside the room with a level to spare, so a use of
+  # this value directly under the room root would escape and needs its own gate.
   local batch
   batch=$(jq -n -c --argjson open "$open" --arg me "$ME" "$C_UNTRUSTED"'
     [ inputs

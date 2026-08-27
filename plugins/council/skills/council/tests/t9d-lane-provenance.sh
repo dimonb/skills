@@ -183,9 +183,15 @@ else
 fi
 
 # --- 6c. a non-object lane document costs its own message, not the lane ----------
-# `. + {_lane: ...}` is fatal on a non-object, so one of these used to empty the whole batch:
-# recv returned 4, the cursor never moved, and every honest message behind it was lost for
-# good -- while status, verdict and claims kept reporting a healthy room.
+# `. + {_lane: ...}` is fatal on four of these five, so one of them used to empty the whole
+# batch: recv returned 4, the cursor never moved, and every honest message behind it was lost
+# for good -- while status, verdict and claims kept reporting a healthy room.
+#
+# `null` is the exception and needs the stricter assertion below. `null + {...}` SUCCEEDS in
+# jq, so the honest message is delivered either way and "did the honest message arrive" says
+# ok even with the gate removed -- while recv quietly hands the participant a second,
+# phantom document with no id, no from and no text. Counting the released lines is what makes
+# this case discriminate, and `null` is precisely the shape the fix exists for.
 for bad in '42' '"a string"' 'true' '[1,2]' 'null'; do
   fresh
   printf '%s' "$bad" > "$R/lane/a/000001.json"
@@ -194,10 +200,11 @@ for bad in '42' '"a string"' 'true' '[1,2]' 'null'; do
              created_at:"t",sent_ms:0}' > "$R/lane/a/000002.json"
   printf '2' > "$R/state/a.seq"
   out=$(COUNCIL_ME=b bash "$CLI" recv --timeout 1 2>/dev/null)
-  if printf '%s' "$out" | grep -q "an honest later message"; then
+  n=$(printf '%s' "$out" | grep -c . || true)
+  if printf '%s' "$out" | grep -q "an honest later message" && [ "$n" = 1 ]; then
     echo "ok   a non-object document ($bad) cost only its own message"
   else
-    echo "FAIL a non-object document ($bad) wedged the lane"; fail=1
+    echo "FAIL a non-object document ($bad) was not retired cleanly: $n line(s) released"; fail=1
   fi
 done
 
