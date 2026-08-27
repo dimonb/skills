@@ -59,9 +59,27 @@ restore() {
 trap restore EXIT
 
 pass=0; nocatch=0
+# $1 is the label. $2, OPTIONAL, is a fixed string the gate's output must contain.
+#
+# Without $2 a probe asserts only that SOMETHING reddened, and that is not enough wherever two
+# arms are layered so that the outer one catches whatever the inner one would. Check 10 has
+# exactly that shape: a missing runner means no test list, and no test list means every test on
+# disk reads as unregistered — so deleting the inner arm still reds, on the neighbour, and the
+# probe keeps reporting `caught` over an assertion that no longer exists. Both of check 10's
+# diagnostic arms were vacuous in this way when they were written, and nothing said so.
+#
+# Pass $2 for any probe whose arm has a neighbour that can substitute for it. The other probes
+# are already kill tests — delete the assertion each one names and it reports NOT CAUGHT.
 expect_fail() {
   if make check >"$SCRATCH/out" 2>&1; then
     echo "NOT CAUGHT: $1"; nocatch=$((nocatch+1))
+  elif [ -n "${2:-}" ] && ! grep -qF -- "$2" "$SCRATCH/out"; then
+    # Reddened, but on a different assertion than the one this probe names: the named arm is
+    # unproven, which is the same result as NOT CAUGHT and must not be reported as a pass.
+    echo "WRONG ARM:  $1"
+    echo "            expected: $2"
+    echo "            got:      $(grep -m1 '^FAIL' "$SCRATCH/out" | cut -c1-70)"
+    nocatch=$((nocatch+1))
   else
     echo "caught:     $1   ->  $(grep -m1 '^FAIL' "$SCRATCH/out" | cut -c1-80)"
     pass=$((pass+1))
@@ -198,9 +216,9 @@ enprobe '\u6f22\u5b57'                             'Han'
 enprobe '\u0641\u0642'                             'Arabic'
 rmdir docs 2>/dev/null || true
 
-# 8 — the two assertions the gate is most easily made vacuous by, and which the review
-# noted were themselves untested: the leak check failing LOUDLY rather than open when it
-# cannot scan, and the dual-agent manifest/disk invariant.
+# 8 — the assertions the gate is most easily made vacuous by, and which the review noted were
+# themselves untested: the leak check and the English check each failing LOUDLY rather than open
+# when they cannot scan, and the dual-agent manifest/disk invariant.
 sed -i.bak 's/^deny=.\/Users/deny='"'"'(unclosed/' scripts/check.sh
 expect_fail "leak check fails LOUDLY on a broken pattern (not open)"
 mv scripts/check.sh.bak scripts/check.sh
@@ -351,16 +369,19 @@ rm -f "$TESTS_DIR/t98-unregistered.sh"
 # `tests+=(` line, whose four names extract fine, so the probe would land on the unregistered arm
 # instead — caught, but by the wrong assertion, which proves nothing about this one.
 perl -pi -e 's/^tests=\(/TESTS=(/; s/tests\+=\(/TESTS+=(/' "$RUNNER"
-expect_fail "run-all.sh test list not found (not compared against an empty set)"
+expect_fail "run-all.sh test list not found (not compared against an empty set)" \
+  "could not find the test list in"
 git checkout -- "$RUNNER"
 
 # 17 — and the runner itself gone. Repointed inside check.sh rather than moved for real: the
 # real move trips check 1 as well, because `git ls-files --cached` still lists the file from the
 # INDEX and `bash -n` then fails on the missing path — two assertions from one probe, which
 # proves neither. Check 9 is unaffected either way, its exemption naming run-all.sh literally.
+# The expected message is load-bearing: with no runner there is no list either, so the
+# `could not find the test list` arm reds too and would report this one caught while it slept.
 cp scripts/check.sh "$SCRATCH/check10-runner.bak"
 perl -pi -e 's{^runner=\$tests_dir/run-all\.sh$}{runner=\$tests_dir/run-all-gone.sh}' scripts/check.sh
-expect_fail "council test runner missing"
+expect_fail "council test runner missing" "council test runner is missing"
 cp "$SCRATCH/check10-runner.bak" scripts/check.sh
 
 echo

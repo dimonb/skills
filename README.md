@@ -190,12 +190,21 @@ walks, so a test cannot land and then silently stop running.
 
 `make check-test` exists because a gate that has never failed can be vacuous and look
 identical to one that works. It proves 50 assertions — a clean baseline plus 49 injected
-violations, one at a time, each of which the gate must catch, with each probe constructed so
-that only the assertion it names can fire. Every failure path in `check.sh` now has one,
-including all four arms that fire when a `git grep` or `git ls-files` errors instead of
-finding a violation, and the two that fire when a check finds nothing to inspect at all.
-Those six are the ones worth naming: an unprobed one can report success having inspected
-nothing, which is indistinguishable from a clean run. Writing and re-running it has found six real bugs
+violations, one at a time, each probe aiming to fire only the assertion it names. Every
+failure path in `check.sh` now has one, including every arm that fires when a matcher errors,
+or finds nothing to inspect, instead of finding a violation — an unprobed arm of that kind
+reports success having inspected nothing, which is indistinguishable from a clean run.
+
+Where two arms are layered so that the outer one reds for the inner — a missing runner means
+no test list, and no test list means every test reads as unregistered — the probe passes the
+expected message to `expect_fail` and is failed as `WRONG ARM` without it. Asserting only
+that *something* reddened would keep reporting a pass over an assertion that had been
+deleted, which is how both of check 10's diagnostic arms were vacuous when first written.
+One weakness is left, named here rather than left to be found: the hollow-plugin probe also
+trips the manifests-versus-disk assertion, so neither of the two arms it names is
+independently proven.
+
+Writing and re-running it has found six real bugs
 so far, including a broken symlink that slipped past an `[ -e ]` test, a leak check that never
 saw untracked files, a state/handler check that passed because `spec` is a prefix of
 `spec-review`, and probes of its own that fired the wrong check and so proved nothing.

@@ -248,7 +248,9 @@ tests_rc=$?
 # tests. Exempt on the path RELATIVE TO the tests directory, never on the basename — the pathspec
 # above crosses directories, so a basename match also exempts a `tests/nested/run-all.sh`, which
 # would then be neither scanned by check 9 nor required to be registered by check 10. A helper
-# that genuinely is not a test belongs in this exemption list, or under a `_`-prefixed name.
+# that genuinely is not a test belongs in this exemption list — the two names are matched
+# literally, and a `_` prefix means nothing to either check, so adding `_foo.sh` and expecting it
+# to be skipped reds the gate pointing at the runner instead of at this line.
 council_tests=""
 if [ "$tests_rc" -eq 0 ]; then
   while IFS= read -r f; do
@@ -316,7 +318,10 @@ fi
 # What this catches and what it does not. The extraction reads the space-separated words out of
 # every single-line `tests=(…)` / `tests+=(…)` assignment in the runner. Split that array across
 # lines, or build it in a loop, and it sees less than is really registered: the gate then reds
-# naming a test that IS registered — the wrong message, but loud, and never silent. The reverse
+# naming a test that IS registered — the wrong message, but loud. It can also OVER-read, and that
+# direction is the silent one: a commented-out or superseded `tests=(…)` line left in the runner
+# enrols names nothing walks, so a real unregistered test whose name still appears there is
+# masked. Keep the registration to one live array and this stays a non-issue. The reverse
 # direction (a registration naming a file that is gone) is deliberately not asserted here, because
 # the suite already reds on it at runtime, `bash` exiting 127 on the missing path.
 if [ "$tests_rc" -ne 0 ]; then
@@ -333,13 +338,25 @@ else
   # Same trap as everywhere above: an extraction that quietly matches nothing would compare the
   # files on disk against an empty set. That is loud here — every test would read as unregistered
   # — but it names the wrong defect, so say the real one instead.
-  if [ "$reg_lines" -eq 0 ] || [ -z "$registered" ]; then
+  # `${reg_lines:-0}`, not `$reg_lines`: grep prints nothing when it cannot read the file, and
+  # `[ "" -eq 0 ]` is a shell ERROR (`[: : integer expected` on stderr), not a false — so the
+  # arm was reached by way of a spurious diagnostic that looked like a gate bug.
+  if [ "${reg_lines:-0}" -eq 0 ] || [ -z "$registered" ]; then
     fail "could not find the test list in $runner (expected a single-line \`tests=(…)\` array)"
   else
     unregistered=$(comm -23 <(printf '%s' "$council_tests" | sort -u) \
                             <(printf '%s\n' "$registered" | sort -u))
-    [ -z "$unregistered" ] || fail \
-      "council test on disk but not registered in $runner (it never runs): $(printf '%s' "$unregistered" | tr '\n' ' ')"
+    comm_rc=$?
+    # comm exits 0 on success whether or not it emitted a line, and non-zero only on failure, so
+    # empty output means "nothing unregistered" ONLY once the comparison is known to have run.
+    # Without this the check reports success having compared nothing — the same shape checks 7, 8
+    # and 9 each guard against, and the one this check would otherwise be the sole example of.
+    if [ "$comm_rc" -ne 0 ]; then
+      fail "could not compare the test list against the files on disk (comm rc=$comm_rc)"
+    else
+      [ -z "$unregistered" ] || fail \
+        "council test on disk but not registered in $runner (it never runs): $(printf '%s' "$unregistered" | tr '\n' ' ')"
+    fi
   fi
 fi
 
