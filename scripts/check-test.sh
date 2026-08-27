@@ -354,6 +354,15 @@ perl -pi -e 's/^tests=\(/TESTS=(/; s/tests\+=\(/TESTS+=(/' "$RUNNER"
 expect_fail "run-all.sh test list not found (not compared against an empty set)"
 git checkout -- "$RUNNER"
 
+# 17 — and the runner itself gone. Repointed inside check.sh rather than moved for real: the
+# real move trips check 1 as well, because `git ls-files --cached` still lists the file from the
+# INDEX and `bash -n` then fails on the missing path — two assertions from one probe, which
+# proves neither. Check 9 is unaffected either way, its exemption naming run-all.sh literally.
+cp scripts/check.sh "$SCRATCH/check10-runner.bak"
+perl -pi -e 's{^runner=\$tests_dir/run-all\.sh$}{runner=\$tests_dir/run-all-gone.sh}' scripts/check.sh
+expect_fail "council test runner missing"
+cp "$SCRATCH/check10-runner.bak" scripts/check.sh
+
 echo
 echo "assertions proven: $pass   not caught: $nocatch"
 [ "$nocatch" -eq 0 ] || exit 1
