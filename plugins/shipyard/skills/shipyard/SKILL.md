@@ -485,6 +485,19 @@ banded `⚠️` from 65% and `🛑` from 80%. Both halves are there on purpose:
   crosses 200k and the figure resolves to `18%`. If the band and the raw count disagree with
   each other, believe the raw count.
 
+**Below the smallest listed window, expect that band — it is the inference doing what it says,
+not a reading.** Every child on a larger model sits at `⚠️`/`🛑` until its peak crosses that
+size, and it self-clears once it does: for a 1M child 200k is 20% in, early in any real run. So
+the noisy stretch is narrow and transient, and it is the price of not falling silent on a 200k
+child at 65%. An operator who knows the window sets `SHIPYARD_CTX_WINDOW` and never sees it.
+
+**Read the raw figure next to the glyph, every time.** That habit is the whole defence against
+a wrong inference, and it catches the mirror defect too: an absolute token threshold is secretly
+an assumption about which model is running. Three children in another workspace once sat at
+`⚠️` from 428k and were still accepting turns at 461k — impossible on a 200k window, so they
+were 1M sessions at 46% and the glyph was a false alarm on all three. The raw count is what said
+so, one glance before compacting three healthy children mid-review.
+
 **That jump is correct behaviour, not a bug — do not "fix" it by pinning a default window.**
 In the ambiguous band the column errs toward alarm on purpose: an over-warning costs one
 glance at the raw count, and falling silent is what cost the 8.5 hours. Pinning a default
