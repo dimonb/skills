@@ -44,6 +44,10 @@ if [ -n "$dirty" ]; then
 fi
 
 SCRATCH=$(mktemp -d)
+# Built from code points rather than written out, for the reason enprobe gives below: a literal
+# would put the very bytes under test into this file. `ö` is Latin, so check 8 permits it either
+# way -- what is under test is git's C-quoting, which fires on any byte >= 0x80.
+NONASCII=$(printf '_probe-n\303\266n')
 restore() {
   # shellcheck disable=SC2086
   git checkout -- $GUARDED 2>/dev/null || true
@@ -59,6 +63,7 @@ restore() {
   rm -rf docs/_probe.md "$SCRATCH" .claude/skills/_probe-local \
     plugins/ship/skills/_probe-skill .claude/skills/_probe-skill .agents/skills/_probe-skill \
     .claude/skills/_probe-tracked plugins/ship/skills/_probe-pkg plugins/ship/skills/ship/_probe.sh \
+    ".claude/skills/$NONASCII" ".agents/skills/$NONASCII" "plugins/ship/skills/$NONASCII" \
     "$TESTS_DIR/t99-probe.sh" "$TESTS_DIR/t98-unregistered.sh" "$TESTS_DIR/nested" 2>/dev/null || true
   rmdir docs 2>/dev/null || true
 }
@@ -109,6 +114,13 @@ expect_pass() {
   elif [ -n "${2:-}" ] && ! grep -qF -- "$2" "$SCRATCH/out"; then
     echo "MISSING:    $1"
     echo "            expected in the green output: $2"
+    nocatch=$((nocatch+1))
+  elif [ -n "${3:-}" ] && grep -qF -- "$3" "$SCRATCH/out"; then
+    # $3 is the mirror of $2: a string the green output must NOT contain. Part of what this gate
+    # does is DECLINE to say something, and a presence pin cannot express that -- a probe for it
+    # would report green whether the line appeared or not.
+    echo "UNWANTED:   $1"
+    echo "            must not appear in the green output: $3"
     nocatch=$((nocatch+1))
   else
     echo "green:      $1"
@@ -191,12 +203,19 @@ git checkout -- .agents/plugins/marketplace.json
 # here rests on the assertion being pointed at the right place.
 cp "$(git rev-parse --git-path index)" "$SCRATCH/fake-index"
 mkdir -p .claude/skills/_probe-tracked
-printf -- '---\nname: _probe-tracked\ndescription: A probe skill.\n---\n' \
+# `name:` disagrees with the directory ON PURPOSE. Checks 1 and 2 exempt an entry here only while
+# it is UNTRACKED, and this one is in the index -- so the same fixture proves the mode arm fires
+# AND that the exemption stayed untracked-only. With a conforming fixture that second half was
+# unprovable: measured, deleting the `--error-unmatch` line (exempting by DIRECTORY alone, the
+# wrong summary check.sh warns about) left the whole suite reporting every assertion proven.
+printf -- '---\nname: totally-different\ndescription: A probe skill.\n---\n' \
   > .claude/skills/_probe-tracked/SKILL.md
 GIT_INDEX_FILE="$SCRATCH/fake-index" git update-index --add --cacheinfo \
   "100644,$(git hash-object .claude/skills/_probe-tracked/SKILL.md),.claude/skills/_probe-tracked/SKILL.md"
 export GIT_INDEX_FILE="$SCRATCH/fake-index"
 expect_fail "committed non-symlink under a project skills dir" "committed but not a symlink"
+expect_fail "committed SKILL.md there is still read by check 2" \
+  "skill name 'totally-different' != directory '_probe-tracked'"
 unset GIT_INDEX_FILE
 rm -rf .claude/skills/_probe-tracked
 
@@ -210,7 +229,7 @@ link ship .claude/skills
 mkdir -p "$SCRATCH/plugins/ship/skills/ship"
 cp "$CORE" "$SCRATCH/plugins/ship/skills/ship/SKILL.md"
 ln -sfn "$SCRATCH/plugins/ship/skills/ship" .claude/skills/ship
-expect_fail "symlink target outside the repo"
+expect_fail "symlink target outside the repo" "symlink target is outside this repo's plugins/"
 link ship .claude/skills
 
 # 5d — a packaged skill with no symlink at all. Removing the link leaves the INDEX entry
@@ -502,7 +521,7 @@ cp "$SCRATCH/check5-empty.bak" scripts/check.sh
 # so the status has to be forced — and forcing it while the output stays non-empty is what stops
 # the empty arm from explaining the failure instead.
 cp scripts/check.sh "$SCRATCH/check5-rc.bak"
-perl -pi -e 's{^skills_ls=\$\(git -c core\.quotePath=false ls-files -s -- \$SKILL_LINK_DIRS\)$}{skills_ls=\$(git ls-files -s -- $SKILL_LINK_DIRS; exit 128)}' scripts/check.sh
+perl -pi -e 's{^skills_ls=\$\(git -c core\.quotePath=false ls-files -s -- \$SKILL_LINK_DIRS\)$}{skills_ls=\$(git ls-files -s -- \$SKILL_LINK_DIRS; exit 128)}' scripts/check.sh
 expect_fail "project skill listing fails LOUDLY when git ls-files errors" \
   "could not list tracked project skill entries"
 cp "$SCRATCH/check5-rc.bak" scripts/check.sh
@@ -520,7 +539,8 @@ printf -- '---\nname: _probe-skill\ndescription: A probe skill.\n---\n' \
   > plugins/ship/skills/_probe-skill/SKILL.md
 ln -sfn ../../plugins/ship/skills/_probe-skill .agents/skills/_probe-skill
 ln -sfn ../../plugins/ship/skills/_probe-skill .claude/skills/_probe-skill
-expect_pass "unstaged packaged skill whose links are correct"
+expect_pass "unstaged packaged skill whose links are correct" "" \
+  "note: untracked entry .claude/skills/_probe-skill"
 
 # 22b — a link that resolves nowhere, with nothing staged. `[ -L ]` alone is satisfied by it,
 # which is exactly why that test is not enough on its own.
@@ -537,7 +557,50 @@ printf -- '---\nname: _probe-skill\ndescription: A probe skill.\n---\n' \
 ln -sfn "$SCRATCH/outside/_probe-skill" .claude/skills/_probe-skill
 expect_fail "unstaged packaged-skill link resolving outside the repo" \
   "link is not staged and does not resolve into plugins/"
+
+# 22d — and a link INTO plugins/ that exposes no SKILL.md, which is the likelier typo of the two:
+# `plugins/<plugin>` is a real directory one level above the right target, so containment alone
+# accepts it. This is the assertion the tracked loop has always made and this loop nearly missed.
+ln -sfn ../../plugins/ship .claude/skills/_probe-skill
+expect_fail "unstaged packaged-skill link exposing no SKILL.md" \
+  "link is not staged and exposes no SKILL.md"
 rm -rf plugins/ship/skills/_probe-skill .claude/skills/_probe-skill .agents/skills/_probe-skill
+
+# 23 — the exemption must survive git's path quoting. `git ls-files` C-quotes a path holding a
+# byte >= 0x80, and a quoted string matches none of the prefixes the predicate tests, so the
+# exemption silently stops applying and a valid local skill reds three fabricated failures about a
+# path that does not exist. That shipped once already: the flag went onto check 5's two listings
+# and not onto the two that feed checks 1 and 2.
+mkdir -p ".claude/skills/$NONASCII"
+printf -- '---\nname: totally-different\ndescription: A local, unversioned skill.\n---\n' \
+  > ".claude/skills/$NONASCII/SKILL.md"
+printf 'if true; then\n' > ".claude/skills/$NONASCII/helper.sh"
+expect_pass "untracked local skill whose directory name is not ASCII" \
+  "note: untracked entry .claude/skills/$NONASCII"
+rm -rf ".claude/skills/$NONASCII"
+
+# 23b — the same name on a PACKAGED skill, which is checked in full and must stay green.
+mkdir -p "plugins/ship/skills/$NONASCII"
+printf -- '---\nname: %s\ndescription: A probe skill.\n---\n' "$NONASCII" \
+  > "plugins/ship/skills/$NONASCII/SKILL.md"
+ln -sfn "../../plugins/ship/skills/$NONASCII" ".claude/skills/$NONASCII"
+ln -sfn "../../plugins/ship/skills/$NONASCII" ".agents/skills/$NONASCII"
+expect_pass "packaged skill whose directory name is not ASCII"
+rm -rf "plugins/ship/skills/$NONASCII" ".claude/skills/$NONASCII" ".agents/skills/$NONASCII"
+
+# 24 — the predicate must fail CLOSED. Forced inside check.sh, like probes 14a and 21: only the
+# status can be forced, because no real path makes `--error-unmatch` error. Collapsing "not in the
+# index" and "git failed" would turn a git failure into a decision to skip the check, which is the
+# "could not list" read as "nothing to report" that the rest of this gate refuses by name.
+cp scripts/check.sh "$SCRATCH/check-predicate.bak"
+perl -pi -e 's{^  git ls-files --error-unmatch -- "\$1" >/dev/null 2>&1$}{  git ls-files --error-unmatch -- "\$1" >/dev/null 2>&1; (exit 128)}' scripts/check.sh
+mkdir -p .claude/skills/_probe-local
+printf -- '---\nname: totally-different\ndescription: A local, unversioned skill.\n---\n' \
+  > .claude/skills/_probe-local/SKILL.md
+expect_fail "the untracked predicate fails CLOSED when git errors" \
+  "skill name 'totally-different' != directory '_probe-local'"
+rm -rf .claude/skills/_probe-local
+cp "$SCRATCH/check-predicate.bak" scripts/check.sh
 
 echo
 echo "assertions proven: $pass   not proven: $nocatch"
