@@ -209,9 +209,15 @@ done
 `--only-changed` is what makes this monitor liveable. Ship spends much of its life parked
 in `⏸ idle/wait` on a pipeline or a self-review round, so without it the loop emits the
 same table every 10 minutes for hours and the real events drown in it. With it the tick
-is silent until the MR state, the pipeline stage, the escalation count, the MR number or
-the terminal's presence actually moves — and the terminal report is always printed. Drop
-the flag only when you want a heartbeat for its own sake.
+is silent until the MR state, the pipeline stage, the escalation count, the MR number, the
+**ctx band** or the terminal's presence actually moves — and the terminal report is always
+printed. Drop the flag only when you want a heartbeat for its own sake.
+
+The ctx band belongs in that list now in a way it did not before. It has always been in the
+signature, but while the column was scraping the pane it read `—` on current builds and so was
+permanently `ok` — a signal that could never fire. Reading it from the transcript makes a band
+crossing a real event, and it is the only part of the ctx column that breaks silence: the raw
+token figure ticks up constantly and is deliberately excluded.
 
 **`--only-changed` cannot hide a stall.** Silence and death have the same shape here: a
 child that hit its context ceiling, that was compacted and never told to resume, or that
@@ -251,7 +257,9 @@ them. Surface an escalation immediately (see Step 3).
 But mirror **changes, not ticks**. `--only-changed` already keeps the monitor quiet, so
 in practice every table that arrives is worth reprinting. If you do get an unchanged
 table anyway (heartbeat mode, a `⏸`/`▶️` flip, an escalation count settling back to 0),
-do not reprint it — a wall of identical tables buries the one line that matters. Say
+do not reprint it — a wall of identical tables buries the one line that matters. **A ctx band
+crossing is never such a table**: it is the whole reason that column exists, and a row whose
+only visible change is `⚠️`, `🛑` or `❓` appearing is exactly the one to surface. Say
 nothing, or fold it into one short sentence when the user asks. `⏸ idle/wait` on `apply`
 or `archive` (work in progress, or CI still green-lighting the head) is a normal resting
 state of a healthy ship session, not news.
