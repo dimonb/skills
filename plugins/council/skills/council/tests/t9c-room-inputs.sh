@@ -76,6 +76,72 @@ b=$(bash "$CLI" verdict --json 2>/dev/null | jq -r .budget)
 if [ "$b" = 30 ]; then echo "ok   a string turns_budget fell back to the default (budget=$b)"
 else echo "FAIL a string turns_budget was believed: budget=$b"; fail=1; fi
 
+# --- 5b. a NON-INTEGER roster number is treated as absent too --------------------
+# jq's `type == "number"` is not enough on its own: 1.5 and 1e400 are both numbers and both
+# are fatal to `$(( ))`. A c_barrier that dies mid-function prints NEITHER open nor closed,
+# and every caller tests `= open`, so the opening barrier would silently cease to exist.
+for bad in '0.5' '1e400'; do
+  fresh
+  jq --argjson d "$bad" '.mode = "roundtable" | .round_deadline_ms = $d' \
+    "$R/roster.json" > "$R/roster.next" && mv "$R/roster.next" "$R/roster.json"
+  COUNCIL_ME=a bash "$CLI" send --act propose "a position" >/dev/null 2>&1
+  err=$(bash "$CLI" status 2>&1 >/dev/null | grep -c 'arithmetic\|integer expected' || true)
+  b=$(bash "$CLI" floor 2>/dev/null)
+  if [ "$err" = 0 ] && [ -n "$b" ]; then
+    echo "ok   a non-integer round_deadline_ms ($bad) fell back to the default"
+  else
+    echo "FAIL a non-integer round_deadline_ms ($bad) reached bash: errors=$err floor='$b'"; fail=1
+  fi
+done
+
+# --- 5c. a wrong-typed round_quorum leaves no diagnostic on the floor path -------
+# The quorum reaches `[ "$quorum" -lt 2 ]`. `// empty` never fired for a string, because a
+# string is truthy in jq, so every floor/status/send/recv in a roundtable room used to carry
+# `[: abc: integer expected` on stderr and the deadline+quorum close stayed disabled.
+fresh
+jq '.mode = "roundtable" | .round_quorum = "abc"' \
+  "$R/roster.json" > "$R/roster.next" && mv "$R/roster.next" "$R/roster.json"
+COUNCIL_ME=a bash "$CLI" send --act propose "a position" >/dev/null 2>&1
+err=$(bash "$CLI" floor 2>&1 >/dev/null | grep -c 'integer expected' || true)
+if [ "$err" = 0 ]; then echo "ok   a wrong-typed round_quorum produced no bash diagnostic"
+else echo "FAIL a wrong-typed round_quorum reached the numeric test: $err diagnostic(s)"; fail=1; fi
+
+# --- 5d. a leading zero is not octal, and 08/09 are not fatal -------------------
+# Digits alone are not an integer to bash. `$(( 010 + 1 ))` is 9, so a cursor of `010`
+# SILENTLY skips messages 1..8; `$(( 08 + 1 ))` is a fatal error that kills the shell it runs
+# in, which empties c_drain's file list and deafens the lane for good. Both are the wedge #38
+# is about, arriving through the gate that was added to close it.
+# Written straight into the lane rather than through `send`: twelve messages do not fit in
+# one participant's turns, and turn-taking is not what is under test here.
+lane12() { local i; for i in 1 2 3 4 5 6 7 8 9 10 11 12; do
+             raw_msg a "$i" "$i" null msg '[]' "msg-$i"; done; }
+
+# `010` is decimal ten. Read as octal it is eight, so the reader would re-deliver msg-9 --
+# a message it has already consumed -- and, one file earlier in the sequence, skip past
+# unread ones. Assert on msg-9 specifically: it is the one the two readings disagree about.
+fresh; lane12
+printf '010' > "$R/cursor/b/a"
+out=$(COUNCIL_ME=b bash "$CLI" recv --timeout 1 2>/dev/null)
+if printf '%s' "$out" | grep -q '"text":"msg-9"'; then
+  echo "FAIL a leading-zero cursor was read as octal (msg-9 re-delivered past cursor 10)"; fail=1
+elif printf '%s' "$out" | grep -q '"text":"msg-11"'; then
+  echo "ok   a leading-zero cursor was read as decimal, not octal"
+else
+  echo "FAIL a leading-zero cursor delivered neither reading: $(printf '%s' "$out" | grep -c .) line(s)"; fail=1
+fi
+
+# `08` and `09` are not octal digits, so `$(( 08 + 1 ))` is a FATAL bash error rather than a
+# wrong answer. It kills the subshell c_new_files runs in, so the file list comes back empty
+# and the lane goes deaf for good -- with no error a supervisor would see.
+fresh; lane12
+printf '08' > "$R/cursor/b/a"
+out=$(COUNCIL_ME=b bash "$CLI" recv --timeout 1 2>/dev/null)
+if printf '%s' "$out" | grep -q '"text":"msg-9"'; then
+  echo "ok   an 08 cursor was not fatal and delivered from 9 on"
+else
+  echo "FAIL an 08 cursor deafened the lane: $(printf '%s' "$out" | grep -c .) line(s)"; fail=1
+fi
+
 # --- 6. board/status still reads as a WORD --------------------------------------
 # The one room file c_slurp's callers read that legitimately holds a word rather than a
 # number. A blanket numeric gate would map decided AND unresolved onto 0, and the `= 0`

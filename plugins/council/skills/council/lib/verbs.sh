@@ -150,9 +150,11 @@ v_claims() {
 v_verdict() {
   local g n budget turns decided live open since win lap v
   g=$(_graph) || return 1
-  # Type-checked, not `// 30`: a string is truthy in jq, so the alternative never fires and
-  # the value reaches `[ -ge ]` and `--argjson` below. roster.json is peer-writable.
-  n=$(c_npeers); budget=$(jq -r 'if (.turns_budget|type) == "number" then .turns_budget else 30 end' "$ROOM/roster.json")
+  # Held to digits, not `// 30` and not jq's `type == "number"`: a string is truthy in jq so
+  # the alternative never fires, and a JSON number is not a bash integer -- `2.5` and `1e400`
+  # are numbers, and both make the `[ -ge ]` below error, which silently disables the room's
+  # only stop condition and puts the same value into `--argjson`. roster.json is peer-writable.
+  n=$(c_npeers); budget=$(c_int_field turns_budget 30)
   read -r decided live open <<<"$(printf '%s' "$g" | jq -r '[(.decided // "-"), (.live|length), (.open|length)] | @tsv')"
   # Turns come from c_turns, never from the graph: the graph counts turn-claiming messages
   # and knows nothing about a completed barrier round, which consumes a whole lap without

@@ -1,8 +1,12 @@
 #!/usr/bin/env bash
-# t9d — a reader must take a message's PROVENANCE from the path it read it at, never from
-# the message. Two fields used to be believed, by two different mechanisms, with two
-# different consequences. They are asserted separately here on purpose: one fix delivers
-# both, and a single assertion would hide whichever half regressed.
+# t9d — where a reader takes a message's LANE and its POSITION IN THAT LANE from, and what
+# happens when it takes them from the message. Both now come from the path the file was read
+# at. This is NOT a claim that a message's self-declared `.from` is verified — it is not, and
+# it is still the author every verb prints; only these two structural uses moved.
+#
+# Two fields used to be believed, by two different mechanisms, with two different
+# consequences. They are asserted separately here on purpose: one fix delivers both, and a
+# single assertion would hide whichever half regressed.
 #
 # `.from` was interpolated into the cursor path, so a participant writing
 # `"from": "../../../x"` into its OWN lane made the READER create or truncate that file,
@@ -128,6 +132,85 @@ else
   echo "FAIL multi-document lane file mishandled: escaped=$([ -e "$ESC2" ] && echo yes || echo no) lines=$n cursor=$cur"; fail=1
   rm -f "$ESC2"
 fi
+
+# --- 6b. a bare scalar must not bleed into the NEXT lane's file ------------------
+# jq does not reset its parser at a file boundary: a value whose end is only knowable at EOF
+# -- a bare null/true/false/number with no trailing delimiter -- stays open until the next
+# file's first token closes it, and `input_filename` then reports THAT file. So four bytes
+# appended to a peer's own lane hand a ghost document to a VICTIM's lane. `null` is the
+# silent one: `null + {...}` succeeds in jq where a number or a boolean errors.
+#
+# It takes an OPEN BARRIER to do real damage, and a third seat, which is why this case builds
+# a roundtable room rather than reusing `fresh`. While the round is open every position is
+# withheld; the ghost is not a position, so it is RELEASED, and the cursor then follows it
+# past the victim's withheld message. The loss only becomes visible after the round closes,
+# when that message should finally arrive and never does. A token-mode room hides all of
+# this -- nothing is withheld there, so the victim's message rides along in the same batch.
+rm -rf "$R"; mkroom "$R" a b c; echo "q" > "$R/agenda.md"
+jq '.mode = "roundtable"' "$R/roster.json" > "$R/roster.next" && mv "$R/roster.next" "$R/roster.json"
+# sent_ms must be NOW, not a small number: c_barrier closes the round once the oldest
+# position is older than round_deadline_ms, so a toy timestamp closes the barrier on the
+# spot and the case silently stops testing the open-barrier path it exists for.
+NOW_MS=$(( $(date +%s) * 1000 ))
+round0() { # <peer> <lamport> <text>
+  jq -c -n --arg p "$1" --argjson l "$2" --arg t "$3" --argjson ms "$NOW_MS" \
+    '{id:($p+"-1"),from:$p,lamport:$l,deps:{},act:"propose",refs:[],to:["*"],
+      hand:false,turn:null,round:0,text:$t,created_at:"t",sent_ms:$ms}' > "$R/lane/$1/000001.json"
+  printf '1' > "$R/state/$1.seq"
+}
+round0 a 1 "a opening position"
+printf 'null' >> "$R/lane/a/000001.json"      # the bleed: no trailing newline
+round0 b 2 "b opening position"
+
+# c drains while the round is still open (2 of 3 posted): nothing may be released yet.
+COUNCIL_ME=c bash "$CLI" recv --timeout 1 >/dev/null 2>&1
+cb=$(cat "$R/cursor/c/b" 2>/dev/null || echo MISSING)
+if [ "$cb" = 0 ]; then
+  echo "ok   the open barrier released nothing of b's to c"
+else
+  echo "FAIL a ghost document advanced c's cursor on b's lane while the barrier was open (cursor/c/b=$cb)"; fail=1
+fi
+
+# c posts its own position, which closes the round; both peers' positions must now arrive.
+COUNCIL_ME=c bash "$CLI" send --act propose "c opening position" >/dev/null 2>&1
+out=$(COUNCIL_ME=c bash "$CLI" recv --timeout 1 2>/dev/null)
+got_a=$(printf '%s' "$out" | grep -c 'a opening position' || true)
+got_b=$(printf '%s' "$out" | grep -c 'b opening position' || true)
+if [ "$got_a" = 1 ] && [ "$got_b" = 1 ]; then
+  echo "ok   after the round closed, c received both opening positions"
+else
+  echo "FAIL a trailing scalar cost c the victim's position (a=$got_a b=$got_b, want 1 and 1)"; fail=1
+fi
+
+# --- 6c. a non-object lane document costs its own message, not the lane ----------
+# `. + {_lane: ...}` is fatal on a non-object, so one of these used to empty the whole batch:
+# recv returned 4, the cursor never moved, and every honest message behind it was lost for
+# good -- while status, verdict and claims kept reporting a healthy room.
+for bad in '42' '"a string"' 'true' '[1,2]' 'null'; do
+  fresh
+  printf '%s' "$bad" > "$R/lane/a/000001.json"
+  jq -c -n '{id:"a-2",from:"a",lamport:2,deps:{},act:"msg",refs:[],to:["*"],
+             hand:false,turn:null,round:null,text:"an honest later message",
+             created_at:"t",sent_ms:0}' > "$R/lane/a/000002.json"
+  printf '2' > "$R/state/a.seq"
+  out=$(COUNCIL_ME=b bash "$CLI" recv --timeout 1 2>/dev/null)
+  if printf '%s' "$out" | grep -q "an honest later message"; then
+    echo "ok   a non-object document ($bad) cost only its own message"
+  else
+    echo "FAIL a non-object document ($bad) wedged the lane"; fail=1
+  fi
+done
+
+# --- 6d. and the whole room does not read as empty because of one ----------------
+# Every caller of c_all swallows its failure, so one bad document used to make status,
+# verdict, claims and the transcript report an EMPTY room rather than a broken one.
+fresh
+p=$(say_floor propose '[]' "An ordinary proposal.")
+printf '[1,2]' > "$R/lane/$p/000002.json"
+printf '2' > "$R/state/$p.seq"
+live=$(bash "$CLI" verdict --json 2>/dev/null | jq -r '.live // "ERR"')
+if [ "$live" = 1 ]; then echo "ok   one bad document did not blank the whole room"
+else echo "FAIL a bad document collapsed the room: live=$live (want 1)"; fail=1; fi
 
 # --- 7. the room still works normally afterwards --------------------------------
 fresh

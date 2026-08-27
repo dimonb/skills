@@ -50,14 +50,26 @@ c_ms()     { local t=${EPOCHREALTIME/./}; echo $(( 10#$t / 1000 )); }
 # every participant, not just its own lane. The other numeric room inputs are gated at their
 # own readers rather than here -- `state/*.lamport`, `state/*.seq` and `cursor/*` in c_slurp,
 # and the `roster.json` numerics in c_quorum, c_barrier and v_verdict. Each of those was a
-# live way to run a command in a reader's shell until it was gated, because they reach
-# `$(( ))` and `$(( ))` evaluates. And two fields are consumed STRUCTURALLY rather than
-# numerically, so no amount of coercion here would have covered them: `.from`, which used to
-# be interpolated into the cursor path, and `.id`, which used to be parsed for a sequence
-# number. Both are ignored now -- c_drain takes the lane and the sequence from the PATH it
-# read the file at instead. So: adding an arithmetic use of anything that did not come
-# through `_untrusted` or one of those readers still needs its own gate, and so does any new
-# use of a message field as a PATH or as something that must parse.
+# live way to run a command in a reader's shell until it was gated. Four of them reach
+# `$(( ))`, which EVALUATES: `state/*.lamport`, `state/*.seq`, `cursor/*` and
+# `round_deadline_ms`. `round_quorum` and `turns_budget` reach only a `[ -lt ]` / `[ -ge ]`,
+# which errors rather than evaluating -- they are gated against the same type confusion, but
+# they were never execution. Do not tidy one of those tests into `(( ))`, which would make it
+# one.
+#
+# Two message fields are consumed STRUCTURALLY rather than numerically, so no amount of
+# coercion here would have covered them: `.from`, which used to be interpolated into the
+# cursor path, and `.id`, which used to be parsed for a sequence number. c_drain takes both
+# from the PATH it read the file at now. `.id` is genuinely unused; `.from` is NOT -- it is
+# still the `(lamport, from)` tiebreak below, still c_posted_round0, still the author every
+# verb prints, and still the whole of claims.jq's rule for who may close an objection. It
+# remains a message's own unverified CLAIM of identity and must never be read as an
+# authenticated sender.
+#
+# So: adding an arithmetic use of anything that did not come through `_untrusted` or one of
+# those readers still needs its own gate, and so does any new use of a message field as a
+# PATH or as something that must parse. `.refs` and `.to` are not coerced here either, and
+# a wrong-typed one still aborts claims.jq and the transcript.
 C_UNTRUSTED='def _untrusted: map(
     .turn    |= (if type == "number" then . else null end)
   | .round   |= (if type == "number" then . else null end)
@@ -78,14 +90,22 @@ c_ring() { local f="$ROOM/bell/$1.fifo"; [ -p "$f" ] || return 0; ( printf '.' >
 # gate below is inlined rather than layered over c_slurp_raw -- a wrapper would pay back
 # the fork this comment exists to avoid.
 #
-# Every file read here is written by ANOTHER participant, and every caller but one feeds
-# the result to `$(( ))`, which EVALUATES what it is handed rather than merely parsing it.
-# So an integer gate is the DEFAULT, not something each numeric caller remembers: a reader
-# added later that reaches for c_slurp is safe without knowing this, and the one caller
-# that wants a WORD has to ask for c_slurp_raw by name. Wrong-typed is treated as ABSENT
-# (0), the same rule _untrusted applies to a lane message.
+# Every file read here lives in a room every participant can write, so the single-writer
+# invariants at the top of this file are a protocol rule the filesystem does not enforce:
+# these are MY files, and a peer that ignores the rule can still put anything in them. Every
+# caller but one then feeds the result to `$(( ))`, which EVALUATES what it is handed rather
+# than merely parsing it. So an integer gate is the DEFAULT, not something each numeric
+# caller remembers: a reader added later that reaches for c_slurp is safe without knowing
+# this, and the one caller that wants a WORD has to ask for c_slurp_raw by name.
+# Wrong-typed is treated as ABSENT (0), the same rule _untrusted applies to a lane message.
+#
+# `10#` is the second half of the gate and not decoration. Digits alone are not an integer
+# to bash: `$(( 010 + 1 ))` is 9, because a leading zero means OCTAL -- which silently skips
+# a message when it lands in a cursor -- and `$(( 08 + 1 ))` is a FATAL error that kills the
+# shell it runs in, which empties c_drain's file list and deafens a lane for good. c_ms above
+# already carries this idiom for exactly the same reason.
 c_slurp()   { local v=""; [ -f "$1" ] || { printf 0; return; }; read -r v < "$1" 2>/dev/null
-              case "$v" in ''|*[!0-9]*) v=0 ;; esac; printf '%s' "$v"; }
+              case "$v" in ''|*[!0-9]*) v=0 ;; *) v=$((10#$v)) ;; esac; printf '%s' "$v"; }
 # Verbatim, for the one room file that legitimately holds a word rather than a number:
 # board/status, compared as decided|unresolved. A numeric gate there would map BOTH onto 0
 # and report a room that ran out of turns as decided. Nothing may do arithmetic on this.
@@ -129,8 +149,25 @@ c_mode()   { jq -r '.mode // "token"' "$ROOM/roster.json"; }
 # roster.json lives in the room, so every participant can write it -- and both numbers
 # below reach bash: the quorum a `[ -lt ]`, the deadline a `$(( deadline * 2 ))`. `// empty`
 # and `// 600000` do NOT defend that, because a STRING is truthy in jq and sails through the
-# alternative operator untouched. Ask for the type instead, and treat anything else as absent.
-c_quorum() { jq -r 'if (.round_quorum|type) == "number" then .round_quorum else empty end' "$ROOM/roster.json"; }
+# alternative operator untouched.
+#
+# Nor is asking jq for `type == "number"` enough on its own: a JSON number is not a bash
+# integer. `1.5` and `1e400` are both numbers to jq, and both are fatal to `$(( ))` -- and a
+# c_barrier that dies mid-function prints NEITHER `open` nor `closed`, so every
+# `[ "$(c_barrier)" = open ]` in the room reads false at once and the opening barrier
+# silently ceases to exist.
+#
+# It takes BOTH tests, because each is blind to what the other catches. jq's type test is the
+# only thing that can tell the string "30" from the number 30 -- `jq -r` renders them
+# identically, so a digits test alone accepts the string. The digits test is the only thing
+# that can tell 30 from 1.5 or 1e400 -- all three are `type == "number"`. Anything that fails
+# either test is treated as ABSENT and takes the default.
+c_int_field() { # <field> <default>  -- a roster integer, or the default if it is not one
+  local v; v=$(jq -r --arg k "$1" 'if (.[$k]|type) == "number" then .[$k] else empty end' \
+                  "$ROOM/roster.json" 2>/dev/null)
+  case "$v" in ''|*[!0-9]*) printf '%s' "$2" ;; *) printf '%s' $((10#$v)) ;; esac
+}
+c_quorum() { c_int_field round_quorum ''; }
 
 # Positions posted in the opening round, as JSON lines.
 c_round0() { { c_all 2>/dev/null || true; } | jq -c 'select(.round == 0)'; }
@@ -149,7 +186,7 @@ c_barrier() {
   quorum=$(c_quorum); [ -n "$quorum" ] || quorum=$(( n - 1 )); [ "$quorum" -lt 2 ] && quorum=2
   first=$(c_round0 | jq -s 'if length == 0 then 0 else (min_by(.sent_ms).sent_ms) end')
   case "$first" in ''|*[!0-9]*) first=0 ;; esac
-  deadline=$(jq -r 'if (.round_deadline_ms|type) == "number" then .round_deadline_ms else 600000 end' "$ROOM/roster.json")
+  deadline=$(c_int_field round_deadline_ms 600000)
   [ "$first" = 0 ] && { printf 'open'; return; }
   local age=$(( $(c_ms) - first ))
   if [ "$age" -gt "$deadline" ] && [ "$posted" -ge "$quorum" ]; then
@@ -259,10 +296,12 @@ c_drain() {
   # than skipping it, so nothing is lost and the cursor never runs past unread words.
   local open=false; [ "$(c_barrier)" = open ] && open=true
   # WHICH LANE a message came from and WHERE IN THAT LANE it sits are taken from the PATH it
-  # was read at, never from the message. c_new_files built those paths itself, out of the
-  # roster, so they are the one thing here no peer controls -- and both of the fields they
-  # replace were consumed structurally rather than numerically, so the coercion in
-  # _untrusted did not and could not cover them:
+  # was read at, never from the message. The path is chosen by the READER -- c_new_files
+  # builds it -- rather than supplied by the thing being read, which is the property that
+  # matters here; it is NOT that the path is beyond a peer's reach, because c_new_files
+  # builds it out of `roster.order`, and the roster is in the room like everything else.
+  # Both of the fields the path replaces were consumed structurally rather than numerically,
+  # so the coercion in _untrusted did not and could not cover them:
   #
   #   `.from` was interpolated into the cursor path. A participant that wrote
   #   `"from": "../../../x"` into its OWN lane made the READER create or truncate that file,
@@ -278,12 +317,27 @@ c_drain() {
   #   with one deaf participant, which is precisely what the `stuck` alarm cannot show.
   #
   # `input_filename` under `-n` + `inputs` is per-DOCUMENT, so this stays correct even when a
-  # peer puts several documents in one lane file. Deriving the lane as `split("/") | .[-2]`
-  # is also what keeps the cursor write contained by construction: a component of a split
-  # path can never itself contain a `/`, so there is no traversal left to gate afterwards.
+  # peer puts several documents in one lane file.
+  #
+  # `select(type == "object")` is what makes that true, and it is NOT a tidy-up. jq does not
+  # reset its parser at a file boundary: a value whose end is only knowable at EOF -- a bare
+  # `null`, `true`, `false` or number with no trailing delimiter -- stays open until the NEXT
+  # file's first token closes it, and `input_filename` then reports that next file. So a peer
+  # appending four bytes to its own lane could hand a ghost document to a VICTIM's lane and
+  # advance the reader's cursor past a message it never saw. `null` is the silent one, since
+  # `null + {...}` succeeds in jq where a number or a boolean errors. An object, an array and
+  # a string all self-terminate, so dropping everything else removes the vector entirely; it
+  # also means one malformed document costs its own message rather than the whole batch.
+  #
+  # Deriving the lane as `split("/") | .[-2]` is what keeps the cursor write contained: the
+  # value is one component of a split path, so it can never itself contain a `/`. `..` is the
+  # one component that still points upward, and the write survives it only because
+  # `cursor/<me>/` sits two levels inside the room -- so a future use of this value somewhere
+  # shallower needs its own gate.
   local batch
   batch=$(jq -n -c --argjson open "$open" --arg me "$ME" "$C_UNTRUSTED"'
     [ inputs
+      | select(type == "object")
       | . + { _lane: (input_filename | split("/") | .[-2])
             , _seq:  (input_filename | split("/") | .[-1] | sub("\\.json$"; "") | tonumber) } ]
     | _untrusted
@@ -324,7 +378,12 @@ c_all() {
   local -a files=(); local f
   for f in "$ROOM"/lane/*/[0-9]*.json; do [ -e "$f" ] && files+=("$f"); done
   [ "${#files[@]}" -gt 0 ] || return 1
-  cat "${files[@]}" | jq -s -c "$C_UNTRUSTED"'_untrusted | sort_by(.lamport, .from)[]'
+  # Same document gate as c_drain, for the same reason and one more: every caller of c_all
+  # swallows its failure (`c_all 2>/dev/null || true`), so ONE non-object document in any lane
+  # used to make status, verdict, claims and the transcript report an EMPTY room rather than a
+  # broken one. Skipping the document costs one message; aborting costs the whole log.
+  cat "${files[@]}" | jq -s -c "$C_UNTRUSTED"'map(select(type == "object"))
+                                 | _untrusted | sort_by(.lamport, .from)[]'
 }
 
 # --- canonicalisation ----------------------------------------------------------
