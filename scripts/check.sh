@@ -352,9 +352,9 @@ fi
 # held by judgement alone until a whole plugin shipped its protocol, its runtime messages and
 # its decision records in Russian: the files agents READ as instructions, in a language the
 # next reader of the repo may not have. So the gate checks what a gate can check — the SCRIPT.
-# A non-Latin script in a tracked file is the structural half of the rule; English prose
-# written in Latin letters is still a judgement call, and this check does not pretend
-# otherwise.
+# A non-Latin script in any file the gate can see, untracked included, is the structural half of
+# the rule; English prose written in Latin letters is still a judgement call, and this check does
+# not pretend otherwise.
 #
 # `-P` (PCRE) rather than a literal character class, deliberately: writing the ranges out
 # would put the very characters this check forbids into the check, which then has to exempt

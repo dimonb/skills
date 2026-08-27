@@ -180,7 +180,8 @@ it. Say in the change which parts you verified by running and which you reasoned
   all outward-facing text fresh, in a neutral voice.
 * **English everywhere** — issues, pull requests, comments, code, docs. Multiline bodies go
   through a file, never an escaped newline inside a quoted argument. `make check` enforces the
-  *script*: a non-Latin character in a tracked file fails the gate. Latin-script prose that is
+  *script*: a non-Latin character fails the gate, in an untracked file as much as a tracked one
+  (the leak check has the same reach, and for the same reason). Latin-script prose that is
   not English it cannot see, so that half is judgement — and a whole plugin once shipped its
   protocol and its decision records in another language before anything said so.
 * **Rule zero, restated as a commit rule:** no absolute home paths, no personal e-mail
