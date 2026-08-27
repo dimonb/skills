@@ -68,8 +68,13 @@ pass=0; nocatch=0
 # probe keeps reporting `caught` over an assertion that no longer exists. Both of check 10's
 # diagnostic arms were vacuous in this way when they were written, and nothing said so.
 #
-# Pass $2 for any probe whose arm has a neighbour that can substitute for it. The other probes
-# are already kill tests — delete the assertion each one names and it reports NOT CAUGHT.
+# Pass $2 for any probe whose arm has a neighbour that can substitute for it. EIGHT probes below
+# still need one and do not have it — the two hollow-plugin probes, `second copy of a SKILL.md`,
+# `broken dogfooding symlink`, `SKILL.md with no name:`, `missing marketplace manifest`,
+# `invalid JSON in a marketplace manifest` and `missing project skills dir`. Delete the arm any of
+# them names and this suite still reports it caught, so those eight arms have no kill test. They
+# are pre-existing and tracked in the follow-up issue rather than pinned here; do not read the
+# absence of a $2 as evidence that a probe does not need one.
 expect_fail() {
   if make check >"$SCRATCH/out" 2>&1; then
     echo "NOT CAUGHT: $1"; nocatch=$((nocatch+1))
@@ -383,6 +388,16 @@ cp scripts/check.sh "$SCRATCH/check10-runner.bak"
 perl -pi -e 's{^runner=\$tests_dir/run-all\.sh$}{runner=\$tests_dir/run-all-gone.sh}' scripts/check.sh
 expect_fail "council test runner missing" "council test runner is missing"
 cp "$SCRATCH/check10-runner.bak" scripts/check.sh
+
+# 18 — and check 10 must not read a comparison that never ran as "nothing unregistered". Same
+# technique as 13 and 17: break the comparator's name so it cannot execute, leaving only the
+# status arm. Without this probe that arm is vacuous — delete it and the suite still reports
+# every assertion caught, which is how it shipped in the commit that added it.
+cp scripts/check.sh "$SCRATCH/check10-comm.bak"
+perl -pi -e 's/\$\(comm -23 /\$(comm-does-not-exist -23 /' scripts/check.sh
+expect_fail "test-list comparison fails LOUDLY when comm errors (not open)" \
+  "could not compare the test list"
+cp "$SCRATCH/check10-comm.bak" scripts/check.sh
 
 echo
 echo "assertions proven: $pass   not caught: $nocatch"

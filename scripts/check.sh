@@ -350,7 +350,10 @@ else
     # comm exits 0 on success whether or not it emitted a line, and non-zero only on failure, so
     # empty output means "nothing unregistered" ONLY once the comparison is known to have run.
     # Without this the check reports success having compared nothing — the same shape checks 7, 8
-    # and 9 each guard against, and the one this check would otherwise be the sole example of.
+    # and 9 each guard against, and that checks 4 and 6 still have.
+    # The limit: this proves comm RAN, not that its inputs were generated. `pipefail` does not
+    # reach into a process substitution, so a `sort` that died in either `<(…)` leaves comm at 0
+    # over a truncated list. Reaching that needs a system-level failure rather than a code path.
     if [ "$comm_rc" -ne 0 ]; then
       fail "could not compare the test list against the files on disk (comm rc=$comm_rc)"
     else
