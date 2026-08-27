@@ -62,7 +62,9 @@ c_ms()     { local t=${EPOCHREALTIME/./}; echo $(( 10#$t / 1000 )); }
 # Two message fields are consumed STRUCTURALLY rather than numerically, so no amount of
 # coercion here would have covered them: `.from`, which used to be interpolated into the
 # cursor path, and `.id`, which used to be parsed for a sequence number. c_drain takes both
-# from the PATH it read the file at now, and neither is read by c_drain any more.
+# from the PATH it read the file at now, so neither decides a path or a sequence any more.
+# That is the whole of what changed: c_drain still ENDS in `sort_by(.lamport, .from)`, so a
+# forged `.from` still decides delivery order inside a lamport tie.
 #
 # That is NOT the same as either being unused, and both remain a message's own unverified
 # CLAIM. `.from` is still the `(lamport, from)` tiebreak below, still c_posted_round0, still
@@ -113,11 +115,15 @@ c_ring() { local f="$ROOM/bell/$1.fifo"; [ -p "$f" ] || return 0; ( printf '.' >
 #   In a cursor that means messages the reader has already consumed are handed to it AGAIN
 #   -- re-delivery, not loss, since octal can only ever under-read the same digits.
 #
-#   `$(( 08 + 1 ))` is an error, because 8 is not an octal digit. It does not kill the shell:
-#   it unwinds the enclosing function and the substitution subshell, which is worse here than
-#   a loud death, because the subshell it unwinds is the one feeding `c_new_files` into
-#   c_drain. The file list comes back EMPTY and the lane goes deaf for good, with nothing
-#   said. c_ms above already carries this idiom for exactly the same reason.
+#   `$(( 08 + 1 ))` is an error instead, because 8 is not an octal digit -- and where that
+#   error lands decides how it fails. At the top level of a verb, which is where c_send runs,
+#   it EXITS council.sh: rc 1, no lane file written, and that participant cannot speak again
+#   until someone repairs `state/<me>.seq`. Inside a substitution it kills only that subshell,
+#   and the one that matters is `< <(c_new_files)` in c_drain: the file list comes back EMPTY,
+#   c_drain reports an empty inbox, and the lane goes deaf for good with nothing said. The
+#   quiet half is the dangerous one. Measured, both, on bash 5.3.
+#
+#   c_ms above already carries this idiom for exactly the same reason.
 c_slurp()   { local v=""; [ -f "$1" ] || { printf 0; return; }; read -r v < "$1" 2>/dev/null
               case "$v" in ''|*[!0-9]*) v=0 ;; *) v=$((10#$v)) ;; esac; printf '%s' "$v"; }
 # Verbatim, for the one room file that legitimately holds a word rather than a number:
