@@ -57,6 +57,7 @@ restore() {
   # interrupt between writing one and its inline rm would leave it. A stray t99-probe.sh reds the
   # gate on its own assertion and then blocks the next run on the dirty-tree guard above.
   rm -rf docs/_probe.md "$SCRATCH" .claude/skills/_probe-local \
+    plugins/ship/skills/_probe-skill .claude/skills/_probe-skill .agents/skills/_probe-skill \
     "$TESTS_DIR/t99-probe.sh" "$TESTS_DIR/t98-unregistered.sh" "$TESTS_DIR/nested" 2>/dev/null || true
   rmdir docs 2>/dev/null || true
 }
@@ -94,14 +95,23 @@ expect_fail() {
   fi
 }
 
-# The mirror of expect_fail, for the cases where the gate must NOT red. $1 is the label.
+# The mirror of expect_fail, for the cases where the gate must NOT red. $1 is the label. $2,
+# OPTIONAL, is a fixed string the GREEN output must contain — the mirror of expect_fail's pin, and
+# needed for the same reason: exit status alone cannot tell "the check correctly ignored this"
+# from "the check, and everything it was supposed to say about it, is gone". The note check 5
+# prints is the only output in this gate that no `fail` arm backs, so it is the one thing here
+# that can rot in total silence.
 expect_pass() {
-  if make check >"$SCRATCH/out" 2>&1; then
-    echo "green:      $1"
-    pass=$((pass+1))
-  else
+  if ! make check >"$SCRATCH/out" 2>&1; then
     echo "REDDENED:   $1   ->  $(grep -m1 '^FAIL' "$SCRATCH/out" | cut -c1-80)"
     nocatch=$((nocatch+1))
+  elif [ -n "${2:-}" ] && ! grep -qF -- "$2" "$SCRATCH/out"; then
+    echo "MISSING:    $1"
+    echo "            expected in the green output: $2"
+    nocatch=$((nocatch+1))
+  else
+    echo "green:      $1"
+    pass=$((pass+1))
   fi
 }
 
@@ -280,9 +290,11 @@ perl -pi -e 's/^description: "Drive one change/descriptio: "Drive one change/' "
 expect_fail "SKILL.md with no description:"
 git checkout -- "$CORE"
 
-# Outside .claude/skills and .agents/skills on purpose: placing it under either would trip
-# the "not a symlink" branch of check 5 first, and a probe that fires the wrong check
-# proves nothing about the one it names.
+# Outside .claude/skills and .agents/skills on purpose — check 5 exempts those two paths from
+# this loop, so a probe placed there would red NOTHING and report `NOT CAUGHT`. (It used to be the
+# opposite problem: the old filesystem-driven check 5 caught it first, on the wrong arm. The
+# placement is right either way, but the reason inverted, and the `expect_pass` probe at the end
+# of this file now asserts precisely that a SKILL.md there stays green.)
 mkdir -p docs/stray
 printf -- '---\nname: stray\ndescription: A stray skill outside plugins/.\n---\n' \
   > docs/stray/SKILL.md
@@ -430,7 +442,8 @@ cp "$SCRATCH/check10-comm.bak" scripts/check.sh
 # and it shadows nothing in a clone, so it cannot violate "one source of truth per skill" — and
 # failing on one blocked every commit in the repo until the directory was moved.
 mkdir -p .claude/skills/_probe-local
-expect_pass "untracked directory under a project skills dir"
+expect_pass "untracked directory under a project skills dir" \
+  "note: untracked entry .claude/skills/_probe-local"
 
 # ...and with a SKILL.md in it, which is the natural thing to keep there. That file reddened a
 # SECOND assertion — the `--others` reach of "SKILL.md outside plugins/" — so an empty directory
@@ -443,8 +456,8 @@ expect_pass "untracked local skill with a SKILL.md in it"
 rm -rf .claude/skills/_probe-local
 
 # 20 — and check 5 must say the listing found nothing rather than pass having asserted nothing.
-# Repointed inside check.sh, like 14b: `git ls-files --cached` over a pathspec matching no tracked
-# file warns about nothing and exits 0, so this lands on the empty arm and only on it.
+# Repointed inside check.sh, like 14b: `git ls-files -s` over a pathspec matching no tracked file
+# warns about nothing and exits 0, so this lands on the empty arm and only on it.
 cp scripts/check.sh "$SCRATCH/check5-empty.bak"
 perl -pi -e 's{^skills_ls=\$\(git ls-files -s -- \.claude/skills \.agents/skills\)$}{skills_ls=\$(git ls-files -s -- .claude/skills-moved-away)}' scripts/check.sh
 expect_fail "project skill listing fails LOUDLY when it lists nothing" \
@@ -460,6 +473,38 @@ perl -pi -e 's{^skills_ls=\$\(git ls-files -s -- \.claude/skills \.agents/skills
 expect_fail "project skill listing fails LOUDLY when git ls-files errors" \
   "could not list tracked project skill entries"
 cp "$SCRATCH/check5-rc.bak" scripts/check.sh
+
+# 22 — a packaged skill's own link is repo-owned, so check 5 asserts it whether or not it has
+# been staged. That window is the one AGENTS.md's "How to add a skill" opens: create both links
+# (step 3), run the gate (step 5), `git add` after. The fixture is a new skill in an EXISTING
+# plugin because that is the shape AGENTS.md calls typical, and because a new PLUGIN cannot reach
+# the window at all — checks 3 and 4 red on an unlisted plugins/* directory first.
+#
+# 22a first requires the correct case to stay GREEN: these assertions run over untracked paths, so
+# getting them wrong would put back a false positive on the very procedure the repo documents.
+mkdir -p plugins/ship/skills/_probe-skill
+printf -- '---\nname: _probe-skill\ndescription: A probe skill.\n---\n' \
+  > plugins/ship/skills/_probe-skill/SKILL.md
+ln -sfn ../../plugins/ship/skills/_probe-skill .agents/skills/_probe-skill
+ln -sfn ../../plugins/ship/skills/_probe-skill .claude/skills/_probe-skill
+expect_pass "unstaged packaged skill whose links are correct"
+
+# 22b — a link that resolves nowhere, with nothing staged. `[ -L ]` alone is satisfied by it,
+# which is exactly why that test is not enough on its own.
+ln -sfn ../../plugins/ship/skills/gone .claude/skills/_probe-skill
+expect_fail "unstaged packaged-skill link that resolves nowhere" \
+  "link is not staged and does not resolve into plugins/"
+
+# 22c — and one resolving OUTSIDE the repo, which a substring test on the link text would accept.
+# The other branch of the same `case`, and the shape that would let an agent opened in a clone
+# read an out-of-tree SKILL.md as instructions.
+mkdir -p "$SCRATCH/outside/_probe-skill"
+printf -- '---\nname: _probe-skill\ndescription: A probe skill.\n---\n' \
+  > "$SCRATCH/outside/_probe-skill/SKILL.md"
+ln -sfn "$SCRATCH/outside/_probe-skill" .claude/skills/_probe-skill
+expect_fail "unstaged packaged-skill link resolving outside the repo" \
+  "link is not staged and does not resolve into plugins/"
+rm -rf plugins/ship/skills/_probe-skill .claude/skills/_probe-skill .agents/skills/_probe-skill
 
 echo
 echo "assertions proven: $pass   not proven: $nocatch"

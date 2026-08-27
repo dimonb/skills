@@ -103,7 +103,7 @@ done
 # untracked directory someone keeps under a project skills dir cannot violate it: it is not in
 # the repository, it reaches nobody else, and it shadows nothing in a clone. Iterating the
 # filesystem instead (`for e in "$d"/*`) failed on one, and that blocked every commit in the
-# repo until the directory was moved -- over local state the repo does not own.
+# repo until the directory was moved — over local state the repo does not own.
 #
 # Asserting the git MODE states the real rule directly rather than by proxy: `120000` is git's
 # symlink mode, and a committed entry recorded as anything else IS the second copy. That makes
@@ -113,15 +113,25 @@ done
 # Deliberately narrower than checks 1 and 2, which DO read untracked files. That is not an
 # inconsistency: a new script or SKILL.md is part of the change being made, and catching it
 # before `git add` is the point. Incidental local state is not part of any change.
-skills_ls=$(git ls-files -s -- .claude/skills .agents/skills)
+#
+# `-c core.quotePath=false`: by default git C-quotes any path holding a byte >= 0x80, and the
+# parse below would then take the quotes and the octal escapes for part of the name — reddening
+# a link that is perfectly valid, which is the class of defect this check is being fixed for.
+# A control character, `"` or `\` is quoted whatever that setting says, so those still red with a
+# misleading message; they never pass, and no skill directory in any repo is plausibly named that
+# way. `-z` would remove the residue, but its records cannot survive `$( )`, which discards NUL
+# bytes — and the listing has to stay a command substitution so its exit status can be captured.
+skills_ls=$(git -c core.quotePath=false ls-files -s -- .claude/skills .agents/skills)
 skills_rc=$?
 if [ "$skills_rc" -ne 0 ]; then
-  # Never read "could not list" as "nothing to report" -- the trap sections 7 to 10 each guard.
+  # Never read "could not list" as "nothing to report" — the trap sections 7 to 10 each guard.
   fail "could not list tracked project skill entries (git ls-files rc=$skills_rc)"
 elif [ -z "$skills_ls" ]; then
   # A listing that matched nothing has not held, it has abstained. Nothing else here would say
   # so: the "packaged skill has both links" loop below reads the FILESYSTEM, so links present on
   # disk but dropped from the index satisfy it while every assertion above silently stops.
+  # This arm fires only on a TOTAL drop. ONE link removed from the index leaves the listing
+  # non-empty and stays green — a gap that predates this check and is not closed here.
   fail "no tracked entry under .claude/skills or .agents/skills at all (dropped from the index?)"
 else
   while IFS= read -r line; do
@@ -136,9 +146,9 @@ else
     # containing `/plugins/`, and an agent opened in a clone would read that out-of-tree
     # SKILL.md as instructions. Resolve it and require it to be under this repo's plugins/.
     # Compare PHYSICAL against PHYSICAL. `$PWD` is the LOGICAL path `cd` set, so matching a
-    # `pwd -P` result against it fails on every checkout reached through a symlink -- a clone
+    # `pwd -P` result against it fails on every checkout reached through a symlink — a clone
     # under /tmp on macOS (/tmp -> /private/tmp), a symlinked home, an automounted project
-    # dir -- and the message then names a target that is plainly inside the repo.
+    # dir — and the message then names a target that is plainly inside the repo.
     tgt=$(cd "$e" 2>/dev/null && pwd -P)
     case "$tgt" in
       "$ROOT_P/plugins/"*) ;;
@@ -147,21 +157,31 @@ else
   done <<< "$skills_ls"
 fi
 
-# Untracked entries get a NOTE, never a failure. Staying silent would be defensible -- they
-# cannot violate a rule about committed content -- but someone who expected their local skill to
+# Untracked entries get a NOTE, never a failure. Staying silent would be defensible — they
+# cannot violate a rule about committed content — but someone who expected their local skill to
 # be checked should learn here that it is not, rather than read a green gate as coverage.
-untracked_skills=$(git ls-files --others --exclude-standard --directory \
-  -- .claude/skills .agents/skills)
+# The note names the check, because checks 1 and 2 DO still read the entry: without that the
+# gate can print a `FAIL` about a local skill and call it ignored in the same run.
+untracked_skills=$(git -c core.quotePath=false ls-files --others --exclude-standard \
+  --directory -- .claude/skills .agents/skills)
 while IFS= read -r e; do
   [ -n "$e" ] || continue
-  echo "note: untracked entry ${e%/} is local state and is ignored by this check"
+  e=${e%/}
+  # A link at a packaged skill's own path is NOT local state: the loop at the end of this check
+  # asserts it whether or not it is staged. Calling it ignored here would be false, and a gate
+  # that prints `note: ... ignored` and `FAIL` about one path in a single run is the shape this
+  # note exists to avoid, not to create.
+  packaged=""
+  for s in plugins/*/skills/"$(basename "$e")"/SKILL.md; do [ -f "$s" ] && packaged=1; done
+  [ -n "$packaged" ] && continue
+  echo "note: untracked entry $e is local state, ignored by check 5 (checks 1 and 2 still read it)"
 done <<< "$untracked_skills"
 
 # A SKILL.md anywhere but plugins/ is a duplicated source of truth (tracked or not). The two
 # project skills directories are exempt HERE because they are covered above instead, and more
 # precisely: a committed SKILL.md under one of them is not mode 120000, so the mode assertion
 # names it as the second copy it is, while an untracked one is the local state the note reports.
-# Without this exemption a local skill reddened the gate TWICE -- the `--others` reach of this
+# Without this exemption a local skill reddened the gate TWICE — the `--others` reach of this
 # loop is the other half of the same false positive, not a separate one.
 while IFS= read -r f; do
   case "$f" in
@@ -171,11 +191,28 @@ while IFS= read -r f; do
 done < <(git ls-files --cached --others --exclude-standard '*SKILL.md')
 # Every packaged skill must HAVE both links. Validating only the links that exist lets a new
 # skill ship with no dogfooding at all, which is the invariant this check is here to protect.
+#
+# A link at a PACKAGED skill's own path is repo-owned by construction, never the incidental local
+# state the index-driven loop above declines to judge, so it is checked whether or not it has been
+# staged. That is what keeps "How to add a skill" honest: it says to create both links and then
+# run the gate, and at that moment the links are untracked, invisible to the listing above, and
+# `[ -L ]` alone is satisfied by one that points nowhere.
+#
+# Links git already has are skipped here, deliberately. The loop above resolved them with the same
+# two assertions, and a second identical verdict would hand those assertions a stand-in: delete
+# them and this loop would still red, so their probes would keep reporting `caught` over arms that
+# no longer exist. Measured on this suite — reusing the wording turned 53/2 into 55/0.
 for s in plugins/*/skills/*/SKILL.md; do
   [ -f "$s" ] || continue
   skill=$(basename "$(dirname "$s")")
   for d in .claude/skills .agents/skills; do
-    [ -L "$d/$skill" ] || fail "packaged skill '$skill' has no symlink at $d/$skill"
+    [ -L "$d/$skill" ] || { fail "packaged skill '$skill' has no symlink at $d/$skill"; continue; }
+    git ls-files --error-unmatch -- "$d/$skill" >/dev/null 2>&1 && continue
+    ltgt=$(cd "$d/$skill" 2>/dev/null && pwd -P)
+    case "$ltgt" in
+      "$ROOT_P/plugins/"*) ;;
+      *) fail "packaged skill '$skill' link is not staged and does not resolve into plugins/: $d/$skill -> ${ltgt:-<unresolved>}" ;;
+    esac
   done
 done
 
