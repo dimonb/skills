@@ -51,11 +51,13 @@ c_ms()     { local t=${EPOCHREALTIME/./}; echo $(( 10#$t / 1000 )); }
 # own readers rather than here -- `state/*.lamport`, `state/*.seq` and `cursor/*` in c_slurp,
 # and the `roster.json` numerics in c_quorum, c_barrier and v_verdict. Each of those was a
 # live way to run a command in a reader's shell until it was gated, because they reach
-# `$(( ))` and `$(( ))` evaluates. Separately, `.from` is interpolated into a path in c_drain
-# without being checked against the roster, which is not execution but does let one
-# participant make another create or truncate a file outside the room; that one is still open
-# and tracked on its own. So: adding an arithmetic use of anything that did not come through
-# `_untrusted` or one of those readers still needs its own gate.
+# `$(( ))` and `$(( ))` evaluates. And two fields are consumed STRUCTURALLY rather than
+# numerically, so no amount of coercion here would have covered them: `.from`, which used to
+# be interpolated into the cursor path, and `.id`, which used to be parsed for a sequence
+# number. Both are ignored now -- c_drain takes the lane and the sequence from the PATH it
+# read the file at instead. So: adding an arithmetic use of anything that did not come
+# through `_untrusted` or one of those readers still needs its own gate, and so does any new
+# use of a message field as a PATH or as something that must parse.
 C_UNTRUSTED='def _untrusted: map(
     .turn    |= (if type == "number" then . else null end)
   | .round   |= (if type == "number" then . else null end)
@@ -256,27 +258,53 @@ c_drain() {
   # participant — that is the whole mechanism. A lane stops at its withheld message rather
   # than skipping it, so nothing is lost and the cursor never runs past unread words.
   local open=false; [ "$(c_barrier)" = open ] && open=true
+  # WHICH LANE a message came from and WHERE IN THAT LANE it sits are taken from the PATH it
+  # was read at, never from the message. c_new_files built those paths itself, out of the
+  # roster, so they are the one thing here no peer controls -- and both of the fields they
+  # replace were consumed structurally rather than numerically, so the coercion in
+  # _untrusted did not and could not cover them:
+  #
+  #   `.from` was interpolated into the cursor path. A participant that wrote
+  #   `"from": "../../../x"` into its OWN lane made the READER create or truncate that file,
+  #   with the reader's credentials. It also decided grouping, so claiming a peer's name
+  #   merged two lanes and advanced the wrong cursor past unread messages.
+  #
+  #   `.id` was parsed as `split("-") | last | tonumber`, which is FATAL for jq on
+  #   `"noDashHere"`, `"a-x"`, `17`, `null` or `["a-1"]`. jq exited non-zero, the batch came
+  #   back empty, and recv reported an empty inbox -- so the cursor never advanced, the
+  #   poisoned file was re-read on every later call, and every honest message behind it in
+  #   that lane was never delivered. Silently: status, verdict, claims and transcript all
+  #   kept working, because none of them uses this parse. A supervisor saw a healthy room
+  #   with one deaf participant, which is precisely what the `stuck` alarm cannot show.
+  #
+  # `input_filename` under `-n` + `inputs` is per-DOCUMENT, so this stays correct even when a
+  # peer puts several documents in one lane file. Deriving the lane as `split("/") | .[-2]`
+  # is also what keeps the cursor write contained by construction: a component of a split
+  # path can never itself contain a `/`, so there is no traversal left to gate afterwards.
   local batch
-  batch=$(cat "${files[@]}" | jq -s -c --argjson open "$open" --arg me "$ME" "$C_UNTRUSTED"'
-    def seqof: (.id | split("-") | last | tonumber);
-    _untrusted
-    | [ group_by(.from)[]
-      | sort_by(seqof)
+  batch=$(jq -n -c --argjson open "$open" --arg me "$ME" "$C_UNTRUSTED"'
+    [ inputs
+      | . + { _lane: (input_filename | split("/") | .[-2])
+            , _seq:  (input_filename | split("/") | .[-1] | sub("\\.json$"; "") | tonumber) } ]
+    | _untrusted
+    | [ group_by(._lane)[]
+      | sort_by(._seq)
       | (if $open then
-           (. as $g | ($g | map(.round == 0 and .from != $me) | index(true)) as $i
+           (. as $g | ($g | map(.round == 0 and ._lane != $me) | index(true)) as $i
             | if $i == null then $g else $g[0:$i] end)
          else . end)
       | .[] ]
-    | sort_by(.lamport, .from)[]') || return 1
+    | sort_by(.lamport, .from)[]' "${files[@]}") || return 1
   [ -n "$batch" ] || return 1
-  printf '%s\n' "$batch"
+  # `_lane` and `_seq` are this function's own bookkeeping, not part of a message: strip them
+  # before anyone sees them, so the shape a participant reads is unchanged.
+  printf '%s\n' "$batch" | jq -c 'del(._lane, ._seq)' || return 1
   # Cursors follow what was RELEASED, not what was found on disk.
   local p hi
   while IFS=$'\t' read -r p hi; do
     [ -n "$p" ] && printf '%s' "$hi" | c_atomic "$ROOM/cursor/$ME/$p"
   done < <(printf '%s\n' "$batch" | jq -s -r '
-    def seqof: (.id | split("-") | last | tonumber);
-    group_by(.from)[] | [ (.[0].from), (map(seqof) | max) ] | @tsv')
+    group_by(._lane)[] | [ (.[0]._lane), (map(._seq) | max) ] | @tsv')
   local seen mine
   seen=$(printf '%s\n' "$batch" | jq -s 'max_by(.lamport).lamport')
   mine=$(c_lamport)
