@@ -486,10 +486,12 @@ banded `⚠️` from 65% and `🛑` from 80%. Both halves are there on purpose:
   each other, believe the raw count.
 
 **Below the smallest listed window, expect that band — it is the inference doing what it says,
-not a reading.** Every child on a larger model sits at `⚠️`/`🛑` until its peak crosses that
-size, and it self-clears once it does: for a 1M child 200k is 20% in, early in any real run. So
-the noisy stretch is narrow and transient, and it is the price of not falling silent on a 200k
-child at 65%. An operator who knows the window sets `SHIPYARD_CTX_WINDOW` and never sees it.
+not a reading.** A child on a larger model reads `ok` until it passes 65% of that size — 130k of
+a 200k window — and shows `⚠️`/`🛑` only from there until its peak crosses the window: measured,
+`50% · 100k` bands `ok`, 130k warns, 160k crits. It self-clears once the peak crosses: for a 1M
+child 200k is 20% in, early in any real run. So the noisy stretch really is narrow — 130k to
+200k, not the whole range below it — and it is the price of not falling silent on a 200k child at
+65%. An operator who knows the window sets `SHIPYARD_CTX_WINDOW` and never sees it.
 
 **Read the raw figure next to the glyph, every time.** That habit is the whole defence against
 a wrong inference, and it catches the mirror defect too: an absolute token threshold is secretly
@@ -498,7 +500,8 @@ an assumption about which model is running. Three children in another workspace 
 were 1M sessions at 46% and the glyph was a false alarm on all three. The raw count is what said
 so, one glance before compacting three healthy children mid-review.
 
-**That jump is correct behaviour, not a bug — do not "fix" it by pinning a default window.**
+**That 92%-to-18% jump is correct behaviour, not a bug — do not "fix" it by pinning a default
+window.**
 In the ambiguous band the column errs toward alarm on purpose: an over-warning costs one
 glance at the raw count, and falling silent is what cost the 8.5 hours. Pinning a default
 would restore exactly the failure this column was rebuilt to remove. If you know your window
