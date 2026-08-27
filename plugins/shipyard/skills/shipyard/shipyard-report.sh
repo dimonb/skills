@@ -9,11 +9,18 @@
 # --only-changed prints NOTHING while the meaningful state is the same as the last
 # printed report, so a child parked in idle-wait for hours stops generating identical
 # tables. Meaningful = slot, MR iid, terminal present, MR state, pipeline stage, open
-# escalation count. Deliberately NOT meaningful: the timestamp, the `last line`
-# column (elapsed time / token counts change every tick) and ▶️/⏸, which flips
+# escalation count, and the ctx BAND. Deliberately NOT meaningful: the timestamp, the
+# `last line` column (elapsed time / token counts change every tick), the raw ctx
+# figure — only its band — and ▶️/⏸, which flips
 # constantly while ship works and re-waits. A terminal report (nothing in flight) is
 # always printed, so the end of the run is never swallowed. Exit codes are unchanged
 # whether or not anything was printed.
+#
+# The ctx band has always been in the signature, but it could never move it while the
+# column was blind: the old pane-scraping ctx_of returned "—" on current builds, so the
+# band was permanently `ok`. Reading it from the transcript makes it a live signal, which
+# is why it is named here now — a band crossing is exactly the tick worth breaking
+# silence for, and it is the only thing in the ctx column that does.
 #
 # Design notes:
 #  * running-vs-idle comes from a snapshot DIFF (two captures 3s apart), not from
@@ -34,13 +41,17 @@
 #   SHIPYARD_SESSION    tmux session name    (default: <repo>)
 #   SHIPYARD_STALL_SECS motionless seconds before the stall block fires (default: 1800)
 #   SHIPYARD_CTX_WINDOW context window in tokens, overriding the inference in ctx_window
+#   CLAUDE_CONFIG_DIR / CLAUDE_HOME
+#                       where a child's transcript is looked up (default: $HOME/.claude);
+#                       propagated to children by shipyard_env_preamble when set here
 #   GITLAB_HOST         glab host (default: derived from the origin remote)
 set -o pipefail
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=shipyard-lib.sh
 . "$DIR/shipyard-lib.sh"
 # The ctx column's logic lives in its own file so that it can be SOURCED — this one cannot be,
-# because shipyard_backend_check below exits a process that tries. See shipyard-ctx.sh and tests/.
+# because shipyard_backend_check below exits a process that tries. See shipyard-ctx.sh and its
+# tests/ directory.
 # shellcheck source=shipyard-ctx.sh
 . "$DIR/shipyard-ctx.sh"
 
@@ -76,6 +87,7 @@ STALL_SECS="${SHIPYARD_STALL_SECS:-1800}"   # 30 min of no movement, idle, nothi
 if mb=$(shipyard_mailbox_ensure 2>/dev/null); then SIGFILE="$mb/report-sig"; STALLFILE="$mb/report-stall"; fi
 STALLED=()
 STALL_ROWS=()
+UNSCALED=()   # slots whose ctx figure exceeds every window size the report knows of
 
 # iid: numeric slot is the iid; otherwise read it from .pipeline-state.
 # Which forge origin points at. The report used to assume GitLab everywhere and ran
@@ -227,11 +239,19 @@ for slot in "${SLOTS[@]}"; do
 
   read -r ctx_pct ctx <<<"$(ctx_probe "$slot" "$b")"
   band=$(ctx_band "$ctx_pct")
-  case "$band" in warn) ctx="⚠️ $ctx" ;; crit) ctx="🛑 $ctx" ;; esac
+  # `unknown` gets a glyph of its own and is collected below. It must never read as healthy:
+  # it is the one band where the report is holding a number it cannot scale, so an unmarked
+  # row would be the silent-blind column this whole file was rewritten to remove.
+  case "$band" in
+    warn)    ctx="⚠️ $ctx" ;;
+    crit)    ctx="🛑 $ctx" ;;
+    unknown) ctx="❓ $ctx"; UNSCALED+=("$slot") ;;
+  esac
 
   # --- stall detection -------------------------------------------------------
   # The silence of --only-changed is indistinguishable from death: a child that has
-  # hit its context ceiling, or that was compacted and never told to resume, sits
+  # hit its context ceiling, that was compacted and never told to resume, or that left
+  # its own next instruction unsubmitted in the input box sits
   # ⏸ idle with esc — and NOTHING changes, so the monitor says nothing. One ran that
   # way for 8.5 hours. So track how long each slot has been motionless and shout
   # when it crosses the threshold, bypassing --only-changed entirely.
@@ -311,7 +331,20 @@ fi
       echo "  2. THEN NUDGE IT: \`bash $DIR/shipyard-tell.sh $sl \"<what to do next>\"\`. It types, submits, and"
       echo "     reports delivered/queued/unconfirmed from a before/after diff. Do not hand-drive the pane."
       echo "  3. ONLY THEN COMPACT: \`bash $DIR/shipyard-compact.sh $sl\` (compacts AND resumes) — and only if"
-      echo "     ctx is ⚠️/🛑 or the nudge went unconfirmed. The client's own autocompact usually gets there first."
+      echo "     ctx is ⚠️/🛑/❓ or the nudge went unconfirmed. The client's own autocompact usually gets there first."
+    done
+  fi
+  # An unscalable ctx figure is NOT a healthy one, and the band alone is easy to miss in a wide
+  # table — so it gets its own line. It means the report is holding a token count larger than any
+  # window it knows of, which is the one state where it can neither reassure nor alarm honestly.
+  if [ "${#UNSCALED[@]}" -gt 0 ]; then
+    echo
+    echo "### ❓ ctx OUT OF RANGE — a figure larger than any window this report knows of"
+    for sl in "${UNSCALED[@]}"; do
+      echo "- \`$sl\` — the token count is shown without a percentage because none can be computed."
+      echo "  Do NOT read the missing glyph as healthy: this child may be at its ceiling or nowhere near it."
+      echo "  Fix it by naming the window — \`SHIPYARD_CTX_WINDOW=<tokens>\` — or add the size to CTX_WINDOWS"
+      echo "  in shipyard-ctx.sh if a new model has shipped."
     done
   fi
   bash "$DIR/shipyard-escalations.sh" 2>/dev/null
