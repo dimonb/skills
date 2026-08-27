@@ -11,7 +11,11 @@ DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 # ctx_probe reads a transcript through ctx_transcript, which needs $ROOT and a project dir; the
 # shapes below are exercised through the PANE fallback instead, which reaches the identical
-# window/percentage/banding code with no filesystem setup. t5 covers the transcript path.
+# window/percentage/banding code with no filesystem setup.
+#
+# NOTHING HERE COVERS THE TRANSCRIPT BRANCH, and no other file does either — see run-all.sh's
+# uncovered list. On this path `peak` is assigned from `cur`, so which of the two feeds
+# ctx_window is not asserted anywhere in the suite.
 ROOT="$CTX_TEST_DIR/norepo"
 
 probe() { ctx_probe nosuchslot "$1" 2>/dev/null; }

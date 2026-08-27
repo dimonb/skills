@@ -6,18 +6,24 @@
 # NOT wired into `make check`. The gate's checks 9 and 10 register the COUNCIL tests specifically
 # (check 9's assertion is a grep for council's own temp-room shape), so generalising them is more
 # than a couple of lines and would mean editing scripts/check.sh in the same breath as it changed
-# under another PR. That gap is written down in issue #58 rather than papered over here: these
-# tests are real, they are fast, and nothing yet forces anyone to run them.
+# under another PR. That gap is written down in dimonb/skills#58 rather than papered over here:
+# these tests are real, they are fast, and nothing yet forces anyone to run them.
 #
 # Everything under test is a pure function over a file and two environment variables, so this
 # needs no process machinery, no network and no fixtures outside its own mktemp dir.
 #
-# SCOPE IS DELIBERATELY NARROW: seven assertions, and each one has already caught a real defect
-# in this code — six from the round of review that produced these files, plus the band that round
-# added. Assertions that have not demonstrated they catch something were left out on purpose,
-# because a suite padded with them takes longer to read than the code and stops being run.
-# What is therefore NOT covered, and is carried by comment alone: the project-directory slug
-# ctx_transcript derives, and the exclusion of subagent transcripts.
+# SCOPE IS DELIBERATELY NARROW, and the rule is about PROVENANCE, not about counting: every
+# property asserted here traces to a defect this code actually shipped — six from the round of
+# review that produced these files, plus the band that round added. They are expanded into ~57
+# checks because boundaries and the malformed-override table are cheap to enumerate once the
+# property is there; that expansion is not padding, and the count is not the contract. Do not add
+# a property that has no defect behind it: a suite longer than the code it guards stops being run.
+#
+# WHAT IS NOT COVERED, so that a green run is never read as more than it is — `ctx_transcript` has
+# no test at all, and neither does `ctx_probe`'s transcript branch. Specifically unguarded: the
+# project-directory slug, the newest-by-mtime choice, the exclusion of subagent transcripts, the
+# CLAUDE_CONFIG_DIR/CLAUDE_HOME resolution, and which of `cur`/`peak` feeds ctx_window (the pane
+# path the tests use sets them equal). Mutate any of those and this suite still passes.
 set -uo pipefail
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 

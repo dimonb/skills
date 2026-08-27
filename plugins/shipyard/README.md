@@ -37,7 +37,7 @@ a slot behaves identically on either; when neither is available the skill refuse
 
 **A monitor that stays quiet until something happens.** The status table reports running
 versus idle from a snapshot diff rather than spinner glyphs, and `--only-changed` keeps it
-silent until a state, stage, escalation count or terminal presence actually moves.
+silent until a state, stage, escalation count, ctx band or terminal presence actually moves.
 
 **Watchdogs for the two failure modes that look like health.** A background agent parked on
 CI and a background agent that has *died* have the same shape — idle, no escalation, green
@@ -143,8 +143,10 @@ percentage is measured against. Without it the window is inferred from the large
 child's transcript has ever carried — a request that carried N tokens cannot have run on a
 window smaller than N — and the override beats that inference in both directions.
 
-Two more are worth knowing about: `SHIPYARD_ENV_PASS` extends the set of variables copied from
-your session into a child, and `SHIPYARD_ENV_SCRUB` overrides the set removed from it — the
+Two more are worth knowing about: `SHIPYARD_ENV_PASS` **replaces** the set of variables copied
+from your session into a child — the default is `CLAUDE_HOME CLAUDE_CONFIG_DIR`, so name those
+again if you still want them, or the child resolves whatever config directory its login profile
+supplies and gets different skills. `SHIPYARD_ENV_SCRUB` overrides the set removed from it — the
 defaults strip this session's own identity, including the messaging socket, so a child cannot
 reach the parent's IPC channel. Override that one only if you know why. `SHIPYARD_DRY=1`
 prints everything a child would get and starts nothing.

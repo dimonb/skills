@@ -87,10 +87,11 @@ ctx_transcript() {
 # a frozen child reading `87% · 879k` and reading `0% · 0` with no glyph at all. The client writes
 # its OWN `message.usage` records with all four fields zero when a turn never reached the API:
 # `"model": "<synthetic>"`, `isApiErrorMessage: true`, for "You've hit your session limit",
-# "API Error: 500 Internal server error", "Connection closed mid-response". Measured on this
-# machine: 18 of 290 transcripts currently END on one. A ceiling-stalled child is MORE likely to
-# end on such a record, not less — it has stopped producing real turns — so taking it at face
-# value paints the most reassuring possible reading on exactly the children that are dead.
+# "API Error: 500 Internal server error", "Connection closed mid-response". Measured on the
+# machine that found it: 25 of 290 transcripts ended on such a record, the largest hiding a real
+# total of 501456 tokens. A ceiling-stalled child is MORE likely to end on one, not less — it has
+# stopped producing real turns — so taking it at face value paints the most reassuring possible
+# reading on exactly the children that are dead.
 # A real API turn always carries input tokens, so a zero sum means "not measured", never
 # "zero context used". Filtering on the sum rather than on `model == "<synthetic>"` is deliberate:
 # it catches any unmeasured record, whatever the client calls it next.
@@ -113,14 +114,24 @@ CTX_WINDOWS=(200000 1000000)
 # single request that carried N tokens cannot have run on a window smaller than N, so the window
 # is the smallest known size that still fits the peak.
 #
-# WHAT THIS GUARANTEES, stated narrowly because the earlier draft of this comment claimed more
-# than the code delivers and that is exactly how a hardcoded list gets left to rot: the inference
-# is exact when the true window IS one of the sizes listed above. For a window that is NOT listed
-# it can land above the truth and UNDER-warn — a real 400k window whose peak has passed 200000
-# infers 1000000, so a child at 380k (95%, effectively at the ceiling) reads 38%. A window smaller
-# than the smallest listed under-warns the same way. There is no way to be safe about a size
-# nobody has told us about; what there is, is SHIPYARD_CTX_WINDOW, and a reading that looks wrong
-# next to its own raw token count.
+# WHAT THIS GUARANTEES, stated narrowly: the inference is exact when the true window IS one of the
+# sizes listed above, and only then.
+#
+# THE COMFORTABLE VERSION IS FALSE, and it is the one you will re-derive if you do not read this
+# paragraph. It goes: "an unlisted window resolves to the smallest known one that fits, so it
+# over-warns rather than under-warns, which is the safe direction." That was written into this
+# design's own rationale twice before review caught it, and it is wrong in both directions. A real
+# 400k window whose peak has passed 200000 infers 1000000, so a child at 380k — 95%, effectively
+# at the ceiling — reads 38%, an UNDER-warning. A window smaller than the smallest listed
+# under-warns the same way. There is no way to be safe about a size nobody has declared; what
+# there is, is SHIPYARD_CTX_WINDOW, and a percentage that always travels next to the raw token
+# count it came from, so a wrong inference can be caught by eye.
+#
+# One thing that IS bounded, and is why the `?` state below is rare rather than routine: a single
+# request's usage sum cannot exceed the window it ran on, because prompt plus output is what the
+# window measures. Measured across 291 transcripts, the largest single-record sum was 999567 and
+# none exceeded 1000000. So a total past the top of this list means the list is out of date, not
+# that a 1M child is near its ceiling — the ceiling case bands crit long before it gets there.
 #
 # SHIPYARD_CTX_WINDOW wins unconditionally, INCLUDING DOWNWARDS: someone running a window smaller
 # than anything listed has to be able to say so, and no inference may overrule them. A value that
@@ -132,7 +143,13 @@ ctx_window() {
   if [[ "${SHIPYARD_CTX_WINDOW:-}" =~ ^[1-9][0-9]*$ ]]; then
     printf '%s' "$SHIPYARD_CTX_WINDOW"; return
   fi
-  if [ -n "${SHIPYARD_CTX_WINDOW:-}" ]; then
+  # ONCE PER PROCESS, not once per slot. ctx_window runs inside the per-slot loop, which runs
+  # before --only-changed decides whether to print anything — so warning every call meant a single
+  # typo emitted one stderr line per slot on every tick, for ever, including the ticks that were
+  # supposed to be silent. That defeats the flag SKILL.md calls "what makes this monitor liveable":
+  # the operator gets woken by the warning about the variable they set to stop being woken.
+  if [ -n "${SHIPYARD_CTX_WINDOW:-}" ] && [ -z "${_ctx_window_warned:-}" ]; then
+    _ctx_window_warned=1
     echo "warning: SHIPYARD_CTX_WINDOW='$SHIPYARD_CTX_WINDOW' is not a positive integer of tokens — ignored, inferring instead" >&2
   fi
   for w in "${CTX_WINDOWS[@]}"; do

@@ -14,6 +14,14 @@ SKILL_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 CTX_TEST_DIR=$(mktemp -d "${TMPDIR:-/tmp}/shipyard-ctx-test.XXXXXXXX") || exit 1
 trap 'rm -rf "$CTX_TEST_DIR"' EXIT
 
+# The filesystem is isolated by the mktemp above, but the ENVIRONMENT is not, and every function
+# under test reads this one variable. Both SKILL.md and the README tell an operator to set it —
+# so without this, the suite fails on the machine of exactly the person the escape hatch exists
+# for: measured, an exported SHIPYARD_CTX_WINDOW=400000 turns 8 checks red for no real reason.
+# A suite that cries wolf on a correctly configured machine is one nobody runs. Per-case overrides
+# all live inside their own command substitutions, so unsetting it here costs nothing.
+unset SHIPYARD_CTX_WINDOW
+
 FAILURES=0
 CHECKS=0
 

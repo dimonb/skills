@@ -104,8 +104,9 @@ entirely.
 So `shipyard-launch.sh` writes a **launcher script** and re-asserts those variables inside it,
 *after* the login profile has run:
 
-* propagated (only when set here): `CLAUDE_HOME`, `CLAUDE_CONFIG_DIR` — extend with
-  `SHIPYARD_ENV_PASS="VAR1 VAR2"`;
+* propagated (only when set here): `CLAUDE_HOME`, `CLAUDE_CONFIG_DIR` — `SHIPYARD_ENV_PASS`
+  REPLACES that list rather than adding to it, so name them again yourself:
+  `SHIPYARD_ENV_PASS="CLAUDE_HOME CLAUDE_CONFIG_DIR VAR1"`;
 * scrubbed always: `CLAUDECODE`, `CLAUDE_CODE_ENTRYPOINT`, `CLAUDE_CODE_SESSION_ID`,
   `CLAUDE_CODE_CHILD_SESSION`, `CLAUDE_PID`, `CLAUDE_CODE_MESSAGING_SOCKET`,
   `CLAUDE_CODE_MESSAGING_TOKEN`, `CLAUDE_EFFORT`, `SHIPYARD_SLOT` — these are *this* session's
@@ -435,6 +436,14 @@ input rather than as the human speaking.
 **3. ONLY THEN COMPACT** — `shipyard-compact.sh <slot>`, and only when `ctx` is `⚠️`/`🛑`
 or the nudge came back `unconfirmed`. Compaction is not the default remedy (below).
 
+**A `❓` ctx is neither a compaction trigger nor a clearance.** It says the figure could not be
+scaled — the child may be at 5% of a window this script has not heard of, or past a ceiling it
+cannot see, and nothing in the reading distinguishes those. So compacting on it would compact a
+healthy child, and skipping it would leave a dying one. Resolve the instrument first: name the
+window with `SHIPYARD_CTX_WINDOW`, or add the size to `CTX_WINDOWS` in `shipyard-ctx.sh`. That
+turns `❓` into a real band, and you act on that. The report prints the same rule beside any slot
+it flags.
+
 Two traps that each produced a wrong diagnosis, and neither is visible from the report:
 
 * **`pgrep -f <pattern>` matches YOUR OWN command line.** The pattern you are searching for
@@ -498,6 +507,13 @@ resolves itself on the child's next turn, the second never does:
   `SHIPYARD_CTX_WINDOW=<tokens>` — or add the size to `CTX_WINDOWS` in `shipyard-ctx.sh` if a
   new model has shipped. The report prints a block under the table saying exactly that.
 
+There is a fourth form, rare and easy to mistake for a bug: **a bare percentage with no token
+count** (`⚠️ 68%`). That is a figure read straight from the client's own footer, on a build that
+still prints one, when no transcript could be found. It stands alone because it needs no inferred
+window — the client did the scaling — and no token total is available to print beside it. Nothing
+is wrong; there is simply nothing to cross-check it against, so the "believe the raw count" rule
+above has no raw count to offer.
+
 `SHIPYARD_CTX_WINDOW` takes the window **in tokens, as a plain integer** (`1000000`, not `1M` or
 `1000k` — a shorthand is refused, out loud, on stderr). It wins over the inference in both
 directions, so setting it leaves the `unknown` band immediately.
@@ -520,7 +536,9 @@ the ones this step exists for:
   back with an empty context and sits idle until told to continue. Same silhouette again.
 
 So reach for a manual compaction when the figure keeps climbing through `🛑` without one
-firing, or when a nudge came back `unconfirmed`. Once you have decided to, do not put it off:
+firing, or when a nudge came back `unconfirmed` — and on `❓`, resolve the window first rather
+than compacting or ignoring, per the rule in the order above. Once you have decided to, do not
+put it off:
 compaction is itself an API call and needs working room, so run it before the figure reaches
 the ceiling rather than at it. The footer hint
 `/clear to save NNNk tokens` means the ceiling is close — it does not mean `/clear` is the
@@ -609,7 +627,7 @@ name — once it holds no ship sessions. The change's feature branch can go afte
 | session | ▶️ running / ⏸ idle-wait (snapshot diff) / ⛔ no terminal |
 | MR state / stage | forge state (opened/merged/closed) + ship's pipeline stage |
 | esc | open escalations for this slot |
-| ctx | child context usage as `<pct>% · <tokens>`, read from its transcript; `⚠️` ≥65%, `🛑` ≥80%. Two non-readings: `—` = nothing measurable yet; `❓ <tokens>` = the figure exceeds every window this script knows, so the percentage would be invented — set `SHIPYARD_CTX_WINDOW`, or add the size to `CTX_WINDOWS`. Neither means healthy (Step 5) |
+| ctx | child context usage as `<pct>% · <tokens>`, read from its transcript; `⚠️` ≥65%, `🛑` ≥80%. A bare `<pct>%` is the client's own footer figure, used when no transcript was found. Two non-readings, neither meaning healthy: `—` = nothing measurable yet; `❓ <tokens>` = the figure exceeds every window this script knows, so the percentage would be invented — resolve it with `SHIPYARD_CTX_WINDOW` or a new `CTX_WINDOWS` entry before acting (Step 5) |
 | last line | last meaningful line of the screen |
 
 ⏸ idle-wait is **normal** for ship: it waits on CI or on a self-review round and re-wakes

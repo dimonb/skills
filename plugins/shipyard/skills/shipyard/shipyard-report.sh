@@ -331,7 +331,9 @@ fi
       echo "  2. THEN NUDGE IT: \`bash $DIR/shipyard-tell.sh $sl \"<what to do next>\"\`. It types, submits, and"
       echo "     reports delivered/queued/unconfirmed from a before/after diff. Do not hand-drive the pane."
       echo "  3. ONLY THEN COMPACT: \`bash $DIR/shipyard-compact.sh $sl\` (compacts AND resumes) — and only if"
-      echo "     ctx is ⚠️/🛑/❓ or the nudge went unconfirmed. The client's own autocompact usually gets there first."
+      echo "     ctx is ⚠️/🛑 or the nudge went unconfirmed. The client's own autocompact usually gets there first."
+      echo "     A ❓ ctx is NOT a compaction trigger and NOT a clearance: it means the figure could not be"
+      echo "     scaled, so resolve that first (see the block below) and act on the band it turns into."
     done
   fi
   # An unscalable ctx figure is NOT a healthy one, and the band alone is easy to miss in a wide
