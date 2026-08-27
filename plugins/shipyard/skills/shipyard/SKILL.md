@@ -214,12 +214,14 @@ the terminal's presence actually moves — and the terminal report is always pri
 the flag only when you want a heartbeat for its own sake.
 
 **`--only-changed` cannot hide a stall.** Silence and death have the same shape here: a
-child that hit its context ceiling, or that was compacted and never told to resume, sits
-`⏸ idle/wait` with `esc —` while NOTHING changes — so a change-triggered monitor says
-nothing at all. One ran that way for **8.5 hours**. The report therefore tracks how long
-each slot has been motionless and prints a loud `🛑 STALLED` block, bypassing
-`--only-changed`, once an idle slot with no open escalation has not moved for 30 minutes
-(`SHIPYARD_STALL_SECS` to tune). Treat that block as an alarm, not as a status line.
+child that hit its context ceiling, that was compacted and never told to resume, or that
+left its own next instruction unsubmitted in the input box sits `⏸ idle/wait` with `esc —`
+while NOTHING changes — so a change-triggered monitor says nothing at all. One ran that way
+for **8.5 hours**. The report therefore tracks how long each slot has been motionless and
+prints a loud `🛑 STALLED` block, bypassing `--only-changed`, once an idle slot with no open
+escalation has not moved for 30 minutes (`SHIPYARD_STALL_SECS` to tune). Treat that block as
+an alarm, not as a status line — and work the order it prints, which is Step 5's: git,
+then a nudge, then compaction.
 
 Arm the **fast escalation monitor** too — 10 minutes is too slow for a child that is
 blocked on a question:
@@ -375,30 +377,126 @@ Directives are `kind: directive`, `status: sent` — the report's `esc` column a
 monitor both skip them, so telling a child something never looks like an open escalation.
 `bash <SKILL>/shipyard-tell.sh --list` shows what you have sent.
 
-## Step 5. Compact a child BEFORE it hits its context ceiling
+## Step 5. Diagnose a child that looks stalled
 
-A ship child accumulates context for as long as it works, and a long change will reach
-the ceiling. What makes this dangerous is the failure mode: the session does not crash
-and does not say anything. It **silently stops accepting turns** — you type, the text
-sits in the input box, nothing happens. In the report it reads as `⏸ idle/wait` with
-`esc —`, which is exactly what a healthy child waiting on CI looks like. One ran that way
-for **8.5 hours** overnight before it was noticed.
+**Several different failures wear the same face.** A child at its context ceiling, a child
+that was compacted and never told to resume, a child that ended its turn leaving its own
+next instruction UNSUBMITTED in the input box, and a healthy child waiting on CI all read
+identically from the report: `⏸ idle/wait`, `esc —`, nothing moving. One ceiling stall ran
+that way for **8.5 hours** overnight; the unsubmitted-line case turned up **three times in
+one run**. So do not diagnose from the silhouette — work the order below.
 
-**The tell is the `ctx` column**, and the footer states it in one of TWO forms — the
-client changed this under us, silently. Older builds print a session token total, which
-the report bands as `⚠️` from 400k and `🛑` from 550k; current ones print a percentage
-(`98% context used`), banded `⚠️` from 65% and `🛑` from 80%. The percentage is preferred
-when both are present, because it needs no assumption about the model's window size —
-the token thresholds hardcode one, and on a 1M-token model they are simply wrong.
+### The order: git, then a nudge, then compaction
 
-Reading only the token form is not a cosmetic gap: this column showed `—` for a whole
-night while a child sat at 98%, so the one signal this step depends on was switched off
-by a rename, with no error anywhere. The footer also starts showing
-`/clear to save NNNk tokens` — that hint means the ceiling is close, not that `/clear` is
-the answer.
+**1. GIT FIRST, always — it is the only source that reports what the child DID.**
 
-**Act on `⚠️`, do not wait for `🛑`.** Compaction needs working room; at the ceiling it is
-itself an API call that may fail or retry for a long time.
+```bash
+git -C .claude/worktrees/ship-<slot> log --oneline -5
+git -C .claude/worktrees/ship-<slot> status --short
+git -C .claude/worktrees/ship-<slot> log --oneline @{u}..    # committed, not yet pushed
+```
+
+The pane shows what the child *intended*; git shows what it *produced*, and the two
+disagree exactly when it matters. In one case the pane suggested a line had been submitted
+and git proved it had not — the file that line would have created did not exist. A stalled
+child has also usually committed and pushed more than its last notice reported, so this
+step often shows there is nothing to rescue in the first place.
+
+**2. THEN NUDGE IT — `shipyard-tell.sh`, never the pane by hand.**
+
+```bash
+bash <SKILL>/shipyard-tell.sh <slot> "<what it should do next>"
+```
+
+It types, submits, and reports `delivered` / `queued` / `unconfirmed` from a before/after
+diff — which is precisely what hand-driving is trying to establish by eye, and it gets it
+right. Measured: three hand-driven attempts (typing, sending newlines, `--select`) all
+failed and each produced a wrong conclusion; `shipyard-tell.sh` then worked **first try**.
+Reach for the raw terminal only after this has failed, and read the three facts at the end
+of this section before you do.
+
+**3. ONLY THEN COMPACT** — `shipyard-compact.sh <slot>`, and only when `ctx` is `⚠️`/`🛑`
+or the nudge came back `unconfirmed`. Compaction is not the default remedy (below).
+
+Two traps that each produced a wrong diagnosis, and neither is visible from the report:
+
+* **`pgrep -f <pattern>` matches YOUR OWN command line.** The pattern you are searching for
+  is in the process doing the searching, so it always finds something. That was read as a
+  live child twice, and once nearly justified killing a compaction that was in progress.
+  Exclude your own pid (`pgrep -f <pattern> | grep -v "^$$\$"`) or do not use it at all —
+  step 1 answers the same question without the ambiguity.
+* **`shipyard-compact.sh` exit 4 is AMBIGUOUS.** It means no `Compacted` marker appeared
+  before the timeout, which has one benign cause and one real one — see the exit-4 branch of
+  the script, which now spells both out. Background agents keep running after the main turn
+  ends, so the session sits at a live prompt, accepts `/compact`, and then compacts slowly
+  or not at all while they work; the wait expires and nothing is wrong. Treat exit 4 as a
+  question, never as proof of death: check git, then check whether the pane still shows a
+  spinner or an agent list, and re-run when it does not.
+
+### The `ctx` column, and where its figure comes from
+
+`ctx` is what separates a child that has stopped accepting turns from one that is merely
+waiting. It is read from **the child's own transcript**, not from the pane — the pane is a
+rendering, and a child running subagents shows no session figure at all because the
+agent-progress list takes that room. That is not a cosmetic gap: the column read `—` for a
+whole night while the child behind it sat at 756445 tokens, so a child at 76% of its window
+looked exactly like one at 5%, and it goes blind precisely when the child is deepest in a
+review battery. Footer forms — a session token total, a `NN% context used` line — are still
+read, but only as a fallback for builds that print them.
+
+The column shows **a percentage and the raw token count together**, e.g. `29% · 291k`,
+banded `⚠️` from 65% and `🛑` from 80%. Both halves are there on purpose:
+
+* the percentage is what matters, because a token count means nothing without a window —
+  400k is 40% of a 1M window and 100% of a 400k one;
+* **no live signal states the window**, so it is inferred: a request that carried N tokens
+  cannot have run on a window smaller than N, so the window is the smallest known size that
+  fits the largest total that session has ever reached. That is a proof where it fires, and
+  `SHIPYARD_CTX_WINDOW` overrides it outright;
+* the raw count is printed **so that you can catch the inference being wrong**. Its one soft
+  spot is a young session on a big model: below the smallest known window there is nothing
+  yet to prove the window is larger, so a 1M child at 185k reads `🛑 92% · 185k` until it
+  crosses 200k and the figure resolves to `18%`. If the band and the raw count disagree with
+  each other, believe the raw count.
+
+**That jump is correct behaviour, not a bug — do not "fix" it by pinning a default window.**
+In the ambiguous band the column errs toward alarm on purpose: an over-warning costs one
+glance at the raw count, and falling silent is what cost the 8.5 hours. Pinning a default
+would restore exactly the failure this column was rebuilt to remove. If you know your window
+and want the band exact from the first turn, set `SHIPYARD_CTX_WINDOW` — it wins
+unconditionally, including downwards, for a window smaller than any the report knows.
+
+Two readings mean *the report does not know*, and neither is `0%`:
+
+* **`—`** — no figure was obtainable at all: no completed turn yet, or no transcript.
+* **a bare token count with no percentage** (`1240k`) — the total exceeds every window size
+  the report knows of, so the percentage would have to be over 100. That is a contradiction,
+  not a measurement, so it is not shown. It means the window list has fallen behind a new
+  model, or `SHIPYARD_CTX_WINDOW` is set too low. Fix whichever, rather than reading the
+  number as a ceiling.
+
+### Compaction is a backstop, not routine
+
+**The client's own autocompact works and fires on its own** — one child here went from 76%
+to 27% with no intervention at all. So read `ctx` as information, not as a to-do list.
+
+Be precise about what that does and does not cover, because the states it does not cover are
+the ones this step exists for:
+
+* **Autocompact handles** the ordinary case — context growing during normal work. A rising
+  `ctx` on a child that is visibly `▶️ running` usually needs nothing from you.
+* **It does not rescue a session that has already crossed the line.** Past the ceiling the
+  child stops accepting turns silently: you type, the text sits in the input box, nothing
+  happens. That is a real state, it reads as `⏸ idle/wait` with `esc —`, and it is what the
+  order at the top of this step is for.
+* **It does not resume a child either.** A compacted child — by autocompact or by you — comes
+  back with an empty context and sits idle until told to continue. Same silhouette again.
+
+So reach for a manual compaction when the figure keeps climbing through `🛑` without one
+firing, or when a nudge came back `unconfirmed`. Act on `⚠️` rather than waiting for `🛑`
+when you do: compaction is itself an API call and needs working room. The footer hint
+`/clear to save NNNk tokens` means the ceiling is close — it does not mean `/clear` is the
+answer, and it never is.
 
 **Use `shipyard-compact.sh` — it does BOTH halves.** Compaction is a slash command in the TUI,
 so the mailbox cannot carry it (`shipyard-tell.sh` prefixes and flattens its payload into a
@@ -432,9 +530,14 @@ Exit 5 means the child was still mid-turn when the wait ran out: `shipyard-compa
 drive a terminal during a turn, because the Escape it sends to clear the input box is
 INTERRUPT while one is running — it would kill the work in flight. Re-run when idle.
 
-Exit 4 means no `Compacted` marker appeared before the timeout — the session is past the
-point of accepting even a slash command. Then recover the way a dead child is recovered: a
-FRESH session on the SAME worktree plus a written handoff file. Check `git status` and
+Exit 4 means no `Compacted` marker appeared before the timeout. **It does not mean the child
+is dead**, and reading it that way would once have thrown away a healthy run: background
+agents were still working, so the session sat at a live prompt, took the slash command, and
+simply had not finished compacting when the wait expired. The script's own exit-4 output
+names the benign and the real case and how to tell them apart; work that, in this order —
+git first, then whether the pane still shows a spinner or an agent list. Only when it is
+genuinely the real case do you recover the way a dead child is recovered: a FRESH session on
+the SAME worktree plus a written handoff file. Check `git status` and
 `git log origin/<default-branch>..HEAD` there first — a stalled child has usually committed and pushed
 more than its last notice reported, so nothing is lost. **`/clear` is never the answer** —
 it throws away exactly what you are trying to keep.
@@ -478,17 +581,17 @@ name — once it holds no ship sessions. The change's feature branch can go afte
 | session | ▶️ running / ⏸ idle-wait (snapshot diff) / ⛔ no terminal |
 | MR state / stage | forge state (opened/merged/closed) + ship's pipeline stage |
 | esc | open escalations for this slot |
-| ctx | child context usage; `⚠️` ≥65% / ≥400k, `🛑` ≥80% / ≥550k — compact it (Step 5) |
+| ctx | child context usage as `<pct>% · <tokens>`, read from its transcript; `⚠️` ≥65%, `🛑` ≥80%; `—` = no figure obtainable (Step 5) |
 | last line | last meaningful line of the screen |
 
 ⏸ idle-wait is **normal** for ship: it waits on CI or on a self-review round and re-wakes
 itself. Never read idle as "it died" — the only completion signal is a merged (or closed)
 MR. A child blocked on an escalation also looks idle; the `esc` column is what tells you it
-is waiting on *you*. A child that has hit its context ceiling ALSO looks idle, with
-`esc —`; the `ctx` column is what tells you it has stopped accepting turns rather than
-waiting for something (Step 5). `/ship` never waits for an approval, so a session parked
-for a long stretch with a green pipeline and no escalation is worth a look — check its
-stage for `needs-human` or `ready-to-merge`.
+is waiting on *you*. A child at its context ceiling looks idle too, with `esc —`, and so
+does one that simply left its own next instruction unsubmitted in the input box — the `ctx`
+column and the diagnosis order in Step 5 are what separate those three. `/ship` never waits
+for an approval, so a session parked for a long stretch with a green pipeline and no
+escalation is worth a look — check its stage for `needs-human` or `ready-to-merge`.
 
 ## There is no companion reviewer session
 

@@ -79,8 +79,21 @@ while [ "$waited" -lt "$TIMEOUT" ]; do
   sleep 5; waited=$((waited+5))
 done
 if [ "$waited" -ge "$TIMEOUT" ]; then
-  echo "warning: no 'Compacted' marker after ${TIMEOUT}s — the session may be past the point of accepting even a slash command." >&2
-  echo "         recover with a FRESH session on the same worktree plus a handoff file; check git status/log there first." >&2
+  # EXIT 4 IS AMBIGUOUS, and saying otherwise has nearly killed a healthy run. This message
+  # used to assert the session was past accepting a slash command; it was not — two review
+  # subagents were running and the wait simply expired inside a long turn. The mid-turn guard
+  # above cannot see that case: background agents keep working after the main turn ends, so
+  # the session sits at a live prompt, accepts `/compact`, and then compacts slowly or not at
+  # all while they run. Acting on the old wording means discarding a session that was fine.
+  echo "warning: no 'Compacted' marker after ${TIMEOUT}s. This does NOT prove the session is dead." >&2
+  echo "         Two things produce it, and they need opposite responses:" >&2
+  echo "           * BENIGN — background agents or a long turn. The pane still shows a spinner or an" >&2
+  echo "             agent list. Re-run when that list is empty, or raise --timeout. Change nothing else." >&2
+  echo "           * REAL — the session is past accepting even a slash command. The pane shows no turn" >&2
+  echo "             running and typing into it does nothing." >&2
+  echo "         Tell them apart from GIT FIRST — \`git -C <worktree> log --oneline -5\` and \`git status\`" >&2
+  echo "         say what the child actually produced — then look at the pane. Only on REAL, recover with" >&2
+  echo "         a FRESH session on the same worktree plus a handoff file. \`/clear\` is never the answer." >&2
   exit 4
 fi
 
