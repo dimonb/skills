@@ -27,6 +27,16 @@ plugins/<plugin>/
 the two project skill directories hold symlinks so that a session opened here gets the
 packaged skills without a second copy in git. `make check` enforces this.
 
+**What the gate does and does not see under the two project skill directories.** It enforces the
+rule above over **committed** content: a tracked entry there must be a symlink into `plugins/`,
+and a packaged skill's own two link paths are asserted staged or not, because those paths are the
+repo's. Anything else you keep there untracked — a scratch directory, a local skill of your own,
+whatever another tool left behind — is your business: the gate reports it as a note and asserts
+nothing about it, not its frontmatter and not its scripts. That is deliberate, and it costs no
+coverage of anything this repo ships, because everything it ships lives under `plugins/`, which
+is checked in full including untracked files. Failing on incidental local state only ever blocked
+unrelated commits.
+
 ## No spec-artifact stage
 
 This repo keeps **no per-change spec artifact** — no spec tool, no design doc, no proposal

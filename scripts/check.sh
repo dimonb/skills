@@ -18,13 +18,41 @@ ROOT_P=$(pwd -P)          # physical repo root; see the symlink containment chec
 rc=0
 fail() { echo "FAIL $*"; rc=1; }
 
+# The two project skills directories, named ONCE. Check 5's listing, its note, its
+# outside-plugins exemption and checks 1 and 2 below all mean this same pair; two places
+# spelling it differently is how one of them stops being maintained.
+SKILL_LINK_DIRS='.claude/skills .agents/skills'
+under_skill_dirs() {
+  for _d in $SKILL_LINK_DIRS; do
+    case "$1" in "$_d"/*) return 0 ;; esac
+  done
+  return 1
+}
+# ...and is it UNTRACKED? That distinction is the entire exemption, and "exempt the project
+# skills directories" is the wrong summary of it — the one a later edit would implement. A
+# COMMITTED file under either directory is check 5's business and must still red.
+untracked_local_skill() {
+  under_skill_dirs "$1" || return 1
+  git ls-files --error-unmatch -- "$1" >/dev/null 2>&1 && return 1
+  return 0
+}
+# Why this costs no coverage of anything the repo ships, which is the part worth writing down:
+# the argument for checks 1 and 2 reading untracked files is that a brand-new PACKAGED skill's
+# SKILL.md is untracked between writing it and `git add`. True, and irrelevant here — a packaged
+# skill lives under plugins/, which stays fully checked, untracked included. These two
+# directories hold nothing but dogfooding symlinks into plugins/; that is the repo's own rule,
+# and asserting it is check 5's job. So an untracked entry here is the person's own business,
+# and failing on one only ever blocked unrelated commits.
+
 # ---------------------------------------------------------------- 1. shell syntax
 while IFS= read -r f; do
+  untracked_local_skill "$f" && continue
   bash -n "$f" || fail "syntax: $f"
 done < <(git ls-files --cached --others --exclude-standard '*.sh')
 
 # ------------------------------------------------- 2. SKILL.md frontmatter + name
 while IFS= read -r f; do
+  untracked_local_skill "$f" && continue
   head -1 "$f" | grep -q '^---$' || { fail "frontmatter missing: $f"; continue; }
   fm=$(awk 'NR>1 && /^---$/{exit} NR>1' "$f")
   printf '%s\n' "$fm" | grep -q '^name:'        || fail "no name: $f"
@@ -121,7 +149,8 @@ done
 # misleading message; they never pass, and no skill directory in any repo is plausibly named that
 # way. `-z` would remove the residue, but its records cannot survive `$( )`, which discards NUL
 # bytes — and the listing has to stay a command substitution so its exit status can be captured.
-skills_ls=$(git -c core.quotePath=false ls-files -s -- .claude/skills .agents/skills)
+# shellcheck disable=SC2086
+skills_ls=$(git -c core.quotePath=false ls-files -s -- $SKILL_LINK_DIRS)
 skills_rc=$?
 if [ "$skills_rc" -ne 0 ]; then
   # Never read "could not list" as "nothing to report" — the trap sections 7 to 10 each guard.
@@ -160,10 +189,11 @@ fi
 # Untracked entries get a NOTE, never a failure. Staying silent would be defensible — they
 # cannot violate a rule about committed content — but someone who expected their local skill to
 # be checked should learn here that it is not, rather than read a green gate as coverage.
-# The note names the check, because checks 1 and 2 DO still read the entry: without that the
-# gate can print a `FAIL` about a local skill and call it ignored in the same run.
+# The note is the only thing the gate says about such an entry at all now — checks 1 and 2
+# skip it too (see untracked_local_skill above), so nothing else will mention it.
+# shellcheck disable=SC2086
 untracked_skills=$(git -c core.quotePath=false ls-files --others --exclude-standard \
-  --directory -- .claude/skills .agents/skills)
+  --directory -- $SKILL_LINK_DIRS)
 while IFS= read -r e; do
   [ -n "$e" ] || continue
   e=${e%/}
@@ -174,7 +204,7 @@ while IFS= read -r e; do
   packaged=""
   for s in plugins/*/skills/"$(basename "$e")"/SKILL.md; do [ -f "$s" ] && packaged=1; done
   [ -n "$packaged" ] && continue
-  echo "note: untracked entry $e is local state, ignored by check 5 (checks 1 and 2 still read it)"
+  echo "note: untracked entry $e is local state and the gate asserts nothing about it"
 done <<< "$untracked_skills"
 
 # A SKILL.md anywhere but plugins/ is a duplicated source of truth (tracked or not). The two
@@ -184,10 +214,9 @@ done <<< "$untracked_skills"
 # Without this exemption a local skill reddened the gate TWICE — the `--others` reach of this
 # loop is the other half of the same false positive, not a separate one.
 while IFS= read -r f; do
-  case "$f" in
-    plugins/*|.claude/skills/*|.agents/skills/*) ;;
-    *) fail "SKILL.md outside plugins/ (the packaged copy is the only source of truth): $f" ;;
-  esac
+  case "$f" in plugins/*) continue ;; esac
+  under_skill_dirs "$f" && continue
+  fail "SKILL.md outside plugins/ (the packaged copy is the only source of truth): $f"
 done < <(git ls-files --cached --others --exclude-standard '*SKILL.md')
 # Every packaged skill must HAVE both links. Validating only the links that exist lets a new
 # skill ship with no dogfooding at all, which is the invariant this check is here to protect.

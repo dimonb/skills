@@ -58,6 +58,7 @@ restore() {
   # gate on its own assertion and then blocks the next run on the dirty-tree guard above.
   rm -rf docs/_probe.md "$SCRATCH" .claude/skills/_probe-local \
     plugins/ship/skills/_probe-skill .claude/skills/_probe-skill .agents/skills/_probe-skill \
+    .claude/skills/_probe-tracked plugins/ship/skills/_probe-pkg plugins/ship/skills/ship/_probe.sh \
     "$TESTS_DIR/t99-probe.sh" "$TESTS_DIR/t98-unregistered.sh" "$TESTS_DIR/nested" 2>/dev/null || true
   rmdir docs 2>/dev/null || true
 }
@@ -176,19 +177,28 @@ expect_fail "the two marketplace manifests list different plugins"
 git checkout -- .agents/plugins/marketplace.json
 
 # 5a — an entry COMMITTED under a project skills directory as something other than a symlink,
-# i.e. a second copy in the making. The check reads the INDEX, so reproducing this for real means
-# staging a mutation, and the restore trap's `git checkout --` cannot undo a staged add — the
-# destructive shape the guard at the top of this file exists to prevent. So the pathspec is
-# WIDENED inside check.sh instead, to a tracked path whose entries are ordinary files: same
-# assertion, same input shape, and no index to put back. Only the mode arm can fire — the real
-# symlinks still pass all three assertions, and nothing else in the gate reads that pathspec.
-# The limit, stated because a probe that passes is otherwise read as full coverage: this proves
-# the mode arm fires on a non-symlink entry, not that the pathspec names the right directories.
-cp scripts/check.sh "$SCRATCH/check5-mode.bak"
-perl -pi -e 's{^skills_ls=\$\(git ls-files -s -- \.claude/skills \.agents/skills\)$}{skills_ls=\$(git ls-files -s -- .claude/skills .agents/skills scripts)}' scripts/check.sh
-expect_fail "committed project skill entry that is not a symlink" \
-  "committed but not a symlink"
-cp "$SCRATCH/check5-mode.bak" scripts/check.sh
+# i.e. a second copy in the making. This is ALSO the probe that keeps checks 1 and 2's exemption
+# from being a hole: that exemption turns on `git ls-files --error-unmatch`, and this entry is in
+# the index, so it must still red.
+#
+# The assertion reads the INDEX, and the restore trap's `git checkout --` cannot undo a staged
+# add — the destructive shape the guard at the top of this file exists to prevent. So the entry
+# goes into a THROWAWAY index: git reads whatever GIT_INDEX_FILE names, so a copy of the real one
+# can be given a fake entry and discarded. Measured: the repo's own index stays byte-identical and
+# the working tree stays clean, so an interrupt leaves nothing but a scratch file. The blob is
+# hashed WITHOUT `-w`, so nothing reaches the object database either — check.sh reads the working
+# tree, never the blob. Unlike a widened pathspec this exercises the real directories, so nothing
+# here rests on the assertion being pointed at the right place.
+cp "$(git rev-parse --git-path index)" "$SCRATCH/fake-index"
+mkdir -p .claude/skills/_probe-tracked
+printf -- '---\nname: _probe-tracked\ndescription: A probe skill.\n---\n' \
+  > .claude/skills/_probe-tracked/SKILL.md
+GIT_INDEX_FILE="$SCRATCH/fake-index" git update-index --add --cacheinfo \
+  "100644,$(git hash-object .claude/skills/_probe-tracked/SKILL.md),.claude/skills/_probe-tracked/SKILL.md"
+export GIT_INDEX_FILE="$SCRATCH/fake-index"
+expect_fail "committed non-symlink under a project skills dir" "committed but not a symlink"
+unset GIT_INDEX_FILE
+rm -rf .claude/skills/_probe-tracked
 
 # 5b — a broken symlink. `[ -e ]` follows the link, so this is the case that once slipped.
 ln -sfn ../../plugins/ship/skills/gone .claude/skills/ship
@@ -445,21 +455,44 @@ mkdir -p .claude/skills/_probe-local
 expect_pass "untracked directory under a project skills dir" \
   "note: untracked entry .claude/skills/_probe-local"
 
-# ...and with a SKILL.md in it, which is the natural thing to keep there. That file reddened a
-# SECOND assertion — the `--others` reach of "SKILL.md outside plugins/" — so an empty directory
-# alone leaves half the false positive unproven. Its frontmatter is valid and its name matches
-# the directory on purpose: checks 1 and 2 DO read untracked files by design, and this probe is
-# not about relaxing them.
-printf -- '---\nname: _probe-local\ndescription: A local, unversioned skill.\n---\n' \
+# 19b — ...and with a SKILL.md in it, which is the natural thing to keep there. That file
+# reddened a SECOND assertion, the `--others` reach of "SKILL.md outside plugins/", so an empty
+# directory alone leaves half the false positive unproven. Its name disagrees with its directory
+# on purpose: that is the shape that kept the original symptom alive through CHECK 2 after check 5
+# had been fixed, and the three probes here are the issue's own reproduction.
+printf -- '---\nname: totally-different\ndescription: A local, unversioned skill.\n---\n' \
   > .claude/skills/_probe-local/SKILL.md
-expect_pass "untracked local skill with a SKILL.md in it"
+expect_pass "untracked local skill whose name disagrees with its directory"
+
+# 19c — check 2's other arm.
+printf 'not frontmatter at all\n' > .claude/skills/_probe-local/SKILL.md
+expect_pass "untracked local skill with no frontmatter"
+
+# 19d — and check 1: a script bash cannot parse, which blocked every commit just as loudly.
+printf 'if true; then\n' > .claude/skills/_probe-local/helper.sh
+expect_pass "untracked local skill carrying an unparseable script"
 rm -rf .claude/skills/_probe-local
+
+# 19e — the counter-tests that keep 19b-d from being a hole. The SAME two violations under
+# plugins/, where untracked content is still read in full, because that is what the repo ships and
+# a packaged skill's SKILL.md is untracked in the moment between writing it and `git add`.
+mkdir -p plugins/ship/skills/_probe-pkg
+printf -- '---\nname: totally-different\ndescription: A probe skill.\n---\n' \
+  > plugins/ship/skills/_probe-pkg/SKILL.md
+expect_fail "untracked packaged SKILL.md whose name disagrees with its directory" \
+  "skill name 'totally-different' != directory '_probe-pkg'"
+rm -rf plugins/ship/skills/_probe-pkg
+
+printf 'if true; then\n' > plugins/ship/skills/ship/_probe.sh
+expect_fail "untracked script under plugins/ that bash cannot parse" \
+  "syntax: plugins/ship/skills/ship/_probe.sh"
+rm -f plugins/ship/skills/ship/_probe.sh
 
 # 20 — and check 5 must say the listing found nothing rather than pass having asserted nothing.
 # Repointed inside check.sh, like 14b: `git ls-files -s` over a pathspec matching no tracked file
 # warns about nothing and exits 0, so this lands on the empty arm and only on it.
 cp scripts/check.sh "$SCRATCH/check5-empty.bak"
-perl -pi -e 's{^skills_ls=\$\(git ls-files -s -- \.claude/skills \.agents/skills\)$}{skills_ls=\$(git ls-files -s -- .claude/skills-moved-away)}' scripts/check.sh
+perl -pi -e 's{^skills_ls=\$\(git -c core\.quotePath=false ls-files -s -- \$SKILL_LINK_DIRS\)$}{skills_ls=\$(git ls-files -s -- .claude/skills-moved-away)}' scripts/check.sh
 expect_fail "project skill listing fails LOUDLY when it lists nothing" \
   "no tracked entry under"
 cp "$SCRATCH/check5-empty.bak" scripts/check.sh
@@ -469,7 +502,7 @@ cp "$SCRATCH/check5-empty.bak" scripts/check.sh
 # so the status has to be forced — and forcing it while the output stays non-empty is what stops
 # the empty arm from explaining the failure instead.
 cp scripts/check.sh "$SCRATCH/check5-rc.bak"
-perl -pi -e 's{^skills_ls=\$\(git ls-files -s -- \.claude/skills \.agents/skills\)$}{skills_ls=\$(git ls-files -s -- .claude/skills .agents/skills; exit 128)}' scripts/check.sh
+perl -pi -e 's{^skills_ls=\$\(git -c core\.quotePath=false ls-files -s -- \$SKILL_LINK_DIRS\)$}{skills_ls=\$(git ls-files -s -- $SKILL_LINK_DIRS; exit 128)}' scripts/check.sh
 expect_fail "project skill listing fails LOUDLY when git ls-files errors" \
   "could not list tracked project skill entries"
 cp "$SCRATCH/check5-rc.bak" scripts/check.sh

@@ -140,7 +140,11 @@ scripts/check-test.sh   proof the gate fires     (make check-test)
 
 **One source of truth per skill.** The packaged copy under `plugins/` is the only real file;
 the two project skill directories hold symlinks, so working in this repo exercises exactly
-what an install ships. `make check` fails if a second copy of a `SKILL.md` ever appears.
+what an install ships. `make check` fails if a second copy of a `SKILL.md` is ever **committed**.
+An untracked entry you keep under either directory is local state: the gate reports it as a note
+and asserts nothing about it — not its frontmatter, not its scripts — because it is not in the
+repository and cannot reach a clone. A packaged skill's own two link paths are the exception, and
+are asserted whether or not they have been staged.
 
 A plugin directory carries **both** agents' manifests. Neither agent objects to the other's,
 so one directory serves both from one skills tree.
@@ -177,11 +181,16 @@ make check-test   # proves each of the gate's assertions actually fails when vio
 ```
 
 The gate checks that every shell script parses; that every `SKILL.md` has frontmatter whose
-`name` matches its directory; that each plugin has both manifests, valid and named after its
+`name` matches its directory — both over tracked files and over untracked ones under `plugins/`,
+since a packaged skill is untracked in the moment between writing it and `git add`, and neither
+over an untracked entry in the two project skill directories, which is local state the repo does
+not own; that each plugin has both manifests, valid and named after its
 directory, with at least one skill; that marketplace entries resolve and that **both**
 manifests offer the same plugins as `plugins/` on disk; that every packaged skill is
 symlinked for both agents, with the link resolving inside `plugins/` and no second copy of
-any `SKILL.md`; that no per-forge reference file carries a copy of the pipeline state enum
+any `SKILL.md` **in git** — a packaged skill's own two link paths are repo-owned, so those are
+asserted staged or not, while any other untracked entry there is local state and only draws a
+note; that no per-forge reference file carries a copy of the pipeline state enum
 and no state exists without a handler; that no non-generic string is present; that no tracked
 file carries non-Latin script; that no council test names the shared temp parent — a grep
 for the shape a test copied from an older checkout carries, not a proof about where its rooms
@@ -189,11 +198,19 @@ are built; and that every council test on disk appears in the list `run-all.sh` 
 walks, so a test cannot land and then silently stop running.
 
 `make check-test` exists because a gate that has never failed can be vacuous and look
-identical to one that works. It proves 51 assertions — a clean baseline plus 50 injected
-violations, one at a time, each probe aiming to fire only the assertion it names. Every
-failure path in `check.sh` now has one, including every arm that fires when a matcher errors,
-or finds nothing to inspect, instead of finding a violation — an unprobed arm of that kind
-reports success having inspected nothing, which is indistinguishable from a clean run.
+identical to one that works. It proves 62 assertions — a clean baseline, 56 injected
+violations one at a time, each probe aiming to fire only the assertion it names, and 5 cases
+that require the gate to stay **green**. Every failure path in `check.sh` now has one, including
+every arm that fires when a matcher errors, or finds nothing to inspect, instead of finding a
+violation — an unprobed arm of that kind reports success having inspected nothing, which is
+indistinguishable from a clean run.
+
+The green cases are the same defect seen from the other side. A check that reds on state the repo
+does not own blocks every commit until that state is moved, and nothing about a red gate says
+which of the two kinds it is; one such false positive is what made check 5 index-driven. Those
+probes pass `expect_pass` the message the gate must still print, for the same reason the red ones
+pin theirs: an exit status alone cannot tell a check that correctly ignored something from a check
+that is gone.
 
 Where two arms are layered so that the outer one reds for the inner — a missing runner means
 no test list, and no test list means every test reads as unregistered — the probe passes the
@@ -201,13 +218,13 @@ expected message to `expect_fail` and is failed as `WRONG ARM` without it. Asser
 that *something* reddened would keep reporting a pass over an assertion that had been
 deleted, which is how both of check 10's diagnostic arms were vacuous when first written.
 
-Eight arms still have no kill test, named here rather than left to be found: delete the `fail`
+Five arms still have no kill test, named here rather than left to be found: delete the `fail`
 for `no name:`, `plugin has no skills/ directory`, `plugin has no skills/<skill>/SKILL.md`,
-`missing marketplace manifest`, `invalid JSON` (marketplace), `missing project skills dir`,
-`not a symlink` or `broken symlink`, and the probe that names it still reds — on a neighbouring
-assertion — so `make check-test` reports it caught over an assertion that no longer exists.
-Every one is pre-existing and each needs its own pin, so they are tracked as an issue rather
-than fixed alongside an unrelated change.
+`missing marketplace manifest` or `invalid JSON` (marketplace), and the probe that names it still
+reds — on a neighbouring assertion — so `make check-test` reports it caught over an assertion
+that no longer exists. Every one is pre-existing and each needs its own pin, so they are tracked
+as an issue rather than fixed alongside an unrelated change. The list `check-test.sh` keeps above
+`expect_fail` is the authoritative one; this paragraph is a summary of it and nothing more.
 
 Writing and re-running it has found six real bugs
 so far, including a broken symlink that slipped past an `[ -e ]` test, a leak check that never
