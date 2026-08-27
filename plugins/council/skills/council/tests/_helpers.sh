@@ -36,9 +36,39 @@ ROOM_KEEPERS=()
 # cleanup ran either way.
 _council_test_cleanup() {
   local rc=$?
-  local k
+  local k p i
   if [ "${#ROOM_KEEPERS[@]}" -gt 0 ]; then
     for k in "${ROOM_KEEPERS[@]}"; do kill "$(cat "$k" 2>/dev/null)" 2>/dev/null; done
+  fi
+  # The listeners a test backgrounds itself are NOT keepers: they hold a bell fifo, they poll
+  # nothing, and removing the root does not touch them. Their parent dies with the test, so
+  # they reparent to init, and no later run reuses the room name — nothing will ever reap
+  # them and they last until the machine reboots. One was found here three days old.
+  #
+  # Each such test also takes its own down, on its LAST line — which is the one line an early
+  # exit skips: a failed assertion above it, the runner's timeout ceiling, a plain kill. Doing
+  # it here instead puts it on every exit path, and covers tests not yet written.
+  #
+  # `$(jobs -p)` inside this trap lists the JOBS OF THE SHELL THAT SET IT, not of the
+  # substitution's subshell — the job table is inherited for reporting. Measured on bash 5.3.
+  local -a bg=(); bg=( $(jobs -p 2>/dev/null) )
+  if [ "${#bg[@]}" -gt 0 ]; then
+    # TERM first, then CONT — in that order and not the reverse. A SIGSTOPped child does not
+    # act on TERM until something lets it run again, and t3 stops a peer on purpose; sending
+    # CONT first would instead give it a window to block on its fifo afresh. Measured: STOP
+    # then TERM leaves it alive, and the queued TERM is delivered the moment CONT arrives.
+    kill "${bg[@]}" 2>/dev/null
+    kill -CONT "${bg[@]}" 2>/dev/null
+    # A bounded wait, then KILL for whatever ignored TERM. Not `wait`: a job blocked on a fifo
+    # read may never return, and this trap must not be the thing that hangs.
+    local alive
+    for i in 1 2 3 4 5 6 7 8 9 10; do
+      alive=0
+      for p in "${bg[@]}"; do kill -0 "$p" 2>/dev/null && { alive=1; break; }; done
+      [ "$alive" = 1 ] || break
+      sleep 0.1
+    done
+    kill -9 "${bg[@]}" 2>/dev/null
   fi
   [ "${COUNCIL_TEST_ROOT_OWNED:-0}" = 1 ] && rm -rf "$COUNCIL_TEST_ROOT"
   return $rc
