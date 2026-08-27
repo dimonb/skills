@@ -21,6 +21,8 @@ set -uo pipefail
 cd "$(dirname "$0")/.."
 
 CORE=plugins/ship/skills/ship/SKILL.md
+TESTS_DIR=plugins/council/skills/council/tests
+RUNNER=$TESTS_DIR/run-all.sh
 GUARDED='.claude .agents plugins scripts .claude-plugin'
 
 # The guard comes FIRST and the trap is installed only after it passes. Installing the trap
@@ -50,15 +52,39 @@ restore() {
   # Untracked probe files: `git checkout --` cannot bring these back OR take them away, so an
   # interrupt between writing one and its inline rm would leave it. A stray t99-probe.sh reds the
   # gate on its own assertion and then blocks the next run on the dirty-tree guard above.
-  rm -rf docs/_probe.md "$SCRATCH" plugins/council/skills/council/tests/t99-probe.sh 2>/dev/null || true
+  rm -rf docs/_probe.md "$SCRATCH" \
+    "$TESTS_DIR/t99-probe.sh" "$TESTS_DIR/t98-unregistered.sh" "$TESTS_DIR/nested" 2>/dev/null || true
   rmdir docs 2>/dev/null || true
 }
 trap restore EXIT
 
 pass=0; nocatch=0
+# $1 is the label. $2, OPTIONAL, is a fixed string the gate's output must contain.
+#
+# Without $2 a probe asserts only that SOMETHING reddened, and that is not enough wherever two
+# arms are layered so that the outer one catches whatever the inner one would. Check 10 has
+# exactly that shape: a missing runner means no test list, and no test list means every test on
+# disk reads as unregistered — so deleting the inner arm still reds, on the neighbour, and the
+# probe keeps reporting `caught` over an assertion that no longer exists. Both of check 10's
+# diagnostic arms were vacuous in this way when they were written, and nothing said so.
+#
+# Pass $2 for any probe whose arm has a neighbour that can substitute for it. EIGHT probes below
+# still need one and do not have it — the two hollow-plugin probes, `second copy of a SKILL.md`,
+# `broken dogfooding symlink`, `SKILL.md with no name:`, `missing marketplace manifest`,
+# `invalid JSON in a marketplace manifest` and `missing project skills dir`. Delete the arm any of
+# them names and this suite still reports it caught, so those eight arms have no kill test. They
+# are pre-existing and tracked in the follow-up issue rather than pinned here; do not read the
+# absence of a $2 as evidence that a probe does not need one.
 expect_fail() {
   if make check >"$SCRATCH/out" 2>&1; then
     echo "NOT CAUGHT: $1"; nocatch=$((nocatch+1))
+  elif [ -n "${2:-}" ] && ! grep -qF -- "$2" "$SCRATCH/out"; then
+    # Reddened, but on a different assertion than the one this probe names: the named arm is
+    # unproven, which is the same result as NOT CAUGHT and must not be reported as a pass.
+    echo "WRONG ARM:  $1"
+    echo "            expected: $2"
+    echo "            got:      $(grep -m1 '^FAIL' "$SCRATCH/out" | cut -c1-70)"
+    nocatch=$((nocatch+1))
   else
     echo "caught:     $1   ->  $(grep -m1 '^FAIL' "$SCRATCH/out" | cut -c1-80)"
     pass=$((pass+1))
@@ -195,12 +221,21 @@ enprobe '\u6f22\u5b57'                             'Han'
 enprobe '\u0641\u0642'                             'Arabic'
 rmdir docs 2>/dev/null || true
 
-# 8 — the two assertions the gate is most easily made vacuous by, and which the review
-# noted were themselves untested: the leak check failing LOUDLY rather than open when it
-# cannot scan, and the dual-agent manifest/disk invariant.
+# 8 — the assertions the gate is most easily made vacuous by, and which the review noted were
+# themselves untested: the leak check and the English check each failing LOUDLY rather than open
+# when they cannot scan, and the dual-agent manifest/disk invariant.
 sed -i.bak 's/^deny=.\/Users/deny='"'"'(unclosed/' scripts/check.sh
 expect_fail "leak check fails LOUDLY on a broken pattern (not open)"
 mv scripts/check.sh.bak scripts/check.sh
+
+# And check 8's own "could not run" arm, which had no probe while its neighbour above did. Same
+# technique: break its PCRE to an invalid one, so `git grep -P` exits 128 on every file and only
+# the error arm can fire. Without this the arm is vacuous — reverting the check to a bare
+# `if [ "$g" -eq 0 ]` would read the error as "no violation" and still pass check-test.
+cp scripts/check.sh "$SCRATCH/check8.bak"
+perl -pi -e 's/\\p\{Cyrillic\}/(unclosed/' scripts/check.sh
+expect_fail "English check fails LOUDLY when git grep errors (not open)"
+cp "$SCRATCH/check8.bak" scripts/check.sh
 
 python3 - <<'PY'
 import json
@@ -263,12 +298,31 @@ git checkout -- "$CORE"
 # 12 — a council test that builds its room at a path fixed by its own name. This is the shape
 # every test had before the run root existed, so it is the shape a new test copied from an old
 # checkout would carry. Untracked, so the restore cannot remove it: delete it explicitly.
-cat > plugins/council/skills/council/tests/t99-probe.sh <<'PROBE'
+#
+# Registered in the runner as well, so that ONLY check 9 can fire: an unregistered probe file
+# also trips check 10, and a probe that fires two checks at once proves neither.
+perl -pi -e 's{^tests=\(}{tests=(t99-probe.sh }' "$RUNNER"
+cat > "$TESTS_DIR/t99-probe.sh" <<'PROBE'
 #!/usr/bin/env bash
 R="${TMPDIR:-/tmp}/council-test/t99"; rm -rf "$R"
 PROBE
 expect_fail "council test naming a fixed temp room path"
-rm -f plugins/council/skills/council/tests/t99-probe.sh
+rm -f "$TESTS_DIR/t99-probe.sh"
+git checkout -- "$RUNNER"
+
+# 12b — the exemption for the two non-test files applies to the path RELATIVE to the tests
+# directory, not to the basename. The pathspec crosses directories, so under a basename match a
+# `nested/run-all.sh` carrying the very shape check 9 exists to catch was skipped and the gate
+# stayed green. Registered, again so only check 9 can fire.
+perl -pi -e 's{^tests=\(}{tests=(nested/run-all.sh }' "$RUNNER"
+mkdir -p "$TESTS_DIR/nested"
+cat > "$TESTS_DIR/nested/run-all.sh" <<'PROBE'
+#!/usr/bin/env bash
+R="${TMPDIR:-/tmp}/council-test/nested"; rm -rf "$R"
+PROBE
+expect_fail "nested run-all.sh exempted by basename alone"
+rm -rf "$TESTS_DIR/nested"
+git checkout -- "$RUNNER"
 
 # 13 — and check 9 must fail LOUDLY when grep cannot scan, not read the error as "no violation".
 # Same technique as the leak-check probe above: break the check's own pattern to an invalid ERE,
@@ -304,6 +358,46 @@ cp scripts/check.sh "$SCRATCH/check9-empty.bak"
 perl -pi -e 's{^tests_dir=plugins/council/skills/council/tests$}{tests_dir=plugins/council/skills/council/tests-moved-away}' scripts/check.sh
 expect_fail "council-test scan fails LOUDLY when it inspects no file at all"
 cp "$SCRATCH/check9-empty.bak" scripts/check.sh
+
+# 15 — a council test on disk that the runner never runs. Untracked, which is the state it is in
+# during the `make check` just before `git add`, and deliberately free of the pre-run-root shape
+# so that check 9 cannot fire and claim the catch instead.
+cat > "$TESTS_DIR/t98-unregistered.sh" <<'PROBE'
+#!/usr/bin/env bash
+R="$COUNCIL_TEST_ROOT/t98"; rm -rf "$R"
+PROBE
+expect_fail "council test on disk but not registered in run-all.sh"
+rm -f "$TESTS_DIR/t98-unregistered.sh"
+
+# 16 — and check 10 must say it cannot find the list, rather than comparing the files on disk
+# against an empty set. BOTH assignments are renamed: renaming only `tests=(` leaves the `--full`
+# `tests+=(` line, whose four names extract fine, so the probe would land on the unregistered arm
+# instead — caught, but by the wrong assertion, which proves nothing about this one.
+perl -pi -e 's/^tests=\(/TESTS=(/; s/tests\+=\(/TESTS+=(/' "$RUNNER"
+expect_fail "run-all.sh test list not found (not compared against an empty set)" \
+  "could not find the test list in"
+git checkout -- "$RUNNER"
+
+# 17 — and the runner itself gone. Repointed inside check.sh rather than moved for real: the
+# real move trips check 1 as well, because `git ls-files --cached` still lists the file from the
+# INDEX and `bash -n` then fails on the missing path — two assertions from one probe, which
+# proves neither. Check 9 is unaffected either way, its exemption naming run-all.sh literally.
+# The expected message is load-bearing: with no runner there is no list either, so the
+# `could not find the test list` arm reds too and would report this one caught while it slept.
+cp scripts/check.sh "$SCRATCH/check10-runner.bak"
+perl -pi -e 's{^runner=\$tests_dir/run-all\.sh$}{runner=\$tests_dir/run-all-gone.sh}' scripts/check.sh
+expect_fail "council test runner missing" "council test runner is missing"
+cp "$SCRATCH/check10-runner.bak" scripts/check.sh
+
+# 18 — and check 10 must not read a comparison that never ran as "nothing unregistered". Same
+# technique as 13 and 17: break the comparator's name so it cannot execute, leaving only the
+# status arm. Without this probe that arm is vacuous — delete it and the suite still reports
+# every assertion caught, which is how it shipped in the commit that added it.
+cp scripts/check.sh "$SCRATCH/check10-comm.bak"
+perl -pi -e 's/\$\(comm -23 /\$(comm-does-not-exist -23 /' scripts/check.sh
+expect_fail "test-list comparison fails LOUDLY when comm errors (not open)" \
+  "could not compare the test list"
+cp "$SCRATCH/check10-comm.bak" scripts/check.sh
 
 echo
 echo "assertions proven: $pass   not caught: $nocatch"

@@ -183,17 +183,33 @@ manifests offer the same plugins as `plugins/` on disk; that every packaged skil
 symlinked for both agents, with the link resolving inside `plugins/` and no second copy of
 any `SKILL.md`; that no per-forge reference file carries a copy of the pipeline state enum
 and no state exists without a handler; that no non-generic string is present; that no tracked
-file carries non-Latin script; and that no council test names the shared temp parent — a grep
+file carries non-Latin script; that no council test names the shared temp parent — a grep
 for the shape a test copied from an older checkout carries, not a proof about where its rooms
-are built.
+are built; and that every council test on disk appears in the list `run-all.sh` actually
+walks, so a test cannot land and then silently stop running.
 
 `make check-test` exists because a gate that has never failed can be vacuous and look
-identical to one that works. It proves 45 assertions — a clean baseline plus 44 injected
-violations, one at a time, each of which the gate must catch, with each probe constructed so
-that only the assertion it names can fire. Exactly one of `check.sh`'s failure paths is left
-unprobed: the English check's "could not scan" arm, which fires only when `git grep` itself
-errors. The leak check's and the council-test check's equivalent arms are both probed, so the
-technique is there if the last one is ever worth closing. Writing and re-running it has found six real bugs
+identical to one that works. It proves 51 assertions — a clean baseline plus 50 injected
+violations, one at a time, each probe aiming to fire only the assertion it names. Every
+failure path in `check.sh` now has one, including every arm that fires when a matcher errors,
+or finds nothing to inspect, instead of finding a violation — an unprobed arm of that kind
+reports success having inspected nothing, which is indistinguishable from a clean run.
+
+Where two arms are layered so that the outer one reds for the inner — a missing runner means
+no test list, and no test list means every test reads as unregistered — the probe passes the
+expected message to `expect_fail` and is failed as `WRONG ARM` without it. Asserting only
+that *something* reddened would keep reporting a pass over an assertion that had been
+deleted, which is how both of check 10's diagnostic arms were vacuous when first written.
+
+Eight arms still have no kill test, named here rather than left to be found: delete the `fail`
+for `no name:`, `plugin has no skills/ directory`, `plugin has no skills/<skill>/SKILL.md`,
+`missing marketplace manifest`, `invalid JSON` (marketplace), `missing project skills dir`,
+`not a symlink` or `broken symlink`, and the probe that names it still reds — on a neighbouring
+assertion — so `make check-test` reports it caught over an assertion that no longer exists.
+Every one is pre-existing and each needs its own pin, so they are tracked as an issue rather
+than fixed alongside an unrelated change.
+
+Writing and re-running it has found six real bugs
 so far, including a broken symlink that slipped past an `[ -e ]` test, a leak check that never
 saw untracked files, a state/handler check that passed because `spec` is a prefix of
 `spec-review`, and probes of its own that fired the wrong check and so proved nothing.
