@@ -58,12 +58,26 @@ terminal for a question it asked.
 types into the child's terminal, records what was sent, and reports whether it was delivered
 or queued.
 
-**Compaction that puts the child back to work.** A long change will reach its context
-ceiling. Compacting alone is only half the job: a compacted child comes back with an empty
-context and then *sits idle* — the same signature as the stall you just cured. So compaction
-and resume are one operation, and hard constraints that must outlive a compaction go into a
-standing-orders file rather than a message, because a message dies with the context that held
-it.
+**A diagnosis order for a child that looks stuck.** Several different failures wear one face:
+a child at its context ceiling, one compacted and never resumed, one that left its own next
+instruction unsubmitted in the input box, and one healthily waiting on CI all read the same
+from the table. So the order is fixed — **git first** (it says what the child *produced*; the
+pane says only what it *intended*), then the directive channel, and only then compaction. The
+status table prints that order next to any slot it flags as stalled.
+
+**A context reading you can trust.** The `ctx` column is read from the child's own transcript,
+not scraped from its terminal — a child running subagents shows no session figure on screen at
+all, so the pane goes blind exactly when the child is deepest in work. It shows a percentage
+beside the raw token count, and says so explicitly when it *cannot* scale the number rather
+than guessing.
+
+**Compaction that puts the child back to work**, for when it is actually needed. The client's
+own autocompact handles ordinary growth on its own; what it does not do is rescue a session
+already past the line, or resume one afterwards. And compacting alone is only half the job: a
+compacted child comes back with an empty context and then *sits idle* — the same signature as
+the stall you just cured. So compaction and resume are one operation, and hard constraints that
+must outlive a compaction go into a standing-orders file rather than a message, because a
+message dies with the context that held it.
 
 ## Files
 
@@ -73,6 +87,8 @@ it.
 | `shipyard-lib.sh` | mailbox paths, slot resolution, payload input, the child env preamble |
 | `shipyard-launch.sh` | start a child: slot, protocol, launcher, container |
 | `shipyard-report.sh` | the status table, stall watchdog, sidebar glyphs |
+| `shipyard-ctx.sh` | the ctx column: reads a child's transcript, infers its window, bands it |
+| `tests/run-all.sh` | the `shipyard-ctx.sh` suite — run by hand, not part of `make check` |
 | `shipyard-escalations.sh` | the escalation view (`--new` for a fast monitor) |
 | `shipyard-ask.sh` | child side: raise a question / decision / notice |
 | `shipyard-answer.sh` | parent side: answer one |
@@ -120,10 +136,15 @@ starts nothing.
 
 Environment knobs: `SHIPYARD_BACKEND`, `SHIPYARD_WORKSPACE`, `SHIPYARD_SESSION`,
 `SHIPYARD_ENV_PASS`, `SHIPYARD_ENV_SCRUB`, `SHIPYARD_SLOT`, `SHIPYARD_FORCE`, `SHIPYARD_DRY`,
-`SHIPYARD_STALL_SECS`, `SHIPYARD_TELL_MAXLINE`, `SHIPYARD_ASK_TIMEOUT`.
+`SHIPYARD_STALL_SECS`, `SHIPYARD_CTX_WINDOW`, `SHIPYARD_TELL_MAXLINE`, `SHIPYARD_ASK_TIMEOUT`.
 
-Two are worth knowing about: `SHIPYARD_ENV_PASS` extends the set of variables copied from your
-session into a child, and `SHIPYARD_ENV_SCRUB` overrides the set removed from it — the
+`SHIPYARD_CTX_WINDOW` pins the context window, in tokens as a plain integer, that the `ctx`
+percentage is measured against. Without it the window is inferred from the largest total the
+child's transcript has ever carried — a request that carried N tokens cannot have run on a
+window smaller than N — and the override beats that inference in both directions.
+
+Two more are worth knowing about: `SHIPYARD_ENV_PASS` extends the set of variables copied from
+your session into a child, and `SHIPYARD_ENV_SCRUB` overrides the set removed from it — the
 defaults strip this session's own identity, including the messaging socket, so a child cannot
 reach the parent's IPC channel. Override that one only if you know why. `SHIPYARD_DRY=1`
 prints everything a child would get and starts nothing.

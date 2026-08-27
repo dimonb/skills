@@ -409,11 +409,20 @@ bash <SKILL>/shipyard-tell.sh <slot> "<what it should do next>"
 ```
 
 It types, submits, and reports `delivered` / `queued` / `unconfirmed` from a before/after
-diff — which is precisely what hand-driving is trying to establish by eye, and it gets it
-right. Measured: three hand-driven attempts (typing, sending newlines, `--select`) all
-failed and each produced a wrong conclusion; `shipyard-tell.sh` then worked **first try**.
-Reach for the raw terminal only after this has failed, and read the three facts at the end
-of this section before you do.
+diff — which is precisely what hand-driving is trying to establish by eye. Measured: three
+hand-driven attempts (typing, sending newlines, `--select`) all failed and each produced a
+wrong conclusion; `shipyard-tell.sh` then worked **first try**. Reach for the raw terminal
+only after this has failed, and read the three facts at the end of this section before you do.
+
+**One caveat, and it bites on exactly the case above.** `shipyard-tell.sh` does not clear the
+input box — it types over whatever is there, because it is also meant to reach a child that is
+mid-turn, where the Escape that would clear the box is *interrupt*. So against a child that
+left its own instruction unsubmitted, the directive is APPENDED to that text and the whole line
+is submitted together: `[supervisor directive]` is then no longer a prefix, and the child's
+protocol confers authority only on a message that leads with it. The before/after diff still
+reports `delivered`, because the screen did change. So look at the input line in step 1 while
+you are there, and if it has a leftover draft, expect the child to treat your nudge as ordinary
+input rather than as the human speaking.
 
 **3. ONLY THEN COMPACT** — `shipyard-compact.sh <slot>`, and only when `ctx` is `⚠️`/`🛑`
 or the nudge came back `unconfirmed`. Compaction is not the default remedy (below).
@@ -466,14 +475,24 @@ would restore exactly the failure this column was rebuilt to remove. If you know
 and want the band exact from the first turn, set `SHIPYARD_CTX_WINDOW` — it wins
 unconditionally, including downwards, for a window smaller than any the report knows.
 
-Two readings mean *the report does not know*, and neither is `0%`:
+Two readings mean *the report does not know*, and neither is `0%`. They are deliberately
+different marks, because they are different facts and you act differently on them — the first
+resolves itself on the child's next turn, the second never does:
 
-* **`—`** — no figure was obtainable at all: no completed turn yet, or no transcript.
-* **a bare token count with no percentage** (`1240k`) — the total exceeds every window size
-  the report knows of, so the percentage would have to be over 100. That is a contradiction,
-  not a measurement, so it is not shown. It means the window list has fallen behind a new
-  model, or `SHIPYARD_CTX_WINDOW` is set too low. Fix whichever, rather than reading the
-  number as a ceiling.
+* **`—`** — no figure was obtainable at all: no completed turn yet, no transcript, or the child
+  resolved a different config directory from the parent (`CLAUDE_CONFIG_DIR` / `CLAUDE_HOME` are
+  propagated to a child only when they are set in the parent, so a child's login profile can
+  still send it somewhere else).
+* **`❓` and a bare token count** (`❓ 1240k`) — the figure exceeds every window size this script
+  knows of, so a percentage would have to be invented. Its band is `unknown`, which is neither
+  ok nor crit: the script is holding a number it cannot scale, and asserting either would be a
+  lie. **Do not read the missing percentage as healthy.** Your next step is to name the window —
+  `SHIPYARD_CTX_WINDOW=<tokens>` — or add the size to `CTX_WINDOWS` in `shipyard-ctx.sh` if a
+  new model has shipped. The report prints a block under the table saying exactly that.
+
+`SHIPYARD_CTX_WINDOW` takes the window **in tokens, as a plain integer** (`1000000`, not `1M` or
+`1000k` — a shorthand is refused, out loud, on stderr). It wins over the inference in both
+directions, so setting it leaves the `unknown` band immediately.
 
 ### Compaction is a backstop, not routine
 
@@ -493,8 +512,9 @@ the ones this step exists for:
   back with an empty context and sits idle until told to continue. Same silhouette again.
 
 So reach for a manual compaction when the figure keeps climbing through `🛑` without one
-firing, or when a nudge came back `unconfirmed`. Act on `⚠️` rather than waiting for `🛑`
-when you do: compaction is itself an API call and needs working room. The footer hint
+firing, or when a nudge came back `unconfirmed`. Once you have decided to, do not put it off:
+compaction is itself an API call and needs working room, so run it before the figure reaches
+the ceiling rather than at it. The footer hint
 `/clear to save NNNk tokens` means the ceiling is close — it does not mean `/clear` is the
 answer, and it never is.
 
@@ -581,7 +601,7 @@ name — once it holds no ship sessions. The change's feature branch can go afte
 | session | ▶️ running / ⏸ idle-wait (snapshot diff) / ⛔ no terminal |
 | MR state / stage | forge state (opened/merged/closed) + ship's pipeline stage |
 | esc | open escalations for this slot |
-| ctx | child context usage as `<pct>% · <tokens>`, read from its transcript; `⚠️` ≥65%, `🛑` ≥80%; `—` = no figure obtainable (Step 5) |
+| ctx | child context usage as `<pct>% · <tokens>`, read from its transcript; `⚠️` ≥65%, `🛑` ≥80%. Two non-readings: `—` = nothing measurable yet; `❓ <tokens>` = the figure exceeds every window this script knows, so the percentage would be invented — set `SHIPYARD_CTX_WINDOW`, or add the size to `CTX_WINDOWS`. Neither means healthy (Step 5) |
 | last line | last meaningful line of the screen |
 
 ⏸ idle-wait is **normal** for ship: it waits on CI or on a self-review round and re-wakes
@@ -615,6 +635,8 @@ collide with it.
 |------|------|
 | `shipyard-backend.sh` | the agterm/tmux abstraction — every terminal operation goes through it |
 | `shipyard-lib.sh` | mailbox paths, slot resolution, payload input, the child env preamble |
+| `shipyard-ctx.sh` | the ctx column: reads a child's transcript, infers its window, bands it |
+| `tests/run-all.sh` | the `shipyard-ctx.sh` suite — run by hand: `bash <SKILL>/tests/run-all.sh` |
 | `shipyard-launch.sh` | start a child: slot, protocol, launcher, container |
 | `shipyard-report.sh` | the status table + stall watchdog + sidebar glyphs |
 | `shipyard-escalations.sh` | the escalation view (`--new` for the fast monitor) |
