@@ -1,6 +1,6 @@
 {
   "name": "shipyard",
-  "version": "0.1.1",
+  "version": "0.2.0",
   "description": "Run the repo's /ship skill in background terminals (agterm sessions, or tmux) and supervise a fleet of them: one git worktree each, a status table every 10 minutes, and every question or architectural decision escalated back to the session you are sitting in. Requires a /ship skill in the repo — it launches nothing else.",
   "dependencies": [
     "ship"

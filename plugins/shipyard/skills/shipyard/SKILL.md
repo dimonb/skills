@@ -104,8 +104,9 @@ entirely.
 So `shipyard-launch.sh` writes a **launcher script** and re-asserts those variables inside it,
 *after* the login profile has run:
 
-* propagated (only when set here): `CLAUDE_HOME`, `CLAUDE_CONFIG_DIR` — extend with
-  `SHIPYARD_ENV_PASS="VAR1 VAR2"`;
+* propagated (only when set here): `CLAUDE_HOME`, `CLAUDE_CONFIG_DIR` — `SHIPYARD_ENV_PASS`
+  REPLACES that list rather than adding to it, so name them again yourself:
+  `SHIPYARD_ENV_PASS="CLAUDE_HOME CLAUDE_CONFIG_DIR VAR1"`;
 * scrubbed always: `CLAUDECODE`, `CLAUDE_CODE_ENTRYPOINT`, `CLAUDE_CODE_SESSION_ID`,
   `CLAUDE_CODE_CHILD_SESSION`, `CLAUDE_PID`, `CLAUDE_CODE_MESSAGING_SOCKET`,
   `CLAUDE_CODE_MESSAGING_TOKEN`, `CLAUDE_EFFORT`, `SHIPYARD_SLOT` — these are *this* session's
@@ -209,17 +210,25 @@ done
 `--only-changed` is what makes this monitor liveable. Ship spends much of its life parked
 in `⏸ idle/wait` on a pipeline or a self-review round, so without it the loop emits the
 same table every 10 minutes for hours and the real events drown in it. With it the tick
-is silent until the MR state, the pipeline stage, the escalation count, the MR number or
-the terminal's presence actually moves — and the terminal report is always printed. Drop
-the flag only when you want a heartbeat for its own sake.
+is silent until the MR state, the pipeline stage, the escalation count, the MR number, the
+**ctx band** or the terminal's presence actually moves — and the terminal report is always
+printed. Drop the flag only when you want a heartbeat for its own sake.
+
+The ctx band belongs in that list now in a way it did not before. It has always been in the
+signature, but while the column was scraping the pane it read `—` on current builds and so was
+permanently `ok` — a signal that could never fire. Reading it from the transcript makes a band
+crossing a real event, and it is the only part of the ctx column that breaks silence: the raw
+token figure ticks up constantly and is deliberately excluded.
 
 **`--only-changed` cannot hide a stall.** Silence and death have the same shape here: a
-child that hit its context ceiling, or that was compacted and never told to resume, sits
-`⏸ idle/wait` with `esc —` while NOTHING changes — so a change-triggered monitor says
-nothing at all. One ran that way for **8.5 hours**. The report therefore tracks how long
-each slot has been motionless and prints a loud `🛑 STALLED` block, bypassing
-`--only-changed`, once an idle slot with no open escalation has not moved for 30 minutes
-(`SHIPYARD_STALL_SECS` to tune). Treat that block as an alarm, not as a status line.
+child that hit its context ceiling, that was compacted and never told to resume, or that
+left its own next instruction unsubmitted in the input box sits `⏸ idle/wait` with `esc —`
+while NOTHING changes — so a change-triggered monitor says nothing at all. One ran that way
+for **8.5 hours**. The report therefore tracks how long each slot has been motionless and
+prints a loud `🛑 STALLED` block, bypassing `--only-changed`, once an idle slot with no open
+escalation has not moved for 30 minutes (`SHIPYARD_STALL_SECS` to tune). Treat that block as
+an alarm, not as a status line — and work the order it prints, which is Step 5's: git,
+then a nudge, then compaction.
 
 Arm the **fast escalation monitor** too — 10 minutes is too slow for a child that is
 blocked on a question:
@@ -249,7 +258,9 @@ them. Surface an escalation immediately (see Step 3).
 But mirror **changes, not ticks**. `--only-changed` already keeps the monitor quiet, so
 in practice every table that arrives is worth reprinting. If you do get an unchanged
 table anyway (heartbeat mode, a `⏸`/`▶️` flip, an escalation count settling back to 0),
-do not reprint it — a wall of identical tables buries the one line that matters. Say
+do not reprint it — a wall of identical tables buries the one line that matters. **A ctx band
+crossing is never such a table**: it is the whole reason that column exists, and a row whose
+only visible change is `⚠️`, `🛑` or `❓` appearing is exactly the one to surface. Say
 nothing, or fold it into one short sentence when the user asks. `⏸ idle/wait` on `apply`
 or `archive` (work in progress, or CI still green-lighting the head) is a normal resting
 state of a healthy ship session, not news.
@@ -375,30 +386,179 @@ Directives are `kind: directive`, `status: sent` — the report's `esc` column a
 monitor both skip them, so telling a child something never looks like an open escalation.
 `bash <SKILL>/shipyard-tell.sh --list` shows what you have sent.
 
-## Step 5. Compact a child BEFORE it hits its context ceiling
+## Step 5. Diagnose a child that looks stalled
 
-A ship child accumulates context for as long as it works, and a long change will reach
-the ceiling. What makes this dangerous is the failure mode: the session does not crash
-and does not say anything. It **silently stops accepting turns** — you type, the text
-sits in the input box, nothing happens. In the report it reads as `⏸ idle/wait` with
-`esc —`, which is exactly what a healthy child waiting on CI looks like. One ran that way
-for **8.5 hours** overnight before it was noticed.
+**Several different failures wear the same face.** A child at its context ceiling, a child
+that was compacted and never told to resume, a child that ended its turn leaving its own
+next instruction UNSUBMITTED in the input box, and a healthy child waiting on CI all read
+identically from the report: `⏸ idle/wait`, `esc —`, nothing moving. One ceiling stall ran
+that way for **8.5 hours** overnight; the unsubmitted-line case turned up **three times in
+one run**. So do not diagnose from the silhouette — work the order below.
 
-**The tell is the `ctx` column**, and the footer states it in one of TWO forms — the
-client changed this under us, silently. Older builds print a session token total, which
-the report bands as `⚠️` from 400k and `🛑` from 550k; current ones print a percentage
-(`98% context used`), banded `⚠️` from 65% and `🛑` from 80%. The percentage is preferred
-when both are present, because it needs no assumption about the model's window size —
-the token thresholds hardcode one, and on a 1M-token model they are simply wrong.
+### The order: git, then a nudge, then compaction
 
-Reading only the token form is not a cosmetic gap: this column showed `—` for a whole
-night while a child sat at 98%, so the one signal this step depends on was switched off
-by a rename, with no error anywhere. The footer also starts showing
-`/clear to save NNNk tokens` — that hint means the ceiling is close, not that `/clear` is
-the answer.
+**1. GIT FIRST, always — it is the only source that reports what the child DID.**
 
-**Act on `⚠️`, do not wait for `🛑`.** Compaction needs working room; at the ceiling it is
-itself an API call that may fail or retry for a long time.
+```bash
+git -C .claude/worktrees/ship-<slot> log --oneline -5
+git -C .claude/worktrees/ship-<slot> status --short
+git -C .claude/worktrees/ship-<slot> log --oneline @{u}..    # committed, not yet pushed
+```
+
+The pane shows what the child *intended*; git shows what it *produced*, and the two
+disagree exactly when it matters. In one case the pane suggested a line had been submitted
+and git proved it had not — the file that line would have created did not exist. A stalled
+child has also usually committed and pushed more than its last notice reported, so this
+step often shows there is nothing to rescue in the first place.
+
+**2. THEN NUDGE IT — `shipyard-tell.sh`, never the pane by hand.**
+
+```bash
+bash <SKILL>/shipyard-tell.sh <slot> "<what it should do next>"
+```
+
+It types, submits, and reports `delivered` / `queued` / `unconfirmed` from a before/after
+diff — which is precisely what hand-driving is trying to establish by eye. Measured: three
+hand-driven attempts (typing, sending newlines, `--select`) all failed and each produced a
+wrong conclusion; `shipyard-tell.sh` then worked **first try**. Reach for the raw terminal
+only after this has failed, and read the three facts at the end of this section before you do.
+
+**One caveat, and it bites on exactly the case above.** `shipyard-tell.sh` does not clear the
+input box — it types over whatever is there, because it is also meant to reach a child that is
+mid-turn, where the Escape that would clear the box is *interrupt*. So against a child that
+left its own instruction unsubmitted, the directive is APPENDED to that text and the whole line
+is submitted together: `[supervisor directive]` is then no longer a prefix, and the child's
+protocol confers authority only on a message that leads with it. The before/after diff still
+reports `delivered`, because the screen did change. So look at the input line in step 1 while
+you are there, and if it has a leftover draft, expect the child to treat your nudge as ordinary
+input rather than as the human speaking.
+
+**3. ONLY THEN COMPACT** — `shipyard-compact.sh <slot>`, and only when `ctx` is `⚠️`/`🛑`
+or the nudge came back `unconfirmed`. Compaction is not the default remedy (below).
+
+**A `❓` ctx is neither a compaction trigger nor a clearance.** It says the figure could not be
+scaled — the child may be at 5% of a window this script has not heard of, or past a ceiling it
+cannot see, and nothing in the reading distinguishes those. So compacting on it would compact a
+healthy child, and skipping it would leave a dying one. Resolve the instrument first: name the
+window with `SHIPYARD_CTX_WINDOW`, or add the size to `CTX_WINDOWS` in `shipyard-ctx.sh`. That
+turns `❓` into a real band, and you act on that. The report prints the same rule beside any slot
+it flags.
+
+Two traps that each produced a wrong diagnosis, and neither is visible from the report:
+
+* **`pgrep -f <pattern>` matches YOUR OWN command line.** The pattern you are searching for
+  is in the process doing the searching, so it always finds something. That was read as a
+  live child twice, and once nearly justified killing a compaction that was in progress.
+  Exclude your own pid (`pgrep -f <pattern> | grep -v "^$$\$"`) or do not use it at all —
+  step 1 answers the same question without the ambiguity.
+* **`shipyard-compact.sh` exit 4 is AMBIGUOUS.** It means no `Compacted` marker appeared
+  before the timeout, which has one benign cause and one real one — see the exit-4 branch of
+  the script, which now spells both out. Background agents keep running after the main turn
+  ends, so the session sits at a live prompt, accepts `/compact`, and then compacts slowly
+  or not at all while they work; the wait expires and nothing is wrong. Treat exit 4 as a
+  question, never as proof of death: check git, then check whether the pane still shows a
+  spinner or an agent list, and re-run when it does not.
+
+### The `ctx` column, and where its figure comes from
+
+`ctx` is what separates a child that has stopped accepting turns from one that is merely
+waiting. It is read from **the child's own transcript**, not from the pane — the pane is a
+rendering, and a child running subagents shows no session figure at all because the
+agent-progress list takes that room. That is not a cosmetic gap: the column read `—` for a
+whole night while the child behind it sat at 756445 tokens, so a child at 76% of its window
+looked exactly like one at 5%, and it goes blind precisely when the child is deepest in a
+review battery. Footer forms — a session token total, a `NN% context used` line — are still
+read, but only as a fallback for builds that print them.
+
+The column shows **a percentage and the raw token count together**, e.g. `29% · 291k`,
+banded `⚠️` from 65% and `🛑` from 80%. Both halves are there on purpose:
+
+* the percentage is what matters, because a token count means nothing without a window —
+  400k is 40% of a 1M window and 100% of a 400k one;
+* **no live signal states the window**, so it is inferred: a request that carried N tokens
+  cannot have run on a window smaller than N, so the window is the smallest known size that
+  fits the largest total that session has ever reached. That is a proof where it fires, and
+  `SHIPYARD_CTX_WINDOW` overrides it outright;
+* the raw count is printed **so that you can catch the inference being wrong**. Its one soft
+  spot is a young session on a big model: below the smallest known window there is nothing
+  yet to prove the window is larger, so a 1M child at 185k reads `🛑 92% · 185k` until it
+  crosses 200k and the figure resolves to `18%`. If the band and the raw count disagree with
+  each other, believe the raw count.
+
+**Below the smallest listed window, expect that band — it is the inference doing what it says,
+not a reading.** A child on a larger model reads `ok` until it passes 65% of that size — 130k of
+a 200k window — and shows `⚠️`/`🛑` only from there until its peak crosses the window: measured,
+`50% · 100k` bands `ok`, 130k warns, 160k crits. It self-clears once the peak crosses: for a 1M
+child 200k is 20% in, early in any real run. So the noisy stretch really is narrow — 130k to
+200k, not the whole range below it — and it is the price of not falling silent on a 200k child at
+65%. An operator who knows the window sets `SHIPYARD_CTX_WINDOW` and never sees it.
+
+**Read the raw figure next to the glyph, every time.** That habit is the whole defence against
+a wrong inference, and it catches the mirror defect too: an absolute token threshold is secretly
+an assumption about which model is running. Three children in another workspace once sat at
+`⚠️` from 428k and were still accepting turns at 461k — impossible on a 200k window, so they
+were 1M sessions at 46% and the glyph was a false alarm on all three. The raw count is what said
+so, one glance before compacting three healthy children mid-review.
+
+**That 92%-to-18% jump is correct behaviour, not a bug — do not "fix" it by pinning a default
+window.**
+In the ambiguous band the column errs toward alarm on purpose: an over-warning costs one
+glance at the raw count, and falling silent is what cost the 8.5 hours. Pinning a default
+would restore exactly the failure this column was rebuilt to remove. If you know your window
+and want the band exact from the first turn, set `SHIPYARD_CTX_WINDOW` — it wins
+unconditionally, including downwards, for a window smaller than any the report knows.
+
+Two readings mean *the report does not know*, and neither is `0%`. They are deliberately
+different marks, because they are different facts and you act differently on them — the first
+resolves itself on the child's next turn, the second never does:
+
+* **`—`** — no figure was obtainable at all: no completed turn yet, no transcript, or the child
+  resolved a different config directory from the parent (`CLAUDE_CONFIG_DIR` / `CLAUDE_HOME` are
+  propagated to a child only when they are set in the parent, so a child's login profile can
+  still send it somewhere else).
+* **`❓` and a bare token count** (`❓ 1240k`) — the figure exceeds every window size this script
+  knows of, so a percentage would have to be invented. Its band is `unknown`, which is neither
+  ok nor crit: the script is holding a number it cannot scale, and asserting either would be a
+  lie. **Do not read the missing percentage as healthy.** Your next step is to name the window —
+  `SHIPYARD_CTX_WINDOW=<tokens>` — or add the size to `CTX_WINDOWS` in `shipyard-ctx.sh` if a
+  new model has shipped. The report prints a block under the table saying exactly that.
+
+There is a fourth form, rare and easy to mistake for a bug: **a bare percentage with no token
+count** (`⚠️ 68%`). That is a figure read straight from the client's own footer, on a build that
+still prints one, when no transcript could be found. It stands alone because it needs no inferred
+window — the client did the scaling — and no token total is available to print beside it. Nothing
+is wrong; there is simply nothing to cross-check it against, so the "believe the raw count" rule
+above has no raw count to offer.
+
+`SHIPYARD_CTX_WINDOW` takes the window **in tokens, as a plain integer** (`1000000`, not `1M` or
+`1000k` — a shorthand is refused, out loud, on stderr). It wins over the inference in both
+directions, so setting it leaves the `unknown` band immediately.
+
+### Compaction is a backstop, not routine
+
+**The client's own autocompact works and fires on its own** — one child here went from 76%
+to 27% with no intervention at all. So read `ctx` as information, not as a to-do list.
+
+Be precise about what that does and does not cover, because the states it does not cover are
+the ones this step exists for:
+
+* **Autocompact handles** the ordinary case — context growing during normal work. A rising
+  `ctx` on a child that is visibly `▶️ running` usually needs nothing from you.
+* **It does not rescue a session that has already crossed the line.** Past the ceiling the
+  child stops accepting turns silently: you type, the text sits in the input box, nothing
+  happens. That is a real state, it reads as `⏸ idle/wait` with `esc —`, and it is what the
+  order at the top of this step is for.
+* **It does not resume a child either.** A compacted child — by autocompact or by you — comes
+  back with an empty context and sits idle until told to continue. Same silhouette again.
+
+So reach for a manual compaction when the figure keeps climbing through `🛑` without one
+firing, or when a nudge came back `unconfirmed` — and on `❓`, resolve the window first rather
+than compacting or ignoring, per the rule in the order above. Once you have decided to, do not
+put it off:
+compaction is itself an API call and needs working room, so run it before the figure reaches
+the ceiling rather than at it. The footer hint
+`/clear to save NNNk tokens` means the ceiling is close — it does not mean `/clear` is the
+answer, and it never is.
 
 **Use `shipyard-compact.sh` — it does BOTH halves.** Compaction is a slash command in the TUI,
 so the mailbox cannot carry it (`shipyard-tell.sh` prefixes and flattens its payload into a
@@ -432,9 +592,14 @@ Exit 5 means the child was still mid-turn when the wait ran out: `shipyard-compa
 drive a terminal during a turn, because the Escape it sends to clear the input box is
 INTERRUPT while one is running — it would kill the work in flight. Re-run when idle.
 
-Exit 4 means no `Compacted` marker appeared before the timeout — the session is past the
-point of accepting even a slash command. Then recover the way a dead child is recovered: a
-FRESH session on the SAME worktree plus a written handoff file. Check `git status` and
+Exit 4 means no `Compacted` marker appeared before the timeout. **It does not mean the child
+is dead**, and reading it that way would once have thrown away a healthy run: background
+agents were still working, so the session sat at a live prompt, took the slash command, and
+simply had not finished compacting when the wait expired. The script's own exit-4 output
+names the benign and the real case and how to tell them apart; work that, in this order —
+git first, then whether the pane still shows a spinner or an agent list. Only when it is
+genuinely the real case do you recover the way a dead child is recovered: a FRESH session on
+the SAME worktree plus a written handoff file. Check `git status` and
 `git log origin/<default-branch>..HEAD` there first — a stalled child has usually committed and pushed
 more than its last notice reported, so nothing is lost. **`/clear` is never the answer** —
 it throws away exactly what you are trying to keep.
@@ -478,17 +643,17 @@ name — once it holds no ship sessions. The change's feature branch can go afte
 | session | ▶️ running / ⏸ idle-wait (snapshot diff) / ⛔ no terminal |
 | MR state / stage | forge state (opened/merged/closed) + ship's pipeline stage |
 | esc | open escalations for this slot |
-| ctx | child context usage; `⚠️` ≥65% / ≥400k, `🛑` ≥80% / ≥550k — compact it (Step 5) |
+| ctx | child context usage as `<pct>% · <tokens>`, read from its transcript; `⚠️` ≥65%, `🛑` ≥80%. A bare `<pct>%` is the client's own footer figure, used when no transcript was found. Two non-readings, neither meaning healthy: `—` = nothing measurable yet; `❓ <tokens>` = the figure exceeds every window this script knows, so the percentage would be invented — resolve it with `SHIPYARD_CTX_WINDOW` or a new `CTX_WINDOWS` entry before acting (Step 5) |
 | last line | last meaningful line of the screen |
 
 ⏸ idle-wait is **normal** for ship: it waits on CI or on a self-review round and re-wakes
 itself. Never read idle as "it died" — the only completion signal is a merged (or closed)
 MR. A child blocked on an escalation also looks idle; the `esc` column is what tells you it
-is waiting on *you*. A child that has hit its context ceiling ALSO looks idle, with
-`esc —`; the `ctx` column is what tells you it has stopped accepting turns rather than
-waiting for something (Step 5). `/ship` never waits for an approval, so a session parked
-for a long stretch with a green pipeline and no escalation is worth a look — check its
-stage for `needs-human` or `ready-to-merge`.
+is waiting on *you*. A child at its context ceiling looks idle too, with `esc —`, and so
+does one that simply left its own next instruction unsubmitted in the input box — the `ctx`
+column and the diagnosis order in Step 5 are what separate those three. `/ship` never waits
+for an approval, so a session parked for a long stretch with a green pipeline and no
+escalation is worth a look — check its stage for `needs-human` or `ready-to-merge`.
 
 ## There is no companion reviewer session
 
@@ -512,6 +677,8 @@ collide with it.
 |------|------|
 | `shipyard-backend.sh` | the agterm/tmux abstraction — every terminal operation goes through it |
 | `shipyard-lib.sh` | mailbox paths, slot resolution, payload input, the child env preamble |
+| `shipyard-ctx.sh` | the ctx column: reads a child's transcript, infers its window, bands it |
+| `tests/run-all.sh` | the `shipyard-ctx.sh` suite — run by hand: `bash <SKILL>/tests/run-all.sh` |
 | `shipyard-launch.sh` | start a child: slot, protocol, launcher, container |
 | `shipyard-report.sh` | the status table + stall watchdog + sidebar glyphs |
 | `shipyard-escalations.sh` | the escalation view (`--new` for the fast monitor) |
