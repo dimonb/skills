@@ -1,15 +1,16 @@
 #!/usr/bin/env bash
 # Repo gate. Runs on every commit (`make check`) and must be green before each.
 #
-# 1. every shell script parses
-# 2. every SKILL.md has name+description frontmatter, and its name matches its directory
+# 1. every shell script parses (untracked too, except under a project skills dir)
+# 2. every SKILL.md has name+description frontmatter, and its name matches its directory (ditto)
 # 3. every plugin manifest is valid JSON, both manifests exist, names agree with the dir
 # 4. marketplace entries resolve, and both manifests offer the same plugins as plugins/ on disk
-# 5. dogfooding: both agents linked to every packaged skill, links contained in plugins/,
+# 5. dogfooding: every COMMITTED entry in a project skills dir is a symlink into plugins/; both
+#    agents linked to every packaged skill, that link resolving inside plugins/ staged or not;
 #    and no second copy of any SKILL.md
 # 6. ship's forge reference files do not carry a copy of the pipeline state enum
 # 7. no non-generic strings (structural patterns only; no dependency on any untracked file)
-# 8. no non-Latin script in any tracked file (the checkable half of "English everywhere")
+# 8. no non-Latin script in any file, untracked included (the checkable half of "English")
 # 9. no council test names the shared temp parent (the pre-run-root shape); see §9 for its limits
 # 10. every council test on disk is registered in run-all.sh, so none silently stops running
 set -uo pipefail
@@ -18,13 +19,60 @@ ROOT_P=$(pwd -P)          # physical repo root; see the symlink containment chec
 rc=0
 fail() { echo "FAIL $*"; rc=1; }
 
+# The two project skills directories, named ONCE and read from here by every consumer: checks 1
+# and 2, check 5's listing, its note, its outside-plugins exemption and both of its `for d` loops.
+# Two places spelling the same pair differently is how one of them stops being maintained.
+SKILL_LINK_DIRS='.claude/skills .agents/skills'
+
+# `-c core.quotePath=false` belongs on EVERY listing whose paths reach `under_skill_dirs` or the
+# `ls-files -s` parse, not just check 5's. By default git C-quotes a path holding a byte >= 0x80,
+# and the predicate then compares `".claude/skills/caf\303\251/SKILL.md"` — quotes and all —
+# against `.claude/skills/*`, which never matches: the exemption silently stops applying and a
+# valid local skill reds three fabricated failures about a path that does not exist. Getting this
+# onto check 5 alone is exactly how that survived one round of review.
+#
+# A control character, `"` or `\` is C-quoted whatever this setting says. Those still red, with a
+# misleading message, and no skill directory in any repo is plausibly named that way. `-z` would
+# remove the residue, but its records cannot survive `$( )`, which discards NUL bytes.
+GIT_Q='-c core.quotePath=false'
+under_skill_dirs() {
+  for _d in $SKILL_LINK_DIRS; do
+    case "$1" in "$_d"/*) return 0 ;; esac
+  done
+  return 1
+}
+# ...and is it UNTRACKED? That distinction is the entire exemption, and "exempt the project
+# skills directories" is the wrong summary of it — the one a later edit would implement. A
+# COMMITTED file under either directory is check 5's business and must still red.
+untracked_local_skill() {
+  under_skill_dirs "$1" || return 1
+  # Exempt ONLY on the status that means "no such path in the index". `--error-unmatch` returns 0
+  # tracked, 1 not tracked, and >1 on an error (no repository, unreadable index) -- and collapsing
+  # those last two would turn a git failure into a decision to skip the check, which is the
+  # "could not list" read as "nothing to report" that the rest of this file refuses by name.
+  git ls-files --error-unmatch -- "$1" >/dev/null 2>&1
+  case $? in
+    1) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+# Why this costs no coverage of anything the repo ships, which is the part worth writing down:
+# the argument for checks 1 and 2 reading untracked files is that a brand-new PACKAGED skill's
+# SKILL.md is untracked between writing it and `git add`. True, and irrelevant here — a packaged
+# skill lives under plugins/, which stays fully checked, untracked included. These two
+# directories hold nothing but dogfooding symlinks into plugins/; that is the repo's own rule,
+# and asserting it is check 5's job. So an untracked entry here is the person's own business,
+# and failing on one only ever blocked unrelated commits.
+
 # ---------------------------------------------------------------- 1. shell syntax
 while IFS= read -r f; do
+  untracked_local_skill "$f" && continue
   bash -n "$f" || fail "syntax: $f"
-done < <(git ls-files --cached --others --exclude-standard '*.sh')
+done < <(git $GIT_Q ls-files --cached --others --exclude-standard '*.sh')
 
 # ------------------------------------------------- 2. SKILL.md frontmatter + name
 while IFS= read -r f; do
+  untracked_local_skill "$f" && continue
   head -1 "$f" | grep -q '^---$' || { fail "frontmatter missing: $f"; continue; }
   fm=$(awk 'NR>1 && /^---$/{exit} NR>1' "$f")
   printf '%s\n' "$fm" | grep -q '^name:'        || fail "no name: $f"
@@ -32,7 +80,7 @@ while IFS= read -r f; do
   want=$(basename "$(dirname "$f")")
   got=$(printf '%s\n' "$fm" | sed -n 's/^name: *//p' | tr -d '"'"'" | head -1)
   [ "$got" = "$want" ] || fail "skill name '$got' != directory '$want': $f"
-done < <(git ls-files --cached --others --exclude-standard '*SKILL.md')
+done < <(git $GIT_Q ls-files --cached --others --exclude-standard '*SKILL.md')
 
 # --------------------------------------------- 3. plugin manifests: JSON + agreement
 for d in plugins/*/; do
@@ -94,12 +142,46 @@ disk=$(for d in plugins/*/; do [ -d "$d" ] && basename "${d%/}"; done | sort)
   on disk:  $(echo "$disk" | tr '\n' ' ')"
 
 # ------------------------------------------------------ 5. dogfooding: links, no copies
-for d in .claude/skills .agents/skills; do
-  [ -d "$d" ] || { fail "missing project skills dir: $d"; continue; }
-  for e in "$d"/*; do
-    # -e follows the link, so a BROKEN symlink is not -e. Test -L too or it is skipped.
-    [ -e "$e" ] || [ -L "$e" ] || continue
-    [ -L "$e" ] || { fail "not a symlink (would be a second copy): $e"; continue; }
+# shellcheck disable=SC2086
+for d in $SKILL_LINK_DIRS; do
+  [ -d "$d" ] || fail "missing project skills dir: $d"
+done
+
+# The shape assertions below are driven by what git RECORDS, not by what the filesystem happens
+# to hold. "One source of truth per skill" is a statement about COMMITTED content, so an
+# untracked directory someone keeps under a project skills dir cannot violate it: it is not in
+# the repository, it reaches nobody else, and it shadows nothing in a clone. Iterating the
+# filesystem instead (`for e in "$d"/*`) failed on one, and that blocked every commit in the
+# repo until the directory was moved — over local state the repo does not own.
+#
+# Asserting the git MODE states the real rule directly rather than by proxy: `120000` is git's
+# symlink mode, and a committed entry recorded as anything else IS the second copy. That makes
+# the check indifferent to local state by construction instead of by an exclusion list, and it
+# reaches a copy committed one level down (`.claude/skills/x/SKILL.md`) as well.
+#
+# Deliberately narrower than checks 1 and 2, which DO read untracked files. That is not an
+# inconsistency: a new script or SKILL.md is part of the change being made, and catching it
+# before `git add` is the point. Incidental local state is not part of any change.
+# shellcheck disable=SC2086
+skills_ls=$(git $GIT_Q ls-files -s -- $SKILL_LINK_DIRS)
+skills_rc=$?
+if [ "$skills_rc" -ne 0 ]; then
+  # Never read "could not list" as "nothing to report" — the trap sections 7 to 10 each guard.
+  fail "could not list tracked project skill entries (git ls-files rc=$skills_rc)"
+elif [ -z "$skills_ls" ]; then
+  # A listing that matched nothing has not held, it has abstained. Nothing else here would say
+  # so: the "packaged skill has both links" loop below reads the FILESYSTEM, so links present on
+  # disk but dropped from the index satisfy it while every assertion above silently stops.
+  # This arm fires only on a TOTAL drop. ONE link removed from the index leaves the listing
+  # non-empty and stays green — a gap that predates this check and is not closed here.
+  fail "no tracked entry under .claude/skills or .agents/skills at all (dropped from the index?)"
+else
+  while IFS= read -r line; do
+    [ -n "$line" ] || continue
+    mode=${line%% *}
+    e=${line#*$'\t'}                    # `git ls-files -s` prints "<mode> <sha> <stage>\t<path>"
+    [ "$mode" = 120000 ] \
+      || { fail "committed but not a symlink (would be a second copy): $e"; continue; }
     [ -f "$e/SKILL.md" ] || fail "broken symlink: $e"
     # Assert CONTAINMENT of the resolved target, not a substring of the link text: a
     # substring test accepts `../../../../../tmp/plugins/x/skills/x` and any absolute path
@@ -114,19 +196,72 @@ for d in .claude/skills .agents/skills; do
       "$ROOT_P/plugins/"*) ;;
       *) fail "symlink target is outside this repo's plugins/: $e -> ${tgt:-<unresolved>}" ;;
     esac
-  done
-done
-# A SKILL.md anywhere but plugins/ is a duplicated source of truth (tracked or not).
+  done <<< "$skills_ls"
+fi
+
+# Untracked entries get a NOTE, never a failure. Staying silent would be defensible — they
+# cannot violate a rule about committed content — but someone who expected their local skill to
+# be checked should learn here that it is not, rather than read a green gate as coverage.
+# Say WHICH checks ignore it. Checks 7 and 8 still read every untracked file wherever it sits —
+# a leak or a non-Latin script is high-consequence enough to scan a directory a person edits by
+# hand — so an absolute "the gate asserts nothing about it" is false, and would put the note and
+# a FAIL about one path in a single run: the shape this note exists to avoid, not to create.
+# shellcheck disable=SC2086
+untracked_skills=$(git $GIT_Q ls-files --others --exclude-standard --directory -- $SKILL_LINK_DIRS)
+while IFS= read -r e; do
+  [ -n "$e" ] || continue
+  e=${e%/}
+  # A link at a packaged skill's own path is NOT local state: the loop at the end of this check
+  # asserts it whether or not it is staged. Calling it ignored here would be false, and a gate
+  # that prints `note: ... ignored` and `FAIL` about one path in a single run is the shape this
+  # note exists to avoid, not to create.
+  packaged=""
+  for s in plugins/*/skills/"$(basename "$e")"/SKILL.md; do [ -f "$s" ] && packaged=1; done
+  [ -n "$packaged" ] && continue
+  echo "note: untracked entry $e is local state; checks 1, 2 and 5 ignore it"
+done <<< "$untracked_skills"
+
+# A SKILL.md anywhere but plugins/ is a duplicated source of truth (tracked or not). The two
+# project skills directories are exempt HERE because they are covered above instead, and more
+# precisely: a committed SKILL.md under one of them is not mode 120000, so the mode assertion
+# names it as the second copy it is, while an untracked one is the local state the note reports.
+# Without this exemption a local skill reddened the gate TWICE — the `--others` reach of this
+# loop is the other half of the same false positive, not a separate one.
 while IFS= read -r f; do
-  case "$f" in plugins/*) ;; *) fail "SKILL.md outside plugins/ (the packaged copy is the only source of truth): $f" ;; esac
-done < <(git ls-files --cached --others --exclude-standard '*SKILL.md')
+  case "$f" in plugins/*) continue ;; esac
+  under_skill_dirs "$f" && continue
+  fail "SKILL.md outside plugins/ (the packaged copy is the only source of truth): $f"
+done < <(git $GIT_Q ls-files --cached --others --exclude-standard '*SKILL.md')
 # Every packaged skill must HAVE both links. Validating only the links that exist lets a new
 # skill ship with no dogfooding at all, which is the invariant this check is here to protect.
+#
+# A link at a PACKAGED skill's own path is repo-owned by construction, never the incidental local
+# state the index-driven loop above declines to judge, so it is checked whether or not it has been
+# staged. That is what keeps "How to add a skill" honest: it says to create both links and then
+# run the gate, and at that moment the links are untracked, invisible to the listing above, and
+# `[ -L ]` alone is satisfied by one that points nowhere.
+#
+# Links git already has are skipped here, deliberately. The loop above resolved them with the same
+# two assertions, and a second identical verdict would hand those assertions a stand-in: delete
+# them and this loop would still red, so their probes would keep reporting `caught` over arms that
+# no longer exist. Measured: reusing the wording moved two probes from `not proven` to `caught`.
 for s in plugins/*/skills/*/SKILL.md; do
   [ -f "$s" ] || continue
   skill=$(basename "$(dirname "$s")")
-  for d in .claude/skills .agents/skills; do
-    [ -L "$d/$skill" ] || fail "packaged skill '$skill' has no symlink at $d/$skill"
+  # shellcheck disable=SC2086
+  for d in $SKILL_LINK_DIRS; do
+    [ -L "$d/$skill" ] || { fail "packaged skill '$skill' has no symlink at $d/$skill"; continue; }
+    git ls-files --error-unmatch -- "$d/$skill" >/dev/null 2>&1 && continue
+    ltgt=$(cd "$d/$skill" 2>/dev/null && pwd -P)
+    case "$ltgt" in
+      "$ROOT_P/plugins/"*) ;;
+      *) fail "packaged skill '$skill' link is not staged and does not resolve into plugins/: $d/$skill -> ${ltgt:-<unresolved>}"; continue ;;
+    esac
+    # BOTH of the tracked loop's assertions, not just containment: a link into plugins/ that
+    # exposes no SKILL.md is the likelier typo of the two, since `plugins/<plugin>` is a real
+    # directory sitting one level above the right target.
+    [ -f "$d/$skill/SKILL.md" ] \
+      || fail "packaged skill '$skill' link is not staged and exposes no SKILL.md: $d/$skill"
   done
 done
 
@@ -207,7 +342,7 @@ deny="$deny"'|TZ=[A-Za-z]+/[A-Za-z_]+'
 hits=$(git grep --untracked -nIiE "$deny" -- . ':!scripts/check.sh' ':!scripts/check-test.sh' 2>&1)
 g=$?
 if [ "$g" -eq 0 ]; then
-  echo "FAIL: non-generic strings in tracked files:"; printf '%s\n' "$hits"; rc=1
+  echo "FAIL: non-generic strings:"; printf '%s\n' "$hits"; rc=1
 elif [ "$g" -gt 1 ]; then
   fail "leak check could not run (git grep rc=$g): $hits"
 fi
@@ -217,9 +352,9 @@ fi
 # held by judgement alone until a whole plugin shipped its protocol, its runtime messages and
 # its decision records in Russian: the files agents READ as instructions, in a language the
 # next reader of the repo may not have. So the gate checks what a gate can check — the SCRIPT.
-# A non-Latin script in a tracked file is the structural half of the rule; English prose
-# written in Latin letters is still a judgement call, and this check does not pretend
-# otherwise.
+# A non-Latin script in any file the gate can see, untracked included, is the structural half of
+# the rule; English prose written in Latin letters is still a judgement call, and this check does
+# not pretend otherwise.
 #
 # `-P` (PCRE) rather than a literal character class, deliberately: writing the ranges out
 # would put the very characters this check forbids into the check, which then has to exempt
@@ -228,7 +363,7 @@ fi
 nonlatin=$(git grep --untracked -nIP '\p{Cyrillic}|\p{Greek}|\p{Han}|\p{Hiragana}|\p{Katakana}|\p{Hangul}|\p{Arabic}|\p{Hebrew}|\p{Devanagari}|\p{Thai}|\p{Armenian}|\p{Georgian}' -- . 2>&1)
 g=$?
 if [ "$g" -eq 0 ]; then
-  echo "FAIL: non-Latin script in tracked files (AGENTS.md: English everywhere):"; printf '%s\n' "$nonlatin"; rc=1
+  echo "FAIL: non-Latin script (AGENTS.md: English everywhere):"; printf '%s\n' "$nonlatin"; rc=1
 elif [ "$g" -gt 1 ]; then
   fail "English check could not run (git grep rc=$g): $nonlatin"
 fi

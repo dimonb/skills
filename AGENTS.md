@@ -27,6 +27,22 @@ plugins/<plugin>/
 the two project skill directories hold symlinks so that a session opened here gets the
 packaged skills without a second copy in git. `make check` enforces this.
 
+**What the gate does and does not see under the two project skill directories.** It enforces the
+rule above over **committed** content: a tracked entry there must be a symlink into `plugins/`,
+and a packaged skill's own two link paths are asserted staged or not, because those paths are the
+repo's. Anything else you keep there untracked — a scratch directory, a local skill of your own,
+whatever another tool left behind — is your business: **checks 1, 2 and 5 ignore it**, so its
+frontmatter, its name and its scripts are not the gate's concern, and it draws a note rather than
+a failure. The two repo-wide scans still read it, deliberately: a leak or a non-Latin script reds
+the gate wherever it sits, including in a file you never meant to commit.
+
+That carve-out costs no coverage of anything this repo ships, because everything it ships lives
+under `plugins/`, which is checked in full, untracked files included. Failing on incidental local
+state only ever blocked unrelated commits. One consequence worth knowing: `make check-test`
+restores with `git checkout --`, so it refuses to run at all while any untracked file sits under
+the paths it guards — `make check` is fine, but move your scratch directory before running the
+other one.
+
 ## No spec-artifact stage
 
 This repo keeps **no per-change spec artifact** — no spec tool, no design doc, no proposal
@@ -164,7 +180,8 @@ it. Say in the change which parts you verified by running and which you reasoned
   all outward-facing text fresh, in a neutral voice.
 * **English everywhere** — issues, pull requests, comments, code, docs. Multiline bodies go
   through a file, never an escaped newline inside a quoted argument. `make check` enforces the
-  *script*: a non-Latin character in a tracked file fails the gate. Latin-script prose that is
+  *script*: a non-Latin character fails the gate, in an untracked file as much as a tracked one
+  (the leak check has the same reach, and for the same reason). Latin-script prose that is
   not English it cannot see, so that half is judgement — and a whole plugin once shipped its
   protocol and its decision records in another language before anything said so.
 * **Rule zero, restated as a commit rule:** no absolute home paths, no personal e-mail
