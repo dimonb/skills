@@ -95,10 +95,11 @@ battery, hand-off. It works on GitHub or GitLab and discovers the repo it is poi
 rather than assuming one.
 
 **`shipyard`** runs a fleet of `ship` sessions — one background terminal and one git worktree
-per change — and carries their escalations back to the human. It launches `/ship` and nothing
-else, so it is useless without it. In Claude Code that dependency is declared in its manifest
-(`"dependencies": ["ship"]`, which the CLI resolves); **Codex has no equivalent field**, so
-there it holds only because the docs say so.
+per change — and carries their escalations back to the human. It launches the matching child
+runtime and its `ship` invocation: Codex launches Codex with `$ship`, while Claude Code launches
+Claude Code with `/ship`. It launches nothing else, so it is useless without `ship`. In Claude
+Code that dependency is declared in its manifest (`"dependencies": ["ship"]`, which the CLI
+resolves); **Codex has no equivalent field**, so there it holds only because the docs say so.
 
 The **escalation mailbox** lives in the shared git directory, at `.git/ship-escalations/`, so
 the same path resolves from the main worktree and from every child worktree, and it is never

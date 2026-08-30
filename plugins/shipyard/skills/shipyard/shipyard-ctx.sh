@@ -12,8 +12,8 @@
 # assumption slot_iid() and slot_stage() already make in shipyard-report.sh.
 #
 # Env:
-#   CLAUDE_CONFIG_DIR / CLAUDE_HOME  where a child's transcript is looked up
-#                                    (default: $HOME/.claude)
+#   CODEX_HOME                       Codex transcript root (default: $HOME/.codex)
+#   CLAUDE_CONFIG_DIR / CLAUDE_HOME  Claude transcript root (default: $HOME/.claude)
 #   SHIPYARD_CTX_WINDOW              context window in tokens, overriding ctx_window's inference
 #
 # ---------------------------------------------------------------------------------------------
@@ -59,7 +59,7 @@
 # does not follow that parent and child always agree: with neither set here, a child's login
 # profile may still resolve a different root, and this lookup then finds no transcript and the
 # column falls back to the pane. That is one of the causes of a "—" reading.
-ctx_transcript() {
+ctx_claude_transcript() {
   local slot="$1" cfg wt slug d f
   cfg="${CLAUDE_CONFIG_DIR:-${CLAUDE_HOME:-$HOME/.claude}}"
   wt="$ROOT/.claude/worktrees/ship-$slot"
@@ -74,6 +74,47 @@ ctx_transcript() {
   f=$(ls -1t "$d"/*.jsonl 2>/dev/null | head -1)
   [ -n "$f" ] || return 1
   printf '%s' "$f"
+}
+
+ctx_agent() {
+  local slot="$1" mb launch agent
+  mb=$(shipyard_mailbox 2>/dev/null) || { printf 'claude'; return; }
+  launch="$mb/launch-$slot.json"
+  if [ -f "$launch" ]; then agent=$(jq -r '.agent // empty' "$launch" 2>/dev/null); fi
+  printf '%s' "${agent:-claude}"
+}
+
+ctx_mtime() {
+  stat -f '%m' "$1" 2>/dev/null || stat -c '%Y' "$1" 2>/dev/null
+}
+
+# Codex records the worktree cwd in session_meta. Pick the newest matching rollout;
+# another Codex session rooted in the same worktree has the same ambiguity as Claude.
+ctx_codex_transcript() {
+  local slot="$1" cfg wt f mt newest="" newest_mt=0 first
+  cfg="${CODEX_HOME:-$HOME/.codex}"
+  wt="$ROOT/.claude/worktrees/ship-$slot"
+  wt=$(cd "$wt" 2>/dev/null && pwd -P) || return 1
+  [ -d "$cfg/sessions" ] || return 1
+  while IFS= read -r f; do
+    first=$(head -1 "$f" 2>/dev/null) || continue
+    printf '%s\n' "$first" | jq -e --arg wt "$wt" \
+      '.type == "session_meta" and .payload.cwd == $wt' >/dev/null 2>&1 || continue
+    mt=$(ctx_mtime "$f") || continue
+    if [ "$mt" -ge "$newest_mt" ] 2>/dev/null; then newest="$f"; newest_mt="$mt"; fi
+  done < <(find "$cfg/sessions" -type f -name '*.jsonl' -print 2>/dev/null)
+  [ -n "$newest" ] || return 1
+  printf '%s' "$newest"
+}
+
+# "<current> <window>" from Codex's latest token_count event, or nothing.
+ctx_codex_totals() {
+  jq -r 'select(.type == "event_msg" and .payload.type == "token_count")
+         | [(.payload.info.last_token_usage.total_tokens // 0),
+            (.payload.info.model_context_window // 0)]
+         | @tsv' "$1" 2>/dev/null \
+    | awk '$1 + 0 > 0 && $2 + 0 > 0 { cur=$1; win=$2 }
+           END { if (cur != "") print cur, win }'
 }
 
 # "<current> <peak>" in tokens, or nothing. BOTH matter, and they are not the same number: the
@@ -196,8 +237,20 @@ ctx_pane_tokens() {
 # Collapsing those two into one sentinel is what made the alarm switch OFF at the ceiling: with
 # an override of 400000, 400001 tokens banded crit and 450000 banded ok.
 ctx_probe() {
-  local slot="$1" pane="$2" f tot cur peak win pct
-  if f=$(ctx_transcript "$slot"); then tot=$(ctx_totals "$f"); fi
+  local slot="$1" pane="$2" agent f tot cur peak win pct
+  agent=$(ctx_agent "$slot")
+  if [ "$agent" = codex ]; then
+    if f=$(ctx_codex_transcript "$slot"); then tot=$(ctx_codex_totals "$f"); fi
+    if [ -n "${tot:-}" ]; then
+      cur=${tot%% *}; win=${tot##* }
+      pct=$(awk -v c="$cur" -v w="$win" 'BEGIN{ printf "%d", (c * 100) / w }')
+      if [ "$pct" -gt 100 ] 2>/dev/null; then printf '%s %s' '?' "$(ctx_human "$cur")"; return; fi
+      printf '%s %s%% · %s' "$pct" "$pct" "$(ctx_human "$cur")"
+      return
+    fi
+  elif f=$(ctx_claude_transcript "$slot"); then
+    tot=$(ctx_totals "$f")
+  fi
   if [ -n "${tot:-}" ]; then
     cur=${tot%% *}; peak=${tot##* }
   else

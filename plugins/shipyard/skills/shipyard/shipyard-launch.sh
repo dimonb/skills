@@ -1,6 +1,5 @@
 #!/usr/bin/env bash
-# shipyard-launch.sh — start a `/ship` Claude session in its own terminal (an agterm session
-# by default, a tmux window with SHIPYARD_BACKEND=tmux) and its own git worktree.
+# shipyard-launch.sh - start a ship child in its own terminal and git worktree.
 #
 # Usage:
 #   shipyard-launch.sh 123                  # continue existing MR/PR !123      -> /ship 123
@@ -18,7 +17,7 @@
 #   * numeric arg / `!123` / `#42` / an MR/PR/issue URL  -> slot = the number
 #   * free text                                          -> slot = slug of the text
 #
-# Dedup: a numeric slot is never started twice (two Claudes in one worktree collide)
+# Dedup: a numeric slot is never started twice (two agents in one worktree collide)
 # — exit 3. A text slot gets a -2, -3, ... suffix instead.
 #
 # Every child is launched with an escalation protocol appended to its system prompt: no
@@ -26,12 +25,13 @@
 # up to the parent watcher through shipyard-ask.sh.
 #
 # Env:
+#   SHIPYARD_AGENT      codex | claude | auto (default: match the parent runtime)
 #   SHIPYARD_BACKEND    agterm (default) | tmux | auto
 #   SHIPYARD_WORKSPACE  agterm workspace name (default: the parent's workspace + "-ai",
 #                 pinned in <mailbox>/container-agterm at the first launch)
 #   SHIPYARD_SESSION    tmux session name    (default: <repo>)
 #   SHIPYARD_ENV_PASS   env vars copied from THIS session into the child (default:
-#                 CLAUDE_HOME CLAUDE_CONFIG_DIR) — see shipyard_env_preamble in shipyard-lib.sh
+#                 CODEX_HOME for Codex; CLAUDE_HOME CLAUDE_CONFIG_DIR for Claude)
 #   SHIPYARD_FORCE=1    allow a second terminal for the same numeric slot
 #   SHIPYARD_DRY=1      print the slot, protocol path and command; start nothing
 set -o pipefail
@@ -56,6 +56,12 @@ if ! git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
   echo "error: current directory is not inside a git repository: $CWD" >&2
   exit 1
 fi
+ROOT=$(git rev-parse --show-toplevel) || exit 1
+
+AGENT=$(shipyard_agent)
+shipyard_agent_check "$AGENT" || exit 1
+SHIP_REF=$(shipyard_skill_ref "$AGENT") || exit 1
+SELF_REF=$(shipyard_self_ref "$AGENT") || exit 1
 
 shipyard_backend_check || exit 1
 BACKEND=$(shipyard_backend)
@@ -108,16 +114,17 @@ if shipyard_target "$SLOT" >/dev/null 2>&1; then
   fi
 fi
 NAME="ship-$SLOT"
+WORKTREE="$ROOT/.claude/worktrees/$NAME"
 
 # --- first prompt --------------------------------------------------------------
 # `/ship` takes all three shapes itself: a number, a `#N`/`pr N` marker, and a
 # free-text description ("Create a new Issue (asks to confirm), then propose + spec
 # PR"). So there is exactly one entry point and no handover.
 if [ "$NUMERIC" = 1 ]; then
-  PROMPT="/ship $TARGET"
+  PROMPT="$SHIP_REF $TARGET"
 else
   # inner double quotes -> single, so the prompt stays readable for the skill
-  PROMPT="/ship \"${TARGET//\"/\'}\""
+  PROMPT="$SHIP_REF \"${TARGET//\"/\'}\""
 fi
 for f in "${EXTRA[@]}"; do PROMPT="$PROMPT $f"; done
 
@@ -128,22 +135,22 @@ PROTO="$MB/protocol-$SLOT.md"
 {
   echo "# You are a CHILD ship session (slot \`$SLOT\`)"
   echo
-  echo "Started by the \`/shipyard\` skill in $KIND \`$CONTAINER\`, terminal \`$NAME\`, worktree"
+  echo "Started by the \`$SELF_REF\` skill in $KIND \`$CONTAINER\`, terminal \`$NAME\`, worktree"
   echo "\`.claude/worktrees/$NAME\`."
   echo
-  echo "## Your one job is \`/ship\`"
+  echo "## Your one job is \`$SHIP_REF\`"
   echo
   echo "You were started with \`$PROMPT\` and that skill owns the whole pipeline — the issue,"
   echo "the spec stage if this repo keeps one, the implementation, its own review passes, and"
   echo "the hand-off at ready-to-merge. Stay inside it. Do not"
   echo "reach for another driver skill, do not invent a pre-step in front of it, and do not"
-  echo "hand the change over to anything else: whatever \`/ship\` does not do is a question"
+  echo "hand the change over to anything else: whatever \`$SHIP_REF\` does not do is a question"
   echo "for the human (escalate it), not work for a different skill."
   echo
   echo "## No human is present in this session"
   echo
   echo "The human sits in the PARENT watcher session that launched you and reads its"
-  echo "notifications, not this terminal. So: never use AskUserQuestion, never end a turn"
+  echo "notifications, not this terminal. So: never use AskUserQuestion/request_user_input, never end a turn"
   echo "with a question, never guess your way past one. Escalate it up to the parent,"
   echo "wait for the answer, and only then act on it and continue here."
   echo
@@ -151,7 +158,7 @@ PROTO="$MB/protocol-$SLOT.md"
   echo "bash $DIR/shipyard-ask.sh \"<question>\" --context \"<state, options, your recommendation>\" --timeout 540"
   echo '```'
   echo
-  echo "It blocks and prints \`ANSWER: <text>\` (call it from the Bash tool with"
+  echo "It blocks and prints \`ANSWER: <text>\` (call it from the shell tool with"
   echo "\`timeout: 600000\`). On \`PENDING:<id>\` do other *safe* work and re-check with"
   echo "\`shipyard-ask.sh --wait <id> --timeout 540\` or \`--poll <id>\`. Keep re-checking; a"
   echo "pending question is never a reason to stop the pipeline loop or to decide alone."
@@ -188,7 +195,7 @@ PROTO="$MB/protocol-$SLOT.md"
   echo '  ```'
   echo "* Ambiguous, conflicting or missing requirements and acceptance criteria — including"
   echo "  the shape of the change itself when you were started from a free-text idea and"
-  echo "  \`/ship\` needs the scope pinned down before it can write a spec."
+  echo "  \`$SHIP_REF\` needs the scope pinned down before it can write a spec."
   echo "* Anything risky or irreversible: prod, data migrations, secrets/access, rewriting"
   echo "  or deleting someone else's work, force-push, CI/CD changes."
   echo "* Any blocker you cannot clear yourself (auth, permissions, a red pipeline you"
@@ -214,7 +221,7 @@ PROTO="$MB/protocol-$SLOT.md"
   echo "them regardless of resolved state (a thread opened and quickly resolved still"
   echo "happened), and filter only \`[bot]\` authors."
   echo
-  echo "**Nothing external will ever unblock you.** \`/ship\` runs its review passes itself,"
+  echo "**Nothing external will ever unblock you.** \`$SHIP_REF\` runs its review passes itself,"
   echo "as subagents. If you find yourself waiting for a second actor to show up, you have"
   echo "left the skill's state machine — re-read it, or escalate. A wait nobody satisfies is"
   echo "invisible from outside and has cost whole nights."
@@ -248,7 +255,7 @@ PROTO="$MB/protocol-$SLOT.md"
   fi
   echo "## Re-wakes"
   echo
-  echo "If you re-wake yourself via \`schedule\`/\`CronCreate\` (a fresh session with no"
+  echo "If you re-wake yourself via a runtime-specific scheduler (a fresh session with no"
   echo "memory), restate this protocol in the payload, or have the payload read this file:"
   echo "\`$PROTO\`. The mailbox is \`$MB\`; the scripts are in \`$DIR\`."
 } >"$PROTO"
@@ -262,23 +269,18 @@ LAUNCHER="$MB/launch-$SLOT.sh"
   echo '#!/bin/zsh -l'
   echo "# generated by shipyard-launch.sh for slot $SLOT — re-runnable by hand"
   echo
-  echo '# Re-assert the parent watcher'"'"'s Claude identity AFTER the login profile ran:'
-  echo '# a profile that sets its own CLAUDE_HOME/CLAUDE_CONFIG_DIR would otherwise hand'
-  echo '# the child a different config dir, hence different skills — possibly no /ship.'
-  shipyard_env_preamble
+  echo "# Re-assert the parent watcher's $AGENT identity AFTER the login profile ran."
+  shipyard_env_preamble "$AGENT"
   echo
   echo "cd $(shipyard_shq "$CWD") || exit 1"
-  printf 'exec claude -w %s --effort max -n %s --permission-mode auto --remote-control %s \\\n' \
-    "$(shipyard_shq "$NAME")" "$(shipyard_shq "$NAME")" "$(shipyard_shq "$NAME")"
-  printf '  --append-system-prompt "$(cat %s)" \\\n' "$(shipyard_shq "$PROTO")"
-  printf '  %s\n' "$(shipyard_shq "$PROMPT")"
+  shipyard_agent_exec "$AGENT" "$NAME" "$WORKTREE" "$PROTO" "$PROMPT"
 } >"$LAUNCHER"
 chmod +x "$LAUNCHER"
 
-ENVSUM=$(shipyard_env_summary)
+ENVSUM=$(shipyard_env_summary "$AGENT")
 
 if [ "${SHIPYARD_DRY:-}" = 1 ]; then
-  echo "dry-run: backend $BACKEND, $KIND $CONTAINER, terminal $NAME (worktree .claude/worktrees/$NAME)"
+  echo "dry-run: agent $AGENT, backend $BACKEND, $KIND $CONTAINER, terminal $NAME (worktree .claude/worktrees/$NAME)"
   echo "dry-run: protocol $PROTO"
   echo "dry-run: launcher $LAUNCHER"
   echo "dry-run: env      $ENVSUM"
@@ -287,7 +289,15 @@ if [ "${SHIPYARD_DRY:-}" = 1 ]; then
   exit 0
 fi
 
+WORKTREE_CREATED=0
+if [ "$AGENT" = codex ] && [ ! -d "$WORKTREE" ]; then WORKTREE_CREATED=1; fi
+shipyard_agent_prepare_worktree "$AGENT" "$ROOT" "$WORKTREE" || {
+  echo "error: failed to prepare child worktree $WORKTREE" >&2
+  exit 1
+}
+
 shipyard_launch "$SLOT" "$CWD" "$LAUNCHER" || {
+  if [ "$WORKTREE_CREATED" = 1 ]; then git -C "$ROOT" worktree remove -f "$WORKTREE" >/dev/null 2>&1 || true; fi
   echo "error: failed to start the child terminal ($BACKEND)" >&2; exit 1; }
 
 # Record what the child was given, so a later "why is it using the wrong skills?" is a
@@ -295,16 +305,16 @@ shipyard_launch "$SLOT" "$CWD" "$LAUNCHER" || {
 # `kind:"launch"` + `status:"info"` keep it out of the escalation views: they share
 # this directory, and a record with no recognised kind used to read as an open
 # question — a fake escalation that never resolves and keeps the monitor alive.
-jq -n --arg slot "$SLOT" --arg backend "$BACKEND" --arg container "$CONTAINER" \
+jq -n --arg slot "$SLOT" --arg agent "$AGENT" --arg backend "$BACKEND" --arg container "$CONTAINER" \
       --arg prompt "$PROMPT" --arg proto "$PROTO" --arg launcher "$LAUNCHER" \
       --arg env "$ENVSUM" --arg cwd "$CWD" --arg now "$(shipyard_now)" \
   '{id:("launch-"+$slot), slot:$slot, kind:"launch", status:"info",
-    backend:$backend, container:$container, prompt:$prompt,
+    agent:$agent, backend:$backend, container:$container, prompt:$prompt,
     protocol:$proto, launcher:$launcher, env:$env, cwd:$cwd, started_at:$now}' \
   >"$MB/launch-$SLOT.json" 2>/dev/null
 
 shipyard_note "$SLOT" active
 
-echo "started ship in $(shipyard_where "$SLOT") (worktree .claude/worktrees/$NAME) — $PROMPT"
+echo "started $AGENT ship in $(shipyard_where "$SLOT") (worktree .claude/worktrees/$NAME) - $PROMPT"
 echo "env: $ENVSUM"
 echo "SLOT:$SLOT"
