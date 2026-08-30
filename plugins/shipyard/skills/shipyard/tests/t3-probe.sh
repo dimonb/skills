@@ -9,7 +9,7 @@ DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=_helpers.sh
 . "$DIR/_helpers.sh"
 
-# ctx_probe reads a transcript through ctx_transcript, which needs $ROOT and a project dir; the
+# ctx_probe reads a transcript through ctx_claude_transcript, which needs $ROOT and a project dir; the
 # shapes below are exercised through the PANE fallback instead, which reaches the identical
 # window/percentage/banding code with no filesystem setup.
 #

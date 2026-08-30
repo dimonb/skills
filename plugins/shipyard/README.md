@@ -1,12 +1,15 @@
 # shipyard
 
 A shipyard is where many ships are built at once. This skill runs the repo's own
-[`/ship`](../ship) skill in background terminals and supervises a fleet of them: **one
+[`ship`](../ship) skill in background terminals and supervises a fleet of them: **one
 terminal and one git worktree per change**, a status table on a timer, and — because there is
 no human inside a background session — every question and every architectural decision
 carried back to the session you are sitting in.
 
 ```
+
+Use `/shipyard` in Claude Code and `$shipyard` in Codex. The child runtime matches the
+runtime that invoked the skill: Claude Code launches Claude Code, while Codex launches Codex.
 /shipyard 108 104           continue two existing PRs/MRs, in parallel
 /shipyard "#42"             start from issue 42
 /shipyard "add X to Y"      a brand-new change from an idea
@@ -18,10 +21,11 @@ Run it from the **main worktree** of a git repo.
 
 ## Requires `ship`
 
-`shipyard` launches exactly one thing: `/ship`. It is not a pipeline of its own and knows
-nothing about the stages. Install the [`ship`](../ship) plugin, or provide your own `/ship`
-skill. In Claude Code the dependency is declared in this plugin's manifest, so the CLI
-resolves it; Codex has no equivalent field, so there it is a documented requirement only.
+`shipyard` launches exactly one thing: the matching runtime's `ship` skill. It is not a
+pipeline of its own and knows nothing about the stages. Install the [`ship`](../ship) plugin,
+or provide your own `/ship` skill in Claude Code or `$ship` skill in Codex. In Claude Code the
+dependency is declared in this plugin's manifest, so the CLI resolves it; Codex has no
+equivalent field, so there it is a documented requirement only.
 
 ## What it actually gives you
 
@@ -83,12 +87,13 @@ message dies with the context that held it.
 
 | file | role |
 |---|---|
+| `shipyard-agent.sh` | select and launch the child runtime that matches the parent |
 | `shipyard-backend.sh` | the agterm/tmux abstraction — every terminal operation goes through it |
 | `shipyard-lib.sh` | mailbox paths, slot resolution, payload input, the child env preamble |
 | `shipyard-launch.sh` | start a child: slot, protocol, launcher, container |
 | `shipyard-report.sh` | the status table, stall watchdog, sidebar glyphs |
 | `shipyard-ctx.sh` | the ctx column: reads a child's transcript, infers its window, bands it |
-| `tests/run-all.sh` | the `shipyard-ctx.sh` suite — run by hand, not part of `make check` |
+| `tests/run-all.sh` | the shipyard script suite — run by hand, not part of `make check` |
 | `shipyard-escalations.sh` | the escalation view (`--new` for a fast monitor) |
 | `shipyard-ask.sh` | child side: raise a question / decision / notice |
 | `shipyard-answer.sh` | parent side: answer one |
@@ -107,14 +112,14 @@ already in flight.
 
 ## What a child is allowed to do — read this before your first run
 
-A child is an **autonomous agent session with tool permissions auto-granted**, working in a
-git worktree of your repository and pushing to your forge, with no human in its terminal. It
-is launched with `--permission-mode auto` deliberately: a background session that stops to
-ask permission is a background session that sits idle until someone notices.
+A child is an **autonomous agent session with automatic approval review**, working in a git
+worktree of your repository and pushing to your forge, with no human in its terminal. Claude
+Code uses `--permission-mode auto`; Codex uses `--approve-for-me`. A background session that
+stops to ask permission is a background session that sits idle until someone notices.
 
 What keeps that safe is the pairing, so do not break it:
 
-- the child runs `/ship`, which escalates anything risky or irreversible instead of deciding
+- the child runs `/ship` in Claude Code or `$ship` in Codex, which escalates anything risky or irreversible instead of deciding
   — and `ship`'s own guardrails forbid force-pushing, history rewriting, branch deletion
   beyond the merge convention, and merging without an explicit policy or go-ahead;
 - **you** are the human it escalates to. If you launch children and stop reading the
@@ -126,15 +131,13 @@ starts nothing.
 ## Requirements
 
 - `git`, `bash`, `jq`, and either an agterm app or `tmux`.
-- A `/ship` skill in the repo — see above.
-- The **`claude` CLI** on `PATH`. The launcher starts each child with
-  `claude --permission-mode auto --remote-control …`, which is Claude-Code-specific: the
-  skill is installable in Codex, but the sessions it supervises are Claude Code sessions.
+- A `ship` skill in the repo — see above.
+- The CLI matching the parent runtime on `PATH`: `claude` for Claude Code or `codex` for Codex.
 - `gh` or `glab`, authenticated, for the status table's forge lookups. `GH_CONFIG_DIR` is
   honoured from your environment when set and otherwise left to `gh` — there is no default
   pointing at anyone's machine. `GITLAB_HOST` defaults to the host in the `origin` remote.
 
-Environment knobs: `SHIPYARD_BACKEND`, `SHIPYARD_WORKSPACE`, `SHIPYARD_SESSION`,
+Environment knobs: `SHIPYARD_AGENT`, `SHIPYARD_BACKEND`, `SHIPYARD_WORKSPACE`, `SHIPYARD_SESSION`,
 `SHIPYARD_ENV_PASS`, `SHIPYARD_ENV_SCRUB`, `SHIPYARD_SLOT`, `SHIPYARD_FORCE`, `SHIPYARD_DRY`,
 `SHIPYARD_STALL_SECS`, `SHIPYARD_CTX_WINDOW`, `SHIPYARD_TELL_MAXLINE`, `SHIPYARD_ASK_TIMEOUT`.
 
@@ -143,10 +146,12 @@ percentage is measured against. Without it the window is inferred from the large
 child's transcript has ever carried — a request that carried N tokens cannot have run on a
 window smaller than N — and the override beats that inference in both directions.
 
-Two more are worth knowing about: `SHIPYARD_ENV_PASS` **replaces** the set of variables copied
-from your session into a child — the default is `CLAUDE_HOME CLAUDE_CONFIG_DIR`, so name those
-again if you still want them, or the child resolves whatever config directory its login profile
-supplies and gets different skills. `SHIPYARD_ENV_SCRUB` overrides the set removed from it — the
-defaults strip this session's own identity, including the messaging socket, so a child cannot
-reach the parent's IPC channel. Override that one only if you know why. `SHIPYARD_DRY=1`
-prints everything a child would get and starts nothing.
+Three more are worth knowing about. `SHIPYARD_AGENT=auto|codex|claude` defaults to matching the
+parent runtime; set it explicitly only when invoking the scripts from a shell with no parent
+agent identity. `SHIPYARD_ENV_PASS` **replaces** the set of variables copied from your session
+into a child — the runtime-specific default is `CODEX_HOME` or `CLAUDE_HOME CLAUDE_CONFIG_DIR`.
+Name those again if you still want them, or the child may resolve a different config directory
+and get different skills. `SHIPYARD_ENV_SCRUB` overrides the set removed from the child; the
+defaults strip both runtimes' session identities, including Claude Code's messaging socket.
+Override that one only if you know why. `SHIPYARD_DRY=1` prints everything a child would get
+and starts nothing.

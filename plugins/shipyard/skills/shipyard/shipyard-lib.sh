@@ -12,6 +12,8 @@ export PATH="/opt/homebrew/bin:/opt/local/bin:/usr/local/bin:/usr/bin:/bin:/usr/
 # functions in shipyard-backend.sh. Nothing else in this skill calls agtermctl or tmux.
 # shellcheck source=shipyard-backend.sh
 . "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/shipyard-backend.sh"
+# shellcheck source=shipyard-agent.sh
+. "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/shipyard-agent.sh"
 
 # Escalation mailbox. Lives in the SHARED .git (git-common-dir), so the very same
 # path resolves from the main worktree (parent watcher) and from
@@ -41,7 +43,7 @@ shipyard_slot() {
 
 shipyard_now() { date -u +%Y-%m-%dT%H:%M:%SZ; }
 
-# --- the child's Claude identity ------------------------------------------------
+# --- the child agent's identity -------------------------------------------------
 # A child is NOT spawned from the parent's shell: agterm spawns it from the app (GUI
 # environment), and tmux spawns it from a server whose environment was frozen whenever
 # that server happened to start. Either way the parent's environment does not reach it
@@ -55,25 +57,23 @@ shipyard_now() { date -u +%Y-%m-%dT%H:%M:%SZ; }
 #
 # Per-session variables go the other way: they must be SCRUBBED. Handing a child the
 # parent's CLAUDE_CODE_MESSAGING_SOCKET/TOKEN points it at the parent's IPC channel.
-SHIPYARD_ENV_PASS_DEFAULT="CLAUDE_HOME CLAUDE_CONFIG_DIR"
-SHIPYARD_ENV_SCRUB_DEFAULT="CLAUDECODE CLAUDE_CODE_ENTRYPOINT CLAUDE_CODE_SESSION_ID \
-CLAUDE_CODE_CHILD_SESSION CLAUDE_PID CLAUDE_CODE_MESSAGING_SOCKET \
-CLAUDE_CODE_MESSAGING_TOKEN CLAUDE_EFFORT SHIPYARD_SLOT"
-
 # Emit `export X=…` / `unset X` lines for the launcher. Only variables actually set in
 # the parent are exported, so an unset CLAUDE_HOME stays unset rather than becoming "".
 shipyard_env_preamble() {
-  local v
-  for v in ${SHIPYARD_ENV_PASS:-$SHIPYARD_ENV_PASS_DEFAULT}; do
+  local agent="$1" v pass scrub
+  pass=${SHIPYARD_ENV_PASS:-$(shipyard_agent_env_pass_default "$agent")} || return 1
+  scrub=${SHIPYARD_ENV_SCRUB:-$(shipyard_agent_env_scrub_default)} || return 1
+  for v in $pass; do
     if [ -n "${!v+set}" ]; then printf 'export %s=%q\n' "$v" "${!v}"; fi
   done
-  printf 'unset %s\n' "${SHIPYARD_ENV_SCRUB:-$SHIPYARD_ENV_SCRUB_DEFAULT}"
+  printf 'unset %s\n' $scrub
 }
 
 # One line naming what will be propagated, for the launch log and the mailbox record.
 shipyard_env_summary() {
-  local v out=""
-  for v in ${SHIPYARD_ENV_PASS:-$SHIPYARD_ENV_PASS_DEFAULT}; do
+  local agent="$1" v out="" pass
+  pass=${SHIPYARD_ENV_PASS:-$(shipyard_agent_env_pass_default "$agent")} || return 1
+  for v in $pass; do
     if [ -n "${!v+set}" ]; then out="$out $v=${!v}"; else out="$out $v=<unset>"; fi
   done
   printf '%s' "${out# }"

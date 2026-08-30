@@ -82,8 +82,9 @@ codex  plugin marketplace add .   &&  codex  plugin add     ship@dimonb-skills
 
 ## Using them
 
-Once installed, each plugin is a skill the agent invokes by name. One line to start; the
-details live in the plugin's own README, which travels with the install.
+Once installed, each plugin is a skill the agent invokes by name. Claude Code uses `/skill`;
+Codex uses `$skill`. One line starts the workflow, and the details live in the plugin's own
+README, which travels with the install.
 
 ```
 /ship "add a typing indicator"     one change, end to end: issue, implementation, its own
@@ -96,6 +97,9 @@ details live in the plugin's own README, which travels with the install.
 /shipyard "add X to Y"             a brand-new change from an idea
 /shipyard 108 no-merge             extra ship flags pass through verbatim
 ```
+
+Use the same arguments as `$ship` and `$shipyard` in Codex. A shipyard child matches the
+runtime that invoked it: Codex launches Codex, while Claude Code launches Claude Code.
 
 `council` is driven by its script rather than by a single argument, because a room outlives
 one turn:

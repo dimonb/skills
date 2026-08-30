@@ -1,32 +1,32 @@
 ---
 name: shipyard
-description: "shipyard: run the repo's /ship skill in background terminals (agterm sessions when available, tmux windows otherwise) and supervise them. Use when one or more changes should each be driven end to end by their own background Claude session, with a status table every 10 minutes, stall and context-ceiling watchdogs, and questions or architectural decisions escalated back to this session. Requires a /ship skill in the repo — it launches nothing else, and the stage names come from that skill, not from here."
+description: "shipyard: run the repo's ship skill in background terminals (agterm sessions when available, tmux windows otherwise) and supervise them. Use when changes should each be driven end to end by a background agent matching the parent runtime (Codex launches Codex; Claude launches Claude), with status and escalation monitoring. Requires a ship skill in the repo; it launches nothing else."
 ---
 
 # shipyard: run ship in background terminals, monitor it, answer its escalations
 
 A shipyard is where many ships are built at once. This skill runs the repo's own
-**`/ship`** skill on your work, one change at a time in parallel: every change gets its
+**ship** skill on your work, one change at a time in parallel: every change gets its
 own terminal and its own git worktree, a background monitor posts a markdown status table
 every 10 minutes and stops itself once everything is merged/closed, and — because
 there is no human inside a child terminal — the child escalates every question and
 every architectural decision **up to this session**, waits for your answer, and only
 then acts on it.
 
-**`shipyard` launches exactly one thing: `/ship`.** It is not a pipeline of its own and it
-knows nothing about the stages — `/ship` owns all of them and takes a free-text idea, a
+**`shipyard` launches exactly one thing: the ship skill.** It is not a pipeline of its own and it
+knows nothing about the stages - `$ship` in Codex or `/ship` in Claude owns all of them and takes a free-text idea, a
 `#N` issue, or an MR/PR number as its argument. `shipyard` only starts it, watches it, and
 carries its questions to you. The repo must provide that skill; if it does not, `shipyard`
 has nothing to run. In Claude Code that dependency is declared in this plugin's manifest
 (`"dependencies": ["ship"]`), so the CLI resolves it; Codex has no equivalent field, so
 there the requirement lives in prose only.
 
-Skill arguments:
-* `/shipyard 108 104` — continue existing MRs/PRs by number;
-* `/shipyard "#42"` — start from an existing issue;
-* `/shipyard "add X to Y"` — a brand-new change from a free-text idea, handed to `/ship` as-is;
-* `/shipyard 108 no-merge` — extra ship flags (`no-merge`, `merge`, `effort <level>`) go through verbatim;
-* `/shipyard` — no arguments: monitor-only over the ship terminals that already exist (Step 0).
+Skill arguments (use `$shipyard` in Codex and `/shipyard` in Claude):
+* `shipyard 108 104` - continue existing MRs/PRs by number;
+* `shipyard "#42"` - start from an existing issue;
+* `shipyard "add X to Y"` - a brand-new change from a free-text idea, handed to ship as-is;
+* `shipyard 108 no-merge` - extra ship flags (`no-merge`, `merge`, `effort <level>`) go through verbatim;
+* `shipyard` - no arguments: monitor-only over the ship terminals that already exist (Step 0).
 
 Run it from the **main worktree** of a git repo.
 
@@ -87,33 +87,37 @@ the board is readable at a glance without the table.
 here goes through `shipyard-backend.sh`; reaching around it is how one backend silently stops
 being supported.
 
-## The child's Claude identity — `CLAUDE_HOME` / `CLAUDE_CONFIG_DIR`
+## Child runtime and identity
+
+`SHIPYARD_AGENT=auto|codex|claude` controls the child runtime. `auto` is the
+default: a Codex parent launches Codex and a Claude parent launches Claude. In a plain
+shell, auto uses the only installed agent, preferring Claude when both are present for
+backward compatibility. Set the variable explicitly when a shell has no parent-agent identity.
 
 **A child does not inherit this session's environment.** agterm spawns it from the app
 (the GUI environment) and tmux spawns it from a server whose environment was frozen
 whenever that server happened to start. Either way, nothing you have set here reaches it
 by itself, and the child's login profile then supplies whatever value it likes.
 
-That matters for exactly the variables that decide *which Claude the child is*:
-`CLAUDE_HOME` and `CLAUDE_CONFIG_DIR` select the config dir, hence the skills, settings
-and memory it loads. A parent running under a non-default config dir whose child falls
-back to the profile default gets a child with **different skills — possibly no `/ship`
-at all**, which surfaces as a child that starts, looks healthy, and does something else
-entirely.
+That matters for variables which select the agent's config directory and therefore its
+skills, settings and memory: `CODEX_HOME` for Codex, or `CLAUDE_HOME` /
+`CLAUDE_CONFIG_DIR` for Claude. A parent using a non-default config directory whose
+child falls back to the profile default can start with different skills and do the wrong work.
 
 So `shipyard-launch.sh` writes a **launcher script** and re-asserts those variables inside it,
 *after* the login profile has run:
 
-* propagated (only when set here): `CLAUDE_HOME`, `CLAUDE_CONFIG_DIR` — `SHIPYARD_ENV_PASS`
-  REPLACES that list rather than adding to it, so name them again yourself:
-  `SHIPYARD_ENV_PASS="CLAUDE_HOME CLAUDE_CONFIG_DIR VAR1"`;
+* propagated (only when set here): `CODEX_HOME` for Codex, or `CLAUDE_HOME`
+  and `CLAUDE_CONFIG_DIR` for Claude. `SHIPYARD_ENV_PASS` replaces the
+  runtime default rather than adding to it;
 * scrubbed always: `CLAUDECODE`, `CLAUDE_CODE_ENTRYPOINT`, `CLAUDE_CODE_SESSION_ID`,
   `CLAUDE_CODE_CHILD_SESSION`, `CLAUDE_PID`, `CLAUDE_CODE_MESSAGING_SOCKET`,
-  `CLAUDE_CODE_MESSAGING_TOKEN`, `CLAUDE_EFFORT`, `SHIPYARD_SLOT` — these are *this* session's
+  `CLAUDE_CODE_MESSAGING_TOKEN`, `CLAUDE_EFFORT`, `CODEX_SESSION_ID`,
+  `CODEX_THREAD_ID`, `SHIPYARD_SLOT` - these are *this* session's
   identity, and handing a child the parent's messaging socket points it at the parent's
   own IPC channel.
 
-Launch prints the propagated set (`env: CLAUDE_HOME=… CLAUDE_CONFIG_DIR=…`) and records
+Launch prints the selected agent and propagated set and records
 it in `<mailbox>/launch-<slot>.json`. **Read that line.** If a child is behaving as if it
 has the wrong skills, the answer is usually there — and if a value drifted after launch
 (you changed config dirs mid-flight), the fix is to re-launch the slot, not to patch the
@@ -160,15 +164,21 @@ environment/argument error.
 
 What it launches:
 
-```
+```bash
+# From a Codex parent:
+codex --approve-for-me -C .claude/worktrees/ship-<slot> \
+  'Read <protocol>; then invoke $ship <target> [flags]'
+
+# From a Claude parent:
 claude -w ship-<slot> --effort max -n ship-<slot> --permission-mode auto \
   --remote-control ship-<slot> --append-system-prompt "$(cat <mailbox>/protocol-<slot>.md)" \
   '/ship <target> [flags]'
 ```
 
-**`--permission-mode auto` is deliberate, and it is the child's whole risk posture.** A
+**Automatic approval review is deliberate, and it is the child's whole risk posture.** A
 background session that stops to ask permission is a background session that sits idle until
-someone notices, so a child gets its tools auto-granted: it works in a worktree of the repo
+someone notices, so Codex uses `--approve-for-me` and Claude uses
+`--permission-mode auto`. The child works in a worktree of the repo
 and pushes to the forge with no human in its terminal. What makes that acceptable is the
 pairing — `/ship` escalates anything risky or irreversible rather than deciding, and the
 parent watcher is the human it escalates to. Launching children and then not reading their
@@ -675,6 +685,7 @@ collide with it.
 
 | file | role |
 |------|------|
+| `shipyard-agent.sh` | agent-runtime adapter: parent detection, skill syntax, environment and launcher |
 | `shipyard-backend.sh` | the agterm/tmux abstraction — every terminal operation goes through it |
 | `shipyard-lib.sh` | mailbox paths, slot resolution, payload input, the child env preamble |
 | `shipyard-ctx.sh` | the ctx column: reads a child's transcript, infers its window, bands it |
