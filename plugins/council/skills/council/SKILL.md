@@ -441,10 +441,12 @@ produced one false test result during development. Do not pipe status through a 
   readers build their file lists from `order`, so renaming or removing a peer orphans its lane
   on the spot: that peer's past messages leave the transcript, the claims graph and the
   verdict, and a seat still running under the old name goes on writing where nobody reads.
-  Nothing is deleted — `status` names the orphaned lane and counts what is in it. If `order`
-  is not an array of plain names (`[A-Za-z0-9_-]`) the room has **no** membership at all:
-  every reader sees it empty, `status` says so loudly, and `decide` refuses rather than write
-  a record it cannot populate.
+  Nothing is deleted — `status` names the orphaned lane and counts what is in it. `order` must
+  be a non-empty array of plain names (`[A-Za-z0-9_-]`), no two the same ignoring case;
+  anything else and the room has **no** membership at all: every reader sees it empty,
+  `status` says so loudly, and `decide` refuses rather than write a record it cannot populate.
+  Two names that differ only by case are rejected rather than merged — on a case-sensitive
+  filesystem they are two real peers, so merging them would change the membership silently.
 * **A participant that consumed your message and then went quiet is usually not thinking.**
   Look at its terminal. On `codex` it may be the trust-this-directory prompt; `agy` is
   launched with permissions skipped and no longer prompts at all. Otherwise it is a context

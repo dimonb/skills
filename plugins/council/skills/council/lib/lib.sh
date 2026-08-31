@@ -53,25 +53,66 @@ _C_PEERS=""
 # exited, so every reader paid the jq again.
 _c_peers_load() {
   [ -n "$_C_PEERS" ] && return 0
-  local raw p
-  # One jq: the array-and-all-strings half. `select` would silently DROP a non-string and
-  # shorten the list, so the test is over the whole array and emits nothing when it fails.
-  raw=$(jq -r 'if (.order | type) == "array" and (.order | map(type == "string") | all)
-               then .order[] else empty end' "$ROOM/roster.json" 2>/dev/null)
-  if [ -n "$raw" ]; then
-    while IFS= read -r p; do
-      _plain_name "$p" || { raw=""; break; }
-    done <<EOF
-$raw
+  local out n count=0 p
+  # jq answers ONE question about the array and then prints its length and its entries.
+  #
+  # The validation is over the ENTRIES, never over the lines this substitution prints, and that
+  # distinction is the whole lesson of two review rounds. A `$( )` strips trailing newlines and
+  # splits embedded ones, so a line-based check silently disagreed with the array twice: an
+  # entry of `"a\nghost"` passed as two plain names (inventing a peer, and leaving c_npeers
+  # larger than the array c_floor_at indexed, so the floor landed on a slot that did not exist
+  # and every send was refused for ever), and a TRAILING empty entry vanished before it could
+  # be rejected at all. Any line-based successor will fail the same way.
+  #
+  # Rejected, all-or-nothing, because a room that cannot state its membership unambiguously
+  # does not have one: not an array; any entry not a string; any entry that is not a plain name
+  # (which is also what keeps it safe as a path component); and any two entries that collide
+  # case-insensitively.
+  #
+  # That last one is a REJECTION and deliberately not a fold. Folding would silently merge two
+  # entries into one, and on a case-sensitive filesystem `abc` and `ABC` are two genuinely
+  # different peers — so folding would change the membership without saying so, which is the
+  # same silent-normalisation defect as dropping a bad entry and re-rotating the floor. What
+  # made this reachable: the glob this reader replaced enumerated real DIRECTORIES, so it
+  # deduplicated case variants by construction on a case-insensitive filesystem; a string
+  # comparison does not, and eight spellings of one lane name read that lane eight times.
+  out=$(jq -r '
+    def usable:
+      type == "array"
+      and length > 0
+      and (map(type == "string") | all)
+      and (map(test("^[A-Za-z0-9_-]+$")) | all)
+      and ((map(ascii_downcase) | unique | length) == length);
+    if (.order | usable) then (.order | length), (.order[]) else empty end
+  ' "$ROOM/roster.json" 2>/dev/null)
+  _C_PEERS=""
+  [ -n "$out" ] || return 1
+  n=${out%%$'\n'*}          # jq's own count of the entries it validated
+  out=${out#*$'\n'}         # ...and the names themselves
+  # Length agreement, belt and braces. The charset above admits no newline, so the names cannot
+  # split any more — but this is the cheap invariant that makes a line/entry disagreement
+  # impossible rather than merely unlikely, and it is what would have caught both of the gate's
+  # earlier holes on its own.
+  while IFS= read -r p; do count=$((count + 1)); done <<EOF
+$out
 EOF
-  fi
-  _C_PEERS="$raw"
-  [ -n "$_C_PEERS" ]
+  [ "$count" = "$n" ] || return 1
+  _C_PEERS="$out"
+  return 0
 }
-c_peers()  { _c_peers_load || true; printf '%s\n' "$_C_PEERS"; }
+c_peers()  { _c_peers_load || return 1; printf '%s\n' "$_C_PEERS"; }
 # Usable roster? False for malformed AND for empty — both mean the room has no membership.
 c_roster_ok() { _c_peers_load; }
-c_npeers() { c_peers | wc -l | tr -d ' '; }
+# Counted from the SAME validated list the lane paths and the floor come from, so the three can
+# never disagree. Reading the array separately is what let c_npeers say 3 for a 2-entry roster.
+c_npeers() {
+  _c_peers_load || { printf '0'; return; }
+  local n=0 p
+  while IFS= read -r p; do n=$((n + 1)); done <<EOF
+$_C_PEERS
+EOF
+  printf '%s' "$n"
+}
 c_now()    { date -u +%Y-%m-%dT%H:%M:%SZ; }
 # bash 5 gives us sub-second time without spawning anything.
 c_ms()     { local t=${EPOCHREALTIME/./}; echo $(( 10#$t / 1000 )); }
@@ -574,17 +615,19 @@ c_all() {
   # `_c_peers_load` rather than `$(c_peers)`: this is the hot path of every send, and the
   # command substitution was both a fork and the reason the memo never worked.
   #
-  # DE-DUPLICATED, because the glob this replaced deduplicated by construction and the roster
-  # does not. A repeated name in `.order` otherwise reads that lane's messages once per entry:
-  # the transcript doubles, `c_turns` inflates, `live` climbs past the one proposal
-  # `ready-to-decide` requires, and with enough entries the room crosses its turn budget and
-  # reports `unresolved` with rc 0 — closed, to a supervisor — having written no record.
+  # The `case` and the `seen` check are BELT AND BRACES over the gate in _c_peers_load, which
+  # already rejects a roster that is not an array of unique plain names. Both stay deliberately:
+  # each defends this loop at the point of USE, so neither end is load-bearing alone, and a gate
+  # that is ever loosened cannot silently turn this into a file-read primitive again.
   #
-  # The `case` is the second half of the path gate. `_plain_name` already rejects `/` and `.`
-  # in c_peers, so a name reaching here cannot be `..` or contain a separator; this makes the
-  # containment hold at the point of USE as well, so neither end is load-bearing alone. Before
-  # both existed, a `.order` entry of `"../../outside"` made this loop read `[0-9]*.json` from
-  # outside the room and splice it into the transcript, the claims graph and the record.
+  # What each one was for. The `case` rejects `.`, `..` and any name with a separator: before
+  # it existed, a `.order` entry of `"../../outside"` made this loop read `[0-9]*.json` from
+  # outside the room and splice it into the transcript, the claims graph and the record. The
+  # `seen` check refuses to read one lane twice: the glob this reader replaced deduplicated by
+  # construction, and a repeated name otherwise read that lane once per entry — the transcript
+  # doubling, `c_turns` inflating, `live` climbing past the one proposal `ready-to-decide`
+  # requires, and with enough entries the room crossing its budget and reporting `unresolved`
+  # at rc 0, which is "closed" to a supervisor, having written no record.
   _c_peers_load || true
   seen=" "
   for p in $_C_PEERS; do
@@ -626,7 +669,11 @@ c_all() {
   # It is on the hot path of every send (c_max_lamport, c_barrier, c_turns all come through
   # here), so this is a real cost, not a rounding error. It buys: an author that cannot be
   # forged, a lane set both readers agree on, and a roster that cannot point a reader outside
-  # the room. If that trade is ever revisited, memoising the roster ACROSS calls is the lever --
+  # the room. Partly offset elsewhere, though not here: c_floor_at now indexes the validated
+  # list instead of running its own `jq -r '.order[$i]'`, so `send`, `floor` and `status` each
+  # spawn one process fewer than they did. Re-measured at 1-minute load 3.0 after that change,
+  # this function's own numbers were 9.8 -> 12.8 ms at 12 messages and 46.9 -> 51.8 at 300 —
+  # the table above still holds. If that trade is ever revisited, memoising the roster ACROSS calls is the lever --
   # `_C_PEERS` only survives within one shell, and most callers sit inside a command
   # substitution -- not going back to the glob, which loses input_filename and the whole
   # property this function exists to provide. A cheaper derivation is not the lever either:
@@ -764,11 +811,27 @@ c_turns_since_last_claim() {
 
 # The floor is a pure function of the log: no token file to lose or duplicate.
 # Order rotates one step per lap so the same peer is not always the anchor.
+# Indexed into the VALIDATED peer list, not into `roster.json` directly. Reading the raw array
+# here while c_npeers counted something else is what let the floor land on a slot that does not
+# exist: an entry containing a newline made c_npeers 3 for a 2-entry array, `.order[2]` was
+# null, no peer equalled null, and every send from every seat was refused for ever with the
+# room reporting no alarm at all. One validated list feeds the lane paths, the count and the
+# rotation, so the three cannot disagree. It also drops a jq exec from the hot path.
 c_floor_at() { # <turns-consumed>
-  local t="$1" n lap idx
+  local t="$1" n lap idx i=0 p
   n=$(c_npeers)
+  # No membership, no floor. Returning nothing is right: c_send compares the holder to $ME and
+  # refuses, which is what should happen in a room whose roster cannot be read.
+  [ "$n" -gt 0 ] || return 1
   lap=$(( t / n )); idx=$(( (t % n + lap) % n ))
-  jq -r --argjson i "$idx" '.order[$i]' "$ROOM/roster.json"
+  _c_peers_load || return 1
+  while IFS= read -r p; do
+    [ "$i" = "$idx" ] && { printf '%s\n' "$p"; return 0; }
+    i=$((i + 1))
+  done <<EOF
+$_C_PEERS
+EOF
+  return 1
 }
 c_floor() { c_floor_at "$(c_turns)"; }
 c_next_after() { # who speaks after the current holder

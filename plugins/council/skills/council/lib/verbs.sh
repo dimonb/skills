@@ -36,7 +36,15 @@ v_agenda() {
 v_decision() {
   # Exit 1 while the room is still open — a STATUS, the same way `verdict` reports a live
   # room, not a failure.
-  [ -f "$ROOM/board/decision.md" ] || {
+  #
+  # `-s`, matching c_recorded_status, and the two readers of this file must not drift apart:
+  # v_decide opens the record with `> "$out"`, which creates it at zero bytes the instant the
+  # redirect opens, so a decide that dies part-way leaves an empty file behind. With `-f` this
+  # verb printed nothing and exited 0 — and `protocol/_channel.md` now makes exactly that exit
+  # the single signal every participant stops on, so every seat would leave an open room with
+  # no record and no alarm. A non-empty but half-written record still prints and exits 0, which
+  # is deliberate: it is the copy a human needs in order to see what went wrong.
+  [ -s "$ROOM/board/decision.md" ] || {
     printf 'council: no decision yet — the room is still open (council.sh verdict)\n'
     return 1
   }
@@ -259,7 +267,7 @@ v_status() {
   esac
   # The loudest alarm there is, because every other line of this block is derived from a reading
   # that is empty: no participants, no floor, no messages, no verdict worth the name.
-  c_roster_ok || alarms="$alarms 🛑 roster.json has no usable 'order' — it must be an array of plain names ([A-Za-z0-9_-]). The room has NO membership: every reader sees it as empty and 'decide' will refuse to write a record. Fix roster.json."
+  c_roster_ok || alarms="$alarms 🛑 roster.json has no usable 'order' — it must be a non-empty array of plain names ([A-Za-z0-9_-]), no two the same ignoring case. The room has NO membership: every reader sees it as empty and 'decide' will refuse to write a record. Fix roster.json."
   read -r ghost_lanes ghost_msgs <<<"$(c_unrostered)"
   [ "$ghost_lanes" -gt 0 ] && alarms="$alarms ⚠️ $ghost_lanes lane(s) on disk are not in the roster, holding $ghost_msgs message(s) no reader counts — a peer renamed or removed from roster.json, or a seat still running under a name the roster no longer lists"
   [ "$conf" -gt 0 ] && alarms="$alarms ⚠️ $conf messages lost a turn conflict (their authors must take the floor again)"
@@ -305,7 +313,7 @@ v_decide() {
   # an empty transcript, while an objection was open. Refuse instead: the record is the room's
   # output and this is the one path that must never produce a wrong one.
   c_roster_ok || {
-    echo "council: roster.json has no usable 'order' (an array of plain names) — refusing to write a record from a room that cannot be read" >&2
+    echo "council: roster.json has no usable 'order' (a non-empty array of plain names, no two the same ignoring case) — refusing to write a record from a room that cannot be read" >&2
     return 2
   }
   j=$(v_verdict --json); verd=$(printf '%s' "$j" | jq -r .verdict)

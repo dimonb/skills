@@ -144,33 +144,36 @@ for bad in '".."' '"../../outside"'; do
   fi
 done
 
-# --- 7. a duplicated roster entry must not multiply a lane ----------------------
-# The glob deduplicated by construction; the roster does not. Enough duplicates and the room
-# crosses its turn budget and reports `unresolved` with rc 0 — closed, to a supervisor — with
-# no record on disk at all.
-fresh
-say_floor propose '[]' "An ordinary proposal." >/dev/null
-dups=$(jq -cn '[range(40) | "a"] + ["b"]')
-set_order "$dups"
-read -r v rc <<<"$(bash "$CLI" verdict 2>/dev/null | cut -d' ' -f1; printf '%s' "$?")"
-live=$(bash "$CLI" verdict --json 2>/dev/null | jq -r .live)
-if [ "$live" = 1 ]; then
-  echo "ok   40 duplicate roster entries still read the lane once (live=$live)"
-else
-  echo "FAIL a duplicated roster entry multiplied the lane: live=$live (want 1)"; fail=1
-fi
-if [ ! -f "$R/board/decision.md" ]; then
-  echo "ok   and no record was written behind a supervisor's back"
-else
-  echo "FAIL a record appeared with nobody running decide"; fail=1
-fi
+# --- 7. a roster that names one lane twice is MALFORMED, not deduplicated -------
+# Exact duplicates and case variants alike. The room cannot state its membership unambiguously,
+# so it has none — rejected, alarmed, and `decide` refuses. Deduplicating instead would be a
+# silent normalisation: on a case-SENSITIVE filesystem `abc` and `ABC` are two different peers,
+# so folding them would change the membership without saying so.
+#
+# Both shapes must be covered, because they failed differently. Exact duplicates read a lane
+# once per entry; case variants defeated a byte-comparison dedup entirely on a case-INsensitive
+# filesystem (APFS, which this repo sits on), giving eight copies of one lane's messages, eight
+# live proposals, silent alarms, and `decide --force` writing a durable record at rc 0.
+for dup in '[range(40) | "a"] + ["b"]' '["abc","Abc","aBc","ABC","b"]'; do
+  fresh
+  p=$(say_floor propose '[]' "An ordinary proposal.")
+  set_order "$(jq -cn "$dup")"
+  live=$(bash "$CLI" verdict --json 2>/dev/null | jq -r .live)
+  COUNCIL_ME="$p" bash "$CLI" decide --force >/dev/null 2>&1; drc=$?
+  alarmed=$(bash "$CLI" status 2>/dev/null | sed -n 's/^alarms://p' | grep -c 'no usable' || true)
+  if [ "$live" = 0 ] && [ "$drc" != 0 ] && [ ! -f "$R/board/decision.md" ] && [ "$alarmed" -ge 1 ]; then
+    echo "ok   a roster naming one lane twice is rejected, not deduplicated ($dup)"
+  else
+    echo "FAIL a duplicate-naming roster was accepted: live=$live decide=$drc alarmed=$alarmed ($dup)"; fail=1
+  fi
+done
 
 # --- 8. a malformed roster means NO membership, and decide must REFUSE ----------
 # The contract: fail closed and visible. The read-only verbs keep working so a corrupt room can
 # still be diagnosed from inside, `status` alarms, and the one path that must never produce a
 # wrong answer — the durable record — refuses. Before the gate, `decide --force` exited 0
 # having written a record saying "(there were no objections)" while an objection was open.
-for bad in '"a"' '{"a":1}' '["a",2]' '["a","../b"]' '[]'; do
+for bad in '"a"' '{"a":1}' '["a",2]' '["a","../b"]' '[]' '["a","b\nghost"]' '["a","b",""]' '["a",null]'; do
   fresh
   p=$(say_floor propose '[]' "An ordinary proposal.")
   say_floor object "$(jq -cn --arg i "$(id_of propose)" '[$i]')" "No." >/dev/null

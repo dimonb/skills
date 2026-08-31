@@ -122,5 +122,24 @@ for bogus in 'yes' '0' 'DECIDED' ''; do
   fi
 done
 
+# --- 6. a zero-byte record is not a record, in EVERY reader -----------------------
+# `v_decide` opens the record with `> "$out"`, which creates it at zero bytes the instant the
+# redirect opens, so a decide that dies part-way leaves an empty file behind. Both readers of
+# that file must agree it is not a record — and `decision`'s exit 0 is what the protocol tells
+# every participant to stop on, so a reader that says "yes" here stops the whole room on an
+# open one. The two readers were fixed one round apart, which is exactly the drift this file
+# exists to catch.
+fresh
+floor_say propose '[]' "Adopt the thing."
+: > "$R/board/decision.md"
+printf 'decided' > "$R/board/status"
+read -r v rc <<<"$(verd)"
+bash "$CLI" decision >/dev/null 2>&1; drc=$?
+if [ "$v" = deliberating ] && [ "$rc" = 1 ] && [ "$drc" != 0 ]; then
+  echo "ok   a zero-byte record reads as no record in both verdict and decision (rc $rc/$drc)"
+else
+  echo "FAIL a zero-byte record was believed: verdict=$v rc=$rc decision_rc=$drc"; fail=1
+fi
+
 [ "$fail" = 0 ] && echo "t9f PASS" || echo "t9f FAIL"
 exit $fail
