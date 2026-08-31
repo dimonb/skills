@@ -45,12 +45,14 @@ silent until a state, stage, escalation count, ctx band or terminal presence act
 
 **A Codex parent that survives transient model-capacity stops.** When shipyard is launched
 from Codex in agterm, the first live child also starts one idempotent continuity watcher for
-the parent session. A root capacity banner gets one `resume`; eight seconds later the watcher
+the parent session, even when a child-runtime override selects Claude. A root capacity banner
+gets one `resume`; eight seconds later the watcher
 queues `/goal resume`, including during an active turn, because agterm supports steering.
 Indented tool output cannot imitate the banner, service lines and stale `Working` scrollback
 do not hide it, and repeated capacity episodes re-arm independently. The current input prompt
-is the safety boundary: any user draft blocks submission, and text plus Return are sent as two
-separate terminal actions. Claude parents and tmux runs are unchanged.
+is the safety boundary: any user draft blocks submission. The watcher requires a quiet window,
+types text and Return as separate actions, and re-reads the prompt before Return; user activity
+or a mismatch cancels submission without erasing input. Claude parents and tmux runs are unchanged.
 
 **Watchdogs for the two failure modes that look like health.** A background agent parked on
 CI and a background agent that has *died* have the same shape — idle, no escalation, green
