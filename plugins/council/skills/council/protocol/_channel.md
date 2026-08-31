@@ -78,11 +78,12 @@ If `send` returned **exit 6**, the floor moved while you were composing. That is
 breakage: drain your inbox (`recv`), read what was said, and wait for your turn. Sending the
 same text again without reading the new messages is the worst thing you can do.
 
-**Stop when the room has written its record** — `council.sh decision` prints it (exit 0), and
-`council.sh verdict` reports `decided` or `unresolved`. Do **not** stop on seeing a message
-with `act: decide`: that only says somebody ran the verb, and it is neither necessary nor
-sufficient. A stray `decide` message closes nothing, and a room genuinely closed with
-`decide --force` often carries no such message at all.
+**Stop when the room has written its record** — `council.sh decision` prints it and exits 0.
+That is the single stop signal. Do **not** stop on seeing a message with `act: decide`: that
+only says somebody ran the verb, and it is neither necessary nor sufficient. A stray `decide`
+message closes nothing, and a room genuinely closed with `decide --force` often carries no such
+message at all. Do not use `verdict` as the stop signal either: a room whose turn budget ran out
+reports `unresolved` with exit 0 while no record has been written yet.
 
 Something urgent can be said out of turn — only `object`, `clarify`, `notice`, with the
 `--hand` flag. It consumes no turn and does not move the floor, but the next speaker is
@@ -97,8 +98,10 @@ amendment (a reference to an objection CLOSES it) · `object --refs '["<id>"]'` 
 objection; from the author of a proposal it drops the proposal) · `withdraw` · `msg` ·
 `notice`.
 
-The room closes itself once no objection is open and a full lap has passed in which nobody
-added a proposal, an amendment or an objection. Therefore:
+The room becomes **ready to decide** once no objection is open and a full lap has passed in
+which nobody added a proposal, an amendment or an objection. It does not close itself: closing
+is somebody running `council.sh decide`, which is the only thing that writes the record.
+Therefore:
 
 * **agreeable noises do not bring a decision closer** — `support` closes nobody's objection;
 * **a lap of polite echo while an objection is open is marked `stuck`** and reaches the

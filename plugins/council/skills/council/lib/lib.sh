@@ -20,10 +20,57 @@ ROOM="$COUNCIL_ROOM"
 ME="${COUNCIL_ME:-}"
 C_IDLE="${COUNCIL_IDLE:-2}"        # bell-loss fallback, seconds
 
-# The roster never changes while a room lives, so read it once: c_send would
-# otherwise pay two jq spawns per message just to learn who to ring.
+# What a peer may be called. `up.sh` validates a room's names with this same rule when the room
+# is created; this is the canonical definition and up.sh falls back to its own copy only on the
+# one path that has no room yet (`up` and `rooms` source up.sh WITHOUT this file).
+#
+# The character class is what makes a name safe to put in a path: no `/`, and no `.`, so a name
+# can be neither a separator nor `..`.
+_plain_name() { case "$1" in ''|*[!A-Za-z0-9_-]*) return 1 ;; *) return 0 ;; esac; }
+
+# The roster's peer list — the room's MEMBERSHIP, and the source both readers build their file
+# lists from. Read once per shell: c_send would otherwise pay two jq spawns per message just to
+# learn who to ring.
+#
+# `roster.json` is in the room like every other file, so every participant can write it, and
+# what it says now decides which paths a reader OPENS. It is therefore gated, all-or-nothing:
+# `.order` must be an array, every entry must be a string, and every entry must be a plain name.
+# Anything else means the room has NO MEMBERSHIP — not a shortened one.
+#
+# All-or-nothing is the whole point, and dropping only the bad entries would be worse: c_npeers
+# and c_floor_at index `.order` POSITIONALLY, so removing one entry silently rotates the floor
+# to a different peer. A room whose roster cannot be read has no floor to compute, and quietly
+# computing a different one is exactly the class of divergence this file exists to remove.
+#
+# Failing this way is "fail closed and visible": the read-only verbs keep working, so a corrupt
+# room can still be diagnosed from inside; `status` raises an alarm; and `decide` REFUSES to
+# write a record it cannot populate. That last one is the symptom that mattered — before the
+# gate, a malformed `.order` made `decide --force` exit 0 having written a durable record
+# saying "(there were no objections)" while an objection was open.
 _C_PEERS=""
-c_peers()  { [ -n "$_C_PEERS" ] || _C_PEERS=$(jq -r '.order[]' "$ROOM/roster.json"); printf '%s\n' "$_C_PEERS"; }
+# Load into THIS shell. Call this, not `$(c_peers)`, on a hot path: a command substitution forks,
+# and that fork is also why the memo never worked — the assignment landed in a subshell that then
+# exited, so every reader paid the jq again.
+_c_peers_load() {
+  [ -n "$_C_PEERS" ] && return 0
+  local raw p
+  # One jq: the array-and-all-strings half. `select` would silently DROP a non-string and
+  # shorten the list, so the test is over the whole array and emits nothing when it fails.
+  raw=$(jq -r 'if (.order | type) == "array" and (.order | map(type == "string") | all)
+               then .order[] else empty end' "$ROOM/roster.json" 2>/dev/null)
+  if [ -n "$raw" ]; then
+    while IFS= read -r p; do
+      _plain_name "$p" || { raw=""; break; }
+    done <<EOF
+$raw
+EOF
+  fi
+  _C_PEERS="$raw"
+  [ -n "$_C_PEERS" ]
+}
+c_peers()  { _c_peers_load || true; printf '%s\n' "$_C_PEERS"; }
+# Usable roster? False for malformed AND for empty — both mean the room has no membership.
+c_roster_ok() { _c_peers_load; }
 c_npeers() { c_peers | wc -l | tr -d ' '; }
 c_now()    { date -u +%Y-%m-%dT%H:%M:%SZ; }
 # bash 5 gives us sub-second time without spawning anything.
@@ -193,7 +240,9 @@ c_slurp_raw() { local v=""; [ -f "$1" ] || { printf 0; return; }; read -r v < "$
 c_lamport() { c_slurp "$ROOM/state/$ME.lamport"; }
 
 # The room's recorded outcome: `decided`, `unresolved`, or EMPTY for a room that is still open.
-# The one place that decides whether a room is closed, so that every verb answers alike.
+# Shared by `verdict` and `claims`, so those two answer alike. `decision` deliberately does NOT
+# come through here: it reports whether the record FILE is there to print, which is a different
+# question from whether the room is closed, and it must keep working on a half-written one.
 #
 # It lives here, shared, because the alternative has already failed: when only v_verdict was
 # taught this rule, v_claims went on announcing "DECIDED by message <id>" from the mere
@@ -222,7 +271,10 @@ c_lamport() { c_slurp "$ROOM/state/$ME.lamport"; }
 # closed as `unresolved`, record on disk, reporting `deliberating` for ever. So the same reader
 # broke the rule in both directions: closed when it was not, and open when it was.
 c_recorded_status() {
-  [ -f "$ROOM/board/decision.md" ] || { printf ''; return; }
+  # -s, not -f: a record of zero bytes is not a record. `v_decide` opens it with `> "$out"`,
+  # which CREATES it the instant the redirect opens, so a decide that dies part-way leaves the
+  # file behind; with `-f` the room then read `decided` rc 0 while `decision` printed nothing.
+  [ -s "$ROOM/board/decision.md" ] || { printf ''; return; }
   local v; v=$(c_slurp_raw "$ROOM/board/status")
   case "$v" in decided|unresolved) printf '%s' "$v" ;; *) printf '' ;; esac
 }
@@ -415,8 +467,9 @@ c_drain() {
   # c_new_files builds it -- rather than supplied by the thing being read, which is the
   # property that matters here; it is NOT that the path is beyond a peer's reach, because
   # c_new_files builds it out of `roster.order`, and the roster is in the room like everything
-  # else. All three of those USES -- two fields, one of them used two ways -- were structural rather than
-  # numerically, so the coercion in _untrusted did not and could not cover them:
+  # else. All three of those USES -- two fields, one of them used two ways -- were consumed
+  # structurally rather than numerically, so the coercion in _untrusted did not and could not
+  # cover them:
   #
   #   `.from` is the author, and OVERWRITING it here is what makes the room's mechanical
   #   rules rest on who wrote a message rather than on what it claims (see the long note at
@@ -499,7 +552,7 @@ c_bell_drain() { while read -r -t 0 -u 3 2>/dev/null && read -r -t 0.01 -N 1 -u 
 # --- total order / floor --------------------------------------------------------
 # Every message in the room, in the one order everybody agrees on.
 c_all() {
-  local -a files=(); local p f
+  local -a files=(); local p f seen
   # The lane SET comes from the ROSTER, not from a glob of `lane/*/`, and that matters as much
   # as where the author comes from. c_drain has always built its file list from `roster.order`
   # (via c_new_files), so a glob here made the two readers disagree about who is IN the room
@@ -508,15 +561,36 @@ c_all() {
   # anybody. Nobody could read it, nobody could answer it, and only the ungated `overrule`
   # could close an objection raised in it -- so the room could not reach ready-to-decide.
   #
-  # It is reachable by ordinary accident, not just by `mkdir`: rename a peer in `roster.json`
-  # and its existing `lane/<old>/` is orphaned on the spot. It also arrives whenever a seat runs
-  # with a COUNCIL_ME that is not in the roster, which council.sh does not check -- it only
-  # requires the variable to be non-empty.
+  # It is reachable by ordinary accident, not just by `mkdir`: rename or remove a peer in
+  # `roster.json` and its existing `lane/<old>/` is orphaned on the spot, and a seat still
+  # running under that name goes on writing into it. A name that was NEVER in the roster does
+  # not produce this -- c_send fails outright, because the lane directory does not exist -- so
+  # the accident is specifically a name the roster USED to list.
   #
   # The roster is the room's membership, so the roster wins. What must never happen is that
   # such a lane goes SILENT: c_unrostered below counts them and `status` raises an alarm, so a
   # reader can tell "no such message" from "a message exists that this room no longer counts".
-  for p in $(c_peers); do
+  #
+  # `_c_peers_load` rather than `$(c_peers)`: this is the hot path of every send, and the
+  # command substitution was both a fork and the reason the memo never worked.
+  #
+  # DE-DUPLICATED, because the glob this replaced deduplicated by construction and the roster
+  # does not. A repeated name in `.order` otherwise reads that lane's messages once per entry:
+  # the transcript doubles, `c_turns` inflates, `live` climbs past the one proposal
+  # `ready-to-decide` requires, and with enough entries the room crosses its turn budget and
+  # reports `unresolved` with rc 0 — closed, to a supervisor — having written no record.
+  #
+  # The `case` is the second half of the path gate. `_plain_name` already rejects `/` and `.`
+  # in c_peers, so a name reaching here cannot be `..` or contain a separator; this makes the
+  # containment hold at the point of USE as well, so neither end is load-bearing alone. Before
+  # both existed, a `.order` entry of `"../../outside"` made this loop read `[0-9]*.json` from
+  # outside the room and splice it into the transcript, the claims graph and the record.
+  _c_peers_load || true
+  seen=" "
+  for p in $_C_PEERS; do
+    case "$p" in ''|.|..|*/*) continue ;; esac
+    case "$seen" in *" $p "*) continue ;; esac
+    seen="$seen$p "
     for f in "$ROOM"/lane/"$p"/[0-9]*.json; do [ -e "$f" ] && files+=("$f"); done
   done
   [ "${#files[@]}" -gt 0 ] || return 1
@@ -531,38 +605,50 @@ c_all() {
   # `inputs` under `-n` gives `input_filename`, and it is per-DOCUMENT, so a peer putting
   # several messages in one lane file has every one of them attributed to that lane.
   #
-  # It TRADES two costs against each other, and the trade goes in opposite directions
-  # depending on what you measure -- which is worth stating, because measuring only one of
-  # them gives a confidently wrong answer either way. c_all is on the hot path of every send
-  # (c_max_lamport, c_barrier and c_turns all come through here), so this was measured, not
-  # reasoned about. 20 calls per size per variant, three lanes, on an otherwise idle machine
-  # (1-minute load 3.2); child CPU time, and the minimum wall clock of the same runs:
+  # THIS FUNCTION IS SLOWER THAN THE ONE IT REPLACED, and the correctness argument is what
+  # carries it. Child CPU per call, 25 calls per size, three lanes, the real function sourced
+  # from each tree (1-minute load ~9-10, stated because it moves the absolute numbers a lot
+  # and the comparison not at all):
   #
-  #                  CPU/call              min wall/call
-  #     12 messages  6.0 -> 4.3 ms         5 -> 5 ms
-  #     30 messages  7.1 -> 5.5 ms         5 -> 6 ms
-  #     60 messages  8.2 -> 6.7 ms         7 -> 8 ms
-  #    300 messages  21.7 -> 18.4 ms       21 -> 24 ms
+  #                  before      cat->jq args only     as it stands
+  #     12 messages   9.4 ms          8.2 ms            12.6 ms
+  #     30 messages  12.2 ms         10.3 ms            15.9 ms
+  #     60 messages  15.9 ms         13.6 ms            19.5 ms
+  #    300 messages  46.3 ms         45.2 ms            48.9 ms
   #
-  # So it costs measurably LESS CPU at every size -- one fewer process to spawn, and `cat`
-  # costs more than jq's extra opens -- while latency is unchanged at the size a room runs at
-  # and drifts a few ms higher in a room several times past its default 30-turn budget,
-  # because jq opens the files one after another where `cat` streamed them. Neither effect is
-  # the derivation, which measured free.
+  # Two changes pulling opposite ways. Handing jq the files instead of `cat`ing them is a win
+  # at every size -- one fewer process, worth more than jq's extra opens. Reading the roster
+  # gives that back and more: ~4 ms, and it is the JQ EXEC, measured against the alternatives
+  # rather than assumed. The validation loop costs nothing over the bare read (4.22 vs 4.38 ms,
+  # i.e. noise) and calling `_c_peers_load` instead of `$(c_peers)` saves only the fork, 0.33 ms.
+  # There is no cheap version of "ask roster.json who is in the room" while it is read per call.
   #
-  # A first pass at this measured wall clock alone, on a machine at load 211 with another test
-  # suite running, and recorded a pure slowdown. That was wrong, and it is left described here
-  # rather than quietly replaced: on a loaded box wall clock measures the queue, not the work.
+  # It is on the hot path of every send (c_max_lamport, c_barrier, c_turns all come through
+  # here), so this is a real cost, not a rounding error. It buys: an author that cannot be
+  # forged, a lane set both readers agree on, and a roster that cannot point a reader outside
+  # the room. If that trade is ever revisited, memoising the roster ACROSS calls is the lever --
+  # `_C_PEERS` only survives within one shell, and most callers sit inside a command
+  # substitution -- not going back to the glob, which loses input_filename and the whole
+  # property this function exists to provide. A cheaper derivation is not the lever either:
+  # `sub`-based trimming measured ~50% WORSE than the split, and memoising the filename per
+  # file bought nothing over deriving it per document.
   #
-  # Do not "optimise" this back to `cat`: that loses input_filename, and with it the whole
-  # property this function exists to provide. A cheaper derivation is not the lever either;
-  # `sub`-based trimming measured about 50% WORSE than the split, and memoising the filename
-  # per file bought nothing over deriving it per document.
+  # Two earlier versions of this table were wrong, in OPPOSITE directions, and both are left
+  # named here rather than quietly replaced. The first measured wall clock on a box at load 211
+  # with another suite running and reported a pure slowdown; on a loaded box wall clock measures
+  # the queue, not the work. The second measured CPU correctly but measured the function BEFORE
+  # the roster read was added to it, and so reported a win that the shipped code does not have.
+  # Measure the function as it is committed, or do not put a number here.
   #
-  # The derived value is only ever printed and compared here -- never used as a path, unlike
-  # c_drain's cursor write -- and `lane/*/` cannot glob `..` or a dotfile, so it is a real
-  # directory name under `lane/`. A future use of it AS A PATH would need c_drain's reasoning
-  # about `..` re-done from scratch.
+  # The derived value is only ever printed and compared here, never used as a path, unlike
+  # c_drain's cursor write.
+  #
+  # Do NOT read that as containment, and do not repeat the argument this comment used to make.
+  # It said `lane/*/` cannot glob `..` or a dotfile so the value is a real directory under
+  # `lane/` -- true of the glob, and this function no longer uses one. The path component now
+  # comes from `roster.order`, which is in the room like everything else, so c_drain's honest
+  # framing applies here too: what makes it safe is the gate in c_peers plus the `case` above,
+  # not the shape of a glob. A future use of it AS A PATH still needs its own reasoning.
   #
   # Same document gate as c_drain, for the same reason and one more: every caller of c_all
   # swallows its failure (`c_all 2>/dev/null || true`), so ONE non-object document in any lane
@@ -594,9 +680,12 @@ c_unrostered() {
   for d in "$ROOM"/lane/*/; do
     [ -d "$d" ] || continue
     p=${d%/}; p=${p##*/}
-    # -x -F: a whole-line literal match, so a lane whose name merely CONTAINS a peer's name
-    # is still reported rather than quietly counted as rostered.
-    printf '%s\n' "$known" | grep -qxF -- "$p" && continue
+    # Matched in bash, not with `grep -F`. grep treats a MULTI-LINE pattern as several
+    # alternatives, so a lane directory named $'a\nghost' matched the rostered peer `a` and
+    # escaped the alarm entirely -- the exact opposite of what a whole-line literal match is
+    # for. Wrapping both sides in newlines makes this exact for any byte sequence, and it drops
+    # a fork per lane as well.
+    case $'\n'"$known"$'\n' in *$'\n'"$p"$'\n'*) continue ;; esac
     n=$((n + 1))
     for f in "$d"[0-9]*.json; do [ -e "$f" ] && m=$((m + 1)); done
   done

@@ -5,7 +5,8 @@
 #                            amend by anyone that references it,
 #                            overrule by ANYONE — ungated, see below.
 #   a proposal dies on       withdraw by its author, or
-#                            concede by its author pointing at one of its objections
+#                            concede by its author pointing at one of its objections, or at
+#                              the proposal itself
 #                            (the proposer yielding IS the proposal dying).
 # `concede` therefore always means the same thing — the sender yields — and who sent it
 # decides what falls.

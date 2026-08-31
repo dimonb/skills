@@ -57,12 +57,12 @@ say_floor msg '[]' "No objections." >/dev/null
 say_floor msg '[]' "Record it." >/dev/null
 [ "$(v)" = ready-to-decide ] || { echo "FAIL expected ready-to-decide, got $(v)"; exit 1; }
 # Decide as whoever holds the floor. `decide` posts an `act: decide` message, and c_send
-# refuses one from a peer that is not the floor holder — so a hard-coded chair makes this
-# test depend on where the rotation happens to have stopped. What that refusal does to the
-# room is a separate defect, deliberately not exercised here.
-chair=$(bash "$CLI" floor | sed -n 's/.*floor=\([^ ]*\).*/\1/p')
-[ -n "$chair" ] || { echo "FAIL could not read the floor holder"; exit 1; }
-written=$(COUNCIL_ME="$chair" bash "$CLI" decide) || { echo "FAIL decide refused"; exit 1; }
+# refuses one from a peer that is not the floor holder — so a hard-coded name makes this
+# test depend on where the rotation happens to have stopped. That refusal is now harmless to
+# the room: closure reads the record, not the message, and t9f pins both directions.
+holder=$(bash "$CLI" floor | sed -n 's/.*floor=\([^ ]*\).*/\1/p')
+[ -n "$holder" ] || { echo "FAIL could not read the floor holder"; exit 1; }
+written=$(COUNCIL_ME="$holder" bash "$CLI" decide) || { echo "FAIL decide refused"; exit 1; }
 [ "$(v)" = decided ] || { echo "FAIL the room did not close, got $(v)"; exit 1; }
 
 out=$(bash "$CLI" decision); rc=$?

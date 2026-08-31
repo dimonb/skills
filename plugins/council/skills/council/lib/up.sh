@@ -9,6 +9,10 @@
 # participant can write. Under LC_ALL=C this rejects `..`, `/`, `#`, `&`, backslash, newline,
 # quotes and everything else outside the set; a leading `-` is accepted and is harmless here,
 # since every sink is either path-prefixed or a quoted operand.
+# The canonical definition lives in lib.sh, which gates roster.order with it. `up` and `rooms`
+# source THIS file without lib.sh — there is no room to resolve yet — so define it only when
+# lib.sh has not already. One rule at runtime, never two.
+command -v _plain_name >/dev/null 2>&1 || \
 _plain_name() { case "$1" in ''|*[!A-Za-z0-9_-]*) return 1 ;; *) return 0 ;; esac; }
 
 # A rename cannot be redirected by a symlink at the destination, but it can still land inside

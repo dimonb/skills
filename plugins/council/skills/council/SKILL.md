@@ -424,7 +424,11 @@ it.)*
 
 `council.sh status` is the block to read: whose floor and for how long, what is on the
 table, what is open, the verdict, and the alarms (`STUCK`, `STALL`, turn conflicts, budget
-exhausted). It exits **0 when the room is finished** and 1 while it is open.
+exhausted, an unusable roster, and lanes on disk the roster does not list). It exits **0 when
+the room is finished** and 1 while it is open — with one caveat worth knowing: a room whose
+turn budget ran out reports `unresolved` and exits 0 before anyone has written a record, so
+`council.sh decision` (exit 0 only with a record) is the signal to trust when you need to know
+that the room's output exists.
 
 **Exit codes here mean status, not success.** `verdict` returns 1 on a live room and 2 on
 a stuck one. Piping such a command (`council.sh status | grep -q X` under
@@ -433,6 +437,14 @@ produced one false test result during development. Do not pipe status through a 
 
 ## Failure modes worth knowing before they cost you a night
 
+* **`roster.json` is the room's membership, and editing it changes what the room IS.** Both
+  readers build their file lists from `order`, so renaming or removing a peer orphans its lane
+  on the spot: that peer's past messages leave the transcript, the claims graph and the
+  verdict, and a seat still running under the old name goes on writing where nobody reads.
+  Nothing is deleted — `status` names the orphaned lane and counts what is in it. If `order`
+  is not an array of plain names (`[A-Za-z0-9_-]`) the room has **no** membership at all:
+  every reader sees it empty, `status` says so loudly, and `decide` refuses rather than write
+  a record it cannot populate.
 * **A participant that consumed your message and then went quiet is usually not thinking.**
   Look at its terminal. On `codex` it may be the trust-this-directory prompt; `agy` is
   launched with permissions skipped and no longer prompts at all. Otherwise it is a context
