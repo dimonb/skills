@@ -72,6 +72,10 @@ from the write to a sleeping reader waking), and end-to-end delivery **~60 ms** 
 the wire. A poll loop would be 0–5 s. A keeper process holds every bell open read-write for the life of the room, so a
 bell rung at a participant that is not currently listening is buffered rather than lost,
 and the ring itself is backgrounded so a dead participant can never wedge a sender.
+A bell that is no longer a fifo — an archive-and-restore of a room directory, or any copy
+that does not preserve fifos — makes `recv` say so on stderr and fall back to that poll,
+because `exec` succeeds on a regular file and the read that follows would otherwise return
+at EOF instead of sleeping, spinning for the whole timeout.
 
 **Scan the inbox from the cursor upward, never by globbing the lane.** A lane is gapless
 and single-writer, so probing `cursor+1, cursor+2, …` until the first missing file is

@@ -11,6 +11,33 @@
 # since every sink is either path-prefixed or a quoted operand.
 _plain_name() { case "$1" in ''|*[!A-Za-z0-9_-]*) return 1 ;; *) return 0 ;; esac; }
 
+# The keeper's pid, or nothing. Both callers hand the result to `kill`, and `kill` reads a
+# `0` as EVERY PROCESS IN THE SENDER'S PROCESS GROUP -- which is the supervisor's own session,
+# not the room. That is not a hypothetical: an early probe for this wrote `0` into a pid file
+# and its own cleanup then killed the probe's process group for real.
+#
+# A stale or malformed pid file is the ordinary case, with nobody attacking: a keeper that
+# died and left its pid behind, a room directory copied, an interrupted start that wrote an
+# empty value. `kill -0 0` also SUCCEEDS, so an unguarded `_keeper_ensure` reads `0` as "a
+# keeper is running", never starts one, and every bell in the room is then silently lost --
+# the exact failure that function's own header says it exists to prevent.
+#
+# So both readers go through here and `kill` only ever sees a positive integer. Digits then
+# `10#`, the idiom c_slurp carries for the same reason: a value like `010` is a legal pid file
+# and `$(( ))` would read it as octal. The ten-digit ceiling is there to make the arithmetic
+# itself exact rather than to judge what a plausible pid is -- past it `$(( ))` wraps a
+# 64-bit signed integer, and a wrapped value can land on a positive number that is somebody
+# else's live process.
+_keeper_pid() { # <pid-file> -> a positive integer on stdout, or nothing and rc 1
+  local v=""
+  [ -s "$1" ] || return 1
+  read -r v < "$1" 2>/dev/null
+  case "$v" in ''|*[!0-9]*) return 1 ;; esac
+  [ "${#v}" -le 10 ] || return 1
+  v=$((10#$v)); [ "$v" -gt 0 ] || return 1
+  printf '%s' "$v"
+}
+
 # A rename cannot be redirected by a symlink at the destination, but it can still land inside
 # one if a PARENT directory is a link — swap `state/` for a link to somewhere else and every
 # write below it goes there. Cheap to check, and there is no legitimate reason for either of
@@ -34,8 +61,8 @@ _room_dirs_sane() { # <room>
 # perfectly healthy while every bell rung at it went nowhere.
 _keeper_ensure() { # <room-dir> <peer>...
   local room="$1"; shift
-  local keep="$room/state/keeper.pid" p
-  [ -s "$keep" ] && kill -0 "$(cat "$keep")" 2>/dev/null && return 0
+  local keep="$room/state/keeper.pid" p pid
+  pid=$(_keeper_pid "$keep") && kill -0 "$pid" 2>/dev/null && return 0
   # Detach it from the caller's stdio COMPLETELY. A background process that keeps the
   # caller's stdout open holds any pipe reading it open too: `council.sh ... | tail`
   # then never sees EOF and hangs forever, with nothing wrong upstream. Cost one
@@ -162,13 +189,22 @@ council_up() {
   # wherever the supervisor happened to be standing, would silently move that seat to another
   # directory — and a supervisor is very often standing in a different worktree of the same
   # repo, which resolves to the same room.
+  # `created_at` is for a human; `created_ms` is the one a reader can do arithmetic on, and it
+  # exists so `status` can tell a genuine stall from a peer with a wrong clock (c_room_age_s in
+  # lib.sh carries the whole account). It is written HERE and nowhere else, once, on a room
+  # directory that did not exist a moment ago — `relaunch` regenerates launchers and protocols
+  # and deliberately does not touch this file. Refreshing it would make the room permanently
+  # young and suppress the stall alarm for good, which is worse than the false alarm it
+  # replaces. `EPOCHREALTIME` rather than `date`, matching c_ms, which lib.sh is not sourced
+  # here to provide; under the `LC_ALL=C` council.sh exports, its separator is always a dot.
+  local created_ms=$(( 10#${EPOCHREALTIME/./} / 1000 ))
   jq -n --argjson order "$(printf '%s\n' "${peers[@]}" | jq -R . | jq -s .)" \
         --argjson peers "$peers_json" --arg mode "$SC_MODE" --arg dec "$SC_DECIDE" \
         --argjson turns "$SC_TURNS" --arg sc "$scenario" --arg at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
-        --argjson rdl "$SC_RDEADLINE" --arg cwd "$cwd" \
+        --argjson rdl "$SC_RDEADLINE" --arg cwd "$cwd" --argjson cms "$created_ms" \
     '{order:$order, peers:$peers, scenario:$sc, mode:$mode, decide_by:$dec,
       order_rotate:true, turn_deadline_ms:180000, turns_budget:$turns,
-      round_deadline_ms:$rdl, cwd:$cwd, created_at:$at}' \
+      round_deadline_ms:$rdl, cwd:$cwd, created_at:$at, created_ms:$cms}' \
     > "$room/roster.json"
   printf '%s\n' "${agenda:-(no agenda given)}" > "$room/agenda.md"
 
@@ -453,8 +489,8 @@ council_down() {
   for p in $(jq -r '.order[]' "$ROOM/roster.json"); do
     ct_kill "$p" 2>/dev/null && echo "terminal closed: $p"
   done
-  local keep="$ROOM/state/keeper.pid"
-  [ -s "$keep" ] && kill "$(cat "$keep")" 2>/dev/null
+  local keep="$ROOM/state/keeper.pid" pid
+  pid=$(_keeper_pid "$keep") && kill "$pid" 2>/dev/null
   if [ "$purge" = 1 ]; then
     # The room IS the record — the ADR and the transcript live in it. Deleting it throws
     # away the only durable output the room produced, so it takes an explicit flag.

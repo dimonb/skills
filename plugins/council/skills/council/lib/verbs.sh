@@ -232,9 +232,16 @@ v_verdict() {
 }
 
 v_status() {
-  local j verd g t floor last held conf alarms=""
-  j=$(v_verdict --json); verd=$(printf '%s' "$j" | jq -r .verdict)
+  local j verd g t floor last held conf room_age alarms=""
+  j=$(v_verdict --json); verd=$(printf '%s' "$j" | jq -r '.verdict // empty' 2>/dev/null)
   g=$(_graph)
+  # This block is what a supervisor reads instead of the room, so it has to say when it cannot
+  # read the room either. Both reads above degrade to EMPTY, not to an error, and every printf
+  # above then renders a blank where a number belongs: `turns 3/`, `verdict: `, no proposals,
+  # `alarms: —`. That is a broken room reported as a quiet one, on the one display a supervisor
+  # is told to watch — so the emptiness gets an alarm of its own rather than a blank field.
+  [ -n "$verd" ] && [ -n "$g" ] \
+    || alarms="$alarms 🛑 this room's state could not be computed — the lines above are incomplete (council.sh order shows the log)"
   t=$(c_turns); floor=$(c_floor_at "$t"); last=$(c_last_turn_ms)
   held=$([ "$last" = 0 ] && echo 0 || echo $(( ($(c_ms) - last) / 1000 )))
   conf=$(c_conflicts)
@@ -266,7 +273,19 @@ v_status() {
                 else alarms="$alarms 🛑 the turn budget is spent — write an honest unresolved"; fi ;;
   esac
   [ "$conf" -gt 0 ] && alarms="$alarms ⚠️ $conf messages lost a turn conflict (their authors must take the floor again)"
-  [ "$held" -gt "${COUNCIL_STALL_SECS:-900}" ] && alarms="$alarms 🛑 STALL: $floor has held the floor for ${held}s — check its terminal, it may be sitting on a permission prompt"
+  # The held time comes from the floor holder's own `sent_ms`, so it is only as good as that
+  # seat's clock — and a held time longer than the ROOM has existed cannot be true. It is not
+  # reported as a smaller number either: clamping it would let an impossible value slip under
+  # the threshold and silence a real stall. It is reported as what it is, evidence of a wrong
+  # clock, naming the seat, so the supervisor looks at the right thing. A room that records no
+  # creation time (one made before `created_ms` existed) answers nothing and keeps the plain
+  # threshold, which is exactly its behaviour before this branch was here.
+  room_age=$(c_room_age_s) || room_age=""
+  if [ -n "$room_age" ] && [ "$held" -gt "$room_age" ]; then
+    alarms="$alarms 🛑 $floor's clock is wrong: its last turn is stamped ${held}s ago, longer than this room has existed (${room_age}s) — no stall can be read from it"
+  elif [ "$held" -gt "${COUNCIL_STALL_SECS:-900}" ]; then
+    alarms="$alarms 🛑 STALL: $floor has held the floor for ${held}s — check its terminal, it may be sitting on a permission prompt"
+  fi
   printf 'alarms:%s\n' "${alarms:- —}"
   printf 'last messages:\n'
   v_transcript | tail -3 | sed 's/^/  /'
@@ -301,13 +320,37 @@ _agenda_is_long() { # <file> — more than one non-blank line
 v_decide() {
   local force=0; [ "${1:-}" = "--force" ] && force=1
   local j verd g out status
-  j=$(v_verdict --json); verd=$(printf '%s' "$j" | jq -r .verdict)
+  j=$(v_verdict --json); verd=$(printf '%s' "$j" | jq -r '.verdict // empty' 2>/dev/null)
+  # A record is NEVER written from a state this verb could not read. Both reads below can come
+  # back empty rather than wrong -- `_graph` is a jq program over peer-written messages, and one
+  # message of the wrong shape aborts it mid-stream -- and every renderer further down treats
+  # empty input as "nothing to say" rather than as a failure. `--force` then walked straight
+  # through: `verd` was empty so it did not match `ready-to-decide`, `status` came out
+  # `unresolved`, and the room's one durable output was written at rc 0 with a blank verdict,
+  # blank turn counts and "(there were no objections)" over a transcript showing an objection.
+  #
+  # A refusal is the honest outcome, and it is not a wedge: `verdict` and `claims` fail the same
+  # way, loudly, and jq has already said on stderr which file it choked on. Writing a false
+  # record cannot be undone by re-running anything -- a reader who believed it is not a state
+  # this room can get back to.
+  #
+  # `verd` is checked rather than `j`'s exit status because v_verdict returns 1 for an ordinary
+  # live room: its rc is a STATUS, not a success flag, and reading it as one would refuse every
+  # `--force` on a room that had not converged, which is precisely the case --force exists for.
+  [ -n "$verd" ] || {
+    echo "council decide: this room's state could not be computed — refusing to write a record. See the error above; council.sh order shows the log." >&2
+    return 1
+  }
   case "$verd" in
     ready-to-decide) ;;
     decided) echo "council: this room is already decided" >&2; return 3 ;;
     *) [ "$force" = 1 ] || { echo "council: verdict '$verd', the decision is not ripe. --force writes an honest unresolved." >&2; return 2; } ;;
   esac
-  g=$(_graph); out="$ROOM/board/decision.md"
+  g=$(_graph) && [ -n "$g" ] || {
+    echo "council decide: this room's argument graph could not be computed — refusing to write a record. See the error above; council.sh order shows the log." >&2
+    return 1
+  }
+  out="$ROOM/board/decision.md"
   status=$([ "$verd" = ready-to-decide ] && echo decided || echo unresolved)
   {
     printf '# Decision of room `%s`\n\n' "$(basename "$ROOM")"

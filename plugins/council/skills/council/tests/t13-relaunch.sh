@@ -28,7 +28,7 @@ ROOT="$COUNCIL_TEST_ROOT/t13"
 REPO="$ROOT/repo"; mkdir -p "$REPO"
 fail=0
 cleanup() {
-  [ -n "${ROOM:-}" ] && [ -s "$ROOM/state/keeper.pid" ] && kill -9 "$(cat "$ROOM/state/keeper.pid")" 2>/dev/null
+  [ -n "${ROOM:-}" ] && kill_keeper "$ROOM/state/keeper.pid" -9
   rm -rf "$ROOT"
   # Only reap the root if we made it. A root handed down by a runner is that runner's to
   # remove, and taking it here would delete the other tests' rooms with it.

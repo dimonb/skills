@@ -222,6 +222,44 @@ live=$(bash "$CLI" verdict --json 2>/dev/null | jq -r '.live // "ERR"')
 if [ "$live" = 1 ]; then echo "ok   one bad document did not blank the whole room"
 else echo "FAIL a bad document collapsed the room: live=$live (want 1)"; fail=1; fi
 
+# --- 6e. content that does not PARSE costs its own message too -------------------
+# The remainder of 6c, and a different mechanism: `select(type == "object")` runs on a
+# document that has been read, and a byte that does not parse is never a document. jq cannot
+# recover from a parse error mid-stream, so one stray byte in a lane used to return recv 4
+# with the cursor unmoved — permanently, and 4 is the status a participant is told to retry —
+# while c_all's callers reported an empty room. The drop must also be VISIBLE: a lane holding
+# bytes nobody can read will not repair itself.
+fresh
+jq -c -n '{id:"a-1",from:"a",lamport:1,deps:{},act:"msg",refs:[],to:["*"],
+           hand:false,turn:null,round:null,text:"an honest earlier message",
+           created_at:"t",sent_ms:0}' > "$R/lane/a/000001.json"
+printf 'not json at all }{' > "$R/lane/a/000002.json"
+jq -c -n '{id:"a-3",from:"a",lamport:3,deps:{},act:"msg",refs:[],to:["*"],
+           hand:false,turn:null,round:null,text:"an honest later message",
+           created_at:"t",sent_ms:0}' > "$R/lane/a/000003.json"
+printf '3' > "$R/state/a.seq"
+err="$R/recv.err"
+out=$(COUNCIL_ME=b bash "$CLI" recv --timeout 1 2>"$err")
+n=$(printf '%s' "$out" | grep -c . || true)
+if printf '%s' "$out" | grep -q "an honest earlier message" \
+   && printf '%s' "$out" | grep -q "an honest later message" && [ "$n" = 2 ]; then
+  echo "ok   an unparseable document cost only its own message"
+else
+  echo "FAIL an unparseable document was not retired cleanly: $n line(s) released"; fail=1
+fi
+if grep -q '000002.json' "$err"; then
+  echo "ok   the unreadable file was named on stderr"
+else
+  echo "FAIL the unreadable file was dropped silently"; fail=1
+fi
+cur=$(cat "$R/cursor/b/a" 2>/dev/null)
+if [ "$cur" = 3 ]; then echo "ok   the cursor moved past it (=$cur)"
+else echo "FAIL the cursor stalled at '$cur' (want 3)"; fail=1; fi
+# and the whole room is still readable through the other reader
+live=$(bash "$CLI" order 2>/dev/null | grep -c . || true)
+if [ "$live" = 2 ]; then echo "ok   the transcript reader also saw both honest messages"
+else echo "FAIL the transcript reader saw $live message(s), want 2"; fail=1; fi
+
 # --- 7. the room still works normally afterwards --------------------------------
 fresh
 p=$(say_floor propose '[]' "An ordinary proposal.")

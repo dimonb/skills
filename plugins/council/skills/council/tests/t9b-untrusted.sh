@@ -97,7 +97,57 @@ fl=$(bash "$CLI" floor)
 case "$fl" in *"turns=1"*) echo "ok   a wrong-typed .hand still consumed its turn" ;;
   *) echo "FAIL a wrong-typed .hand dodged turn accounting: $fl"; fail=1 ;; esac
 
-# --- 5. the room still works normally afterwards --------------------------------
+# --- 5. a wrong-typed .refs must not abort the argument graph -------------------
+# `.refs` is the one field here that is read neither as a number nor as a boolean: its readers
+# ITERATE it, and a value of another type ABORTS jq mid-stream rather than answering wrongly.
+# Every caller swallows that failure, so the damage lands in `board/decision.md` — the room's
+# one durable output — which was written with a blank verdict, blank turn counts and
+# "(there were no objections)" over a transcript showing an objection. `decide` exited 0.
+#
+# Both readers are asserted because they fail at different widths: claims.jq iterates `.refs`
+# only for `amend` and for a proposer's `concede`, while v_transcript's `join` aborts on EVERY
+# act — and v_transcript renders the record's transcript and `status`'s last messages.
+rm -rf "$R"; mkroom "$R" a b; echo "q" > "$R/agenda.md"
+say_floor propose '[]' "Adopt the thing." >/dev/null
+say_floor object '["a-1"]' "This breaks the thing." >/dev/null
+raw_msg a 2 9 2 amend '"a-1"' "an amendment whose refs is a string"
+
+claims=$(bash "$CLI" claims 2>/dev/null); crc=$?
+if [ "$crc" = 0 ] && printf '%s' "$claims" | grep -q 'OPEN b-1'; then
+  echo "ok   a string .refs left the argument graph readable, objection still open"
+else
+  echo "FAIL a string .refs broke the argument graph (rc=$crc)"; fail=1
+fi
+tr_out=$(bash "$CLI" transcript 2>/dev/null); trc=$?
+if [ "$trc" = 0 ] && [ "$(printf '%s\n' "$tr_out" | grep -c .)" = 3 ]; then
+  echo "ok   a string .refs left the transcript whole (3 messages)"
+else
+  echo "FAIL a string .refs truncated the transcript (rc=$trc): $(printf '%s' "$tr_out" | grep -c .) lines"; fail=1
+fi
+COUNCIL_ME=a bash "$CLI" decide --force >/dev/null 2>&1
+if grep -q "This breaks the thing" "$R/board/decision.md" 2>/dev/null; then
+  echo "ok   the decision record still names the objection"
+else
+  echo "FAIL the decision record dropped the objection it exists to record"; fail=1
+fi
+
+# --- 6. a .lamport that is a NUMBER but not an integer must not stall the clock --
+# `_untrusted` used to coerce `.lamport` to a number, which is not the same as to a bash
+# integer: c_drain's `[ "$seen" -gt "$mine" ]` errors on `1.5` with `integer expected`, and
+# that error short-circuits the `&&` which advances the reader's clock. The reader then goes
+# on stamping messages below what it has already read, silently and for good. c_max_lamport
+# gates the identical expression one line further down; this is its sibling.
+rm -rf "$R"; mkroom "$R" a b; echo "q" > "$R/agenda.md"
+craft a lamport '1.5'
+COUNCIL_ME=b bash "$CLI" recv --peek >/dev/null 2>&1
+clock=$(cat "$R/state/b.lamport" 2>/dev/null)
+case "$clock" in
+  ''|*[!0-9]*) echo "FAIL a non-integer .lamport reached the reader's clock as '$clock'"; fail=1 ;;
+  *) if [ "$clock" -ge 1 ]; then echo "ok   a non-integer .lamport still advanced the reader's clock (=$clock)"
+     else echo "FAIL a non-integer .lamport left the reader's clock at $clock"; fail=1; fi ;;
+esac
+
+# --- 7. the room still works normally afterwards --------------------------------
 rm -rf "$R"; mkroom "$R" a b; echo "q" > "$R/agenda.md"
 p=$(say_floor propose '[]' "An ordinary proposal.")
 [ -n "$p" ] && echo "ok   an ordinary room still sends and reads" \

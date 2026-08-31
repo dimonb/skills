@@ -197,7 +197,7 @@ echo "the gist is the agenda's opening line, not the first heading found anywher
 # Only reap the root if we made it: one handed down by a runner is that runner's to remove,
 # and taking it here would delete the other tests' rooms with it. Retire the second room's
 # keeper first, so it is not left polling a directory that is about to go.
-[ -s "$R2/state/keeper.pid" ] && kill "$(cat "$R2/state/keeper.pid")" 2>/dev/null
+kill_keeper "$R2/state/keeper.pid"
 [ -n "$_own_root" ] && rm -rf "$_own_root"
 
 [ "$fail" = 0 ] && echo "t11 PASS" || echo "t11 FAIL"

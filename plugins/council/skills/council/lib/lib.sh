@@ -20,18 +20,67 @@ C_IDLE="${COUNCIL_IDLE:-2}"        # bell-loss fallback, seconds
 
 # The roster never changes while a room lives, so read it once: c_send would
 # otherwise pay two jq spawns per message just to learn who to ring.
+#
+# `roster.json` is a file in the room, so every participant can write it — and what comes out
+# of here is INTERPOLATED INTO LANE PATHS by c_new_files, into JSON keys by c_deps_json, and
+# word-split by two unquoted `for p in $(c_peers)` loops. Ungated, an `.order` entry of
+# `"../../outside"` made `recv` deliver a message read from a file OUTSIDE the room, attributed
+# to a peer called `outside`, and wrote a cursor for it. Measured on a two-seat room; a
+# hand-edited roster or a template with an odd name is all it takes.
+#
+# So the roster is validated where it is READ, and all-or-nothing: one unusable entry rejects
+# the whole list with a diagnostic, which is what `council relaunch` already does with the same
+# rule (see `_plain_name` and the roster block in up.sh). A partial list would be worse than
+# none — it silently redefines who the room is.
+#
+# THE SHAPE OF THE TEST IS THE POINT, and it is chosen against the specific ways an earlier
+# attempt at this was defeated. Validate the ENTRIES of the JSON value, inside jq, never the
+# lines that `$(jq ...)` prints: command substitution strips a trailing newline and splits an
+# embedded one, so an entry of `"a\nb"` becomes two accepted peers and an entry of `"a\n"`
+# passes a length check that never sees the byte. And there is deliberately NO ANCHOR here:
+# jq's `$` matches before a final newline, so `^[A-Za-z0-9_-]+$` ACCEPTS `"ab\n"` — the exact
+# hole that a `^...$` version shipped with. Asking instead whether the string contains a
+# character outside the set has no end-of-string semantics to get wrong, so every entry that
+# survives is a bare word: no `/`, no `..`, no quote, no glob character, no whitespace, no
+# newline. That is what makes the two unquoted `for p in $(c_peers)` loops below safe by
+# construction rather than by care.
+#
+# What this does NOT do, stated because a green guard reads as coverage: two entries differing
+# only in case (`a` and `A`) still probe one lane on a case-insensitive filesystem, and an
+# exactly duplicated entry still reads its lane twice. Both are pre-existing properties of
+# c_new_files, neither is made worse here, and neither is folded away — normalising case would
+# change who is in the room without saying so.
 _C_PEERS=""
-c_peers()  { [ -n "$_C_PEERS" ] || _C_PEERS=$(jq -r '.order[]' "$ROOM/roster.json"); printf '%s\n' "$_C_PEERS"; }
+_C_PEERS_RC=""
+c_peers() {
+  if [ -z "$_C_PEERS_RC" ]; then
+    _C_PEERS=$(jq -r '
+      if (.order | type) != "array" then empty
+      elif (.order | length) == 0 then empty
+      elif ([ .order[]
+              | select(type == "string" and length > 0 and (test("[^A-Za-z0-9_-]") | not)) ]
+            | length) != (.order | length) then empty
+      else .order[] end' "$ROOM/roster.json" 2>/dev/null)
+    if [ -n "$_C_PEERS" ]; then
+      _C_PEERS_RC=0
+    else
+      _C_PEERS_RC=1
+      echo "council: this room's roster has no usable participant list — refusing to read it (a name is letters, digits, '_' and '-')" >&2
+    fi
+  fi
+  [ "$_C_PEERS_RC" = 0 ] || return 1
+  printf '%s\n' "$_C_PEERS"
+}
 c_npeers() { c_peers | wc -l | tr -d ' '; }
 c_now()    { date -u +%Y-%m-%dT%H:%M:%SZ; }
 # bash 5 gives us sub-second time without spawning anything.
 c_ms()     { local t=${EPOCHREALTIME/./}; echo $(( 10#$t / 1000 )); }
 
 # --- trusting nothing another participant wrote ---------------------------------
-# Every numeric field below arrives in a file some OTHER participant wrote, so none of it
-# is believed on read. A value of the wrong type is treated as ABSENT rather than trusted:
-# `.turn` and `.round` fall back to null, `.lamport` and `.sent_ms` to 0, and `.hand` to a
-# real boolean.
+# Every field below arrives in a file some OTHER participant wrote, so none of it is believed
+# on read. A value of the wrong type is treated as ABSENT rather than trusted: `.turn` and
+# `.round` fall back to null, `.lamport` and `.sent_ms` to 0, `.refs` to the empty list, and
+# `.hand` to a real boolean.
 #
 # Two different things go wrong without this, and they are worth naming separately.
 #
@@ -46,7 +95,7 @@ c_ms()     { local t=${EPOCHREALTIME/./}; echo $(( 10#$t / 1000 )); }
 # which is the version that decays: the next consumer is written by someone who never saw
 # this comment.
 #
-# READ THIS BEFORE YOU TRUST IT. What is covered is the five fields above, of a LANE
+# READ THIS BEFORE YOU TRUST IT. What is covered is the six fields above, of a LANE
 # MESSAGE, and nothing else. It is NOT a room-wide guarantee, and the room is writable by
 # every participant, not just its own lane. The other numeric room inputs are gated at their
 # own readers rather than here -- `state/*.lamport`, `state/*.seq` and `cursor/*` in c_slurp,
@@ -120,14 +169,45 @@ c_ms()     { local t=${EPOCHREALTIME/./}; echo $(( 10#$t / 1000 )); }
 #
 # So: adding an arithmetic use of anything that did not come through `_untrusted` or one of
 # those readers still needs its own gate, and so does any new use of a message field as a
-# PATH or as something that must parse. `.refs` is not coerced here either, and a wrong-typed
-# one still aborts claims.jq and the transcript. `.to` is written by c_send and read nowhere,
-# which is a reason to gate it at the first reader that wants it, not a reason it is safe.
-C_UNTRUSTED='def _untrusted: map(
+# PATH or as something that must parse. `.to` is written by c_send and read nowhere, which is
+# a reason to gate it at the first reader that wants it, not a reason it is safe.
+#
+# `.refs` is here now, and it is the one field of the six that is coerced for a reason other
+# than ordering or arithmetic: an ARRAY is what its readers iterate, and a value of any other
+# type ABORTS jq mid-stream. That is not a wrong answer, it is no answer, and the callers
+# swallow it -- so the damage lands in the room's durable output. Measured on a two-seat room
+# with one live proposal and one real objection, plus one message whose `.refs` was the string
+# `"a-1"`: `decide --force` exited 0 having written a record with a blank verdict, both turn
+# counts blank, and "(there were no objections)" under the heading whose whole job is to
+# record objections -- while the transcript three lines below it showed the objection.
+#
+# Two readers, and they fail at different widths, which is why the fix belongs HERE and not in
+# either of them: claims.jq iterates `.refs` only for `amend` and for a proposer's `concede`,
+# so most acts pass through it untouched, while v_transcript's `.refs|join(",")` aborts on
+# EVERY act -- and v_transcript renders both the record's transcript and `status`'s last
+# messages. One coercion at the reader covers both, and every consumer written after this one.
+#
+# Coerced to an array OF STRINGS, not merely to an array. `join` converts numbers, booleans
+# and nulls, but aborts on an object or an array element, so `map(select(type == "string"))`
+# is what makes "after this, `.refs` iterates and joins" true rather than nearly true. Every
+# id the room mints is `<peer>-<seq>`, a string; anything else in there was never a reference.
+#
+# `.lamport` and `.sent_ms` are held to a non-negative INTEGER below 2^53, not to jq's
+# "number". Both reach bash: `.lamport` through c_drain's `[ "$seen" -gt "$mine" ]` and
+# `.sent_ms` through the floor age in `floor` and `status`. `[` does not evaluate its operands,
+# so this was never execution -- it printed `integer expected` and returned 2, which
+# short-circuits the `&&` that advances the reader's clock. A single message carrying
+# `"lamport": 1.5` therefore left every later reader's clock behind what it had already read,
+# silently and for good. 2^53 is where a double stops counting integers exactly, and past it
+# jq prints exponent notation (`1E+400`) that no `[ -gt ]` can read; `floor` also normalises
+# jq 1.7 literal preservation, so `1e15` comes out as digits rather than as `1E+15`.
+C_UNTRUSTED='def _int: if type == "number" and . >= 0 and . < 9007199254740992 then floor else 0 end;
+def _untrusted: map(
     .turn    |= (if type == "number" then . else null end)
   | .round   |= (if type == "number" then . else null end)
-  | .lamport |= (if type == "number" then . else 0 end)
-  | .sent_ms |= (if type == "number" then . else 0 end)
+  | .lamport |= _int
+  | .sent_ms |= _int
+  | .refs    |= (if type == "array" then map(select(type == "string")) else [] end)
   | .hand     = (.hand == true)); '
 
 # write-then-rename: same directory, so the rename is atomic on any sane fs.
@@ -384,6 +464,49 @@ c_send() {
   printf '%s\n' "$id"
 }
 
+# --- surviving a lane file that does not parse ----------------------------------
+# jq reads a whole run of files as ONE stream, which is what makes `input_filename` work and
+# what both readers below are built on. The price is that a single unparseable byte anywhere
+# aborts the run: `recv` came back 4 with its cursor unmoved — permanently, and 4 is the one
+# status a participant is explicitly told to retry — while `status`, `verdict`, `claims` and
+# the transcript all reported an EMPTY room rather than a broken one.
+#
+# jq cannot recover from a parse error mid-stream, so the recovery is the caller's: run the
+# stream as before, and only IF IT FAILS, ask each file on its own and re-run over the ones
+# that answered. A healthy room never reaches this and pays nothing for it — measured rather
+# than asserted, by the method of the table at c_all: child CPU per call, 25 calls per size,
+# three lanes, one room built once and read from both trees, two runs at 1-minute load ~4:
+#
+#                  before        this
+#     12 messages  6.6 / 6.7     6.9 / 6.6 ms
+#     30 messages  9.4 / 9.2     9.3 / 9.5
+#     60 messages  13.3 / 13.6   13.6 / 13.6
+#    300 messages  46.9 / 44.6   46.7 / 46.5
+#
+# Read that as "unchanged", which is the only claim it supports: every difference is smaller
+# than the spread between two runs of the SAME tree. The added code is one branch that a
+# healthy room never takes, so there is nothing here that ought to cost anything — the table
+# is here to check that belief, not to advertise a win.
+#
+# One non-parsing file then costs its own message instead of the whole log, which is exactly
+# the trade `select(type == "object")` already makes for a document that parses but is not an
+# object. It is deliberately NOT silent: a lane holding bytes nobody can read is a fact about
+# the room, and a reader that quietly routes around it hides a corruption that will not repair
+# itself.
+#
+# Retrying is only safe because both programs SLURP — `[ inputs | ... ]` — so a parse error
+# aborts before a single value has been emitted. A future rewrite that streams `inputs`
+# straight to the output would emit the documents before the bad file and then emit them again
+# on the retry; it would have to capture the first attempt instead.
+_C_GOOD=()
+_c_parseable() { # <file>... -> fills _C_GOOD with the ones jq can read
+  _C_GOOD=(); local f
+  for f in "$@"; do
+    if jq empty "$f" >/dev/null 2>&1; then _C_GOOD+=("$f")
+    else echo "council: skipping a lane file that is not readable JSON: $f" >&2; fi
+  done
+}
+
 # --- receive -------------------------------------------------------------------
 # Files in my inbox that I have not consumed yet, one path per line.
 # A lane has exactly one writer and its numbering is gapless, so we probe upward from
@@ -453,16 +576,17 @@ c_drain() {
   # a string all self-terminate, so dropping everything else removes the vector entirely; it
   # also means one non-object document costs its own message rather than the lane. `null` is
   # the one shape that was never fatal here -- `null + {...}` succeeds, which is exactly why
-  # it was the silent one. Content jq cannot PARSE at all is a different case and is still
-  # not covered: it aborts the whole batch, as it did before this change.
+  # it was the silent one. Content jq cannot PARSE at all is a different case, and it is
+  # covered by the retry below rather than by this filter: a filter runs after a document has
+  # been read, and a byte that does not parse is never a document.
   #
   # Deriving the lane as `split("/") | .[-2]` is what keeps the cursor write contained: the
   # value is one component of a split path, so it can never itself contain a `/`. `..` is the
   # one component that still points upward, and one `..` climbs exactly one level -- the write
   # survives because `cursor/<me>/` sits inside the room with a level to spare, so a use of
   # this value directly under the room root would escape and needs its own gate.
-  local batch
-  batch=$(jq -n -c --argjson open "$open" --arg me "$ME" "$C_UNTRUSTED"'
+  local batch prog
+  prog='
     [ inputs
       | select(type == "object")
       | . + { _lane: (input_filename | split("/") | .[-2])
@@ -476,7 +600,11 @@ c_drain() {
             | if $i == null then $g else $g[0:$i] end)
          else . end)
       | .[] ]
-    | sort_by(.lamport, .from)[]' "${files[@]}") || return 1
+    | sort_by(.lamport, .from)[]'
+  batch=$(jq -n -c --argjson open "$open" --arg me "$ME" "$C_UNTRUSTED$prog" "${files[@]}") \
+    || { _c_parseable "${files[@]}"
+         [ "${#_C_GOOD[@]}" -gt 0 ] || return 1
+         batch=$(jq -n -c --argjson open "$open" --arg me "$ME" "$C_UNTRUSTED$prog" "${_C_GOOD[@]}") || return 1; }
   [ -n "$batch" ] || return 1
   # `_lane` and `_seq` are this function's own bookkeeping, not part of a message: strip them
   # before anyone sees them, so the shape a participant reads is unchanged.
@@ -496,8 +624,39 @@ c_drain() {
 
 # Block until something arrives. fd 3 is my bell, opened RDWR by the caller so that
 # open() never blocks and a bell rung with nobody listening is buffered, not lost.
-c_bell_open() { exec 3<> "$ROOM/bell/$ME.fifo"; }
-c_bell_wait() { read -r -t "${1:-$C_IDLE}" -N 1 -u 3 _ 2>/dev/null; return 0; }
+#
+# `[ -p ]` before the open, because `exec 3<>` SUCCEEDS on a regular file and the read that
+# follows then returns instantly at EOF instead of sleeping -- and that read is the only sleep
+# in v_recv's loop. A room whose bells are ordinary files does not fail; it spins for the
+# whole timeout. Measured over an identical 3-second `recv`, child CPU user/sys: 0.038/0.070
+# with a real fifo, 0.868/1.683 with a regular file in its place.
+#
+# Nothing repairs a bell that stopped being a fifo: `_mkroom` writes one only when there is no
+# `-p` there, and it does not run again over a live room. An archive-and-restore of a room
+# directory, or any copy that does not preserve fifos, produces exactly this -- so the reader
+# has to survive it rather than assume it away. Falling back to a real sleep makes bell loss
+# degrade to the poll this transport already documents as its fallback (C_IDLE above), which
+# is the behaviour a participant gets anyway when a bell is merely missed.
+_C_BELL=0
+# NO redirection on the `exec` below, however tempting `2>/dev/null` looks on a line that can
+# fail. `exec` with no command applies its redirections to the CURRENT SHELL and KEEPS them:
+# a `2>/dev/null` here silences the whole process for the rest of its life, and the first
+# version of this function did exactly that — every later diagnostic in a `recv`, including
+# the one three lines down and jq's own account of an unreadable lane file, went to
+# /dev/null. Caught by a test that asserted a message reached stderr; nothing else would have.
+c_bell_open() {
+  if [ -p "$ROOM/bell/$ME.fifo" ] && exec 3<> "$ROOM/bell/$ME.fifo"; then
+    _C_BELL=1
+  else
+    _C_BELL=0
+    echo "council: $ROOM/bell/$ME.fifo is not a fifo — polling instead of waiting on the bell" >&2
+  fi
+}
+c_bell_wait() {
+  if [ "$_C_BELL" = 1 ]; then read -r -t "${1:-$C_IDLE}" -N 1 -u 3 _ 2>/dev/null
+  else sleep "${1:-$C_IDLE}"; fi
+  return 0
+}
 c_bell_drain() { while read -r -t 0 -u 3 2>/dev/null && read -r -t 0.01 -N 1 -u 3 _ 2>/dev/null; do :; done; }
 
 # --- total order / floor --------------------------------------------------------
@@ -573,10 +732,18 @@ c_all() {
   # jq does not reset its parser at a file boundary, so such a value stays open until the next
   # file's first token and `input_filename` then reports that next file. c_drain carries the
   # full account of that; it applies verbatim here, and now for `.from` as well.
-  jq -n -c "$C_UNTRUSTED"'[ inputs
+  #
+  # And the retry, for the case the filter above cannot reach: a byte that does not PARSE is
+  # never a document, so no filter runs on it. See _c_parseable — including why writing this
+  # attempt's output straight to stdout stays correct.
+  local prog='[ inputs
       | select(type == "object")
       | .from = (input_filename | split("/") | .[-2]) ]
-    | _untrusted | sort_by(.lamport, .from)[]' "${files[@]}"
+    | _untrusted | sort_by(.lamport, .from)[]'
+  jq -n -c "$C_UNTRUSTED$prog" "${files[@]}" && return 0
+  _c_parseable "${files[@]}"
+  [ "${#_C_GOOD[@]}" -gt 0 ] || return 1
+  jq -n -c "$C_UNTRUSTED$prog" "${_C_GOOD[@]}"
 }
 
 # --- canonicalisation ----------------------------------------------------------
@@ -654,6 +821,13 @@ c_turns_since_last_claim() {
 c_floor_at() { # <turns-consumed>
   local t="$1" n lap idx
   n=$(c_npeers)
+  # A room with no readable participant list has no floor to compute, and both lines below
+  # divide by this count. That is an arithmetic precondition rather than a second gate on the
+  # roster: c_peers has already refused the list and said why on stderr, and `$(( t / 0 ))`
+  # would answer it with `division by 0` followed by an unbound `$idx` under `set -u` — a
+  # crash whose message names neither the room nor the roster. Returning empty here reaches
+  # the callers as "the floor is nobody's", which is what they already print for this room.
+  [ "$n" -gt 0 ] || return 1
   lap=$(( t / n )); idx=$(( (t % n + lap) % n ))
   jq -r --argjson i "$idx" '.order[$i]' "$ROOM/roster.json"
 }
@@ -669,6 +843,34 @@ c_last_turn_ms() {
                         | if length == 0 then 0 else (max_by(.lamport).sent_ms) end')
   case "$ms" in ''|*[!0-9]*) ms=0 ;; esac
   printf '%s' "$ms"
+}
+
+# How long this room has existed, in seconds — or NOTHING, which means "this room cannot say".
+#
+# It exists for one reason: `sent_ms` above is written by another participant, and a floor age
+# derived from it is only as good as that peer's clock. One message stamped with a tiny
+# `sent_ms` made `status` report `STALL: <peer> has held the floor for 1787859798s` — a false
+# alarm on the ONE signal a supervisor is told to act on, which is how a supervisor is taught
+# to ignore it. A held time longer than the room has existed is not a long wait; it is
+# evidence that the clock which produced it is wrong, and the caller reports it as that.
+#
+# `created_ms` is written once, by `up`, when the room is created, and NOTHING refreshes it —
+# not `relaunch`, not a later `up`. That is load-bearing rather than incidental: a refreshed
+# timestamp makes the room permanently young, every held time then exceeds its age, and the
+# STALL alarm is suppressed for good. Suppressing a true alarm is worse than raising a false
+# one, so the value must only ever be able to make this function's answer OLDER.
+#
+# Empty for a room created before this was recorded, and for a `created_ms` that is not a
+# plausible past instant. Both keep the caller's previous behaviour exactly, which is what
+# lets an old room go on working rather than start reporting a clock problem it does not have.
+c_room_age_s() {
+  local ms now
+  ms=$(c_int_field created_ms 0)
+  [ "$ms" -gt 0 ] || return 1
+  now=$(c_ms)
+  # A room stamped in the future says nothing about how long anything has been held.
+  [ "$now" -gt "$ms" ] || return 1
+  printf '%s' $(( (now - ms) / 1000 ))
 }
 
 # How many turns claimed a slot somebody else won — the number the supervisor watches.
