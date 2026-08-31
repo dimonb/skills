@@ -199,9 +199,15 @@ shipyard_shq() { printf "'%s'" "$(printf '%s' "$1" | sed "s/'/'\\\\''/g")"; }
 
 # --- agterm internals ----------------------------------------------------------
 _shipyard_at_sessions() {   # one compact JSON object per session in our workspace
-  agtermctl tree --json 2>/dev/null \
-    | jq -c --arg ws "$(shipyard_container)" \
-        '.result.tree.workspaces[]? | select(.name==$ws) | .sessions[]?' 2>/dev/null
+  local tree
+  tree=$(agtermctl tree --json 2>/dev/null) || return 1
+  printf '%s' "$tree" | jq -c --arg ws "$(shipyard_container)" '
+    if .ok != true or (.result.tree.workspaces | type) != "array"
+      or (all(.result.tree.workspaces[]; (.sessions | type) == "array") | not)
+    then error("invalid agterm tree")
+    else .result.tree.workspaces[] | select(.name == $ws) | .sessions[]
+    end
+  ' 2>/dev/null
 }
 
 # --- the API every other script uses -------------------------------------------

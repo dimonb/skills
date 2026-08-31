@@ -195,12 +195,19 @@ a single `resume`, followed eight seconds later by
 `/goal resume`; a later banner is a new episode and re-arms the sequence. Root ordering is
 load-bearing: indented tool output cannot trigger it, while Codex service lines and stale
 `Working` scrollback after the banner do not falsely prove that the interrupted turn resumed.
-The watcher may queue `/goal resume` as steering while the parent turn is active. It submits
-only after the live prompt is empty and the owning window has been quiet, then re-reads both
-prompt and user-activity state before sending Return as a separate terminal action. A draft,
-activity, or mismatch blocks Return and is never erased; a failed Return is retried only while
-the exact watcher-owned text remains. This guard is for a Codex parent in agterm; Claude parents
-and the tmux backend are deliberate no-ops.
+The watcher may queue `/goal resume` as steering while the parent turn is active; recent activity
+elsewhere in the agterm window does not make it wait for the turn to become idle. It checks that
+the live prompt is empty immediately before typing, then re-reads the prompt and user-activity
+clock before sending Return as a separate terminal action. Activity delays Return, a mismatch
+blocks it without erasing input, and a failed Return is retried only while the exact watcher-owned
+text remains.
+
+This is best-effort draft protection, not an atomic guarantee. The current agterm control API
+offers separate read, text, and Return requests but no conditional insert or submit. A user
+keystroke can therefore land after an empty or exact-prompt check and before its following write;
+in that narrow race the inputs can concatenate, and the combined line can be altered or submitted.
+An existing draft is still a hard veto, and the late checks minimize the exposed window. This guard
+is for a Codex parent in agterm; Claude parents and the tmux backend are deliberate no-ops.
 
 The primary path for anything needing a human is the escalation mailbox (Step 3);
 `shipyard-tell.sh` (Step 4) is the way back when the child did not ask. `--remote-control` is
@@ -656,10 +663,11 @@ for dirty, one for locked — a single `-f` fails on a lock with a message that 
 permissions problem), prunes, and on agterm drops the `-ai` workspace — plus its pinned
 name — once it holds no ship sessions. The change's feature branch can go afterwards
 (`git branch -d <branch>` — `-d` refuses an unmerged branch, which is what you want after a CLOSE rather than a merge).
-Removing the last slot also stops every parent continuity watcher and removes its mailbox
-state, but only after a successful backend query proves that no slot remains. An unreadable
-backend preserves lifecycle state. A later shipyard run starts a fresh watcher for its own
-parent session.
+Removing the last slot also asks every token-matched parent continuity watcher to stop itself
+and removes its mailbox state, but only after a successful, structurally valid backend query
+proves that no slot remains. An unreadable backend or unacknowledged watcher preserves lifecycle
+state instead of signaling an unverified PID. A later shipyard run starts a fresh watcher for
+its own parent session.
 
 ## What the table shows
 

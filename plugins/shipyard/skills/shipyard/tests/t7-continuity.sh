@@ -54,10 +54,36 @@ shipyard_continuity_decide "$nested" 200
 check "" "$SHIPYARD_CONTINUITY_ACTION" "indented tool output cannot trigger retry"
 
 shipyard_continuity_reset
+suffixed=$(printf '%s\n%s' "$capacity This is quoted prose." "$empty_prompt")
+shipyard_continuity_decide "$suffixed" 201
+check "" "$SHIPYARD_CONTINUITY_ACTION" "only the exact root capacity banner triggers retry"
+if shipyard_continuity_prompt_empty " › Ask Codex to do anything"; then indented_empty=yes; else indented_empty=no; fi
+check no "$indented_empty" "indented prompt output is not a root input box"
+
+shipyard_continuity_reset
 resumed=$(printf '%s\n%s\n%s\n%s' "$capacity" '• Continued the interrupted work.' \
   '• Working (2s)' "$empty_prompt")
 shipyard_continuity_decide "$resumed" 210
 check "" "$SHIPYARD_CONTINUITY_ACTION" "real assistant activity clears stale capacity"
+
+shipyard_continuity_reset
+two_banners=$(printf '%s\n%s\n%s\n%s\n%s' '• Older anchor.' "$capacity" \
+  '• Latest anchor.' "$capacity" "$empty_prompt")
+shipyard_continuity_decide "$two_banners" 220
+shipyard_continuity_succeeded resume 220
+latest_only=$(printf '%s\n%s\n%s' '• Latest anchor.' "$capacity" "$empty_prompt")
+shipyard_continuity_decide "$latest_only" 221
+check "" "$SHIPYARD_CONTINUITY_ACTION" "evicting an older banner does not replay the latest one"
+
+shipyard_continuity_reset
+same_anchor_first=$(printf '%s\n%s\n%s' '› resume' "$capacity" "$empty_prompt")
+shipyard_continuity_decide "$same_anchor_first" 222
+shipyard_continuity_succeeded resume 222
+intervened=$(printf '%s\n%s\n%s\n%s' '› resume' "$capacity" '› resume' "$empty_prompt")
+shipyard_continuity_decide "$intervened" 223
+same_anchor_replacement=$(printf '%s\n%s\n%s' '› resume' "$capacity" "$empty_prompt")
+shipyard_continuity_decide "$same_anchor_replacement" 224
+check resume "$SHIPYARD_CONTINUITY_ACTION" "an observed intervention re-arms an identical replacement episode"
 
 shipyard_continuity_reset
 active_empty=$(printf '%s\n%s\n%s' '• Working (1m 08s · esc to interrupt)' \
@@ -111,7 +137,11 @@ if [ "${1:-} ${2:-}" = "session type" ]; then
     elif [ "$(cat "$FAKE_MODE")" = draft-after-text ]; then
       printf '%s\n' '› resumedo not submit this draft' >"$FAKE_PROMPT"
     else
-      printf '%s\n' '› resume' >"$FAKE_PROMPT"
+      if [ "$bytes" = 2f676f616c20726573756d65 ]; then
+        printf '%s\n' '› /goal resume' >"$FAKE_PROMPT"
+      else
+        printf '%s\n' '› resume' >"$FAKE_PROMPT"
+      fi
       [ "$(cat "$FAKE_MODE")" != activity-after-text ] || printf '%s\n' 0 >"$FAKE_IDLE"
     fi
   fi
@@ -127,6 +157,10 @@ if [ "${1:-} ${2:-}" = "session text" ]; then
   exit 0
 fi
 if [ "${1:-}" = tree ]; then
+  if [ "$(cat "$FAKE_MODE")" = malformed-tree ]; then
+    printf '%s\n' '{"ok":false,"error":"temporary tree failure"}'
+    exit 0
+  fi
   jq -n --argjson idle "$(cat "$FAKE_IDLE")" \
     '{ok:true,result:{tree:{idleMs:$idle,workspaces:[{sessions:[{id:"test-session"}]}]}}}'
   exit 0
@@ -169,6 +203,20 @@ reset_fake
 printf '%s\n' activity-after-text >"$FAKE_MODE"
 shipyard_continuity_submit resume resume test-session test-socket primary test-window || true
 check 'stdin:726573756d65' "$(cat "$FAKE_LOG")" "real user activity during submission blocks Return"
+printf '%s\n' 100 >"$FAKE_IDLE"
+activity_retry_rc=0
+shipyard_continuity_finish_owned test-session test-socket primary test-window || activity_retry_rc=$?
+check 0 "$activity_retry_rc" "exact watcher text stays owned until activity settles"
+check $'stdin:726573756d65\nstdin:0a' "$(cat "$FAKE_LOG")" "settled activity submits without duplicating watcher text"
+
+reset_fake
+printf '%s\n' 1 >"$FAKE_RETURN_FAILURES"
+shipyard_continuity_submit resume resume test-session test-socket primary test-window || true
+printf '%s\n' '› Ask Codex to do anything' >"$FAKE_PROMPT"
+printf '%s\n' 0 >"$FAKE_IDLE"
+cleared_rc=0
+shipyard_continuity_finish_owned test-session test-socket primary test-window || cleared_rc=$?
+check 1 "$cleared_rc" "user-cleared text after failed Return is not inferred as success"
 
 reset_fake
 printf '%s\n' 1 >"$FAKE_RETURN_FAILURES"
@@ -184,6 +232,12 @@ reset_fake
 printf '%s\n' '› resume' >"$FAKE_PROMPT"
 shipyard_continuity_finish_owned test-session test-socket primary test-window || true
 check "" "$(cat "$FAKE_LOG")" "pre-existing command text is not watcher-owned"
+
+reset_fake
+printf '%s\n' 0 >"$FAKE_IDLE"
+shipyard_continuity_submit '/goal resume' goal test-session test-socket primary test-window
+check $'stdin:2f676f616c20726573756d65\nstdin:0a' "$(cat "$FAKE_LOG")" \
+  "active empty prompt steers goal resume despite recent window activity"
 
 # Start is idempotent and last-slot cleanup owns the detached watcher.
 _SHIPYARD_CONTINUITY_DIR="$TMP/state"
@@ -223,6 +277,7 @@ shipyard_continuity_stop_all
 if kill -0 "$pid1" 2>/dev/null; then alive=yes; else alive=no; fi
 check no "$alive" "lifecycle cleanup stops a stale live watcher"
 files=$(find "$_SHIPYARD_CONTINUITY_DIR" -type f -print 2>/dev/null)
+[ -z "$files" ] || find "$_SHIPYARD_CONTINUITY_DIR" -name 'continuity-*.log' -exec sed -n '1,80p' {} \;
 check "" "$files" "lifecycle cleanup removes watcher state"
 
 _SHIPYARD_CONTINUITY_INITIAL_DELAY=2
@@ -246,7 +301,71 @@ else
   timeout_alive=no
 fi
 check no "$timeout_alive" "startup timeout terminates its detached watcher"
+timeout_files=$(find "$_SHIPYARD_CONTINUITY_DIR" -type f -print 2>/dev/null)
+check "" "$timeout_files" "startup timeout removes all watcher state and logs"
 unset _SHIPYARD_CONTINUITY_INITIAL_DELAY
+
+reset_fake
+shipyard_continuity_start agterm >"$TMP/start-one" 2>&1 & start_one=$!
+shipyard_continuity_start agterm >"$TMP/start-two" 2>&1 & start_two=$!
+start_one_rc=0; wait "$start_one" || start_one_rc=$?
+start_two_rc=0; wait "$start_two" || start_two_rc=$?
+check 0 "$start_one_rc" "first concurrent start succeeds"
+check 0 "$start_two_rc" "second concurrent start joins the same watcher"
+starts=$(grep -hFc 'parent continuity guard started' "$TMP/start-one" "$TMP/start-two" | awk '{n += $1} END {print n + 0}')
+check 1 "$starts" "concurrent starts create exactly one watcher"
+lock_files=$(find "$_SHIPYARD_CONTINUITY_DIR" -name 'continuity-*.lock' -print)
+check "" "$lock_files" "concurrent start releases its lifecycle lock"
+shipyard_continuity_stop_all
+
+mkdir -p "$_SHIPYARD_CONTINUITY_DIR"
+printf '%s\n' orphan >"$_SHIPYARD_CONTINUITY_DIR/continuity-orphan.log"
+printf '%s\n' orphan >"$_SHIPYARD_CONTINUITY_DIR/continuity-orphan.heartbeat"
+shipyard_continuity_stop_all
+orphan_files=$(find "$_SHIPYARD_CONTINUITY_DIR" -type f -print)
+check "" "$orphan_files" "last-slot cleanup sweeps orphan watcher records"
+
+failure_state="$TMP/failure-state"
+mkdir -p "$failure_state"
+printf '%s %s\n' "$$" held-token >"$failure_state/continuity-held.pid"
+printf '%s %s\n' held-token 1 >"$failure_state/continuity-held.heartbeat"
+printf '%s\n' held-log >"$failure_state/continuity-held.log"
+failure_result=$(
+  _SHIPYARD_CONTINUITY_DIR="$failure_state"
+  shipyard_continuity_request() { return 1; }
+  rc=0
+  shipyard_continuity_stop_all || rc=$?
+  printf '%s:%s' "$rc" "$(find "$failure_state" -type f | wc -l | tr -d ' ')"
+)
+check 1:3 "$failure_result" "failed cooperative stop preserves every lifecycle record"
+
+FAKE_ROOT="$TMP/repo"
+FAKE_GIT_DIR="$TMP/gitdir"
+export FAKE_ROOT FAKE_GIT_DIR
+mkdir -p "$FAKE_ROOT" "$FAKE_GIT_DIR/ship-escalations"
+printf '%s\n' preserve >"$FAKE_GIT_DIR/ship-escalations/continuity-preserve.log"
+git() {
+  if [ "${1:-} ${2:-}" = "rev-parse --show-toplevel" ]; then printf '%s\n' "$FAKE_ROOT"; return 0; fi
+  if [ "${1:-} ${2:-}" = "rev-parse --git-common-dir" ]; then printf '%s\n' "$FAKE_GIT_DIR"; return 0; fi
+  return 0
+}
+export -f git
+export TMP
+agtermctl() { "$TMP/bin/agtermctl" "$@"; }
+export -f agtermctl
+printf '%s\n' malformed-tree >"$FAKE_MODE"
+down_rc=0
+SHIPYARD_BACKEND=agterm SHIPYARD_WORKSPACE=test-ai \
+  bash "$SKILL_DIR/shipyard-down.sh" ghost --force >"$TMP/down.out" 2>"$TMP/down.err" || down_rc=$?
+check 1 "$down_rc" "down fails when agterm enumeration is structurally invalid"
+[ "$(grep -Fc 'lifecycle state was preserved' "$TMP/down.err")" -eq 1 ] || sed -n '1,80p' "$TMP/down.err"
+check 1 "$(grep -Fc 'lifecycle state was preserved' "$TMP/down.err")" \
+  "down reports that malformed enumeration preserved lifecycle state"
+if [ -f "$FAKE_GIT_DIR/ship-escalations/continuity-preserve.log" ]; then preserved=yes; else preserved=no; fi
+check yes "$preserved" "down integration preserves state on malformed enumeration"
+unset -f git
+unset -f agtermctl
+reset_fake
 
 unset CODEX_SESSION_ID CODEX_THREAD_ID
 shipyard_continuity_start agterm >/dev/null

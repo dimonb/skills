@@ -50,9 +50,14 @@ gets one `resume`; eight seconds later the watcher
 queues `/goal resume`, including during an active turn, because agterm supports steering.
 Indented tool output cannot imitate the banner, service lines and stale `Working` scrollback
 do not hide it, and repeated capacity episodes re-arm independently. The current input prompt
-is the safety boundary: any user draft blocks submission. The watcher requires a quiet window,
-types text and Return as separate actions, and re-reads the prompt before Return; user activity
-or a mismatch cancels submission without erasing input. Claude parents and tmux runs are unchanged.
+is the common-case safety boundary: an existing user draft blocks submission. The watcher checks
+the prompt immediately before text, sends text and Return as separate actions, and re-reads the
+prompt plus user-activity clock before Return; activity delays Return, and a mismatch cancels it
+without erasing input. The current agterm control API has no atomic conditional insert or submit,
+so a keystroke can still race between either check and its following write. In that narrow window
+the inputs can concatenate, and the watcher can alter or submit the combined line. This guard
+reduces routine collisions; it does not claim absolute draft isolation. Claude parents and tmux
+runs are unchanged.
 
 **Watchdogs for the two failure modes that look like health.** A background agent parked on
 CI and a background agent that has *died* have the same shape — idle, no escalation, green

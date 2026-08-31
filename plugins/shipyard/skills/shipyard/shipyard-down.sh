@@ -109,5 +109,8 @@ shipyard_continuity_cleanup_last_slot "$enumeration_status" "$remaining_slots" |
 if [ "$cleanup_status" -eq 2 ]; then
   echo "warning: could not verify that every shipyard slot is gone; lifecycle state was preserved" >&2
   rc=1
+elif [ "$cleanup_status" -eq 3 ]; then
+  echo "warning: could not stop every parent continuity watcher; lifecycle state was preserved" >&2
+  rc=1
 fi
 exit "$rc"
