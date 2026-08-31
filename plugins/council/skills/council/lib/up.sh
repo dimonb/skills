@@ -485,8 +485,14 @@ council_relaunch() {
 council_down() {
   local purge=0; [ "${1:-}" = "--purge" ] && purge=1
   . "$SKILL/lib/term.sh"
+  # Through c_peers, like every other reader of this list: `down` runs after council.sh has
+  # sourced lib.sh, so the validated reader is in scope here. Reading `.order` raw left the
+  # last unquoted word-split of an unvalidated peer list in the skill, one function away from
+  # `relaunch`'s own guard — and a third copy of a rule is the copy that stops being
+  # maintained. A roster nobody can read closes no terminal and says so; the keeper below
+  # still goes, and `--purge` still removes the room, which is what teardown is for.
   local p
-  for p in $(jq -r '.order[]' "$ROOM/roster.json"); do
+  for p in $(c_peers); do
     ct_kill "$p" 2>/dev/null && echo "terminal closed: $p"
   done
   local keep="$ROOM/state/keeper.pid" pid

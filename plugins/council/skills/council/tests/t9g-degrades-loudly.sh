@@ -87,6 +87,26 @@ else echo "FAIL down over a '0' keeper.pid died with rc $drc — it signalled it
 # Put the real keeper's pid back so the suite's cleanup can still reap it.
 [ -n "$real" ] && printf '%s' "$real" > "$R/state/keeper.pid"
 
+# `down` reads the peer list too, and it must read it through the same validated reader as
+# everything else — t9h owns the roster rule itself; this asserts the call site, because a
+# reader left on the raw file is how one copy of a rule quietly stops being maintained.
+fresh
+jq '.order = ["a","*"]' "$R/roster.json" > "$R/r.tmp" && mv "$R/r.tmp" "$R/roster.json"
+set -m
+( export COUNCIL_ROOM="$R" COUNCIL_BACKEND=none-for-tests
+  SKILL="$SKILL"; ROOM="$R"
+  . "$SKILL/lib/lib.sh"; . "$SKILL/lib/up.sh"
+  council_down ) >"$R/down.out" 2>"$R/down.err" &
+dpid=$!
+wait "$dpid"; drc=$?
+set +m
+if [ "$drc" = 0 ] && grep -q 'no usable participant list' "$R/down.err" \
+   && ! grep -q 'terminal closed' "$R/down.out"; then
+  echo "ok   down read the peer list through the validated reader"
+else
+  echo "FAIL down still reads roster.order raw (rc $drc): $(head -1 "$R/down.out")"; fail=1
+fi
+
 # --- 4. a bell that is no longer a fifo polls, it does not spin -----------------
 # Nothing repairs a bell: `_mkroom` writes one only where there is no `-p`, and it does not run
 # again over a live room. An archive-and-restore, or any copy that does not preserve fifos,
