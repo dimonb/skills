@@ -437,16 +437,13 @@ produced one false test result during development. Do not pipe status through a 
 
 ## Failure modes worth knowing before they cost you a night
 
-* **`roster.json` is the room's membership, and editing it changes what the room IS.** Both
-  readers build their file lists from `order`, so renaming or removing a peer orphans its lane
-  on the spot: that peer's past messages leave the transcript, the claims graph and the
-  verdict, and a seat still running under the old name goes on writing where nobody reads.
-  Nothing is deleted — `status` names the orphaned lane and counts what is in it. `order` must
-  be a non-empty array of plain names (`[A-Za-z0-9_-]`), no two the same ignoring case;
-  anything else and the room has **no** membership at all: every reader sees it empty,
-  `status` says so loudly, and `decide` refuses rather than write a record it cannot populate.
-  Two names that differ only by case are rejected rather than merged — on a case-sensitive
-  filesystem they are two real peers, so merging them would change the membership silently.
+* **The two readers do not agree on which lanes are the room.** `recv` builds its list from
+  `roster.order`; everything else (`verdict`, `claims`, `transcript`, `decide`) globs `lane/*/`.
+  So renaming or removing a peer in `roster.json` orphans its lane: it still appears in the
+  transcript and the verdict, while `recv` delivers none of it to anybody, and an objection
+  raised there can never be answered. Nothing warns about it. This is a known open defect
+  (issue #66) — the obvious fix, pointing both readers at the roster, was tried and reverted,
+  and `c_all` carries the account of why.
 * **A participant that consumed your message and then went quiet is usually not thinking.**
   Look at its terminal. On `codex` it may be the trust-this-directory prompt; `agy` is
   launched with permissions skipped and no longer prompts at all. Otherwise it is a context

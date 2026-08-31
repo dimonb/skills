@@ -232,7 +232,7 @@ v_verdict() {
 }
 
 v_status() {
-  local j verd g t floor last held conf ghost_lanes ghost_msgs alarms=""
+  local j verd g t floor last held conf alarms=""
   j=$(v_verdict --json); verd=$(printf '%s' "$j" | jq -r .verdict)
   g=$(_graph)
   t=$(c_turns); floor=$(c_floor_at "$t"); last=$(c_last_turn_ms)
@@ -265,11 +265,6 @@ v_status() {
                 then alarms="$alarms ✅ closed as unresolved — the record is written (council.sh decision)"
                 else alarms="$alarms 🛑 the turn budget is spent — write an honest unresolved"; fi ;;
   esac
-  # The loudest alarm there is, because every other line of this block is derived from a reading
-  # that is empty: no participants, no floor, no messages, no verdict worth the name.
-  c_roster_ok || alarms="$alarms 🛑 roster.json has no usable 'order' — it must be a non-empty array of plain names ([A-Za-z0-9_-]), no two the same ignoring case. The room has NO membership: every reader sees it as empty and 'decide' will refuse to write a record. Fix roster.json."
-  read -r ghost_lanes ghost_msgs <<<"$(c_unrostered)"
-  [ "$ghost_lanes" -gt 0 ] && alarms="$alarms ⚠️ $ghost_lanes lane(s) on disk are not in the roster, holding $ghost_msgs message(s) no reader counts — a peer renamed or removed from roster.json, or a seat still running under a name the roster no longer lists"
   [ "$conf" -gt 0 ] && alarms="$alarms ⚠️ $conf messages lost a turn conflict (their authors must take the floor again)"
   [ "$held" -gt "${COUNCIL_STALL_SECS:-900}" ] && alarms="$alarms 🛑 STALL: $floor has held the floor for ${held}s — check its terminal, it may be sitting on a permission prompt"
   printf 'alarms:%s\n' "${alarms:- —}"
@@ -306,16 +301,6 @@ _agenda_is_long() { # <file> — more than one non-blank line
 v_decide() {
   local force=0; [ "${1:-}" = "--force" ] && force=1
   local j verd g out status
-  # A room whose roster is unusable has no membership, so every reader sees it as empty — and a
-  # record written from an empty reading is not a thin record, it is a FALSE one. Before this
-  # check, a malformed `.order` made `decide --force` exit 0 having written a durable
-  # `board/decision.md` with no participants, "turns: 0 of 30", "(there were no objections)" and
-  # an empty transcript, while an objection was open. Refuse instead: the record is the room's
-  # output and this is the one path that must never produce a wrong one.
-  c_roster_ok || {
-    echo "council: roster.json has no usable 'order' (a non-empty array of plain names, no two the same ignoring case) — refusing to write a record from a room that cannot be read" >&2
-    return 2
-  }
   j=$(v_verdict --json); verd=$(printf '%s' "$j" | jq -r .verdict)
   case "$verd" in
     ready-to-decide) ;;
