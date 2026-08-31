@@ -192,7 +192,10 @@ without starting anything — use it when you are unsure what a child will get.
 live, `shipyard-launch.sh` starts one idempotent `shipyard-continuity.sh` watcher for the Codex
 parent session, independently of any child-runtime override. A root model-capacity banner gets
 a single `resume`, followed eight seconds later by
-`/goal resume`; a later banner is a new episode and re-arms the sequence. Root ordering is
+`/goal resume`; a changed banner, increased banner count, or observed intervening turn re-arms
+the sequence. The agterm text response has no terminal cursor or generation, so a byte-identical
+scrollback replacement that happens wholly between polls is indistinguishable from the already
+handled screen and is conservatively not replayed. Root ordering is
 load-bearing: indented tool output cannot trigger it, while Codex service lines and stale
 `Working` scrollback after the banner do not falsely prove that the interrupted turn resumed.
 The watcher may queue `/goal resume` as steering while the parent turn is active; recent activity

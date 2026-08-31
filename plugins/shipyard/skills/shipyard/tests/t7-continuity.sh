@@ -7,6 +7,8 @@ trap 'shipyard_continuity_stop_all >/dev/null 2>&1 || true; rm -rf "$TMP"' EXIT
 
 # shellcheck source=../shipyard-continuity.sh
 . "$SKILL_DIR/shipyard-continuity.sh"
+# shellcheck source=../shipyard-backend.sh
+. "$SKILL_DIR/shipyard-backend.sh"
 
 failures=0
 check() {
@@ -161,6 +163,10 @@ if [ "${1:-}" = tree ]; then
     printf '%s\n' '{"ok":false,"error":"temporary tree failure"}'
     exit 0
   fi
+  if [ "$(cat "$FAKE_MODE")" = malformed-session ]; then
+    printf '%s\n' '{"ok":true,"result":{"tree":{"idleMs":5000,"workspaces":[{"name":"test-ai","sessions":[{}]}]}}}'
+    exit 0
+  fi
   jq -n --argjson idle "$(cat "$FAKE_IDLE")" \
     '{ok:true,result:{tree:{idleMs:$idle,workspaces:[{sessions:[{id:"test-session"}]}]}}}'
   exit 0
@@ -219,6 +225,16 @@ shipyard_continuity_finish_owned test-session test-socket primary test-window ||
 check 1 "$cleared_rc" "user-cleared text after failed Return is not inferred as success"
 
 reset_fake
+shipyard_continuity_begin_owned resume resume
+SHIPYARD_CONTINUITY_OWNED_IDLE=5000
+printf '%s\n' '› Ask Codex to do anything' >"$FAKE_PROMPT"
+printf '%s\n' 0 >"$FAKE_IDLE"
+pre_return_clear_rc=0
+shipyard_continuity_finish_owned test-session test-socket primary test-window || pre_return_clear_rc=$?
+check 1 "$pre_return_clear_rc" "user-cleared text before Return relinquishes ownership"
+check "" "$SHIPYARD_CONTINUITY_OWNED_COMMAND" "cleared watcher text cannot wedge later decisions"
+
+reset_fake
 printf '%s\n' 1 >"$FAKE_RETURN_FAILURES"
 first_rc=0
 shipyard_continuity_submit resume resume test-session test-socket primary test-window || first_rc=$?
@@ -238,6 +254,12 @@ printf '%s\n' 0 >"$FAKE_IDLE"
 shipyard_continuity_submit '/goal resume' goal test-session test-socket primary test-window
 check $'stdin:2f676f616c20726573756d65\nstdin:0a' "$(cat "$FAKE_LOG")" \
   "active empty prompt steers goal resume despite recent window activity"
+
+printf '%s\n' malformed-session >"$FAKE_MODE"
+malformed_exists_rc=0
+shipyard_continuity_session_exists test-session test-socket test-window || malformed_exists_rc=$?
+check 2 "$malformed_exists_rc" "malformed nested sessions cannot prove the parent absent"
+reset_fake
 
 # Start is idempotent and last-slot cleanup owns the detached watcher.
 _SHIPYARD_CONTINUITY_DIR="$TMP/state"
@@ -305,6 +327,27 @@ timeout_files=$(find "$_SHIPYARD_CONTINUITY_DIR" -type f -print 2>/dev/null)
 check "" "$timeout_files" "startup timeout removes all watcher state and logs"
 unset _SHIPYARD_CONTINUITY_INITIAL_DELAY
 
+_SHIPYARD_CONTINUITY_PUBLISH_DELAY=2
+export _SHIPYARD_CONTINUITY_PUBLISH_DELAY
+shipyard_continuity_start agterm >/dev/null 2>&1 & interrupted_starter=$!
+n=0
+while ! find "$_SHIPYARD_CONTINUITY_DIR" -name 'continuity-*.log' -print -quit | grep -q . \
+  && [ "$n" -lt 20 ]; do
+  sleep 0.05
+  n=$((n + 1))
+done
+kill "$interrupted_starter" 2>/dev/null || true
+wait "$interrupted_starter" 2>/dev/null || true
+sleep 1.2
+interrupted_files=$(find "$_SHIPYARD_CONTINUITY_DIR" -mindepth 1 -print)
+check "" "$interrupted_files" "unpublished watcher self-cleans after interrupted start"
+unset _SHIPYARD_CONTINUITY_PUBLISH_DELAY
+shipyard_continuity_start agterm >/dev/null
+restarted_pidfile=$(find "$_SHIPYARD_CONTINUITY_DIR" -name 'continuity-*.pid' -print -quit)
+if [ -n "$restarted_pidfile" ]; then restarted=yes; else restarted=no; fi
+check yes "$restarted" "start recovers after an interrupted publication"
+shipyard_continuity_stop_all
+
 reset_fake
 shipyard_continuity_start agterm >"$TMP/start-one" 2>&1 & start_one=$!
 shipyard_continuity_start agterm >"$TMP/start-two" 2>&1 & start_two=$!
@@ -363,6 +406,33 @@ check 1 "$(grep -Fc 'lifecycle state was preserved' "$TMP/down.err")" \
   "down reports that malformed enumeration preserved lifecycle state"
 if [ -f "$FAKE_GIT_DIR/ship-escalations/continuity-preserve.log" ]; then preserved=yes; else preserved=no; fi
 check yes "$preserved" "down integration preserves state on malformed enumeration"
+
+printf '%s\n' malformed-session >"$FAKE_MODE"
+nested_down_rc=0
+SHIPYARD_BACKEND=agterm SHIPYARD_WORKSPACE=test-ai \
+  bash "$SKILL_DIR/shipyard-down.sh" ghost --force >/dev/null 2>"$TMP/nested-down.err" || nested_down_rc=$?
+check 1 "$nested_down_rc" "down rejects malformed nested session records"
+check 1 "$(grep -Fc 'lifecycle state was preserved' "$TMP/nested-down.err")" \
+  "nested session failure preserves lifecycle state"
+
+tmux_absent=$(
+  _SHIPYARD_BE=tmux
+  _SHIPYARD_CONTAINER=test-ai
+  tmux() { printf '%s\n' "can't find session: test-ai" >&2; return 1; }
+  rc=0
+  shipyard_slots || rc=$?
+  printf 'rc=%s' "$rc"
+)
+check rc=0 "$tmux_absent" "an absent final tmux session is authoritative empty state"
+tmux_error=$(
+  _SHIPYARD_BE=tmux
+  _SHIPYARD_CONTAINER=test-ai
+  tmux() { printf '%s\n' 'permission denied' >&2; return 1; }
+  rc=0
+  shipyard_slots || rc=$?
+  printf 'rc=%s' "$rc"
+)
+check rc=1 "$tmux_error" "an unrelated tmux query failure preserves lifecycle state"
 unset -f git
 unset -f agtermctl
 reset_fake

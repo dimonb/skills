@@ -49,7 +49,10 @@ the parent session, even when a child-runtime override selects Claude. A root ca
 gets one `resume`; eight seconds later the watcher
 queues `/goal resume`, including during an active turn, because agterm supports steering.
 Indented tool output cannot imitate the banner, service lines and stale `Working` scrollback
-do not hide it, and repeated capacity episodes re-arm independently. The current input prompt
+do not hide it, and a later observably distinct banner or intervening submitted turn re-arms
+the guard. Byte-identical scrollback replacements between polls have no cursor or generation
+in the current agterm text API, so the guard conservatively avoids replaying an unchanged screen.
+The current input prompt
 is the common-case safety boundary: an existing user draft blocks submission. The watcher checks
 the prompt immediately before text, sends text and Return as separate actions, and re-reads the
 prompt plus user-activity clock before Return; activity delays Return, and a mismatch cancels it

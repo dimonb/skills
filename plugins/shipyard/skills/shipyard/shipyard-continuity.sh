@@ -209,6 +209,11 @@ shipyard_continuity_finish_owned() {
   fi
   if [ "$SHIPYARD_CONTINUITY_RETURN_ATTEMPTED" -eq 0 ] \
     && shipyard_continuity_prompt_empty "$screen"; then
+    if [ "${SHIPYARD_CONTINUITY_OWNED_IDLE:--1}" -ge 0 ] \
+      && { [ "$idle" -lt 0 ] || [ "$idle" -lt "$SHIPYARD_CONTINUITY_OWNED_IDLE" ]; }; then
+      shipyard_continuity_clear_owned
+      return 1
+    fi
     return 2
   fi
   if [ "$prompt" != "› $SHIPYARD_CONTINUITY_OWNED_COMMAND" ]; then
@@ -258,11 +263,19 @@ shipyard_continuity_submit() {
 shipyard_continuity_session_exists() {
   local sid="$1" socket="$2" window="$3" tree
   tree=$(agtermctl tree --json --window "$window" --socket "$socket" 2>/dev/null) || return 2
+  printf '%s' "$tree" | jq -e '
+    .ok == true and (.result.tree.workspaces | type) == "array"
+    and all(.result.tree.workspaces[];
+      type == "object" and (.name | type) == "string"
+      and (.sessions | type) == "array"
+      and all(.sessions[];
+        type == "object" and (.id | type) == "string" and (.id | length) > 0
+        and (.name | type) == "string"))
+  ' >/dev/null 2>&1 || return 2
   if printf '%s' "$tree" | jq -e --arg sid "$sid" \
     '.result.tree.workspaces[].sessions[] | select(.id == $sid)' >/dev/null 2>&1; then
     return 0
   fi
-  printf '%s' "$tree" | jq -e '.result.tree.workspaces | arrays' >/dev/null 2>&1 || return 2
   return 1
 }
 
@@ -294,13 +307,18 @@ shipyard_continuity_control_check() {
 
 shipyard_continuity_watch() {
   local sid="$1" socket="$2" pane="$3" window="$4" pidfile="$5" heartbeat="$6"
-  local control="$7" ack="$8" token="$9"
+  local control="$7" ack="$8" token="$9" lock="${10}" lock_token="${11}" logfile="${12}"
   local screen now action submit_rc exists_rc cleanup interval="${_SHIPYARD_CONTINUITY_POLL_SECS:-5}"
   printf -v cleanup 'shipyard_continuity_remove_owned_state %q %q "" "" %q' \
     "$pidfile" "$heartbeat" "$token"
   trap "$cleanup" EXIT
   trap 'exit 0' INT TERM
   shipyard_continuity_reset
+  if ! shipyard_continuity_wait_publication "$pidfile" "$token"; then
+    shipyard_continuity_release_lock "$lock" "$lock_token"
+    rm -f "$logfile"
+    return 1
+  fi
   sleep "${_SHIPYARD_CONTINUITY_INITIAL_DELAY:-0}"
   while true; do
     shipyard_continuity_control_check "$control" "$ack" "$token" && return 0
@@ -431,8 +449,55 @@ shipyard_continuity_wait_state_gone() {
   return 1
 }
 
+shipyard_continuity_wait_publication() {
+  local pidfile="$1" token="$2" n=0 pid seen
+  while [ "$n" -lt "${_SHIPYARD_CONTINUITY_PUBLICATION_POLLS:-20}" ]; do
+    if [ -f "$pidfile" ]; then
+      read -r pid seen <"$pidfile" || true
+      [ "${pid:-}" = "$$" ] && [ "${seen:-}" = "$token" ] && return 0
+    fi
+    sleep "${_SHIPYARD_CONTINUITY_PUBLICATION_SLEEP:-0.05}"
+    n=$((n + 1))
+  done
+  return 1
+}
+
+shipyard_continuity_acquire_lock() {
+  local lock="$1" n=0 owner pid token
+  SHIPYARD_CONTINUITY_LOCK_TOKEN="$$-$RANDOM-$(date +%s)"
+  while ! mkdir "$lock" 2>/dev/null; do
+    owner="$lock/owner"
+    if [ -f "$owner" ]; then
+      read -r pid token <"$owner" || true
+      if [ -n "${pid:-}" ] && ! kill -0 "$pid" 2>/dev/null; then
+        rm -f "$owner"
+        rmdir "$lock" 2>/dev/null && continue
+      fi
+    elif [ "$n" -ge 20 ]; then
+      rmdir "$lock" 2>/dev/null && continue
+    fi
+    [ "$n" -ge 100 ] && return 1
+    sleep 0.05
+    n=$((n + 1))
+  done
+  shipyard_continuity_write_record "$lock/owner" "$$" "$SHIPYARD_CONTINUITY_LOCK_TOKEN" \
+    || { rmdir "$lock" 2>/dev/null || true; return 1; }
+}
+
+shipyard_continuity_release_lock() {
+  local lock="$1" token="$2" pid seen
+  [ -d "$lock" ] || return 0
+  if [ -f "$lock/owner" ]; then
+    read -r pid seen <"$lock/owner" || true
+    [ "${seen:-}" = "$token" ] || return 1
+    rm -f "$lock/owner"
+  fi
+  rmdir "$lock" 2>/dev/null
+}
+
 shipyard_continuity_start_locked() {
-  local state="$1" key="$2" pidfile heartbeat control ack logfile pid token old_token n
+  local state="$1" key="$2" lock="$3" lock_token="$4"
+  local pidfile heartbeat control ack logfile pid token old_token n
   pidfile="$state/continuity-$key.pid"
   heartbeat="$state/continuity-$key.heartbeat"
   control="$state/continuity-$key.control"
@@ -456,9 +521,10 @@ shipyard_continuity_start_locked() {
   token="$$-$RANDOM-$(date +%s)"
   nohup bash "$SHIPYARD_CONTINUITY_SCRIPT" watch "$AGTERM_SESSION_ID" \
     "$AGTERM_SOCKET" "${AGTERM_PANE:-primary}" "$AGTERM_WINDOW_ID" \
-    "$pidfile" "$heartbeat" "$control" "$ack" "$token" \
+    "$pidfile" "$heartbeat" "$control" "$ack" "$token" "$lock" "$lock_token" "$logfile" \
     >>"$logfile" 2>&1 </dev/null &
   pid=$!
+  sleep "${_SHIPYARD_CONTINUITY_PUBLISH_DELAY:-0}"
   shipyard_continuity_write_record "$pidfile" "$pid" "$token" \
     || { shipyard_continuity_terminate_pid "$pid" || true; rm -f "$logfile"; return 1; }
   n=0
@@ -476,7 +542,7 @@ shipyard_continuity_start_locked() {
 }
 
 shipyard_continuity_start() {
-  local backend="$1" state key lock n=0 rc
+  local backend="$1" state key lock lock_token rc
   [ "$backend" = agterm ] || return 0
   [ -n "${CODEX_SESSION_ID:-}${CODEX_THREAD_ID:-}" ] || return 0
   [ "${AGTERM_ENABLED:-}" = 1 ] || return 0
@@ -488,29 +554,27 @@ shipyard_continuity_start() {
   state=$(shipyard_continuity_state_dir) || return 1
   key=$(printf '%s' "$AGTERM_SESSION_ID" | tr -c 'A-Za-z0-9._-' '_')
   lock="$state/continuity-$key.lock"
-  while ! mkdir "$lock" 2>/dev/null; do
-    [ "$n" -ge 100 ] && return 1
-    sleep 0.05
-    n=$((n + 1))
-  done
+  shipyard_continuity_acquire_lock "$lock" || return 1
+  lock_token="$SHIPYARD_CONTINUITY_LOCK_TOKEN"
   rc=0
-  shipyard_continuity_start_locked "$state" "$key" || rc=$?
-  rmdir "$lock" 2>/dev/null || true
+  shipyard_continuity_start_locked "$state" "$key" "$lock" "$lock_token" || rc=$?
+  shipyard_continuity_release_lock "$lock" "$lock_token" || rc=1
   return "$rc"
 }
 
 shipyard_continuity_stop_all() {
-  local state f pid token heartbeat control ack log lock key rc=0 stop_rc
+  local state f pid token heartbeat control ack log lock lock_token key rc=0 stop_rc
   state=$(shipyard_continuity_state_dir 2>/dev/null) || return 0
   for f in "$state"/continuity-*.pid; do
     [ -f "$f" ] || continue
     key=${f##*/continuity-}
     key=${key%.pid}
     lock="$state/continuity-$key.lock"
-    if ! mkdir "$lock" 2>/dev/null; then
+    if ! shipyard_continuity_acquire_lock "$lock"; then
       rc=1
       continue
     fi
+    lock_token="$SHIPYARD_CONTINUITY_LOCK_TOKEN"
     read -r pid token <"$f" || true
     heartbeat="${f%.pid}.heartbeat"
     control="${f%.pid}.control"
@@ -527,7 +591,7 @@ shipyard_continuity_stop_all() {
     else
       rc=1
     fi
-    rmdir "$lock" 2>/dev/null || true
+    shipyard_continuity_release_lock "$lock" "$lock_token" || rc=1
   done
   for heartbeat in "$state"/continuity-*.heartbeat "$state"/continuity-*.control \
     "$state"/continuity-*.ack "$state"/continuity-*.log; do
@@ -551,6 +615,6 @@ shipyard_continuity_cleanup_last_slot() {
 if [ "${BASH_SOURCE[0]}" = "$0" ]; then
   case "${1:-}" in
     watch) shift; shipyard_continuity_watch "$@" ;;
-    *) echo 'usage: shipyard-continuity.sh watch <session> <socket> <pane> <window> <pidfile> <heartbeat> <token>' >&2; exit 2 ;;
+    *) echo 'usage: shipyard-continuity.sh watch <session> <socket> <pane> <window> <pidfile> <heartbeat> <control> <ack> <token> <lock> <lock-token> <log>' >&2; exit 2 ;;
   esac
 fi
