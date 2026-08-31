@@ -15,7 +15,9 @@
 # intact. Note what is NOT in that list: a seat with a stale COUNCIL_ME. c_send takes the
 # lane path and `.from` from the same variable (case 7's comment below), so such a seat
 # writes into the stale lane with a matching `.from` and derivation changes nothing about it.
-# That accident is a lane-membership problem and is covered by t9g, not here.
+# That accident is the lane-membership divergence between the two readers, recorded as an open
+# defect on issue #66 and described at c_all. NO TEST COVERS IT — do not read this file's
+# passing as coverage of it.
 #
 # The cases below are written against the ROOM's answers — verdict, transcript, floor —
 # rather than against the derivation itself, because the derivation is not the point: a

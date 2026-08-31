@@ -424,8 +424,8 @@ it.)*
 
 `council.sh status` is the block to read: whose floor and for how long, what is on the
 table, what is open, the verdict, and the alarms (`STUCK`, `STALL`, turn conflicts, budget
-exhausted, an unusable roster, and lanes on disk the roster does not list). It exits **0 when
-the room is finished** and 1 while it is open — with one caveat worth knowing: a room whose
+exhausted). It exits **0 when the room is finished** and 1 while it is open — with one caveat
+worth knowing: a room whose
 turn budget ran out reports `unresolved` and exits 0 before anyone has written a record, so
 `council.sh decision` (exit 0 only with a record) is the signal to trust when you need to know
 that the room's output exists.
