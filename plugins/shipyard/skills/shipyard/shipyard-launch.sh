@@ -315,6 +315,13 @@ jq -n --arg slot "$SLOT" --arg agent "$AGENT" --arg backend "$BACKEND" --arg con
 
 shipyard_note "$SLOT" active
 
+# A Codex parent can be stopped by a transient capacity response while every child
+# continues normally. Keep one idempotent watcher on that parent for the lifetime of
+# the shipyard run. Other parent runtimes and the tmux backend are deliberate no-ops.
+if ! shipyard_continuity_start "$BACKEND"; then
+  echo "warning: could not start the Codex parent continuity guard" >&2
+fi
+
 echo "started $AGENT ship in $(shipyard_where "$SLOT") (worktree .claude/worktrees/$NAME) - $PROMPT"
 echo "env: $ENVSUM"
 echo "SLOT:$SLOT"

@@ -101,8 +101,16 @@ git -C "$ROOT" worktree prune 2>/dev/null
 # Once the last child is gone, drop the container and forget its pinned name, so the
 # next run derives a fresh one from wherever you launch it. Keeping a stale pin would
 # send tomorrow's children into a workspace you have since stopped working in.
-if [ -z "$(shipyard_slots 2>/dev/null)" ]; then
-  shipyard_container_prune
-  shipyard_container_unpin
+remaining_slots=""
+enumeration_status=0
+remaining_slots=$(shipyard_slots 2>/dev/null) || enumeration_status=$?
+cleanup_status=0
+shipyard_continuity_cleanup_last_slot "$enumeration_status" "$remaining_slots" || cleanup_status=$?
+if [ "$cleanup_status" -eq 2 ]; then
+  echo "warning: could not verify that every shipyard slot is gone; lifecycle state was preserved" >&2
+  rc=1
+elif [ "$cleanup_status" -eq 3 ]; then
+  echo "warning: could not stop every parent continuity watcher; lifecycle state was preserved" >&2
+  rc=1
 fi
 exit "$rc"

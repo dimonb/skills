@@ -199,9 +199,20 @@ shipyard_shq() { printf "'%s'" "$(printf '%s' "$1" | sed "s/'/'\\\\''/g")"; }
 
 # --- agterm internals ----------------------------------------------------------
 _shipyard_at_sessions() {   # one compact JSON object per session in our workspace
-  agtermctl tree --json 2>/dev/null \
-    | jq -c --arg ws "$(shipyard_container)" \
-        '.result.tree.workspaces[]? | select(.name==$ws) | .sessions[]?' 2>/dev/null
+  local tree
+  tree=$(agtermctl tree --json 2>/dev/null) || return 1
+  printf '%s' "$tree" | jq -c --arg ws "$(shipyard_container)" '
+    if .ok != true or (.result.tree.workspaces | type) != "array"
+      or (all(.result.tree.workspaces[];
+        type == "object" and (.name | type) == "string"
+        and (.sessions | type) == "array"
+        and all(.sessions[];
+          type == "object" and (.id | type) == "string" and (.id | length) > 0
+          and (.name | type) == "string")) | not)
+    then error("invalid agterm tree")
+    else .result.tree.workspaces[] | select(.name == $ws) | .sessions[]
+    end
+  ' 2>/dev/null
 }
 
 # --- the API every other script uses -------------------------------------------
@@ -259,9 +270,20 @@ shipyard_peek_hint() {
 shipyard_slots() {
   case "$(shipyard_backend)" in
     agterm) _shipyard_at_sessions | jq -r '.name // empty' 2>/dev/null | sed -n -E 's/^ship-(.+)$/\1/p' ;;
-    tmux)   tmux list-windows -t "$(shipyard_container)" -F '#{window_name}' 2>/dev/null \
-              | sed -E 's/[-*]$//' | sed -n -E 's/^ship-(.+)$/\1/p' ;;
+    tmux)   _shipyard_tmux_slots ;;
     *) _shipyard_no_backend; return 1 ;;
+  esac
+}
+
+_shipyard_tmux_slots() {
+  local out
+  if out=$(tmux list-windows -t "$(shipyard_container)" -F '#{window_name}' 2>&1); then
+    printf '%s\n' "$out" | sed -E 's/[-*]$//' | sed -n -E 's/^ship-(.+)$/\1/p'
+    return 0
+  fi
+  case "$out" in
+    *'no server running'*|*"can't find session"*|*'session not found'*|*'no such session'*) return 0 ;;
+    *) return 1 ;;
   esac
 }
 
