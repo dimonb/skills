@@ -22,6 +22,7 @@ shipyard_continuity_reset() {
   SHIPYARD_CONTINUITY_OWNED_CAPACITY=0
   SHIPYARD_CONTINUITY_OWNED_CAPACITY_KEY=""
   SHIPYARD_CONTINUITY_RETURN_ATTEMPTED=0
+  SHIPYARD_CONTINUITY_OWNED_EMPTY_READS=0
 }
 
 shipyard_continuity_is_service_line() {
@@ -179,6 +180,7 @@ shipyard_continuity_begin_owned() {
   SHIPYARD_CONTINUITY_OWNED_CAPACITY="$SHIPYARD_CONTINUITY_ACTION_CAPACITY"
   SHIPYARD_CONTINUITY_OWNED_CAPACITY_KEY="$SHIPYARD_CONTINUITY_ACTION_CAPACITY_KEY"
   SHIPYARD_CONTINUITY_RETURN_ATTEMPTED=0
+  SHIPYARD_CONTINUITY_OWNED_EMPTY_READS=0
 }
 
 shipyard_continuity_clear_owned() {
@@ -187,6 +189,7 @@ shipyard_continuity_clear_owned() {
   SHIPYARD_CONTINUITY_OWNED_CAPACITY=0
   SHIPYARD_CONTINUITY_OWNED_CAPACITY_KEY=""
   SHIPYARD_CONTINUITY_RETURN_ATTEMPTED=0
+  SHIPYARD_CONTINUITY_OWNED_EMPTY_READS=0
 }
 
 # Finish watcher-owned text. Return 0 after Return succeeds, 3 when a prior
@@ -209,8 +212,11 @@ shipyard_continuity_finish_owned() {
   fi
   if [ "$SHIPYARD_CONTINUITY_RETURN_ATTEMPTED" -eq 0 ] \
     && shipyard_continuity_prompt_empty "$screen"; then
-    if [ "${SHIPYARD_CONTINUITY_OWNED_IDLE:--1}" -ge 0 ] \
-      && { [ "$idle" -lt 0 ] || [ "$idle" -lt "$SHIPYARD_CONTINUITY_OWNED_IDLE" ]; }; then
+    # A capture can lag one successful type request. Confirm the empty prompt on a
+    # later read before deciding that our staged text disappeared; the bounded
+    # confirmation also unlatches zero or unavailable activity baselines.
+    SHIPYARD_CONTINUITY_OWNED_EMPTY_READS=$((SHIPYARD_CONTINUITY_OWNED_EMPTY_READS + 1))
+    if [ "$SHIPYARD_CONTINUITY_OWNED_EMPTY_READS" -ge 2 ]; then
       shipyard_continuity_clear_owned
       return 1
     fi
@@ -315,7 +321,9 @@ shipyard_continuity_watch() {
   trap 'exit 0' INT TERM
   shipyard_continuity_reset
   if ! shipyard_continuity_wait_publication "$pidfile" "$token"; then
-    shipyard_continuity_release_lock "$lock" "$lock_token"
+    # The starter owns this lock until it publishes or exits. A timed-out watcher
+    # may reclaim it only after proving that owner is gone.
+    shipyard_continuity_reclaim_dead_lock "$lock" "$lock_token" || true
     rm -f "$logfile"
     return 1
   fi
@@ -462,37 +470,230 @@ shipyard_continuity_wait_publication() {
   return 1
 }
 
-shipyard_continuity_acquire_lock() {
-  local lock="$1" n=0 owner pid token
-  SHIPYARD_CONTINUITY_LOCK_TOKEN="$$-$RANDOM-$(date +%s)"
-  while ! mkdir "$lock" 2>/dev/null; do
-    owner="$lock/owner"
-    if [ -f "$owner" ]; then
-      read -r pid token <"$owner" || true
-      if [ -n "${pid:-}" ] && ! kill -0 "$pid" 2>/dev/null; then
-        rm -f "$owner"
-        rmdir "$lock" 2>/dev/null && continue
-      fi
-    elif [ "$n" -ge 20 ]; then
-      rmdir "$lock" 2>/dev/null && continue
+shipyard_continuity_legacy_lock_reclaim() {
+  local lock="$1" age="$2" owner pid="" token=""
+  owner="$lock/owner"
+  if [ -f "$owner" ]; then
+    read -r pid token <"$owner" || true
+    case "$pid" in ''|0|0*|*[!0-9]*) pid="" ;; esac
+    [ -n "$token" ] || pid=""
+    if [ -n "$pid" ]; then
+      kill -0 "$pid" 2>/dev/null && return 1
+      rm -f "$owner"
+      shipyard_continuity_remove_dead_lock_temps "$lock"
+      rmdir "$lock" 2>/dev/null
+      return $?
     fi
-    [ "$n" -ge 100 ] && return 1
+    [ "$age" -ge 20 ] || return 1
+    rm -f "$owner"
+  else
+    [ "$age" -ge 20 ] || return 1
+  fi
+  shipyard_continuity_remove_dead_lock_temps "$lock"
+  rmdir "$lock" 2>/dev/null
+}
+
+shipyard_continuity_acquire_lock() {
+  local lock="$1" n=0 record pid token owner_pid claim claim_path lock_dir lock_name valid
+  owner_pid=$(sh -c 'printf "%s" "$PPID"') || return 1
+  SHIPYARD_CONTINUITY_LOCK_TOKEN="$owner_pid-$RANDOM-$(date +%s)"
+  SHIPYARD_CONTINUITY_LOCK_OWNER_PID="$owner_pid"
+  lock_dir=${lock%/*}
+  lock_name=${lock##*/}
+  claim="$lock_name.claim.$owner_pid.$SHIPYARD_CONTINUITY_LOCK_TOKEN"
+  claim_path="$lock_dir/$claim"
+  mkdir "$claim_path" 2>/dev/null || return 1
+  while true; do
+    # `ln` follows an existing directory and would create the claim inside it, so
+    # legacy directories and symlinks to claim directories must be handled before
+    # attempting the atomic symlink.
+    if [ -d "$lock" ] && [ ! -L "$lock" ]; then
+      shipyard_continuity_legacy_lock_reclaim "$lock" "$n" && continue
+    elif [ -L "$lock" ]; then
+      record=$(readlink "$lock" 2>/dev/null) || record=""
+      valid=1
+      case "$record" in
+        "$lock_name.claim."*)
+          token=${record#"$lock_name.claim."}
+          pid=${token%%.*}
+          token=${token#*.}
+          ;;
+        *) valid=0; pid=""; token="" ;;
+      esac
+      case "$pid" in ''|0|0*|*[!0-9]*) valid=0 ;; esac
+      if { [ "$valid" -eq 1 ] && ! kill -0 "$pid" 2>/dev/null; } \
+        || { [ "$valid" -eq 0 ] && [ "$n" -ge 20 ]; }; then
+        if shipyard_continuity_reap_claim "$lock" "$record" "$claim" "$n"; then
+          return 0
+        fi
+      fi
+    elif sleep "${_SHIPYARD_CONTINUITY_BEFORE_CLAIM_DELAY:-0}" \
+      && ln -s -n "$claim" "$lock" 2>/dev/null; then
+      shipyard_continuity_cleanup_reapers "$lock"
+      return 0
+    elif [ -e "$lock" ] && [ "$n" -ge 20 ]; then
+      rm -f "$lock"
+      continue
+    fi
+    if [ "$n" -ge 100 ]; then
+      rmdir "$claim_path" 2>/dev/null || true
+      return 1
+    fi
     sleep 0.05
     n=$((n + 1))
   done
-  shipyard_continuity_write_record "$lock/owner" "$$" "$SHIPYARD_CONTINUITY_LOCK_TOKEN" \
-    || { rmdir "$lock" 2>/dev/null || true; return 1; }
+}
+
+# Serialize stale-claim replacement so two reclaimers cannot both pass a
+# compare-then-delete window. The replacement is installed before the reaper is
+# released, leaving no ownerless admission gap.
+shipyard_continuity_reap_claim() {
+  local lock="$1" expected="$2" replacement="$3" age="$4"
+  local owner_pid token lock_dir source candidate path suffix reaper_pid valid_target=0 rc=1
+  owner_pid=$(sh -c 'printf "%s" "$PPID"') || return 1
+  token="$owner_pid-$RANDOM-$(date +%s)"
+  lock_dir=${lock%/*}
+  case "$expected" in
+    "${lock##*/}.claim."*/*|*'..'*) source="" ;;
+    "${lock##*/}.claim."*) source="$lock_dir/$expected"; valid_target=1 ;;
+    *) source="" ;;
+  esac
+  if [ "$valid_target" -eq 1 ] && [ ! -d "$source" ]; then
+    source=""
+    for path in "$lock_dir/$expected".reap.*; do
+      [ -d "$path" ] || continue
+      suffix=${path##*.reap.}
+      reaper_pid=${suffix%%.*}
+      case "$reaper_pid" in ''|0|0*|*[!0-9]*) ;; *)
+        kill -0 "$reaper_pid" 2>/dev/null && return 1
+        ;;
+      esac
+      source="$path"
+      break
+    done
+  fi
+  # A malformed old symlink has no claim directory. Materialize a unique
+  # election node only after its grace period; valid claims always arrive with one.
+  if [ -z "$source" ] && [ "$age" -ge 20 ]; then
+    source="$lock.claim.invalid.$(printf '%s' "$expected" | cksum | awk '{print $1 "-" $2}')"
+    mkdir "$source" 2>/dev/null || true
+  fi
+  [ -n "$source" ] || return 1
+  candidate="$source.reap.$owner_pid.$token"
+  mv "$source" "$candidate" 2>/dev/null || return 1
+  if [ -L "$lock" ] && [ "$(readlink "$lock" 2>/dev/null)" = "$expected" ]; then
+    sleep "${_SHIPYARD_CONTINUITY_RECLAIM_DELAY:-0}"
+    rm -f "$lock"
+    if [ -z "$replacement" ] || ln -s -n "$replacement" "$lock" 2>/dev/null; then
+      rc=0
+    fi
+  fi
+  rmdir "$candidate" 2>/dev/null || true
+  [ "$rc" -ne 0 ] || shipyard_continuity_cleanup_reapers "$lock"
+  return "$rc"
+}
+
+shipyard_continuity_cleanup_reapers() {
+  local lock="$1" path suffix pid record lock_dir lock_name
+  lock_dir=${lock%/*}
+  lock_name=${lock##*/}
+  record=""
+  [ ! -L "$lock" ] || record=$(readlink "$lock" 2>/dev/null) || true
+  if [ -d "$lock.reap" ]; then
+    shipyard_continuity_legacy_lock_reclaim "$lock.reap" 20 || true
+  fi
+  for path in "$lock_dir/$lock_name.claim."*; do
+    [ -d "$path" ] || continue
+    case "$path" in
+      *.reap.*)
+        suffix=${path##*.reap.}
+        pid=${suffix%%.*}
+        case "$pid" in ''|0|0*|*[!0-9]*) ;; *)
+          kill -0 "$pid" 2>/dev/null && continue
+          ;;
+        esac
+        ;;
+      *)
+        [ "${path##*/}" = "$record" ] && continue
+        suffix=${path#"$lock_dir/$lock_name.claim."}
+        pid=${suffix%%.*}
+        case "$pid" in ''|0|0*|*[!0-9]*) ;; *)
+          kill -0 "$pid" 2>/dev/null && continue
+          ;;
+        esac
+        ;;
+    esac
+    rmdir "$path" 2>/dev/null || true
+  done
 }
 
 shipyard_continuity_release_lock() {
-  local lock="$1" token="$2" pid seen
-  [ -d "$lock" ] || return 0
-  if [ -f "$lock/owner" ]; then
-    read -r pid seen <"$lock/owner" || true
-    [ "${seen:-}" = "$token" ] || return 1
-    rm -f "$lock/owner"
+  local lock="$1" token="$2" owner_pid="$3" claim claim_path
+  [ -L "$lock" ] || return 0
+  claim="${lock##*/}.claim.$owner_pid.$token"
+  claim_path="${lock%/*}/$claim"
+  [ "$(readlink "$lock" 2>/dev/null)" = "$claim" ] || return 1
+  rm -f "$lock"
+  rmdir "$claim_path" 2>/dev/null || true
+}
+
+shipyard_continuity_remove_dead_lock_temps() {
+  local lock="$1" tmp name pid
+  for tmp in "$lock"/owner.*.tmp.*; do
+    [ -f "$tmp" ] || continue
+    name=${tmp##*/}
+    pid=${name##*.tmp.}
+    case "$pid" in
+      ''|0|0*|*[!0-9]*) rm -f "$tmp" ;;
+      *) kill -0 "$pid" 2>/dev/null || rm -f "$tmp" ;;
+    esac
+  done
+}
+
+shipyard_continuity_reclaim_dead_lock() {
+  local lock="$1" token="$2" record pid seen
+  [ -L "$lock" ] || return 1
+  record=$(readlink "$lock" 2>/dev/null) || return 1
+  seen=${record#"${lock##*/}.claim."}
+  [ "$seen" != "$record" ] || return 1
+  pid=${seen%%.*}
+  seen=${seen#*.}
+  case "$pid" in ''|0|0*|*[!0-9]*) return 1 ;; esac
+  [ "$seen" = "$token" ] || return 1
+  kill -0 "$pid" 2>/dev/null && return 1
+  shipyard_continuity_reap_claim "$lock" "$record" "" 20
+}
+
+shipyard_continuity_stop_in_progress() {
+  local state="$1" marker="$state/continuity-stopping" pid token claim
+  [ -f "$marker" ] || return 1
+  read -r pid token <"$marker" || return 1
+  case "$pid" in ''|0|0*|*[!0-9]*) return 1 ;; esac
+  [ -n "$token" ] || return 1
+  claim="continuity-lifecycle.lock.claim.$pid.$token"
+  [ -L "$state/continuity-lifecycle.lock" ] \
+    && [ "$(readlink "$state/continuity-lifecycle.lock" 2>/dev/null)" = "$claim" ] \
+    && kill -0 "$pid" 2>/dev/null
+}
+
+shipyard_continuity_generation() {
+  local state="$1" generation=0
+  if [ -f "$state/continuity-generation" ]; then
+    read -r generation <"$state/continuity-generation" || generation=0
   fi
-  rmdir "$lock" 2>/dev/null
+  case "$generation" in ''|*[!0-9]*) generation=0 ;; esac
+  printf '%s' "$generation"
+}
+
+shipyard_continuity_remove_dead_intents() {
+  local state="$1" intent name pid
+  for intent in "$state"/continuity-start-*.intent; do
+    [ -f "$intent" ] || continue
+    name=${intent##*/continuity-start-}
+    pid=${name%%-*}
+    case "$pid" in ''|0|0*|*[!0-9]*) continue ;; esac
+    kill -0 "$pid" 2>/dev/null || rm -f "$intent"
+  done
 }
 
 shipyard_continuity_start_locked() {
@@ -542,7 +743,8 @@ shipyard_continuity_start_locked() {
 }
 
 shipyard_continuity_start() {
-  local backend="$1" state key lock lock_token rc
+  local backend="$1" state key lock lock_token lock_owner_pid rc owner_pid intent_token intent
+  local start_generation current_generation recorded_generation intent_session
   [ "$backend" = agterm ] || return 0
   [ -n "${CODEX_SESSION_ID:-}${CODEX_THREAD_ID:-}" ] || return 0
   [ "${AGTERM_ENABLED:-}" = 1 ] || return 0
@@ -553,28 +755,59 @@ shipyard_continuity_start() {
 
   state=$(shipyard_continuity_state_dir) || return 1
   key=$(printf '%s' "$AGTERM_SESSION_ID" | tr -c 'A-Za-z0-9._-' '_')
-  lock="$state/continuity-$key.lock"
-  shipyard_continuity_acquire_lock "$lock" || return 1
+  owner_pid=$(sh -c 'printf "%s" "$PPID"') || return 1
+  intent_token="$owner_pid-$RANDOM-$(date +%s)"
+  intent="$state/continuity-start-$intent_token.intent"
+  start_generation=$(shipyard_continuity_generation "$state")
+  sleep "${_SHIPYARD_CONTINUITY_BEFORE_INTENT_DELAY:-0}"
+  printf '%s %s\n' "$start_generation" "$AGTERM_SESSION_ID" >"$intent" 2>/dev/null || return 1
+  if shipyard_continuity_stop_in_progress "$state"; then
+    rm -f "$intent"
+    return 0
+  fi
+  sleep "${_SHIPYARD_CONTINUITY_ADMISSION_DELAY:-0}"
+  lock="$state/continuity-lifecycle.lock"
+  if ! shipyard_continuity_acquire_lock "$lock"; then
+    rm -f "$intent"
+    return 1
+  fi
   lock_token="$SHIPYARD_CONTINUITY_LOCK_TOKEN"
+  lock_owner_pid="$SHIPYARD_CONTINUITY_LOCK_OWNER_PID"
+  rm -f "$state/continuity-stopping"
   rc=0
-  shipyard_continuity_start_locked "$state" "$key" "$lock" "$lock_token" || rc=$?
-  shipyard_continuity_release_lock "$lock" "$lock_token" || rc=1
+  shipyard_continuity_remove_dead_intents "$state"
+  recorded_generation=""
+  [ ! -f "$intent" ] || read -r recorded_generation intent_session <"$intent" || true
+  current_generation=$(shipyard_continuity_generation "$state")
+  if [ -f "$intent" ] && [ "$recorded_generation" = "$current_generation" ]; then
+    shipyard_continuity_start_locked "$state" "$key" "$lock" "$lock_token" || rc=$?
+  fi
+  rm -f "$intent"
+  shipyard_continuity_release_lock "$lock" "$lock_token" "$lock_owner_pid" || rc=1
   return "$rc"
 }
 
 shipyard_continuity_stop_all() {
-  local state f pid token heartbeat control ack log lock lock_token key rc=0 stop_rc
+  local state f pid token heartbeat control ack log lock lock_token lock_owner_pid marker rc=0 stop_rc
+  local generation next_generation
   state=$(shipyard_continuity_state_dir 2>/dev/null) || return 0
+  lock="$state/continuity-lifecycle.lock"
+  shipyard_continuity_acquire_lock "$lock" || return 1
+  lock_token="$SHIPYARD_CONTINUITY_LOCK_TOKEN"
+  lock_owner_pid="$SHIPYARD_CONTINUITY_LOCK_OWNER_PID"
+  generation=$(shipyard_continuity_generation "$state")
+  next_generation=$((generation + 1))
+  if ! shipyard_continuity_write_record "$state/continuity-generation" "$next_generation" ""; then
+    shipyard_continuity_release_lock "$lock" "$lock_token" "$lock_owner_pid"
+    return 1
+  fi
+  marker="$state/continuity-stopping"
+  printf '%s %s\n' "$lock_owner_pid" "$lock_token" >"$marker" 2>/dev/null \
+    || { shipyard_continuity_release_lock "$lock" "$lock_token" "$lock_owner_pid"; return 1; }
+  rm -f "$state"/continuity-start-*.intent
+  sleep "${_SHIPYARD_CONTINUITY_STOP_AFTER_SWEEP_DELAY:-0}"
   for f in "$state"/continuity-*.pid; do
     [ -f "$f" ] || continue
-    key=${f##*/continuity-}
-    key=${key%.pid}
-    lock="$state/continuity-$key.lock"
-    if ! shipyard_continuity_acquire_lock "$lock"; then
-      rc=1
-      continue
-    fi
-    lock_token="$SHIPYARD_CONTINUITY_LOCK_TOKEN"
     read -r pid token <"$f" || true
     heartbeat="${f%.pid}.heartbeat"
     control="${f%.pid}.control"
@@ -591,13 +824,16 @@ shipyard_continuity_stop_all() {
     else
       rc=1
     fi
-    shipyard_continuity_release_lock "$lock" "$lock_token" || rc=1
   done
   for heartbeat in "$state"/continuity-*.heartbeat "$state"/continuity-*.control \
     "$state"/continuity-*.ack "$state"/continuity-*.log; do
     [ -f "$heartbeat" ] || continue
     [ -f "${heartbeat%.*}.pid" ] || rm -f "$heartbeat"
   done
+  # Catch intents registered after the first sweep while the stop marker was live.
+  rm -f "$state"/continuity-start-*.intent
+  rm -f "$marker"
+  shipyard_continuity_release_lock "$lock" "$lock_token" "$lock_owner_pid" || rc=1
   return "$rc"
 }
 

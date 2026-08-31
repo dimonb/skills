@@ -667,10 +667,11 @@ permissions problem), prunes, and on agterm drops the `-ai` workspace — plus i
 name — once it holds no ship sessions. The change's feature branch can go afterwards
 (`git branch -d <branch>` — `-d` refuses an unmerged branch, which is what you want after a CLOSE rather than a merge).
 Removing the last slot also asks every token-matched parent continuity watcher to stop itself
-and removes its mailbox state, but only after a successful, structurally valid backend query
-proves that no slot remains. An unreadable backend or unacknowledged watcher preserves lifecycle
-state instead of signaling an unverified PID. A later shipyard run starts a fresh watcher for
-its own parent session.
+and removes its live mailbox records, but only after a successful, structurally valid backend
+query proves that no slot remains. A small admission generation remains so a start already in
+flight cannot publish a watcher after teardown returns. An unreadable backend or unacknowledged
+watcher preserves lifecycle state instead of signaling an unverified PID. A later shipyard run
+starts a fresh watcher for its own parent session.
 
 ## What the table shows
 

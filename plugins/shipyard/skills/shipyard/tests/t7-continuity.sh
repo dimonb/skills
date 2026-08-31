@@ -21,6 +21,10 @@ check() {
   fi
 }
 
+runtime_state_paths() {
+  find "$_SHIPYARD_CONTINUITY_DIR" -mindepth 1 ! -name continuity-generation -print 2>/dev/null
+}
+
 capacity='⚠ Selected model is at capacity. Please try a different model.'
 empty_prompt='› Ask Codex to do anything'
 
@@ -121,7 +125,10 @@ FAKE_IDLE="$TMP/idle"
 FAKE_MODE="$TMP/mode"
 FAKE_RETURN_FAILURES="$TMP/return-failures"
 FAKE_READ_FAILURES="$TMP/read-failures"
+FAKE_STALE_READS="$TMP/stale-reads"
+FAKE_LATE_PROMPT="$TMP/late-prompt"
 export FAKE_LOG FAKE_PROMPT FAKE_IDLE FAKE_MODE FAKE_RETURN_FAILURES FAKE_READ_FAILURES
+export FAKE_STALE_READS FAKE_LATE_PROMPT
 cat >"$TMP/bin/agtermctl" <<'EOF'
 #!/usr/bin/env bash
 if [ "${1:-} ${2:-}" = "session type" ]; then
@@ -140,9 +147,15 @@ if [ "${1:-} ${2:-}" = "session type" ]; then
       printf '%s\n' '› resumedo not submit this draft' >"$FAKE_PROMPT"
     else
       if [ "$bytes" = 2f676f616c20726573756d65 ]; then
-        printf '%s\n' '› /goal resume' >"$FAKE_PROMPT"
+        typed_prompt='› /goal resume'
       else
-        printf '%s\n' '› resume' >"$FAKE_PROMPT"
+        typed_prompt='› resume'
+      fi
+      if [ "$(cat "$FAKE_MODE")" = stale-after-text ]; then
+        printf '%s\n' "$typed_prompt" >"$FAKE_LATE_PROMPT"
+        printf '%s\n' 1 >"$FAKE_STALE_READS"
+      else
+        printf '%s\n' "$typed_prompt" >"$FAKE_PROMPT"
       fi
       [ "$(cat "$FAKE_MODE")" != activity-after-text ] || printf '%s\n' 0 >"$FAKE_IDLE"
     fi
@@ -154,6 +167,13 @@ if [ "${1:-} ${2:-}" = "session text" ]; then
   if [ "$failures" -gt 0 ]; then
     printf '%s\n' "$((failures - 1))" >"$FAKE_READ_FAILURES"
     exit 1
+  fi
+  stale=$(cat "$FAKE_STALE_READS")
+  if [ "$stale" -gt 0 ]; then
+    printf '%s\n' "$((stale - 1))" >"$FAKE_STALE_READS"
+  elif [ -s "$FAKE_LATE_PROMPT" ]; then
+    cp "$FAKE_LATE_PROMPT" "$FAKE_PROMPT"
+    : >"$FAKE_LATE_PROMPT"
   fi
   jq -n --rawfile text "$FAKE_PROMPT" '{ok:true,result:{text:($text | rtrimstr("\n"))}}'
   exit 0
@@ -186,6 +206,8 @@ reset_fake() {
   printf '%s\n' normal >"$FAKE_MODE"
   printf '%s\n' 0 >"$FAKE_RETURN_FAILURES"
   printf '%s\n' 0 >"$FAKE_READ_FAILURES"
+  printf '%s\n' 0 >"$FAKE_STALE_READS"
+  : >"$FAKE_LATE_PROMPT"
   : >"$FAKE_LOG"
   shipyard_continuity_reset
 }
@@ -204,6 +226,18 @@ printf '%s\n' draft-after-text >"$FAKE_MODE"
 shipyard_continuity_submit resume resume test-session test-socket primary test-window || true
 check 'stdin:726573756d65' "$(cat "$FAKE_LOG")" "a draft appearing after text blocks Return"
 check '› resumedo not submit this draft' "$(cat "$FAKE_PROMPT")" "draft conflict is never erased"
+
+reset_fake
+printf '%s\n' stale-after-text >"$FAKE_MODE"
+stale_submit_rc=0
+shipyard_continuity_submit resume resume test-session test-socket primary test-window || stale_submit_rc=$?
+check 2 "$stale_submit_rc" "one stale empty capture retains watcher ownership"
+check resume "$SHIPYARD_CONTINUITY_OWNED_COMMAND" "stale capture cannot strand typed watcher text"
+stale_finish_rc=0
+shipyard_continuity_finish_owned test-session test-socket primary test-window || stale_finish_rc=$?
+check 0 "$stale_finish_rc" "later watcher-text capture completes submission"
+check $'stdin:726573756d65\nstdin:0a' "$(cat "$FAKE_LOG")" \
+  "stale capture recovery submits one text action and one Return"
 
 reset_fake
 printf '%s\n' activity-after-text >"$FAKE_MODE"
@@ -231,8 +265,37 @@ printf '%s\n' '› Ask Codex to do anything' >"$FAKE_PROMPT"
 printf '%s\n' 0 >"$FAKE_IDLE"
 pre_return_clear_rc=0
 shipyard_continuity_finish_owned test-session test-socket primary test-window || pre_return_clear_rc=$?
-check 1 "$pre_return_clear_rc" "user-cleared text before Return relinquishes ownership"
+check 2 "$pre_return_clear_rc" "one empty capture does not prematurely release watcher ownership"
+pre_return_clear_rc=0
+shipyard_continuity_finish_owned test-session test-socket primary test-window || pre_return_clear_rc=$?
+check 1 "$pre_return_clear_rc" "confirmed user-cleared text before Return relinquishes ownership"
 check "" "$SHIPYARD_CONTINUITY_OWNED_COMMAND" "cleared watcher text cannot wedge later decisions"
+
+reset_fake
+shipyard_continuity_begin_owned resume resume
+SHIPYARD_CONTINUITY_OWNED_IDLE=0
+printf '%s\n' '› Ask Codex to do anything' >"$FAKE_PROMPT"
+printf '%s\n' 0 >"$FAKE_IDLE"
+zero_baseline_rc=0
+shipyard_continuity_finish_owned test-session test-socket primary test-window || zero_baseline_rc=$?
+check 2 "$zero_baseline_rc" "zero activity baseline waits for empty-prompt confirmation"
+zero_baseline_rc=0
+shipyard_continuity_finish_owned test-session test-socket primary test-window || zero_baseline_rc=$?
+check 1 "$zero_baseline_rc" "zero activity baseline cannot retain confirmed vanished text"
+check "" "$SHIPYARD_CONTINUITY_OWNED_COMMAND" "zero activity baseline releases watcher ownership"
+
+reset_fake
+shipyard_continuity_begin_owned resume resume
+SHIPYARD_CONTINUITY_OWNED_IDLE=-1
+printf '%s\n' '› Ask Codex to do anything' >"$FAKE_PROMPT"
+printf '%s\n' malformed-tree >"$FAKE_MODE"
+unavailable_baseline_rc=0
+shipyard_continuity_finish_owned test-session test-socket primary test-window || unavailable_baseline_rc=$?
+check 2 "$unavailable_baseline_rc" "unavailable activity baseline waits for empty-prompt confirmation"
+unavailable_baseline_rc=0
+shipyard_continuity_finish_owned test-session test-socket primary test-window || unavailable_baseline_rc=$?
+check 1 "$unavailable_baseline_rc" "unavailable activity baseline cannot retain confirmed vanished text"
+check "" "$SHIPYARD_CONTINUITY_OWNED_COMMAND" "unavailable activity baseline releases watcher ownership"
 
 reset_fake
 printf '%s\n' 1 >"$FAKE_RETURN_FAILURES"
@@ -298,7 +361,7 @@ printf '%s %s\n' "$stale_token" 1 >"${pidfile%.pid}.heartbeat"
 shipyard_continuity_stop_all
 if kill -0 "$pid1" 2>/dev/null; then alive=yes; else alive=no; fi
 check no "$alive" "lifecycle cleanup stops a stale live watcher"
-files=$(find "$_SHIPYARD_CONTINUITY_DIR" -type f -print 2>/dev/null)
+files=$(runtime_state_paths)
 [ -z "$files" ] || find "$_SHIPYARD_CONTINUITY_DIR" -name 'continuity-*.log' -exec sed -n '1,80p' {} \;
 check "" "$files" "lifecycle cleanup removes watcher state"
 
@@ -323,7 +386,7 @@ else
   timeout_alive=no
 fi
 check no "$timeout_alive" "startup timeout terminates its detached watcher"
-timeout_files=$(find "$_SHIPYARD_CONTINUITY_DIR" -type f -print 2>/dev/null)
+timeout_files=$(runtime_state_paths)
 check "" "$timeout_files" "startup timeout removes all watcher state and logs"
 unset _SHIPYARD_CONTINUITY_INITIAL_DELAY
 
@@ -336,11 +399,13 @@ while ! find "$_SHIPYARD_CONTINUITY_DIR" -name 'continuity-*.log' -print -quit |
   sleep 0.05
   n=$((n + 1))
 done
+sleep 1.2
+if [ -L "$_SHIPYARD_CONTINUITY_DIR/continuity-lifecycle.lock" ]; then live_lock=yes; else live_lock=no; fi
+check yes "$live_lock" "unpublished watcher cannot release a live starter lock"
 kill "$interrupted_starter" 2>/dev/null || true
 wait "$interrupted_starter" 2>/dev/null || true
-sleep 1.2
-interrupted_files=$(find "$_SHIPYARD_CONTINUITY_DIR" -mindepth 1 -print)
-check "" "$interrupted_files" "unpublished watcher self-cleans after interrupted start"
+interrupted_pidfiles=$(find "$_SHIPYARD_CONTINUITY_DIR" -name 'continuity-*.pid' -print)
+check "" "$interrupted_pidfiles" "interrupted unpublished start leaves no published watcher"
 unset _SHIPYARD_CONTINUITY_PUBLISH_DELAY
 shipyard_continuity_start agterm >/dev/null
 restarted_pidfile=$(find "$_SHIPYARD_CONTINUITY_DIR" -name 'continuity-*.pid' -print -quit)
@@ -349,6 +414,8 @@ check yes "$restarted" "start recovers after an interrupted publication"
 shipyard_continuity_stop_all
 
 reset_fake
+_SHIPYARD_CONTINUITY_BEFORE_CLAIM_DELAY=0.2
+export _SHIPYARD_CONTINUITY_BEFORE_CLAIM_DELAY
 shipyard_continuity_start agterm >"$TMP/start-one" 2>&1 & start_one=$!
 shipyard_continuity_start agterm >"$TMP/start-two" 2>&1 & start_two=$!
 start_one_rc=0; wait "$start_one" || start_one_rc=$?
@@ -360,12 +427,139 @@ check 1 "$starts" "concurrent starts create exactly one watcher"
 lock_files=$(find "$_SHIPYARD_CONTINUITY_DIR" -name 'continuity-*.lock' -print)
 check "" "$lock_files" "concurrent start releases its lifecycle lock"
 shipyard_continuity_stop_all
+unset _SHIPYARD_CONTINUITY_BEFORE_CLAIM_DELAY
+
+mkdir -p "$_SHIPYARD_CONTINUITY_DIR/continuity-lifecycle.lock"
+printf '%s\n' interrupted >"$_SHIPYARD_CONTINUITY_DIR/continuity-lifecycle.lock/owner"
+printf '%s\n' stale \
+  >"$_SHIPYARD_CONTINUITY_DIR/continuity-lifecycle.lock/owner.dead-token-with-hyphens.tmp.999999"
+shipyard_continuity_start agterm >/dev/null
+recovered_owner_pidfile=$(find "$_SHIPYARD_CONTINUITY_DIR" -name 'continuity-*.pid' -print -quit)
+if [ -n "$recovered_owner_pidfile" ]; then owner_recovered=yes; else owner_recovered=no; fi
+check yes "$owner_recovered" "start reclaims hyphenated legacy lock-owner temp publication"
+shipyard_continuity_stop_all
+
+mkdir -p "$TMP/outside.reap.999999.dead-token"
+printf '%s\n' preserve >"$TMP/outside.reap.999999.dead-token/marker"
+ln -s ../outside "$_SHIPYARD_CONTINUITY_DIR/continuity-lifecycle.lock"
+shipyard_continuity_start agterm >/dev/null
+if [ -f "$TMP/outside.reap.999999.dead-token/marker" ]; then outside_preserved=yes; else outside_preserved=no; fi
+check yes "$outside_preserved" "malformed lock target cannot move a sibling directory"
+shipyard_continuity_stop_all
+
+reset_fake
+stale_claim='continuity-lifecycle.lock.claim.999999.stale-claim'
+mkdir "$_SHIPYARD_CONTINUITY_DIR/$stale_claim"
+ln -s "$stale_claim" "$_SHIPYARD_CONTINUITY_DIR/continuity-lifecycle.lock"
+mkdir -p "$_SHIPYARD_CONTINUITY_DIR/continuity-lifecycle.lock.reap"
+printf '%s %s\n' 999999 dead-reaper \
+  >"$_SHIPYARD_CONTINUITY_DIR/continuity-lifecycle.lock.reap/owner"
+_SHIPYARD_CONTINUITY_RECLAIM_DELAY=0.3
+export _SHIPYARD_CONTINUITY_RECLAIM_DELAY
+shipyard_continuity_start agterm >"$TMP/reclaim-one" 2>&1 & reclaim_one=$!
+shipyard_continuity_start agterm >"$TMP/reclaim-two" 2>&1 & reclaim_two=$!
+reclaim_one_rc=0; wait "$reclaim_one" || reclaim_one_rc=$?
+reclaim_two_rc=0; wait "$reclaim_two" || reclaim_two_rc=$?
+check 0 "$reclaim_one_rc" "first stale-claim contender succeeds"
+check 0 "$reclaim_two_rc" "second stale-claim contender joins safely"
+reclaim_starts=$(grep -hFc 'parent continuity guard started' "$TMP/reclaim-one" "$TMP/reclaim-two" \
+  | awk '{n += $1} END {print n + 0}')
+check 1 "$reclaim_starts" "stale-claim replacement admits exactly one watcher"
+if [ -d "$_SHIPYARD_CONTINUITY_DIR/continuity-lifecycle.lock.reap" ]; then
+  combined_reaper=present
+else
+  combined_reaper=gone
+fi
+check gone "$combined_reaper" "stale handoff also cleans an interrupted legacy reaper"
+shipyard_continuity_stop_all
+unset _SHIPYARD_CONTINUITY_RECLAIM_DELAY
+
+mkdir -p "$_SHIPYARD_CONTINUITY_DIR/continuity-lifecycle.lock.reap"
+printf '%s %s\n' 999999 dead-reaper \
+  >"$_SHIPYARD_CONTINUITY_DIR/continuity-lifecycle.lock.reap/owner"
+shipyard_continuity_stop_all
+orphan_reaper_paths=$(runtime_state_paths)
+check "" "$orphan_reaper_paths" "lifecycle entry cleans an interrupted legacy reaper"
+
+reset_fake
+_SHIPYARD_CONTINUITY_ADMISSION_DELAY=0.4
+export _SHIPYARD_CONTINUITY_ADMISSION_DELAY
+shipyard_continuity_start agterm >"$TMP/admission-start" 2>&1 & admission_start=$!
+n=0
+while ! find "$_SHIPYARD_CONTINUITY_DIR" -name 'continuity-start-*.intent' -print -quit | grep -q . \
+  && [ "$n" -lt 20 ]; do
+  sleep 0.02
+  n=$((n + 1))
+done
+admission_stop_rc=0
+shipyard_continuity_stop_all || admission_stop_rc=$?
+admission_start_rc=0; wait "$admission_start" || admission_start_rc=$?
+check 0 "$admission_stop_rc" "stop cancels a start admitted before lock acquisition"
+check 0 "$admission_start_rc" "cancelled admitted start exits cleanly"
+admission_files=$(runtime_state_paths)
+check "" "$admission_files" "stop-first admission race cannot publish late watcher state"
+unset _SHIPYARD_CONTINUITY_ADMISSION_DELAY
+
+reset_fake
+_SHIPYARD_CONTINUITY_STOP_AFTER_SWEEP_DELAY=0.4
+export _SHIPYARD_CONTINUITY_STOP_AFTER_SWEEP_DELAY
+shipyard_continuity_stop_all >"$TMP/sweeping-stop" 2>&1 & sweeping_stop=$!
+n=0
+while [ ! -f "$_SHIPYARD_CONTINUITY_DIR/continuity-stopping" ] && [ "$n" -lt 20 ]; do
+  sleep 0.02
+  n=$((n + 1))
+done
+if [ -f "$_SHIPYARD_CONTINUITY_DIR/continuity-stopping" ]; then sweep_seen=yes; else sweep_seen=no; fi
+check yes "$sweep_seen" "stop sweep synchronization point is observed"
+sweep_start_rc=0
+shipyard_continuity_start agterm >"$TMP/during-sweep-start" 2>&1 || sweep_start_rc=$?
+sweeping_stop_rc=0; wait "$sweeping_stop" || sweeping_stop_rc=$?
+check 0 "$sweeping_stop_rc" "stop with active admission marker succeeds"
+check 0 "$sweep_start_rc" "start during stop sweep is cancelled cleanly"
+sweep_files=$(runtime_state_paths)
+check "" "$sweep_files" "intent created during stop sweep cannot publish late state"
+unset _SHIPYARD_CONTINUITY_STOP_AFTER_SWEEP_DELAY
+
+reset_fake
+_SHIPYARD_CONTINUITY_BEFORE_INTENT_DELAY=0.4
+export _SHIPYARD_CONTINUITY_BEFORE_INTENT_DELAY
+shipyard_continuity_start agterm >"$TMP/pre-intent-start" 2>&1 & pre_intent_start=$!
+sleep 0.1
+pre_intent_stop_rc=0
+shipyard_continuity_stop_all || pre_intent_stop_rc=$?
+pre_intent_start_rc=0; wait "$pre_intent_start" || pre_intent_start_rc=$?
+check 0 "$pre_intent_stop_rc" "stop advances admission generation during pre-intent start"
+check 0 "$pre_intent_start_rc" "old-generation start is cancelled cleanly"
+pre_intent_files=$(runtime_state_paths)
+check "" "$pre_intent_files" "old-generation intent cannot publish after stop returns"
+unset _SHIPYARD_CONTINUITY_BEFORE_INTENT_DELAY
+
+reset_fake
+_SHIPYARD_CONTINUITY_PUBLISH_DELAY=0.4
+_SHIPYARD_CONTINUITY_PUBLICATION_POLLS=40
+export _SHIPYARD_CONTINUITY_PUBLISH_DELAY _SHIPYARD_CONTINUITY_PUBLICATION_POLLS
+shipyard_continuity_start agterm >"$TMP/racing-start" 2>&1 & racing_start=$!
+n=0
+while [ ! -L "$_SHIPYARD_CONTINUITY_DIR/continuity-lifecycle.lock" ] && [ "$n" -lt 20 ]; do
+  sleep 0.02
+  n=$((n + 1))
+done
+if [ -L "$_SHIPYARD_CONTINUITY_DIR/continuity-lifecycle.lock" ]; then start_lock_seen=yes; else start_lock_seen=no; fi
+check yes "$start_lock_seen" "start-wins lifecycle synchronization point is observed"
+shipyard_continuity_stop_all >"$TMP/racing-stop" 2>&1 & racing_stop=$!
+racing_start_rc=0; wait "$racing_start" || racing_start_rc=$?
+racing_stop_rc=0; wait "$racing_stop" || racing_stop_rc=$?
+check 0 "$racing_start_rc" "in-flight start publishes before synchronized stop"
+check 0 "$racing_stop_rc" "synchronized stop waits for an in-flight start"
+racing_files=$(runtime_state_paths)
+check "" "$racing_files" "synchronized stop leaves no late watcher state"
+unset _SHIPYARD_CONTINUITY_PUBLISH_DELAY _SHIPYARD_CONTINUITY_PUBLICATION_POLLS
 
 mkdir -p "$_SHIPYARD_CONTINUITY_DIR"
 printf '%s\n' orphan >"$_SHIPYARD_CONTINUITY_DIR/continuity-orphan.log"
 printf '%s\n' orphan >"$_SHIPYARD_CONTINUITY_DIR/continuity-orphan.heartbeat"
 shipyard_continuity_stop_all
-orphan_files=$(find "$_SHIPYARD_CONTINUITY_DIR" -type f -print)
+orphan_files=$(runtime_state_paths)
 check "" "$orphan_files" "last-slot cleanup sweeps orphan watcher records"
 
 failure_state="$TMP/failure-state"
@@ -378,7 +572,7 @@ failure_result=$(
   shipyard_continuity_request() { return 1; }
   rc=0
   shipyard_continuity_stop_all || rc=$?
-  printf '%s:%s' "$rc" "$(find "$failure_state" -type f | wc -l | tr -d ' ')"
+  printf '%s:%s' "$rc" "$(find "$failure_state" -type f ! -name continuity-generation | wc -l | tr -d ' ')"
 )
 check 1:3 "$failure_result" "failed cooperative stop preserves every lifecycle record"
 
