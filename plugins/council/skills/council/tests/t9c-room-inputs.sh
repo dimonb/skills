@@ -170,9 +170,10 @@ fi
 
 # --- 6. board/status still reads as a WORD --------------------------------------
 # The one room file c_slurp's callers read that legitimately holds a word rather than a
-# number. A blanket numeric gate would map decided AND unresolved onto 0, and the `= 0`
-# fallback above it would then report an unresolved room as decided — the room ran out of
-# turns and the record says the opposite.
+# number. A blanket numeric gate would map decided AND unresolved onto 0; c_recorded_status
+# compares against those two words, so nothing would ever match, and every room that had
+# genuinely closed would report itself OPEN for ever — `verdict` and `status` would never
+# return the 0 a supervising session waits on.
 fresh
 say_floor propose '[]' "An ordinary proposal." >/dev/null
 who=$(bash "$CLI" floor | sed -n 's/.*floor=\([^ ]*\).*/\1/p')

@@ -127,9 +127,18 @@ v_claims() {
   # and no longer has anything to do with it: a barrier position and a `--hand` claim stamp
   # no turn, so this reads -1 in rooms whose every claim is real. Labelled for what it is,
   # rather than left looking like a contradiction of the verdict line.
-  printf '%s' "$g" | jq -r --argjson turns "$(c_turns)" '
+  # Closure comes from the RECORD, through the same reader `verdict` uses. This line used to
+  # print "DECIDED by message <id>" from claims.jq's `$decided`, which is nothing more than
+  # "a decide message exists somewhere in the log" -- so one room answered `deliberating` from
+  # `verdict`, `DECIDED` from here, and "no decision yet" from `decision`, all at once. It ran
+  # the other way too: after a `--force` close whose trailing send was refused, the room was
+  # genuinely closed and this line said nothing at all. protocol/_channel.md sends every
+  # participant here to catch up, so this was the reader most likely to be believed.
+  printf '%s' "$g" | jq -r --argjson turns "$(c_turns)" --arg closed "$(c_recorded_status)" '
     "turns: \($turns)   last claim that stamped a turn: \(.last_claim_turn)",
-    (if .decided then "DECIDED by message \(.decided)" else empty end),
+    (if $closed != "" then "CLOSED as \($closed) — the record is written (council.sh decision)"
+     elif .decide_msg then "a decide message was sent (\(.decide_msg)) — no record yet, the room is still open"
+     else empty end),
     "",
     ( .proposals[]
       | "proposal \(.id) from \(.from)\(if .dead then "  [dropped: \(.dead_by)]" else "" end)"
@@ -155,7 +164,15 @@ v_verdict() {
   # are numbers, and both make the `[ -ge ]` below error, which silently disables the room's
   # only stop condition and puts the same value into `--argjson`. roster.json is peer-writable.
   n=$(c_npeers); budget=$(c_int_field turns_budget 30)
-  read -r decided live open <<<"$(printf '%s' "$g" | jq -r '[(.decided // "-"), (.live|length), (.open|length)] | @tsv')"
+  # Two counts, and deliberately NOT the decide message's id alongside them. `@tsv` does not
+  # escape spaces and `read` splits on them as well as on tabs, so a peer-chosen `.id` of
+  # `b 9` used to shift every following field: live took the id's tail and open took
+  # `1<TAB>1`, which then reached `[ "$open" -gt 0 ]` as `integer expected`. That was harmless
+  # only while the branch below short-circuited on the id being present -- which is exactly
+  # what this change removed, so carrying the field here would have turned a latent trap into
+  # a live one: the room could no longer report stuck, ready-to-decide or no-proposal, and
+  # `status` lost the STUCK alarm entirely. A non-scalar `.id` empties all three the same way.
+  read -r live open <<<"$(printf '%s' "$g" | jq -r '[(.live|length), (.open|length)] | @tsv')"
   # Turns come from c_turns, never from the graph: the graph counts turn-claiming messages
   # and knows nothing about a completed barrier round, which consumes a whole lap without
   # any of its positions claiming a turn. Mixing the two produced a room "minus one turn
@@ -171,42 +188,13 @@ v_verdict() {
   # keying the gate on a stamped turn left a roundtable room unable to converge at all.
   win=$(c_turns_since_last_claim)
   since=$(( win < 0 ? turns : win ))
-  # A room is closed when its RECORD says so, never because a `decide` message exists.
-  # `board/status` is the whole condition, and the decide message is not part of it.
-  #
-  # It is tempting to require BOTH, as a belt-and-braces reading of "the record was written
-  # AND somebody ran decide". That is wrong, and measurably so: v_decide writes the record
-  # and board/status FIRST and sends the message last, and that send can legitimately fail --
-  # c_send refuses a sender that does not hold the floor (rc 6), which is the ordinary case
-  # for `decide --force` on a stuck room, and v_decide does not check it. Requiring the
-  # message leaves a room that has genuinely closed as `unresolved`, record on disk,
-  # reporting `deliberating` for ever.
-  #
-  # That is not hypothetical and it is not new: it is what the code did BEFORE this change,
-  # which required the message via `$decided`. A `--force` close by anyone not holding the
-  # floor -- the ordinary way a stuck room gets closed -- read back as a live room. So the
-  # same reader broke the rule twice, in opposite directions: closed when it was not, and
-  # open when it was. t9f's fourth case pins this half.
-  #
-  # `c_slurp_raw` returns `0` for a MISSING file -- it has to, it is a reader with nothing to
-  # report -- and the old `[ "$v" = 0 ] && v=decided` mapped exactly that onto `decided`. So a
-  # bare `{"act":"decide"}` written into any lane made the room report itself closed and
-  # decided, rc 0, while holding a live proposal and having written no decision record at all.
-  # rc 0 is documented as "the room is closed" and is what a supervising session branches on,
-  # so nothing anywhere said otherwise. That is issue #66's third reproduction; it is NOT an
-  # author-identity bug -- it reproduces identically with an honest `.from` -- and it directly
-  # contradicted this file's own documented rule, that the recorded status is written to
-  # `board/status` and not re-derived from the presence of a `decide` message.
-  #
-  # Absent, unreadable or holding anything else, `board/status` therefore means NOT CLOSED and
-  # the room falls through to its real verdict. Only the two words `v_decide` writes are
-  # believed -- `board/status` is in the room like every other file, so an unexpected value is
-  # treated as absent, the same rule applied to every other untrusted room input.
-  #
-  # This is the only caller of c_slurp_raw. If a second one ever appears, it inherits the
-  # missing-file-reads-as-0 trap and needs its own decision about what absence means.
-  recorded=$(c_slurp_raw "$ROOM/board/status")
-  case "$recorded" in decided|unresolved) ;; *) recorded="" ;; esac
+  # A room is closed when its RECORD says so, never because a `decide` message exists --
+  # c_recorded_status is the one reader that decides this, shared with v_claims so the two
+  # verbs cannot drift apart, and it carries the full account of why. That is issue #66's
+  # third reproduction: a bare `{"act":"decide"}` in any lane used to make the room report
+  # itself decided with rc 0 while holding a live proposal and having written no record. It is
+  # NOT an author-identity bug -- it reproduces identically with an honest `.from`.
+  recorded=$(c_recorded_status)
   if   [ -n "$recorded" ]; then v=$recorded
   elif [ "$turns" -ge "$budget" ]; then v=unresolved
   elif [ "$live" = 0 ]; then v=no-proposal
@@ -218,7 +206,8 @@ v_verdict() {
     printf '%s' "$g" | jq -c --arg v "$v" --argjson turns "$turns" --argjson since "$since" \
       --argjson lap "$lap" --argjson budget "$budget" \
       '{verdict:$v, turns:$turns, budget:$budget, since_last_claim:$since, lap:$lap,
-        live:(.live|length), open:(.open|length), open_ids:[.open[].id], decided:.decided}'
+        live:(.live|length), open:(.open|length), open_ids:[.open[].id],
+        decide_msg:.decide_msg}'
   else
     printf '%s  turns %s/%s  nothing new for %s turns (lap %s)  live proposals %s  open objections %s\n' \
       "$v" "$turns" "$budget" "$since" "$lap" "$live" "$open"
@@ -227,7 +216,7 @@ v_verdict() {
 }
 
 v_status() {
-  local j verd g t floor last held conf alarms=""
+  local j verd g t floor last held conf ghost_lanes ghost_msgs alarms=""
   j=$(v_verdict --json); verd=$(printf '%s' "$j" | jq -r .verdict)
   g=$(_graph)
   t=$(c_turns); floor=$(c_floor_at "$t"); last=$(c_last_turn_ms)
@@ -251,8 +240,17 @@ v_status() {
   case "$verd" in
     stuck) alarms="$alarms 🛑 STUCK: a whole lap and nothing new was said, while objections are open" ;;
     ready-to-decide) alarms="$alarms ✅ ready to decide: council.sh decide" ;;
-    unresolved) alarms="$alarms 🛑 the turn budget is spent — write an honest unresolved" ;;
+    # `unresolved` reaches here two ways, and they need opposite things from a supervisor: the
+    # budget ran out and a record is still owed, or a record already says `unresolved` and the
+    # room is finished. Telling a supervisor to "write an honest unresolved" for a room that
+    # has already written one invites it to run `decide --force` again and rewrite the record
+    # — while the same status block exits 0 saying the room is closed.
+    unresolved) if [ -n "$(c_recorded_status)" ]
+                then alarms="$alarms ✅ closed as unresolved — the record is written (council.sh decision)"
+                else alarms="$alarms 🛑 the turn budget is spent — write an honest unresolved"; fi ;;
   esac
+  read -r ghost_lanes ghost_msgs <<<"$(c_unrostered)"
+  [ "$ghost_lanes" -gt 0 ] && alarms="$alarms ⚠️ $ghost_lanes lane(s) on disk are not in the roster, holding $ghost_msgs message(s) no reader counts — a renamed or removed peer, or a seat running with a COUNCIL_ME the roster does not list"
   [ "$conf" -gt 0 ] && alarms="$alarms ⚠️ $conf messages lost a turn conflict (their authors must take the floor again)"
   [ "$held" -gt "${COUNCIL_STALL_SECS:-900}" ] && alarms="$alarms 🛑 STALL: $floor has held the floor for ${held}s — check its terminal, it may be sitting on a permission prompt"
   printf 'alarms:%s\n' "${alarms:- —}"

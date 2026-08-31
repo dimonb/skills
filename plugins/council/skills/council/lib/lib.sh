@@ -9,8 +9,11 @@
 #   * cursor/<me>/<peer>       — exactly ONE writer (me), ever;
 #   * state/<me>.*             — exactly ONE writer (me), ever;
 #   * every file lands via write-tmp-then-rename, so a reader never sees a half file;
-#   * total order is (lamport, from), carried IN the message, so every reader derives
-#     the same sequence without asking anyone.
+#   * total order is (lamport, from) -- `lamport` carried IN the message, `from` taken from
+#     the lane the file was read at -- so every reader derives the same sequence without
+#     asking anyone;
+#   * the room's membership is `roster.order`, and BOTH readers build their file list from
+#     it, so a lane directory the roster does not list is not part of the room.
 export LC_ALL=C
 : "${COUNCIL_ROOM:?COUNCIL_ROOM must be set}"
 ROOM="$COUNCIL_ROOM"
@@ -61,8 +64,14 @@ c_ms()     { local t=${EPOCHREALTIME/./}; echo $(( 10#$t / 1000 )); }
 #
 # Two message fields are consumed STRUCTURALLY rather than numerically, so no amount of
 # coercion here would have covered them: `.from` and `.id`. Both are handled by taking the
-# value from the PATH the file was read at instead of from the message, at the two readers
-# a lane message enters through -- c_drain and c_all.
+# value from the PATH the file was read at instead of from the message -- but not to the same
+# extent, and the difference matters:
+#
+#   `.from` is overwritten in BOTH readers, c_drain and c_all, so no consumer anywhere sees
+#   the message's own claim about its author.
+#   `.id`'s SEQUENCE role is replaced in c_drain only, where it decides a cursor position.
+#   c_all needs no sequence and derives none, so `.id` reaches every other consumer exactly
+#   as the message wrote it.
 #
 # `.from` is the AUTHOR, and it is now DERIVED, not believed: every reader overwrites it
 # with the lane directory the document was read from. A lane has exactly one writer, so the
@@ -71,21 +80,39 @@ c_ms()     { local t=${EPOCHREALTIME/./}; echo $(( 10#$t / 1000 )); }
 # the top of SKILL.md -- "the outcome is computed, not declared" -- true. It was not before:
 # `.from` is claims.jq's whole rule for who may close an objection and who may kill a
 # proposal, so a participant writing `"from": "<peer>"` into its OWN lane withdrew somebody
-# else's proposal and the transcript recorded the victim as having done it. No hostility
-# needed -- a relaunched seat with a stale COUNCIL_ME, or a model copying a worked `send`
-# example including its `from` value, produces exactly that message.
+# else's proposal and the transcript recorded the victim as having done it.
+#
+# WHICH ACCIDENTS THIS ACTUALLY COVERS, stated narrowly because the obvious wider claim is
+# false. It covers anything that writes a lane FILE without going through c_send: an agent
+# that emits the JSON itself rather than calling `send`, one that copies a message it just
+# read out of `recv` and re-sends it with the original `.from` intact, a hand-edited file, a
+# harness that constructs lane files.
+#
+# It does NOT cover a seat running with a stale or wrong COUNCIL_ME, though that reads like
+# the same thing and was claimed as a motivation for this change. c_send takes the lane PATH
+# and `.from` from the same `$ME` (see below), so such a seat writes into the stale lane with
+# a MATCHING `.from` -- lane and claim agree, and deriving one from the other changes nothing.
+# What a stale COUNCIL_ME really does is write into another seat's lane, or into a lane the
+# roster does not list; the second of those is what c_all's roster filter and the `status`
+# alarm now catch, and the first is not fixed here at all.
 #
 # It must be BOTH readers or neither. c_drain feeds `recv`; c_all feeds verdict, status,
 # claims, transcript and decide. Deriving in one only would render the same message under
 # two different authors depending on which path you came through, and somebody comparing
 # `recv` with `transcript` would be debugging a bug that is not there.
 #
-# `.id` used to be parsed for a sequence number and is likewise taken from the path. It
+# `.id` used to be parsed for a sequence number and is likewise taken from the path there. It
 # remains a message's own unverified CLAIM in every other position, and that has NOT
 # changed: `.id` is still c_canon's winner key -- `($win | index($m.id))` decides whether a
-# message counts as valid, so a forged `.id` matching a turn winner's is believed there --
-# still what c_posted_round0 returns, and still the target of every `.refs` lookup in
-# claims.jq. It may not be read as an authenticated anything.
+# message counts as valid -- still what c_posted_round0 returns, and still the target of every
+# `.refs` lookup in claims.jq. It may not be read as an authenticated anything.
+#
+# A forged `.id` is worse than "one message is wrongly counted valid", which is how this was
+# first written. Duplicating a turn winner's id makes BOTH messages read as valid, so the turn
+# count is inflated and the floor advances an extra step -- and because c_conflicts counts
+# exactly the messages that lost a turn conflict, the duplicate loses nothing and the
+# `⚠️ messages lost a turn conflict` alarm never fires. That alarm is the one a supervisor is
+# told to watch for precisely this, so the room misreports and says nothing.
 #
 # What derivation does NOT buy: `.from` is trustworthy as "which lane wrote this", which is
 # not the same as "which agent session wrote this". Nothing stops one seat from writing into
@@ -158,10 +185,47 @@ c_ring() { local f="$ROOM/bell/$1.fifo"; [ -p "$f" ] || return 0; ( printf '.' >
 c_slurp()   { local v=""; [ -f "$1" ] || { printf 0; return; }; read -r v < "$1" 2>/dev/null
               case "$v" in ''|*[!0-9]*) v=0 ;; *) v=$((10#$v)) ;; esac; printf '%s' "$v"; }
 # Verbatim, for the one room file that legitimately holds a word rather than a number:
-# board/status, compared as decided|unresolved. A numeric gate there would map BOTH onto 0
-# and report a room that ran out of turns as decided. Nothing may do arithmetic on this.
+# board/status, compared as decided|unresolved by c_recorded_status below. A numeric gate here
+# would map BOTH words onto 0; no value would then match that comparison, and every room that
+# has genuinely closed would report itself OPEN for ever -- `verdict` and `status` would never
+# return the 0 a supervising session waits on. Nothing may do arithmetic on this.
 c_slurp_raw() { local v=""; [ -f "$1" ] || { printf 0; return; }; read -r v < "$1" 2>/dev/null; printf '%s' "${v:-0}"; }
 c_lamport() { c_slurp "$ROOM/state/$ME.lamport"; }
+
+# The room's recorded outcome: `decided`, `unresolved`, or EMPTY for a room that is still open.
+# The one place that decides whether a room is closed, so that every verb answers alike.
+#
+# It lives here, shared, because the alternative has already failed: when only v_verdict was
+# taught this rule, v_claims went on announcing "DECIDED by message <id>" from the mere
+# presence of a `decide` message, and one room answered `deliberating` and `DECIDED` in the
+# same breath. A rule that has to be remembered by each caller is a rule that holds until the
+# next caller.
+#
+# BOTH halves are required, and each rules out a real state:
+#
+#   the RECORD -- `board/decision.md` is the room's output, and without it there is nothing to
+#   have closed. A `board/status` written on its own would otherwise report a room decided
+#   while `decision` says it is open, and `decide` would then refuse with "already decided",
+#   so no record could ever be written through the entrypoint: a wedge with no way out.
+#
+#   the STATUS WORD -- it says WHICH way it closed, and only v_decide writes it, after the
+#   record is complete. Absent, unreadable, or holding anything else means NOT CLOSED and the
+#   room falls through to its computed verdict; an unrecognised value is treated as absent,
+#   the same rule every other untrusted room input follows. `board/status` is in the room like
+#   every other file, and the old reader passed whatever it held straight through as the
+#   verdict word -- `yes` and `DECIDED` both reached a supervisor as if they were verdicts.
+#
+# The decide MESSAGE is deliberately not part of this. v_decide sends it last, after both
+# files, and that send can legitimately fail -- c_send refuses a sender that does not hold the
+# floor, the ordinary case for `decide --force` on a stuck room, and v_decide does not check
+# it. Requiring the message is what the code did before, and it left a room that had genuinely
+# closed as `unresolved`, record on disk, reporting `deliberating` for ever. So the same reader
+# broke the rule in both directions: closed when it was not, and open when it was.
+c_recorded_status() {
+  [ -f "$ROOM/board/decision.md" ] || { printf ''; return; }
+  local v; v=$(c_slurp_raw "$ROOM/board/status")
+  case "$v" in decided|unresolved) printf '%s' "$v" ;; *) printf '' ;; esac
+}
 # The highest clock anywhere in the room, mine included.
 c_max_lamport() {
   local mine disk
@@ -351,7 +415,7 @@ c_drain() {
   # c_new_files builds it -- rather than supplied by the thing being read, which is the
   # property that matters here; it is NOT that the path is beyond a peer's reach, because
   # c_new_files builds it out of `roster.order`, and the roster is in the room like everything
-  # else. All three of the fields the path replaces were consumed structurally rather than
+  # else. All three of those USES -- two fields, one of them used two ways -- were structural rather than
   # numerically, so the coercion in _untrusted did not and could not cover them:
   #
   #   `.from` is the author, and OVERWRITING it here is what makes the room's mechanical
@@ -435,8 +499,26 @@ c_bell_drain() { while read -r -t 0 -u 3 2>/dev/null && read -r -t 0.01 -N 1 -u 
 # --- total order / floor --------------------------------------------------------
 # Every message in the room, in the one order everybody agrees on.
 c_all() {
-  local -a files=(); local f
-  for f in "$ROOM"/lane/*/[0-9]*.json; do [ -e "$f" ] && files+=("$f"); done
+  local -a files=(); local p f
+  # The lane SET comes from the ROSTER, not from a glob of `lane/*/`, and that matters as much
+  # as where the author comes from. c_drain has always built its file list from `roster.order`
+  # (via c_new_files), so a glob here made the two readers disagree about who is IN the room
+  # even once they agreed about who wrote what: a lane directory the roster does not list
+  # appeared in transcript, claims and verdict while `recv` never delivered a word of it to
+  # anybody. Nobody could read it, nobody could answer it, and only the ungated `overrule`
+  # could close an objection raised in it -- so the room could not reach ready-to-decide.
+  #
+  # It is reachable by ordinary accident, not just by `mkdir`: rename a peer in `roster.json`
+  # and its existing `lane/<old>/` is orphaned on the spot. It also arrives whenever a seat runs
+  # with a COUNCIL_ME that is not in the roster, which council.sh does not check -- it only
+  # requires the variable to be non-empty.
+  #
+  # The roster is the room's membership, so the roster wins. What must never happen is that
+  # such a lane goes SILENT: c_unrostered below counts them and `status` raises an alarm, so a
+  # reader can tell "no such message" from "a message exists that this room no longer counts".
+  for p in $(c_peers); do
+    for f in "$ROOM"/lane/"$p"/[0-9]*.json; do [ -e "$f" ] && files+=("$f"); done
+  done
   [ "${#files[@]}" -gt 0 ] || return 1
   # The author comes from the LANE DIRECTORY, exactly as in c_drain and for the same reason:
   # `.from` is a claim a message makes about itself, and everything downstream of here --
@@ -449,18 +531,29 @@ c_all() {
   # `inputs` under `-n` gives `input_filename`, and it is per-DOCUMENT, so a peer putting
   # several messages in one lane file has every one of them attributed to that lane.
   #
-  # It COSTS something, and the cost is jq opening each file itself rather than reading one
-  # pipe -- not the derivation, which measured free. c_all is on the hot path of every send
-  # (c_max_lamport, c_barrier, c_turns all come through here), so it was measured rather than
-  # assumed, median of 15 interleaved calls per size, three lanes:
+  # It TRADES two costs against each other, and the trade goes in opposite directions
+  # depending on what you measure -- which is worth stating, because measuring only one of
+  # them gives a confidently wrong answer either way. c_all is on the hot path of every send
+  # (c_max_lamport, c_barrier and c_turns all come through here), so this was measured, not
+  # reasoned about. 20 calls per size per variant, three lanes, on an otherwise idle machine
+  # (1-minute load 3.2); child CPU time, and the minimum wall clock of the same runs:
   #
-  #     12 messages  old 5 ms   new 5 ms   +0
-  #     30 messages  old 5 ms   new 5 ms   +0
-  #     60 messages  old 6 ms   new 7 ms   +1
-  #    300 messages  old 14 ms  new 18 ms  +4
+  #                  CPU/call              min wall/call
+  #     12 messages  6.0 -> 4.3 ms         5 -> 5 ms
+  #     30 messages  7.1 -> 5.5 ms         5 -> 6 ms
+  #     60 messages  8.2 -> 6.7 ms         7 -> 8 ms
+  #    300 messages  21.7 -> 18.4 ms       21 -> 24 ms
   #
-  # It scales with the FILE COUNT, so it is nil at the size a room actually runs at -- the
-  # default turn budget is 30 -- and only becomes visible in a room several times past it.
+  # So it costs measurably LESS CPU at every size -- one fewer process to spawn, and `cat`
+  # costs more than jq's extra opens -- while latency is unchanged at the size a room runs at
+  # and drifts a few ms higher in a room several times past its default 30-turn budget,
+  # because jq opens the files one after another where `cat` streamed them. Neither effect is
+  # the derivation, which measured free.
+  #
+  # A first pass at this measured wall clock alone, on a machine at load 211 with another test
+  # suite running, and recorded a pure slowdown. That was wrong, and it is left described here
+  # rather than quietly replaced: on a loaded box wall clock measures the queue, not the work.
+  #
   # Do not "optimise" this back to `cat`: that loses input_filename, and with it the whole
   # property this function exists to provide. A cheaper derivation is not the lever either;
   # `sub`-based trimming measured about 50% WORSE than the split, and memoising the filename
@@ -483,6 +576,31 @@ c_all() {
       | select(type == "object")
       | .from = (input_filename | split("/") | .[-2]) ]
     | _untrusted | sort_by(.lamport, .from)[]' "${files[@]}"
+}
+
+# Lanes on disk that the roster does not list, and how many messages they hold.
+# Prints "<lanes> <messages>".
+#
+# This is the other half of c_all's roster filter, and it is not optional decoration. Filtering
+# without reporting would trade a visible wrong state -- a ghost peer speaking in the transcript
+# -- for an invisible one, which is the failure this codebase keeps having: a room that looks
+# healthy while something in it is lost. `status` turns this into an alarm.
+#
+# Deliberately NOT on the hot path: only `status` calls it, once, so the fork per lane costs
+# nothing that matters. c_all must stay cheap.
+c_unrostered() {
+  local d p n=0 m=0 f known
+  known=$(c_peers)
+  for d in "$ROOM"/lane/*/; do
+    [ -d "$d" ] || continue
+    p=${d%/}; p=${p##*/}
+    # -x -F: a whole-line literal match, so a lane whose name merely CONTAINS a peer's name
+    # is still reported rather than quietly counted as rostered.
+    printf '%s\n' "$known" | grep -qxF -- "$p" && continue
+    n=$((n + 1))
+    for f in "$d"[0-9]*.json; do [ -e "$f" ] && m=$((m + 1)); done
+  done
+  printf '%s %s' "$n" "$m"
 }
 
 # --- canonicalisation ----------------------------------------------------------

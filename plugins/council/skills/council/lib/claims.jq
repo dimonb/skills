@@ -3,23 +3,40 @@
 # Rules, all of them mechanical — no model gets to decide whether it "feels resolved":
 #   an objection closes on   withdraw|concede by its own author,
 #                            amend by anyone that references it,
-#                            overrule (the chair).
+#                            overrule by ANYONE — ungated, see below.
 #   a proposal dies on       withdraw by its author, or
 #                            concede by its author pointing at one of its objections
 #                            (the proposer yielding IS the proposal dying).
 # `concede` therefore always means the same thing — the sender yields — and who sent it
 # decides what falls.
 #
-# Three of those four rules are author-gated, so `.from` is load-bearing here: it decides
-# who may close an objection and who may kill a proposal. It is safe to compare because
-# c_all DERIVES it from the lane the message was read at rather than reading the message's
-# own claim about itself (lib.sh, the note above C_UNTRUSTED). This file is fed by c_canon,
-# which is fed by c_all, so a caller cannot hand it un-derived messages by accident; a NEW
-# caller that assembles messages some other way would break that and must not.
+# Four of those rules are author-gated, and naming them beats counting them: withdraw and
+# concede by an OBJECTION's own author, and withdraw and concede by a PROPOSAL's own author.
+# `amend` is not — anyone who references an objection closes it, by design. Neither is
+# `overrule`.
+#
+# So `.from` is load-bearing here: it decides who may close an objection and who may kill a
+# proposal. It is safe to compare because c_all DERIVES it from the lane the message was read
+# at rather than reading the message's own claim about itself (lib.sh, the note above
+# C_UNTRUSTED). This file is fed by c_canon, which is fed by c_all, so a caller cannot hand it
+# un-derived messages by accident; a NEW caller that assembles messages some other way would
+# break that and must not.
+#
+# `overrule` below is gated on NOTHING — not an author, not a role. Any participant closes any
+# objection with it, and there is no chair anywhere in this skill: no roster field, no scenario,
+# no check. It was described as the chair's act here and in SKILL.md for a long time, which the
+# code never implemented. Deriving `.from` does not touch it, because it never consulted `.from`
+# in the first place. Whether a room should have a chair is a governance question nobody has
+# decided; this comment describes what the code does, and promises nothing about that.
 . as $m
 | [ $m[] | select(.act == "propose") ] as $props
 | [ $m[] | select(.act == "object")  ] as $objs
-| ( $m | map(select(.act == "decide")) | (.[0].id // null) ) as $decided
+# The first `decide` message, if any. Named for what it IS -- a message somebody sent -- and
+# not `decided`, which is what it used to be called and which every reader then took as "the
+# room is closed". It is not: `decide` is an act any participant may send, so the message says
+# only that somebody ran the verb. What closes a room is its RECORD (c_recorded_status), and
+# this graph cannot see that, because it is fed the message log and nothing else.
+| ( $m | map(select(.act == "decide")) | (.[0].id // null) ) as $decide_msg
 # `.turn` is written by another participant and is coerced before it is compared: jq sorts
 # strings ABOVE numbers, so one message carrying a string turn would win this `max` and be
 # reported as the room's last claim no matter what really happened. lib.sh normalises on
@@ -70,7 +87,7 @@
         dead: ((($wd | length) + ($yield | length)) > 0),
         dead_by: (($wd + $yield) | (.[0].id // null)),
         objections: $objd } ] as $P
-| { turns: $turns, last_claim_turn: ($last_claim // -1), decided: $decided,
+| { turns: $turns, last_claim_turn: ($last_claim // -1), decide_msg: $decide_msg,
     proposals: $P,
     live: [ $P[] | select(.dead | not) ],
     open: [ $P[] | select(.dead | not) | .objections[] | select(.closed_by == null) ] }

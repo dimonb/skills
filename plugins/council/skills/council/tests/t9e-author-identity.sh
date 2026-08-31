@@ -3,13 +3,19 @@
 # every reader, and a message's own `.from` is overwritten rather than believed.
 #
 # This is the property the whole deliberation layer rests on and nothing used to check.
-# `claims.jq` is author-gated in three of its four closing rules — only an objection's own
-# author withdraws or concedes it, only a proposal's own author kills it — and it compared
+# `claims.jq` is author-gated in four of its closing rules — withdraw and concede by an
+# objection's own author, withdraw and concede by a proposal's own author — and it compared
 # a field the message declares about itself. So a participant writing `"from": "<peer>"`
 # into its OWN lane dropped somebody else's proposal, and the transcript recorded the
-# victim as having done it. No hostility is required to produce that message: a relaunched
-# seat with a stale COUNCIL_ME writes it, and so does a model copying a worked `send`
-# example including its `from` value.
+# victim as having done it.
+#
+# No hostility is required: any writer that produces a lane FILE without going through
+# c_send does it — an agent that emits the JSON itself instead of calling `send`, or one that
+# copies a message it just read out of `recv` and re-sends it with the original `.from`
+# intact. Note what is NOT in that list: a seat with a stale COUNCIL_ME. c_send takes the
+# lane path and `.from` from the same variable (case 7's comment below), so such a seat
+# writes into the stale lane with a matching `.from` and derivation changes nothing about it.
+# That accident is a lane-membership problem and is covered by t9g, not here.
 #
 # The cases below are written against the ROOM's answers — verdict, transcript, floor —
 # rather than against the derivation itself, because the derivation is not the point: a
@@ -153,7 +159,7 @@ round0() { # <lane> <claimed-from> <lamport> <text>
   printf '1' > "$R/state/$1.seq"
 }
 round0 a a 1 "a opening position"
-round0 b c 2 "b writing, claiming to be c"      # the accident: a stale identity in seat b
+round0 b c 2 "b writing, claiming to be c"      # a lane file written without going through send
 waiting=$(bash "$CLI" floor 2>/dev/null | sed -n 's/.*waiting=\([^ ]*\).*/\1/p')
 if [ "$waiting" = c ]; then
   echo "ok   the barrier is still waiting for the seat that has not spoken"

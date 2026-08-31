@@ -76,8 +76,13 @@ The loop: `recv --until-floor` → **one** message on the substance → wait aga
 
 If `send` returned **exit 6**, the floor moved while you were composing. That is not a
 breakage: drain your inbox (`recv`), read what was said, and wait for your turn. Sending the
-same text again without reading the new messages is the worst thing you can do. Stop when
-you see a message with `act: decide` — the record itself is `council.sh decision`.
+same text again without reading the new messages is the worst thing you can do.
+
+**Stop when the room has written its record** — `council.sh decision` prints it (exit 0), and
+`council.sh verdict` reports `decided` or `unresolved`. Do **not** stop on seeing a message
+with `act: decide`: that only says somebody ran the verb, and it is neither necessary nor
+sufficient. A stray `decide` message closes nothing, and a room genuinely closed with
+`decide --force` often carries no such message at all.
 
 Something urgent can be said out of turn — only `object`, `clarify`, `notice`, with the
 `--hand` flag. It consumes no turn and does not move the floor, but the next speaker is

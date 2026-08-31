@@ -109,10 +109,17 @@ for bogus in 'yes' '0' 'DECIDED' ''; do
   decide_msg b b
   printf '%s' "$bogus" > "$R/board/status"
   read -r v rc <<<"$(verd)"
-  case "$v" in
-    decided|unresolved) echo "FAIL board/status='$bogus' was believed as a close: verdict=$v rc=$rc"; fail=1 ;;
-    *) echo "ok   board/status='$bogus' was treated as absent (verdict=$v)" ;;
-  esac
+  # Assert the room's REAL verdict, not merely "not one of the two closed words". Excluding
+  # `decided|unresolved` is satisfied by a reader that passes board/status through verbatim,
+  # which is exactly what this case exists to forbid: against the old reader it printed
+  # `ok  board/status='yes' was treated as absent (verdict=yes)` — a pass whose own message
+  # contradicts itself. It is also satisfied by an empty $v, i.e. a CLI that failed outright.
+  # This room holds one live proposal and no open objection, so `deliberating` is the answer.
+  if [ "$v" = deliberating ] && [ "$rc" = 1 ]; then
+    echo "ok   board/status='$bogus' was treated as absent (verdict=$v rc=$rc)"
+  else
+    echo "FAIL board/status='$bogus' was not treated as absent: verdict=$v rc=$rc (want deliberating rc 1)"; fail=1
+  fi
 done
 
 [ "$fail" = 0 ] && echo "t9f PASS" || echo "t9f FAIL"
