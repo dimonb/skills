@@ -60,19 +60,38 @@ c_ms()     { local t=${EPOCHREALTIME/./}; echo $(( 10#$t / 1000 )); }
 # conversion would turn a diagnostic into a shell. Measured, all three forms.
 #
 # Two message fields are consumed STRUCTURALLY rather than numerically, so no amount of
-# coercion here would have covered them: `.from`, which used to be interpolated into the
-# cursor path, and `.id`, which used to be parsed for a sequence number. c_drain takes both
-# from the PATH it read the file at now, so neither decides a path or a sequence any more.
-# That is the whole of what changed: c_drain still ENDS in `sort_by(.lamport, .from)`, so a
-# forged `.from` still decides delivery order inside a lamport tie.
+# coercion here would have covered them: `.from` and `.id`. Both are handled by taking the
+# value from the PATH the file was read at instead of from the message, at the two readers
+# a lane message enters through -- c_drain and c_all.
 #
-# That is NOT the same as either being unused, and both remain a message's own unverified
-# CLAIM. `.from` is still the `(lamport, from)` tiebreak below, still c_posted_round0, still
-# the author every verb prints, and still the whole of claims.jq's rule for who may close an
-# objection. `.id` is still c_canon's winner key -- `($win | index($m.id))` decides whether a
+# `.from` is the AUTHOR, and it is now DERIVED, not believed: every reader overwrites it
+# with the lane directory the document was read from. A lane has exactly one writer, so the
+# lane IS the author, and the room's mechanical rules finally rest on who actually wrote a
+# message rather than on what the message says about itself. That is what makes the claim at
+# the top of SKILL.md -- "the outcome is computed, not declared" -- true. It was not before:
+# `.from` is claims.jq's whole rule for who may close an objection and who may kill a
+# proposal, so a participant writing `"from": "<peer>"` into its OWN lane withdrew somebody
+# else's proposal and the transcript recorded the victim as having done it. No hostility
+# needed -- a relaunched seat with a stale COUNCIL_ME, or a model copying a worked `send`
+# example including its `from` value, produces exactly that message.
+#
+# It must be BOTH readers or neither. c_drain feeds `recv`; c_all feeds verdict, status,
+# claims, transcript and decide. Deriving in one only would render the same message under
+# two different authors depending on which path you came through, and somebody comparing
+# `recv` with `transcript` would be debugging a bug that is not there.
+#
+# `.id` used to be parsed for a sequence number and is likewise taken from the path. It
+# remains a message's own unverified CLAIM in every other position, and that has NOT
+# changed: `.id` is still c_canon's winner key -- `($win | index($m.id))` decides whether a
 # message counts as valid, so a forged `.id` matching a turn winner's is believed there --
 # still what c_posted_round0 returns, and still the target of every `.refs` lookup in
-# claims.jq. Neither may be read as an authenticated sender.
+# claims.jq. It may not be read as an authenticated anything.
+#
+# What derivation does NOT buy: `.from` is trustworthy as "which lane wrote this", which is
+# not the same as "which agent session wrote this". Nothing stops one seat from writing into
+# another seat's lane; the room is not a trust boundary (SKILL.md says so at length) and this
+# does not make it one. What it removes is a whole class of ACCIDENT, and with it the gap
+# between what the room documents and what it computes.
 #
 # So: adding an arithmetic use of anything that did not come through `_untrusted` or one of
 # those readers still needs its own gate, and so does any new use of a message field as a
@@ -327,15 +346,20 @@ c_drain() {
   # participant — that is the whole mechanism. A lane stops at its withheld message rather
   # than skipping it, so nothing is lost and the cursor never runs past unread words.
   local open=false; [ "$(c_barrier)" = open ] && open=true
-  # WHICH LANE a message came from and WHERE IN THAT LANE it sits are taken from the PATH it
-  # was read at, never from the message. The path is chosen by the READER -- c_new_files
-  # builds it -- rather than supplied by the thing being read, which is the property that
-  # matters here; it is NOT that the path is beyond a peer's reach, because c_new_files
-  # builds it out of `roster.order`, and the roster is in the room like everything else.
-  # Both of the fields the path replaces were consumed structurally rather than numerically,
-  # so the coercion in _untrusted did not and could not cover them:
+  # WHO a message is from, WHICH LANE it came from and WHERE IN THAT LANE it sits are taken
+  # from the PATH it was read at, never from the message. The path is chosen by the READER --
+  # c_new_files builds it -- rather than supplied by the thing being read, which is the
+  # property that matters here; it is NOT that the path is beyond a peer's reach, because
+  # c_new_files builds it out of `roster.order`, and the roster is in the room like everything
+  # else. All three of the fields the path replaces were consumed structurally rather than
+  # numerically, so the coercion in _untrusted did not and could not cover them:
   #
-  #   `.from` was interpolated into the cursor path. A participant that wrote
+  #   `.from` is the author, and OVERWRITING it here is what makes the room's mechanical
+  #   rules rest on who wrote a message rather than on what it claims (see the long note at
+  #   the head of this file). c_all does the same, and it has to: the two readers disagreeing
+  #   would render one message under two authors.
+  #
+  #   `.from` was also interpolated into the cursor path. A participant that wrote
   #   `"from": "../../../x"` into its OWN lane made the READER create or truncate that file,
   #   with the reader's credentials. It also decided grouping, so claiming a peer's name
   #   merged two lanes and advanced the wrong cursor past unread messages.
@@ -374,7 +398,8 @@ c_drain() {
     [ inputs
       | select(type == "object")
       | . + { _lane: (input_filename | split("/") | .[-2])
-            , _seq:  (input_filename | split("/") | .[-1] | sub("\\.json$"; "") | tonumber) } ]
+            , _seq:  (input_filename | split("/") | .[-1] | sub("\\.json$"; "") | tonumber) }
+      | .from = ._lane ]
     | _untrusted
     | [ group_by(._lane)[]
       | sort_by(._seq)
@@ -413,12 +438,51 @@ c_all() {
   local -a files=(); local f
   for f in "$ROOM"/lane/*/[0-9]*.json; do [ -e "$f" ] && files+=("$f"); done
   [ "${#files[@]}" -gt 0 ] || return 1
+  # The author comes from the LANE DIRECTORY, exactly as in c_drain and for the same reason:
+  # `.from` is a claim a message makes about itself, and everything downstream of here --
+  # verdict, status, claims, transcript, the decision record -- treats it as the author. This
+  # is the reader those consumers come through, so this is where the claim has to stop being
+  # believed. Doing it in c_drain alone would give `recv` and `transcript` different authors
+  # for one message.
+  #
+  # That is why the files are handed to jq as ARGUMENTS rather than `cat`ed into it: only
+  # `inputs` under `-n` gives `input_filename`, and it is per-DOCUMENT, so a peer putting
+  # several messages in one lane file has every one of them attributed to that lane.
+  #
+  # It COSTS something, and the cost is jq opening each file itself rather than reading one
+  # pipe -- not the derivation, which measured free. c_all is on the hot path of every send
+  # (c_max_lamport, c_barrier, c_turns all come through here), so it was measured rather than
+  # assumed, median of 15 interleaved calls per size, three lanes:
+  #
+  #     12 messages  old 5 ms   new 5 ms   +0
+  #     30 messages  old 5 ms   new 5 ms   +0
+  #     60 messages  old 6 ms   new 7 ms   +1
+  #    300 messages  old 14 ms  new 18 ms  +4
+  #
+  # It scales with the FILE COUNT, so it is nil at the size a room actually runs at -- the
+  # default turn budget is 30 -- and only becomes visible in a room several times past it.
+  # Do not "optimise" this back to `cat`: that loses input_filename, and with it the whole
+  # property this function exists to provide. A cheaper derivation is not the lever either;
+  # `sub`-based trimming measured about 50% WORSE than the split, and memoising the filename
+  # per file bought nothing over deriving it per document.
+  #
+  # The derived value is only ever printed and compared here -- never used as a path, unlike
+  # c_drain's cursor write -- and `lane/*/` cannot glob `..` or a dotfile, so it is a real
+  # directory name under `lane/`. A future use of it AS A PATH would need c_drain's reasoning
+  # about `..` re-done from scratch.
+  #
   # Same document gate as c_drain, for the same reason and one more: every caller of c_all
   # swallows its failure (`c_all 2>/dev/null || true`), so ONE non-object document in any lane
   # used to make status, verdict, claims and the transcript report an EMPTY room rather than a
-  # broken one. Skipping the document costs one message; aborting costs the whole log.
-  cat "${files[@]}" | jq -s -c "$C_UNTRUSTED"'map(select(type == "object"))
-                                 | _untrusted | sort_by(.lamport, .from)[]'
+  # broken one. Skipping the document costs one message; aborting costs the whole log. It is
+  # also what stops a bare trailing scalar in one lane file being attributed to the NEXT one:
+  # jq does not reset its parser at a file boundary, so such a value stays open until the next
+  # file's first token and `input_filename` then reports that next file. c_drain carries the
+  # full account of that; it applies verbatim here, and now for `.from` as well.
+  jq -n -c "$C_UNTRUSTED"'[ inputs
+      | select(type == "object")
+      | .from = (input_filename | split("/") | .[-2]) ]
+    | _untrusted | sort_by(.lamport, .from)[]' "${files[@]}"
 }
 
 # --- canonicalisation ----------------------------------------------------------

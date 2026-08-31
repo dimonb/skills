@@ -9,6 +9,13 @@
 #                            (the proposer yielding IS the proposal dying).
 # `concede` therefore always means the same thing — the sender yields — and who sent it
 # decides what falls.
+#
+# Three of those four rules are author-gated, so `.from` is load-bearing here: it decides
+# who may close an objection and who may kill a proposal. It is safe to compare because
+# c_all DERIVES it from the lane the message was read at rather than reading the message's
+# own claim about itself (lib.sh, the note above C_UNTRUSTED). This file is fed by c_canon,
+# which is fed by c_all, so a caller cannot hand it un-derived messages by accident; a NEW
+# caller that assembles messages some other way would break that and must not.
 . as $m
 | [ $m[] | select(.act == "propose") ] as $props
 | [ $m[] | select(.act == "object")  ] as $objs

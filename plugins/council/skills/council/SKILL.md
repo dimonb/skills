@@ -15,6 +15,11 @@ objection is closed by a specific message, a proposal dies by a specific message
 "we agree" means *no open objection and a full lap in which nobody added anything new*.
 No participant can end the room by saying it feels resolved.
 
+Those rules are author-gated — only an objection's own author withdraws it, only a
+proposal's own author kills it — so **a message's author is derived, never believed**: every
+reader takes it from the lane the file was read at and overwrites what the message says
+about itself. A lane has exactly one writer, so the lane *is* the author.
+
 ## When to use it, and when not
 
 Reach for it when a question benefits from a second and third *independent* model — a
@@ -49,8 +54,9 @@ Three invariants replace every lock:
 
 * one writer per lane, one writer per cursor, one writer per state file;
 * every file lands by write-tmp-then-`rename`, so a reader never sees half a message;
-* total order is `(lamport, from)`, carried **inside** each message, so every reader
-  derives the same sequence without asking anyone.
+* total order is `(lamport, from)` — `lamport` carried **inside** each message, `from`
+  taken from the lane it was read at — so every reader derives the same sequence without
+  asking anyone.
 
 Reaction is a **doorbell**: a one-byte write into the recipient's fifo, which a sleeping
 `recv` wakes on. Measured on the reference machine: the bell itself is **sub-millisecond** (0.3 ms median
@@ -243,6 +249,13 @@ remove the traversal and sed-injection forms. They do **not** close the supervis
 path in general: `--add-dir <skill>` makes this skill's own `adapters/` directory writable, so
 a participant can drop a plausibly-named file there and have the roster point a seat at it,
 and an ordinary `council.sh relaunch <peer>` will source it. That is measured, not theorised.
+
+**Deriving a message's author from its lane is not containment either.** It makes `.from`
+honest about *which lane wrote this*, which is what the room's mechanical rules need and is
+what removes the accidental forgeries — a relaunched seat with a stale identity, a model
+copying a worked `send` example including its `from` value. It says nothing about *which
+agent session* wrote it, because nothing stops a participant writing into another
+participant's lane. Read it as a correctness fix, never as authentication.
 
 Nothing here makes a room safe to share with a participant you would not trust with your
 shell. Run rooms accordingly. The trust model itself is an open question, not a settled one;

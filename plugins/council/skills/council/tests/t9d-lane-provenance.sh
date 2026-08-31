@@ -1,8 +1,11 @@
 #!/usr/bin/env bash
 # t9d — where a reader takes a message's LANE and its POSITION IN THAT LANE from, and what
-# happens when it takes them from the message. Both now come from the path the file was read
-# at. This is NOT a claim that a message's self-declared `.from` is verified — it is not, and
-# it is still the author every verb prints; only these two structural uses moved.
+# happens when it takes them from the message. Both come from the path the file was read at.
+#
+# The AUTHOR is derived from the lane too, and t9e covers that: it is a separate property
+# with separate consequences, and keeping it there means neither test's failure has to be
+# read through the other's. What this file asserts is the transport-level half — cursors,
+# grouping and the inbox — and it stays valid whatever the author rules do.
 #
 # Two fields used to be believed, by two different mechanisms, with two different
 # consequences. They are asserted separately here on purpose: one fix delivers both, and a
