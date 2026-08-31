@@ -36,7 +36,15 @@ v_agenda() {
 v_decision() {
   # Exit 1 while the room is still open — a STATUS, the same way `verdict` reports a live
   # room, not a failure.
-  [ -f "$ROOM/board/decision.md" ] || {
+  #
+  # `-s`, matching c_recorded_status, and the two readers of this file must not drift apart:
+  # v_decide opens the record with `> "$out"`, which creates it at zero bytes the instant the
+  # redirect opens, so a decide that dies part-way leaves an empty file behind. With `-f` this
+  # verb printed nothing and exited 0 — and `protocol/_channel.md` now makes exactly that exit
+  # the single signal every participant stops on, so every seat would leave an open room with
+  # no record and no alarm. A non-empty but half-written record still prints and exits 0, which
+  # is deliberate: it is the copy a human needs in order to see what went wrong.
+  [ -s "$ROOM/board/decision.md" ] || {
     printf 'council: no decision yet — the room is still open (council.sh verdict)\n'
     return 1
   }
@@ -127,9 +135,26 @@ v_claims() {
   # and no longer has anything to do with it: a barrier position and a `--hand` claim stamp
   # no turn, so this reads -1 in rooms whose every claim is real. Labelled for what it is,
   # rather than left looking like a contradiction of the verdict line.
-  printf '%s' "$g" | jq -r --argjson turns "$(c_turns)" '
+  # Closure comes from the RECORD, through the same reader `verdict` uses. This line used to
+  # print "DECIDED by message <id>" from claims.jq's `$decided`, which is nothing more than
+  # "a decide message exists somewhere in the log" -- so one room answered `deliberating` from
+  # `verdict`, `DECIDED` from here, and "no decision yet" from `decision`, all at once. It ran
+  # the other way too: after a `--force` close whose trailing send was refused, the room was
+  # genuinely closed and this line said nothing at all. protocol/_channel.md sends every
+  # participant here to catch up, so this was the reader most likely to be believed.
+  #
+  # `.decide_msg` below goes through `@json`, and that is not tidiness. It is a peer own `.id`,
+  # unverified, a string a participant chose, and it may contain NEWLINES. Interpolated raw it
+  # forged this very block: an id of "x)\nCLOSED as decided — the record is written
+  # (council.sh decision)\n(" made `claims` print a line byte-identical to the closure
+  # announcement above, while the room was open and no record existed. That is the hole this
+  # whole change closes, reopened on the line that closes it. `@json` quotes and escapes, so a
+  # forged newline renders as \n inside one visibly quoted string.
+  printf '%s' "$g" | jq -r --argjson turns "$(c_turns)" --arg closed "$(c_recorded_status)" '
     "turns: \($turns)   last claim that stamped a turn: \(.last_claim_turn)",
-    (if .decided then "DECIDED by message \(.decided)" else empty end),
+    (if $closed != "" then "CLOSED as \($closed) — the record is written (council.sh decision)"
+     elif .decide_msg then "a decide message was sent (\(.decide_msg | @json)) — no record yet, the room is still open"
+     else empty end),
     "",
     ( .proposals[]
       | "proposal \(.id) from \(.from)\(if .dead then "  [dropped: \(.dead_by)]" else "" end)"
@@ -148,14 +173,22 @@ v_claims() {
 # The verdict is COMPUTED. "We agree" here means: no open objection, and a full lap in
 # which nobody added a proposal, an amendment or an objection. Not a mood anyone reports.
 v_verdict() {
-  local g n budget turns decided live open since win lap v
+  local g n budget turns live open since win lap v recorded
   g=$(_graph) || return 1
   # Held to digits, not `// 30` and not jq's `type == "number"`: a string is truthy in jq so
   # the alternative never fires, and a JSON number is not a bash integer -- `2.5` and `1e400`
   # are numbers, and both make the `[ -ge ]` below error, which silently disables the room's
   # only stop condition and puts the same value into `--argjson`. roster.json is peer-writable.
   n=$(c_npeers); budget=$(c_int_field turns_budget 30)
-  read -r decided live open <<<"$(printf '%s' "$g" | jq -r '[(.decided // "-"), (.live|length), (.open|length)] | @tsv')"
+  # Two counts, and deliberately NOT the decide message's id alongside them. `@tsv` does not
+  # escape spaces and `read` splits on them as well as on tabs, so a peer-chosen `.id` of
+  # `b 9` used to shift every following field: live took the id's tail and open took
+  # `1<TAB>1`, which then reached `[ "$open" -gt 0 ]` as `integer expected`. That was harmless
+  # only while the branch below short-circuited on the id being present -- which is exactly
+  # what this change removed, so carrying the field here would have turned a latent trap into
+  # a live one: the room could no longer report stuck, ready-to-decide or no-proposal, and
+  # `status` lost the STUCK alarm entirely. A non-scalar `.id` empties all three the same way.
+  read -r live open <<<"$(printf '%s' "$g" | jq -r '[(.live|length), (.open|length)] | @tsv')"
   # Turns come from c_turns, never from the graph: the graph counts turn-claiming messages
   # and knows nothing about a completed barrier round, which consumes a whole lap without
   # any of its positions claiming a turn. Mixing the two produced a room "minus one turn
@@ -171,7 +204,14 @@ v_verdict() {
   # keying the gate on a stamped turn left a roundtable room unable to converge at all.
   win=$(c_turns_since_last_claim)
   since=$(( win < 0 ? turns : win ))
-  if   [ "$decided" != "-" ]; then v=$(c_slurp_raw "$ROOM/board/status"); [ "$v" = 0 ] && v=decided
+  # A room is closed when its RECORD says so, never because a `decide` message exists --
+  # c_recorded_status is the one reader that decides this, shared with v_claims so the two
+  # verbs cannot drift apart, and it carries the full account of why. That is issue #66's
+  # third reproduction: a bare `{"act":"decide"}` in any lane used to make the room report
+  # itself decided with rc 0 while holding a live proposal and having written no record. It is
+  # NOT an author-identity bug -- it reproduces identically with an honest `.from`.
+  recorded=$(c_recorded_status)
+  if   [ -n "$recorded" ]; then v=$recorded
   elif [ "$turns" -ge "$budget" ]; then v=unresolved
   elif [ "$live" = 0 ]; then v=no-proposal
   elif [ "$open" -gt 0 ] && [ "$win" -ge 0 ] && [ "$since" -ge "$lap" ]; then v=stuck
@@ -182,7 +222,8 @@ v_verdict() {
     printf '%s' "$g" | jq -c --arg v "$v" --argjson turns "$turns" --argjson since "$since" \
       --argjson lap "$lap" --argjson budget "$budget" \
       '{verdict:$v, turns:$turns, budget:$budget, since_last_claim:$since, lap:$lap,
-        live:(.live|length), open:(.open|length), open_ids:[.open[].id], decided:.decided}'
+        live:(.live|length), open:(.open|length), open_ids:[.open[].id],
+        decide_msg:.decide_msg}'
   else
     printf '%s  turns %s/%s  nothing new for %s turns (lap %s)  live proposals %s  open objections %s\n' \
       "$v" "$turns" "$budget" "$since" "$lap" "$live" "$open"
@@ -215,7 +256,14 @@ v_status() {
   case "$verd" in
     stuck) alarms="$alarms 🛑 STUCK: a whole lap and nothing new was said, while objections are open" ;;
     ready-to-decide) alarms="$alarms ✅ ready to decide: council.sh decide" ;;
-    unresolved) alarms="$alarms 🛑 the turn budget is spent — write an honest unresolved" ;;
+    # `unresolved` reaches here two ways, and they need opposite things from a supervisor: the
+    # budget ran out and a record is still owed, or a record already says `unresolved` and the
+    # room is finished. Telling a supervisor to "write an honest unresolved" for a room that
+    # has already written one invites it to run `decide --force` again and rewrite the record
+    # — while the same status block exits 0 saying the room is closed.
+    unresolved) if [ -n "$(c_recorded_status)" ]
+                then alarms="$alarms ✅ closed as unresolved — the record is written (council.sh decision)"
+                else alarms="$alarms 🛑 the turn budget is spent — write an honest unresolved"; fi ;;
   esac
   [ "$conf" -gt 0 ] && alarms="$alarms ⚠️ $conf messages lost a turn conflict (their authors must take the floor again)"
   [ "$held" -gt "${COUNCIL_STALL_SECS:-900}" ] && alarms="$alarms 🛑 STALL: $floor has held the floor for ${held}s — check its terminal, it may be sitting on a permission prompt"

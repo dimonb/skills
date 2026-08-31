@@ -73,7 +73,7 @@ council.sh <verb> [options]
     order   [--ids]                the total order of messages
     transcript                     the transcript, for a human
 
-  Chair
+  Closing the room
     decide  [--force]              write the ADR on the board and close the room
     say     <peer> "<text>"        speak to a participant out of band, in its terminal
 

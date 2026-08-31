@@ -15,6 +15,18 @@ objection is closed by a specific message, a proposal dies by a specific message
 "we agree" means *no open objection and a full lap in which nobody added anything new*.
 No participant can end the room by saying it feels resolved.
 
+Those rules are author-gated — only an objection's own author withdraws it, only a
+proposal's own author kills it — so **a message's author is derived, never believed**: every
+reader takes it from the lane the file was read at and overwrites what the message says
+about itself. A lane has exactly one writer, so the lane *is* the author. And the room is
+closed only when its **decision record** has been written, never because a `decide` message
+is present — a message says somebody ran `decide`, the record says it finished.
+
+**One exception, and it is a real hole in the claim above: `overrule` is gated on nothing.**
+Any participant can close any objection with it, and there is no chair (see the acts table
+below). So "no participant can end the room by saying it feels resolved" holds for `decide`
+and for a forged author, and does **not** hold for `overrule`.
+
 ## When to use it, and when not
 
 Reach for it when a question benefits from a second and third *independent* model — a
@@ -49,8 +61,9 @@ Three invariants replace every lock:
 
 * one writer per lane, one writer per cursor, one writer per state file;
 * every file lands by write-tmp-then-`rename`, so a reader never sees half a message;
-* total order is `(lamport, from)`, carried **inside** each message, so every reader
-  derives the same sequence without asking anyone.
+* total order is `(lamport, from)` — `lamport` carried **inside** each message, `from`
+  taken from the lane it was read at — so every reader derives the same sequence without
+  asking anyone.
 
 Reaction is a **doorbell**: a one-byte write into the recipient's fifo, which a sleeping
 `recv` wakes on. Measured on the reference machine: the bell itself is **sub-millisecond** (0.3 ms median
@@ -109,13 +122,19 @@ answer it.
 | `amend --refs '["<proposal>","<objection>"]'` | a revision; referencing an objection **closes** it |
 | `object --refs '["<id>"]'` | must name a specific id, or there is nothing to close |
 | `concede --refs '["<id>"]'` | **the sender yields**: pointing at an objection accepts it, pointing at your own proposal withdraws it in favour of somebody else's |
-| `withdraw` · `support` · `overrule` (chair) · `msg` · `notice` · `skip` · `decide` | |
+| `withdraw` · `support` · `overrule` (**ungated — any participant**) · `msg` · `notice` · `skip` · `decide` | |
 
 `concede` always means the same thing, and who sends it decides what falls: from the
 objection's author it closes the objection; from the proposal's author it kills the
 proposal — whether it points at an objection or at the proposal itself. An objection also
-closes on `withdraw` by its author, on an `amend` that references it, or on the chair's
-`overrule`.
+closes on `withdraw` by its author, on an `amend` that references it, or on an `overrule`.
+
+**`overrule` is gated on nothing.** Any participant can close any objection with it, and
+there is no chair: no roster field names one, no scenario assigns one, and no code checks
+one. It was documented as the chair's act for a long time, which was simply not true of the
+code. Whether a room should have a chair is a question about how a room is *governed* and
+has not been decided — read this as a description of what the code does today, not as a
+gap somebody is on their way to filling.
 
 An `amend` belongs to **one** proposal — the first proposal-typed id it references; its
 other refs are the objections it closes. (Referencing two proposals used to apply the
@@ -135,9 +154,14 @@ is not.
   proposal, amendment or objection;
 * `stuck` — a full lap went by, the objection is still open, nobody said anything new.
   This is the polite-echo failure that is invisible in a plain chat, and it is an alarm;
-* `unresolved` — the turn budget ran out;
+* `unresolved` — the turn budget ran out, **or** a `--force` close wrote an unresolved
+  record, which is read back from `board/status` the same way `decided` is and wins over
+  every computed verdict. So an `unresolved` room is not necessarily one that ran out of
+  turns; `status` distinguishes the two in its alarms;
 * `no-proposal` — the room talked and put nothing on the table;
-* `decided` — the record has been written.
+* `decided` — the record has been written. Read from `board/status`, which `decide` writes
+  once the record is on disk; a `decide` message with no record closes nothing, and the
+  room reports whichever of the verdicts above it is really in.
 
 `council.sh decide` **refuses** a room that is not ready. `--force` writes an honest
 `unresolved` record listing what is still open — a valid outcome, not a failure to hide.
@@ -243,6 +267,18 @@ remove the traversal and sed-injection forms. They do **not** close the supervis
 path in general: `--add-dir <skill>` makes this skill's own `adapters/` directory writable, so
 a participant can drop a plausibly-named file there and have the roster point a seat at it,
 and an ordinary `council.sh relaunch <peer>` will source it. That is measured, not theorised.
+
+**Deriving a message's author from its lane is not containment either.** It makes `.from`
+honest about *which lane wrote this*, which is what the room's mechanical rules need. It says
+nothing about *which agent session* wrote it, because nothing stops a participant writing into
+another participant's lane. Read it as a correctness fix, never as authentication.
+
+What it removes is one accident: anything that writes a lane **file** without going through
+`send` — an agent that emits the JSON itself, or copies a message it read out of `recv` with
+the original `from` intact. It does **not** cover a seat running under the wrong
+`COUNCIL_ME`, even though that sounds like the same thing: `send` takes the lane path and
+`from` from the same variable, so such a seat writes into the wrong lane with a *matching*
+`from`, and deriving one from the other changes nothing.
 
 Nothing here makes a room safe to share with a participant you would not trust with your
 shell. Run rooms accordingly. The trust model itself is an open question, not a settled one;
@@ -388,7 +424,11 @@ it.)*
 
 `council.sh status` is the block to read: whose floor and for how long, what is on the
 table, what is open, the verdict, and the alarms (`STUCK`, `STALL`, turn conflicts, budget
-exhausted). It exits **0 when the room is finished** and 1 while it is open.
+exhausted). It exits **0 when the room is finished** and 1 while it is open — with one caveat
+worth knowing: a room whose
+turn budget ran out reports `unresolved` and exits 0 before anyone has written a record, so
+`council.sh decision` (exit 0 only with a record) is the signal to trust when you need to know
+that the room's output exists.
 
 **Exit codes here mean status, not success.** `verdict` returns 1 on a live room and 2 on
 a stuck one. Piping such a command (`council.sh status | grep -q X` under
@@ -397,6 +437,13 @@ produced one false test result during development. Do not pipe status through a 
 
 ## Failure modes worth knowing before they cost you a night
 
+* **The two readers do not agree on which lanes are the room.** `recv` builds its list from
+  `roster.order`; everything else (`verdict`, `claims`, `transcript`, `decide`) globs `lane/*/`.
+  So renaming or removing a peer in `roster.json` orphans its lane: it still appears in the
+  transcript and the verdict, while `recv` delivers none of it to anybody, and an objection
+  raised there can never be answered. Nothing warns about it. This is a known open defect
+  (issue #66) — the obvious fix, pointing both readers at the roster, was tried and reverted,
+  and `c_all` carries the account of why.
 * **A participant that consumed your message and then went quiet is usually not thinking.**
   Look at its terminal. On `codex` it may be the trust-this-directory prompt; `agy` is
   launched with permissions skipped and no longer prompts at all. Otherwise it is a context
