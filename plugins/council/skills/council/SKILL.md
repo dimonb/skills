@@ -18,7 +18,9 @@ No participant can end the room by saying it feels resolved.
 Those rules are author-gated — only an objection's own author withdraws it, only a
 proposal's own author kills it — so **a message's author is derived, never believed**: every
 reader takes it from the lane the file was read at and overwrites what the message says
-about itself. A lane has exactly one writer, so the lane *is* the author.
+about itself. A lane has exactly one writer, so the lane *is* the author. And the room is
+closed only when its **decision record** has been written, never because a `decide` message
+is present — a message says somebody ran `decide`, the record says it finished.
 
 ## When to use it, and when not
 
@@ -143,7 +145,9 @@ is not.
   This is the polite-echo failure that is invisible in a plain chat, and it is an alarm;
 * `unresolved` — the turn budget ran out;
 * `no-proposal` — the room talked and put nothing on the table;
-* `decided` — the record has been written.
+* `decided` — the record has been written. Read from `board/status`, which `decide` writes
+  once the record is on disk; a `decide` message with no record closes nothing, and the
+  room reports whichever of the verdicts above it is really in.
 
 `council.sh decide` **refuses** a room that is not ready. `--force` writes an honest
 `unresolved` record listing what is still open — a valid outcome, not a failure to hide.

@@ -148,7 +148,7 @@ v_claims() {
 # The verdict is COMPUTED. "We agree" here means: no open objection, and a full lap in
 # which nobody added a proposal, an amendment or an objection. Not a mood anyone reports.
 v_verdict() {
-  local g n budget turns decided live open since win lap v
+  local g n budget turns live open since win lap v recorded
   g=$(_graph) || return 1
   # Held to digits, not `// 30` and not jq's `type == "number"`: a string is truthy in jq so
   # the alternative never fires, and a JSON number is not a bash integer -- `2.5` and `1e400`
@@ -171,7 +171,43 @@ v_verdict() {
   # keying the gate on a stamped turn left a roundtable room unable to converge at all.
   win=$(c_turns_since_last_claim)
   since=$(( win < 0 ? turns : win ))
-  if   [ "$decided" != "-" ]; then v=$(c_slurp_raw "$ROOM/board/status"); [ "$v" = 0 ] && v=decided
+  # A room is closed when its RECORD says so, never because a `decide` message exists.
+  # `board/status` is the whole condition, and the decide message is not part of it.
+  #
+  # It is tempting to require BOTH, as a belt-and-braces reading of "the record was written
+  # AND somebody ran decide". That is wrong, and measurably so: v_decide writes the record
+  # and board/status FIRST and sends the message last, and that send can legitimately fail --
+  # c_send refuses a sender that does not hold the floor (rc 6), which is the ordinary case
+  # for `decide --force` on a stuck room, and v_decide does not check it. Requiring the
+  # message leaves a room that has genuinely closed as `unresolved`, record on disk,
+  # reporting `deliberating` for ever.
+  #
+  # That is not hypothetical and it is not new: it is what the code did BEFORE this change,
+  # which required the message via `$decided`. A `--force` close by anyone not holding the
+  # floor -- the ordinary way a stuck room gets closed -- read back as a live room. So the
+  # same reader broke the rule twice, in opposite directions: closed when it was not, and
+  # open when it was. t9f's fourth case pins this half.
+  #
+  # `c_slurp_raw` returns `0` for a MISSING file -- it has to, it is a reader with nothing to
+  # report -- and the old `[ "$v" = 0 ] && v=decided` mapped exactly that onto `decided`. So a
+  # bare `{"act":"decide"}` written into any lane made the room report itself closed and
+  # decided, rc 0, while holding a live proposal and having written no decision record at all.
+  # rc 0 is documented as "the room is closed" and is what a supervising session branches on,
+  # so nothing anywhere said otherwise. That is issue #66's third reproduction; it is NOT an
+  # author-identity bug -- it reproduces identically with an honest `.from` -- and it directly
+  # contradicted this file's own documented rule, that the recorded status is written to
+  # `board/status` and not re-derived from the presence of a `decide` message.
+  #
+  # Absent, unreadable or holding anything else, `board/status` therefore means NOT CLOSED and
+  # the room falls through to its real verdict. Only the two words `v_decide` writes are
+  # believed -- `board/status` is in the room like every other file, so an unexpected value is
+  # treated as absent, the same rule applied to every other untrusted room input.
+  #
+  # This is the only caller of c_slurp_raw. If a second one ever appears, it inherits the
+  # missing-file-reads-as-0 trap and needs its own decision about what absence means.
+  recorded=$(c_slurp_raw "$ROOM/board/status")
+  case "$recorded" in decided|unresolved) ;; *) recorded="" ;; esac
+  if   [ -n "$recorded" ]; then v=$recorded
   elif [ "$turns" -ge "$budget" ]; then v=unresolved
   elif [ "$live" = 0 ]; then v=no-proposal
   elif [ "$open" -gt 0 ] && [ "$win" -ge 0 ] && [ "$since" -ge "$lap" ]; then v=stuck
