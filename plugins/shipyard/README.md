@@ -43,6 +43,15 @@ a slot behaves identically on either; when neither is available the skill refuse
 versus idle from a snapshot diff rather than spinner glyphs, and `--only-changed` keeps it
 silent until a state, stage, escalation count, ctx band or terminal presence actually moves.
 
+**A Codex parent that survives transient model-capacity stops.** When shipyard is launched
+from Codex in agterm, the first live child also starts one idempotent continuity watcher for
+the parent session. A root capacity banner gets one `resume`; eight seconds later the watcher
+queues `/goal resume`, including during an active turn, because agterm supports steering.
+Indented tool output cannot imitate the banner, service lines and stale `Working` scrollback
+do not hide it, and repeated capacity episodes re-arm independently. The current input prompt
+is the safety boundary: any user draft blocks submission, and text plus Return are sent as two
+separate terminal actions. Claude parents and tmux runs are unchanged.
+
 **Watchdogs for the two failure modes that look like health.** A background agent parked on
 CI and a background agent that has *died* have the same shape — idle, no escalation, green
 board. So the report tracks how long each slot has been motionless and prints a loud stall
@@ -90,6 +99,7 @@ message dies with the context that held it.
 | `shipyard-agent.sh` | select and launch the child runtime that matches the parent |
 | `shipyard-backend.sh` | the agterm/tmux abstraction — every terminal operation goes through it |
 | `shipyard-lib.sh` | mailbox paths, slot resolution, payload input, the child env preamble |
+| `shipyard-continuity.sh` | automatic capacity retry and paused-goal continuity for a Codex parent in agterm |
 | `shipyard-launch.sh` | start a child: slot, protocol, launcher, container |
 | `shipyard-report.sh` | the status table, stall watchdog, sidebar glyphs |
 | `shipyard-ctx.sh` | the ctx column: reads a child's transcript, infers its window, bands it |
@@ -99,7 +109,7 @@ message dies with the context that held it.
 | `shipyard-answer.sh` | parent side: answer one |
 | `shipyard-tell.sh` | parent side: speak first, into the child's terminal |
 | `shipyard-compact.sh` | compact a child **and** put it back to work |
-| `shipyard-down.sh` | teardown, after a merge |
+| `shipyard-down.sh` | teardown after a merge, including the last parent continuity watcher |
 
 Every script runs by hand from a shell too.
 

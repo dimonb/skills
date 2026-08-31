@@ -9,25 +9,29 @@
 # under another PR. That gap is written down in dimonb/skills#58 rather than papered over here:
 # these tests are real, they are fast, and nothing yet forces anyone to run them.
 #
-# Everything under test is a pure function over a file and two environment variables, so this
-# needs no process machinery, no network and no fixtures outside its own mktemp dir.
+# Most tests are pure functions over fixture files and environment variables. The continuity
+# suite also starts one short detached watcher against a fake `agtermctl`, proves idempotency,
+# and reaps it through the real lifecycle cleanup. Nothing uses the network or fixtures outside
+# its own mktemp directory.
 #
 # SCOPE IS DELIBERATELY NARROW, and the rule is about PROVENANCE, not about counting: every
-# property asserted here traces to a defect this code actually shipped — six from the round of
-# review that produced these files, plus the band that round added. They are expanded into ~57
-# checks because boundaries and the malformed-override table are cheap to enumerate once the
-# property is there; that expansion is not padding, and the count is not the contract. Do not add
-# a property that has no defect behind it: a suite longer than the code it guards stops being run.
+# property asserted here traces to a defect this code actually shipped or a live failure this
+# repository is closing. Boundary tables expand those properties into multiple cheap checks;
+# that expansion is not padding, and the count is not the contract. Do not add a property that
+# has no defect behind it: a suite longer than the code it guards stops being run.
 #
 # WHAT IS NOT COVERED, so that a green run is never read as more than it is — `ctx_transcript` has
 # no test at all, and neither does `ctx_probe`'s transcript branch. Specifically unguarded: the
 # project-directory slug, the newest-by-mtime choice, the exclusion of subagent transcripts, the
 # CLAUDE_CONFIG_DIR/CLAUDE_HOME resolution, and which of `cur`/`peak` feeds ctx_window (the pane
-# path the tests use sets them equal). Mutate any of those and this suite still passes.
+# path the tests use sets them equal). The continuity suite uses recorded screen shapes and a
+# fake terminal CLI; it does not exercise a real control socket or prove a future Codex build
+# renders the same markers. Mutate any uncovered path and this suite still passes.
 set -uo pipefail
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
-tests=(t1-totals.sh t2-window.sh t3-probe.sh t4-band.sh t5-agent.sh t6-codex-ctx.sh)
+tests=(t1-totals.sh t2-window.sh t3-probe.sh t4-band.sh t5-agent.sh t6-codex-ctx.sh
+       t7-continuity.sh)
 
 rc=0
 for t in "${tests[@]}"; do

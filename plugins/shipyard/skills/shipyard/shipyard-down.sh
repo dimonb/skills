@@ -102,6 +102,7 @@ git -C "$ROOT" worktree prune 2>/dev/null
 # next run derives a fresh one from wherever you launch it. Keeping a stale pin would
 # send tomorrow's children into a workspace you have since stopped working in.
 if [ -z "$(shipyard_slots 2>/dev/null)" ]; then
+  shipyard_continuity_stop_all
   shipyard_container_prune
   shipyard_container_unpin
 fi
