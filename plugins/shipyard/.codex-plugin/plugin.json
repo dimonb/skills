@@ -1,7 +1,7 @@
 {
   "name": "shipyard",
-  "version": "0.3.0",
-  "description": "Run the repo's ship skill in background terminals, using the same agent runtime as the parent session, and supervise a fleet of them: one git worktree each, status monitoring, and every escalation carried back to you. Requires the ship skill; it launches nothing else.",
+  "version": "0.4.0",
+  "description": "Run the repo's ship skill in background terminals, using the same agent runtime as the parent session, with fleet monitoring, escalations, and automatic Codex parent continuity after transient model-capacity stops. Requires the ship skill; it launches nothing else.",
   "author": {
     "name": "dimonb",
     "url": "https://github.com/dimonb"
@@ -23,7 +23,7 @@
   "interface": {
     "displayName": "shipyard",
     "shortDescription": "Supervise a fleet of background ship sessions",
-    "longDescription": "A shipyard is where many ships are built at once. It launches the repo's own ship skill with a child agent matching the parent runtime, in one background terminal and git worktree per change. It reports status, watches for children that have stalled or run out of context, and carries every question and architectural decision back to the parent session. Requires the ship skill in the repo.",
+    "longDescription": "A shipyard is where many ships are built at once. It launches the repo's own ship skill with a child agent matching the parent runtime, in one background terminal and git worktree per change. It reports status, watches for children that have stalled or run out of context, carries every escalation back to the parent session, and keeps a Codex parent supervising after transient model-capacity stops. Requires the ship skill in the repo.",
     "developerName": "dimonb",
     "category": "Developer Tools",
     "capabilities": [

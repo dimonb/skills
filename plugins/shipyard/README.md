@@ -43,6 +43,25 @@ a slot behaves identically on either; when neither is available the skill refuse
 versus idle from a snapshot diff rather than spinner glyphs, and `--only-changed` keeps it
 silent until a state, stage, escalation count, ctx band or terminal presence actually moves.
 
+**A Codex parent that survives transient model-capacity stops.** When shipyard is launched
+from Codex in agterm, the first live child also starts one idempotent continuity watcher for
+the parent session, even when a child-runtime override selects Claude. A root capacity banner
+gets one `resume`; eight seconds later the watcher
+queues `/goal resume`, including during an active turn, because agterm supports steering.
+Indented tool output cannot imitate the banner, service lines and stale `Working` scrollback
+do not hide it, and a later observably distinct banner or intervening submitted turn re-arms
+the guard. Byte-identical scrollback replacements between polls have no cursor or generation
+in the current agterm text API, so the guard conservatively avoids replaying an unchanged screen.
+The current input prompt
+is the common-case safety boundary: an existing user draft blocks submission. The watcher checks
+the prompt immediately before text, sends text and Return as separate actions, and re-reads the
+prompt plus user-activity clock before Return; activity delays Return, and a mismatch cancels it
+without erasing input. The current agterm control API has no atomic conditional insert or submit,
+so a keystroke can still race between either check and its following write. In that narrow window
+the inputs can concatenate, and the watcher can alter or submit the combined line. This guard
+reduces routine collisions; it does not claim absolute draft isolation. Claude parents and tmux
+runs are unchanged.
+
 **Watchdogs for the two failure modes that look like health.** A background agent parked on
 CI and a background agent that has *died* have the same shape — idle, no escalation, green
 board. So the report tracks how long each slot has been motionless and prints a loud stall
@@ -90,6 +109,7 @@ message dies with the context that held it.
 | `shipyard-agent.sh` | select and launch the child runtime that matches the parent |
 | `shipyard-backend.sh` | the agterm/tmux abstraction — every terminal operation goes through it |
 | `shipyard-lib.sh` | mailbox paths, slot resolution, payload input, the child env preamble |
+| `shipyard-continuity.sh` | automatic capacity retry and paused-goal continuity for a Codex parent in agterm |
 | `shipyard-launch.sh` | start a child: slot, protocol, launcher, container |
 | `shipyard-report.sh` | the status table, stall watchdog, sidebar glyphs |
 | `shipyard-ctx.sh` | the ctx column: reads a child's transcript, infers its window, bands it |
@@ -99,7 +119,7 @@ message dies with the context that held it.
 | `shipyard-answer.sh` | parent side: answer one |
 | `shipyard-tell.sh` | parent side: speak first, into the child's terminal |
 | `shipyard-compact.sh` | compact a child **and** put it back to work |
-| `shipyard-down.sh` | teardown, after a merge |
+| `shipyard-down.sh` | teardown after a merge, including the last parent continuity watcher |
 
 Every script runs by hand from a shell too.
 

@@ -14,6 +14,8 @@ export PATH="/opt/homebrew/bin:/opt/local/bin:/usr/local/bin:/usr/bin:/bin:/usr/
 . "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/shipyard-backend.sh"
 # shellcheck source=shipyard-agent.sh
 . "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/shipyard-agent.sh"
+# shellcheck source=shipyard-continuity.sh
+. "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/shipyard-continuity.sh"
 
 # Escalation mailbox. Lives in the SHARED .git (git-common-dir), so the very same
 # path resolves from the main worktree (parent watcher) and from

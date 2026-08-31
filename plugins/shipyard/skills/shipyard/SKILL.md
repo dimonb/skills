@@ -188,6 +188,30 @@ up for; it is the one property of the skill that is not recoverable after the fa
 `SHIPYARD_DRY=1` prints the slot, the protocol path, the propagated env and the whole launcher
 without starting anything — use it when you are unsure what a child will get.
 
+**Codex parent continuity starts automatically on the agterm path.** Once the first child is
+live, `shipyard-launch.sh` starts one idempotent `shipyard-continuity.sh` watcher for the Codex
+parent session, independently of any child-runtime override. A root model-capacity banner gets
+a single `resume`, followed eight seconds later by
+`/goal resume`; a changed banner, increased banner count, or observed intervening turn re-arms
+the sequence. The agterm text response has no terminal cursor or generation, so a byte-identical
+scrollback replacement that happens wholly between polls is indistinguishable from the already
+handled screen and is conservatively not replayed. Root ordering is
+load-bearing: indented tool output cannot trigger it, while Codex service lines and stale
+`Working` scrollback after the banner do not falsely prove that the interrupted turn resumed.
+The watcher may queue `/goal resume` as steering while the parent turn is active; recent activity
+elsewhere in the agterm window does not make it wait for the turn to become idle. It checks that
+the live prompt is empty immediately before typing, then re-reads the prompt and user-activity
+clock before sending Return as a separate terminal action. Activity delays Return, a mismatch
+blocks it without erasing input, and a failed Return is retried only while the exact watcher-owned
+text remains.
+
+This is best-effort draft protection, not an atomic guarantee. The current agterm control API
+offers separate read, text, and Return requests but no conditional insert or submit. A user
+keystroke can therefore land after an empty or exact-prompt check and before its following write;
+in that narrow race the inputs can concatenate, and the combined line can be altered or submitted.
+An existing draft is still a hard veto, and the late checks minimize the exposed window. This guard
+is for a Codex parent in agterm; Claude parents and the tmux backend are deliberate no-ops.
+
 The primary path for anything needing a human is the escalation mailbox (Step 3);
 `shipyard-tell.sh` (Step 4) is the way back when the child did not ask. `--remote-control` is
 left on as a manual escape hatch for a human at another client — it has no send-side CLI,
@@ -642,6 +666,12 @@ for dirty, one for locked — a single `-f` fails on a lock with a message that 
 permissions problem), prunes, and on agterm drops the `-ai` workspace — plus its pinned
 name — once it holds no ship sessions. The change's feature branch can go afterwards
 (`git branch -d <branch>` — `-d` refuses an unmerged branch, which is what you want after a CLOSE rather than a merge).
+Removing the last slot also asks every token-matched parent continuity watcher to stop itself
+and removes its live mailbox records, but only after a successful, structurally valid backend
+query proves that no slot remains. A small admission generation remains so a start already in
+flight cannot publish a watcher after teardown returns. An unreadable backend or unacknowledged
+watcher preserves lifecycle state instead of signaling an unverified PID. A later shipyard run
+starts a fresh watcher for its own parent session.
 
 ## What the table shows
 
@@ -688,8 +718,9 @@ collide with it.
 | `shipyard-agent.sh` | agent-runtime adapter: parent detection, skill syntax, environment and launcher |
 | `shipyard-backend.sh` | the agterm/tmux abstraction — every terminal operation goes through it |
 | `shipyard-lib.sh` | mailbox paths, slot resolution, payload input, the child env preamble |
+| `shipyard-continuity.sh` | capacity retry and paused-goal continuity for a Codex parent in agterm |
 | `shipyard-ctx.sh` | the ctx column: reads a child's transcript, infers its window, bands it |
-| `tests/run-all.sh` | the `shipyard-ctx.sh` suite — run by hand: `bash <SKILL>/tests/run-all.sh` |
+| `tests/run-all.sh` | the shipyard script suite — run by hand: `bash <SKILL>/tests/run-all.sh` |
 | `shipyard-launch.sh` | start a child: slot, protocol, launcher, container |
 | `shipyard-report.sh` | the status table + stall watchdog + sidebar glyphs |
 | `shipyard-escalations.sh` | the escalation view (`--new` for the fast monitor) |
