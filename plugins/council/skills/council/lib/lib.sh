@@ -467,7 +467,33 @@ c_send() {
   # (lamport, from) order disagrees with the turn order, which makes a transcript show a
   # reply before what it replies to. Observing a message by counting it is still observing
   # it, so the clock rises to match.
-  lam=$(( $(c_max_lamport) + 1 ))
+  #
+  # CAPTURED AND CHECKED, NEVER INTERPOLATED INTO `$(( ))`. c_max_lamport returns a status as
+  # well as a number, and arithmetic cannot see a status: on an unreadable log it returned 2
+  # printing nothing, `$(( $(c_max_lamport) + 1 ))` became `$(( + 1 ))`, and bash reads that as
+  # 1 -- so every send during the outage stamped `lamport: 1` at rc 0 and PERSISTED the rewound
+  # clock a few lines below. Measured against origin/main on the same room, which stamped 5, 6,
+  # 7 where this stamped 1, 1, 1; after the bad file was removed the outage messages sorted
+  # above the objection they answered, and they shared the key (1,"a"), which sort_by cannot
+  # break. An empty VARIABLE is read as 0 by `$(( ))` just as an empty substitution is, so the
+  # capture alone fixes nothing: the status and the digits are both checked, and neither check
+  # can be satisfied by an empty string.
+  #
+  # The one other site with this shape, `seq=$(( $(c_seq) + 1 ))` above, is safe for a reason
+  # worth preserving rather than re-deriving: c_slurp ALWAYS prints a number, 0 for a missing
+  # or unusable file, so it has no empty path to misread. c_turns likewise. Keep any function
+  # feeding `$(( ))` either total, like those, or checked, like this one -- the hole is a
+  # function that is neither.
+  local mx
+  mx=$(c_max_lamport) || {
+    echo "council send: this room's log could not be read — refusing to stamp a clock from it. The error above says what could not be read." >&2
+    return 1
+  }
+  case "$mx" in ''|*[!0-9]*)
+    echo "council send: this room's clock could not be computed — refusing to send." >&2
+    return 1 ;;
+  esac
+  lam=$(( mx + 1 ))
   deps=$(c_deps_json)
   # Which turn this message claims. A hand (raised out of turn) claims none, and neither
   # does an opening position: the whole point of the barrier round is that N participants
@@ -800,10 +826,11 @@ c_all() {
   #     guard written to stop it: `v_decide` refuses when the state could not be COMPUTED, and a
   #     silently-incomplete log computes fine.
   #   * It cost O(files) on every call for the life of the room, because nothing repairs the file
-  #     and this function globs the whole log every time. Measured: one corrupt file in a
-  #     300-message room took `status` from 0.58 s to 12.89 s (v_status calls this eight times,
-  #     each forking one `jq empty` per file), and `floor` -- which `recv --until-floor` polls --
-  #     from 0.23 s to 4.86 s.
+  #     and this function globs the whole log every time. Measured ON THE TREE THAT CARRIED THE
+  #     RETRY, healthy room versus the same room with one corrupt file: `status` 0.58 s -> 12.89 s
+  #     at 300 messages (v_status calls this eight times, each forking one `jq empty` per file),
+  #     and `floor` -- which `recv --until-floor` polls -- 0.23 s -> 4.86 s. Both numbers are
+  #     from that tree, not this one; on this one the read fails instead of re-probing.
   #
   # So the whole log is read or none of it is, and the failure is loud: c_max_lamport, c_round0
   # and c_canon — the three callers, two of which sit ABOVE this function in the file — no
@@ -839,8 +866,23 @@ c_all() {
   local err rc
   { err=$(jq -n -c "$C_UNTRUSTED$prog" "${files[@]}" 2>&1 1>&3); rc=$?; } 3>&1
   [ "$rc" = 0 ] && return 0
-  printf 'council: the log could not be read (a lane file does not parse): %s\n' \
-    "$(printf '%s' "$err" | tr -d '\000' | tr '\n\r\t' '   ' | cut -c1-300)" >&2
+  # A WHITELIST of printable ASCII, not a list of characters to remove. The first version of
+  # this line stripped NUL, newline, CR and tab and was still wrong: `\v` and `\f` open a new
+  # display row, BS rewrites text already printed, BEL rings, and ESC is full cursor control --
+  # `ESC[2J ESC[H` clears the screen and homes the cursor, so a peer-chosen lane name ERASED
+  # the marker below rather than bypassing it, and a real terminal was left showing one
+  # attacker-authored line where the whole status block had been. An exclusion list is a check
+  # that has to catch every case and had already missed five; `tr -c` cannot miss one.
+  #
+  # It runs BEFORE the length cut on purpose: cutting first can leave a half-written escape
+  # sequence at the boundary, and a bare `ESC ]` there makes a terminal swallow everything
+  # after it. After this, every byte that reaches the cut is one printable character wide.
+  #
+  # The status is reported rather than asserted: jq exits non-zero for a file that does not
+  # parse, but also for a program error, and 127 when it is not installed at all. Naming the
+  # cause would be wrong in two of those three.
+  printf 'council: this room'\''s log could not be read (jq exited %s): %s\n' \
+    "$rc" "$(printf '%s' "$err" | LC_ALL=C tr -c '\40-\176' ' ' | cut -c1-300)" >&2
   return 2
 }
 
