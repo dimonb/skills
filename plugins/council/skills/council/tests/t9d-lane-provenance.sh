@@ -247,18 +247,30 @@ if printf '%s' "$out" | grep -q "an honest earlier message" \
 else
   echo "FAIL an unparseable document was not retired cleanly: $n line(s) released"; fail=1
 fi
-if grep -q '000002.json' "$err"; then
-  echo "ok   the unreadable file was named on stderr"
+# Grep for the SKILL's own wording, not the bare filename: jq's own parse error already prints
+# the path, so `grep 000002.json` passed against unfixed code too and proved nothing. Measured
+# both ways; this form is false without the diagnostic and true with it.
+if grep -q 'not readable JSON' "$err" && grep -q '000002.json' "$err"; then
+  echo "ok   the unreadable file was named on stderr by this skill, not just by jq"
 else
-  echo "FAIL the unreadable file was dropped silently"; fail=1
+  echo "FAIL the drop carried no diagnostic of its own"; fail=1
 fi
 cur=$(cat "$R/cursor/b/a" 2>/dev/null)
 if [ "$cur" = 3 ]; then echo "ok   the cursor moved past it (=$cur)"
 else echo "FAIL the cursor stalled at '$cur' (want 3)"; fail=1; fi
-# and the whole room is still readable through the other reader
-live=$(bash "$CLI" order 2>/dev/null | grep -c . || true)
-if [ "$live" = 2 ]; then echo "ok   the transcript reader also saw both honest messages"
-else echo "FAIL the transcript reader saw $live message(s), want 2"; fail=1; fi
+# The two readers deliberately DIFFER here, and the asymmetry is the point. c_drain reads what
+# is NEW and moves its cursor past the bad file, so `recv` keeps the room going at the cost of
+# one message -- that is this issue's point 4. c_all reads the WHOLE log on every call, so it
+# refuses instead: dropping the file there computed a confident verdict from an incomplete log
+# (an objection vanished and `decide` wrote "(there were no objections)" at rc 0) and re-probed
+# every file on every call for the life of the room. It must fail, and it must say why.
+oerr="$R/order.err"
+live=$(bash "$CLI" order 2>"$oerr" | grep -c . || true)
+if [ "$live" = 0 ] && grep -q '000002.json' "$oerr"; then
+  echo "ok   the whole-log reader refused the room and named the file"
+else
+  echo "FAIL the whole-log reader released $live message(s) and wrote $(wc -c <"$oerr" | tr -d ' ') bytes of stderr"; fail=1
+fi
 
 # --- 7. the room still works normally afterwards --------------------------------
 fresh

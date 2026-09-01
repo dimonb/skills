@@ -313,7 +313,10 @@ c_recorded_status() {
 c_max_lamport() {
   local mine disk
   mine=$(c_lamport)
-  disk=$({ c_all 2>/dev/null || true; } | jq -s 'if length == 0 then 0 else (max_by(.lamport).lamport) end')
+  # `|| true` because an empty room is a normal state (see c_canon), but NOT `2>/dev/null`: when
+  # c_all fails it is because a lane file does not parse, and jq's error names that file. The
+  # redirect that used to be here made the room merely look empty.
+  disk=$({ c_all || true; } | jq -s 'if length == 0 then 0 else (max_by(.lamport).lamport) end')
   # c_send feeds this straight into `lam=$(( ... + 1 ))`, so BOTH paths out of here have to
   # be integers -- the value read off disk, gated on the next line, and `mine`, which is what
   # this function returns whenever the comparison below is false or errors. `mine` is gated
@@ -368,7 +371,7 @@ c_int_field() { # <field> <default>  -- a roster integer, or the default if it i
 c_quorum() { c_int_field round_quorum ''; }
 
 # Positions posted in the opening round, as JSON lines.
-c_round0() { { c_all 2>/dev/null || true; } | jq -c 'select(.round == 0)'; }
+c_round0() { { c_all || true; } | jq -c 'select(.round == 0)'; }
 
 # open | closed. Closed for good once everyone has posted, or once the deadline has passed
 # with a quorum — one participant that never starts must not hold the room forever.
@@ -474,33 +477,29 @@ c_send() {
 
 # --- surviving a lane file that does not parse ----------------------------------
 # jq reads a whole run of files as ONE stream, which is what makes `input_filename` work and
-# what both readers below are built on. The price is that a single unparseable byte anywhere
-# aborts the run: `recv` came back 4 with its cursor unmoved — permanently, and 4 is the one
-# status a participant is explicitly told to retry — while `status`, `verdict`, `claims` and
-# the transcript all reported an EMPTY room rather than a broken one.
+# what both readers of the log are built on. The price is that a single unparseable byte
+# anywhere aborts the run: `recv` came back 4 with its cursor unmoved — permanently, and 4 is
+# the one status a participant is explicitly told to retry.
 #
 # jq cannot recover from a parse error mid-stream, so the recovery is the caller's: run the
 # stream as before, and only IF IT FAILS, ask each file on its own and re-run over the ones
-# that answered. A healthy room never reaches this and pays nothing for it — measured rather
-# than asserted, by the method of the table at c_all: child CPU per call, 25 calls per size,
-# three lanes, one room built once and read from both trees, two runs at 1-minute load ~4:
+# that answered.
 #
-#                  before        this
-#     12 messages  6.6 / 6.7     6.9 / 6.6 ms
-#     30 messages  9.4 / 9.2     9.3 / 9.5
-#     60 messages  13.3 / 13.6   13.6 / 13.6
-#    300 messages  46.9 / 44.6   46.7 / 46.5
-#
-# Read that as "unchanged", which is the only claim it supports: every difference is smaller
-# than the spread between two runs of the SAME tree. The added code is one branch that a
-# healthy room never takes, so there is nothing here that ought to cost anything — the table
-# is here to check that belief, not to advertise a win.
+# THIS IS USED BY c_drain ONLY, and the asymmetry with c_all is the whole point. c_drain reads
+# what is NEW and then moves its cursor past the file it dropped, so the cost is paid once and
+# the room keeps going; that is where issue #67's point 4 is fixed. c_all reads the WHOLE log
+# on every call, so the same recovery there was wrong twice over — it computed confident
+# verdicts from a log with a message missing, and it re-probed every file on every call for the
+# life of the room. c_all carries the measurements and the reasoning; do not "restore symmetry"
+# by adding it back there.
 #
 # One non-parsing file then costs its own message instead of the whole log, which is exactly
 # the trade `select(type == "object")` already makes for a document that parses but is not an
 # object. It is deliberately NOT silent: a lane holding bytes nobody can read is a fact about
 # the room, and a reader that quietly routes around it hides a corruption that will not repair
-# itself.
+# itself. That claim is true of THIS reader — `recv` does not suppress it — and it is worth
+# stating that it was once false of the other one: every c_all caller redirected stderr, so
+# this line existed and reached nobody.
 #
 # Retrying is only safe because both programs SLURP — `[ inputs | ... ]` — so a parse error
 # aborts before a single value has been emitted. A future rewrite that streams `inputs`
@@ -733,25 +732,44 @@ c_all() {
   # future use of it AS A PATH would need c_drain's reasoning about `..` re-done from scratch.
   #
   # Same document gate as c_drain, for the same reason and one more: every caller of c_all
-  # swallows its failure (`c_all 2>/dev/null || true`), so ONE non-object document in any lane
-  # used to make status, verdict, claims and the transcript report an EMPTY room rather than a
-  # broken one. Skipping the document costs one message; aborting costs the whole log. It is
+  # swallows its exit status (`c_all || true`), because an empty room is a normal state, so ONE
+  # non-object document in any lane used to make status, verdict, claims and the transcript
+  # report an EMPTY room rather than a broken one. They no longer swallow its STDERR, so the
+  # remaining failure — a file that does not parse at all — announces itself and names the file
+  # even though the status is still discarded.
+  # Skipping the document costs one message; aborting costs the whole log. It is
   # also what stops a bare trailing scalar in one lane file being attributed to the NEXT one:
   # jq does not reset its parser at a file boundary, so such a value stays open until the next
   # file's first token and `input_filename` then reports that next file. c_drain carries the
   # full account of that; it applies verbatim here, and now for `.from` as well.
   #
-  # And the retry, for the case the filter above cannot reach: a byte that does not PARSE is
-  # never a document, so no filter runs on it. See _c_parseable — including why writing this
-  # attempt's output straight to stdout stays correct.
+  # AND THERE IS DELIBERATELY NO RETRY HERE, unlike c_drain. A byte that does not PARSE is never
+  # a document, so no filter reaches it and this function fails as a whole. That is the intended
+  # behaviour, and dropping the unreadable file instead was tried and reverted:
+  #
+  #   * It turned "unreadable" into "readable but silently incomplete". The room then computed a
+  #     confident verdict from a log with a message missing -- so an objection whose lane file
+  #     had one corrupted byte simply vanished, `claims` reported `open objections: 0`, and
+  #     `decide` wrote `(there were no objections)` into the permanent record at rc 0. That is
+  #     the false decision record this file calls the worst outcome it has, and it BYPASSED the
+  #     guard written to stop it: `v_decide` refuses when the state could not be COMPUTED, and a
+  #     silently-incomplete log computes fine.
+  #   * It cost O(files) on every call for the life of the room, because nothing repairs the file
+  #     and this function globs the whole log every time. Measured: one corrupt file in a
+  #     300-message room took `status` from 0.58 s to 12.89 s (v_status calls this eight times,
+  #     each forking one `jq empty` per file), and `floor` -- which `recv --until-floor` polls --
+  #     from 0.23 s to 4.86 s.
+  #
+  # So the whole log is read or none of it is, and the failure is loud: the callers below no
+  # longer suppress jq's parse error, which names the offending file. `recv` still degrades one
+  # message at a time, because c_drain reads only what is NEW and moves its cursor past the bad
+  # file; that is where issue #67's point 4 is actually fixed, and it is the only place the
+  # trade pays for itself.
   local prog='[ inputs
       | select(type == "object")
       | .from = (input_filename | split("/") | .[-2]) ]
     | _untrusted | sort_by(.lamport, .from)[]'
-  jq -n -c "$C_UNTRUSTED$prog" "${files[@]}" && return 0
-  _c_parseable "${files[@]}"
-  [ "${#_C_GOOD[@]}" -gt 0 ] || return 1
-  jq -n -c "$C_UNTRUSTED$prog" "${_C_GOOD[@]}"
+  jq -n -c "$C_UNTRUSTED$prog" "${files[@]}"
 }
 
 # --- canonicalisation ----------------------------------------------------------
@@ -770,7 +788,11 @@ c_canon() {
   # `|| true`: an EMPTY room is a normal state, not an error. c_all reports "nothing
   # here" with exit 1, and under `set -e` + pipefail in a caller that propagated
   # through the command substitution and killed the very first send in a fresh room.
-  { c_all 2>/dev/null || true; } | jq -s -c '
+  #
+  # The stderr redirect that used to sit beside it is gone. c_all's OTHER exit-1 case is a lane
+  # file that does not parse, and hiding jq's error there made an unreadable room look like an
+  # empty one to every reader that goes through here -- which is all of them.
+  { c_all || true; } | jq -s -c '
     sort_by(.lamport, .from)
     | ( [ .[] | select(.hand == false and .turn != null) ]
         | group_by(.turn) | map(sort_by(.lamport, .from) | .[0].id) ) as $win
