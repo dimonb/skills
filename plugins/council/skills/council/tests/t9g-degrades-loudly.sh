@@ -253,15 +253,39 @@ esac
 # which made `v_verdict` return before it reaches `recorded=$(c_recorded_status)` — so a closed
 # room went to `verdict` rc 1 printing nothing, `status` rc 1 and `decide` rc 1, and a
 # supervisor keyed on status exit 0 waited for ever on a room whose record was already on disk.
-# It is the inversion this file's own header names: the cheap way to make an unreadable log
+# It is the inversion t9f's own header names: the cheap way to make an unreadable log
 # refuse is to stop believing the record, and that breaks every room that legitimately closed.
 # Any future attempt at that seam has to let the record answer FIRST; this assertion is how it
 # finds out that it did not.
+# The objection is what makes this room close as `unresolved` rather than `decided`, and that
+# matters for the second assertion below: `decide` on a `decided` room returns 3 without
+# rewriting anything, so a `decided` fixture cannot see a record rewritten with bad values. A
+# first version of this block used one and passed against the very commit it was written for.
 fresh
 say_floor propose '[]' "Adopt the thing." >/dev/null
+say_floor object '["a-1"]' "This breaks the thing." >/dev/null
 for i in 1 2 3; do say_floor msg '[]' "filler $i" >/dev/null; done
 COUNCIL_ME=a bash "$CLI" decide --force >/dev/null 2>&1
 recorded=$(cat "$R/board/status" 2>/dev/null)
+# Before damaging anything: a HEALTHY closed room must still render real numbers. The
+# short-circuit that lets the record answer returns its own JSON, and `v_status` and `v_decide`
+# read `.turns`, `.budget`, `.since_last_claim` and `.lap` out of it — so a version of it that
+# emitted only the verdict printed `turns 5/null … (nothing new for null turns, lap null)` on
+# every closed room, healthy ones included, and wrote `* turns: null of null` into the durable
+# record on a second `--force`. The suite was green with both live. Assert the numbers here,
+# where a closed room already exists, rather than trusting the shape.
+sblock=$(bash "$CLI" status 2>/dev/null)
+if printf '%s' "$sblock" | grep -q 'null'; then
+  echo "FAIL a healthy closed room rendered null in its status block:"; printf '%s\n' "$sblock" | sed -n '2,3p'; fail=1
+else
+  echo "ok   a healthy closed room renders real numbers, not null"
+fi
+COUNCIL_ME=a bash "$CLI" decide --force >/dev/null 2>&1
+if grep -q '^\* turns: [0-9][0-9]* of [0-9][0-9]*$' "$R/board/decision.md" 2>/dev/null; then
+  echo "ok   a second --force rewrote the record with real turn counts"
+else
+  echo "FAIL the rewritten record's turn line is not two integers: $(grep -m1 '^\* turns:' "$R/board/decision.md" 2>/dev/null)"; fail=1
+fi
 case "$recorded" in
   decided|unresolved)
     # BOTH DOORS. The inversion arrived twice, from two directions — through the LOG when a
@@ -278,12 +302,15 @@ case "$recorded" in
       v=$(bash "$CLI" verdict 2>/dev/null | cut -d' ' -f1); vrc=$?
       bash "$CLI" status >/dev/null 2>&1; src=$?
       COUNCIL_ME=a bash "$CLI" decide >/dev/null 2>&1; drc=$?
-      # The verdict must be the RECORDED word, and the two exit codes the supervising contract
-      # rests on — `status` 0 for "finished", `decide` 3 for "already decided" — must survive.
-      if [ "$v" = "$recorded" ] && [ "$vrc" = 0 ] && [ "$src" = 0 ] && [ "$drc" = 3 ]; then
+      # The verdict must be the RECORDED word, and the exit codes the supervising contract rests
+      # on must survive: `status` 0 for "the room is finished", and `decide` refusing — 3 for a
+      # room already `decided`, 2 for one recorded `unresolved`, which is "not ripe" and is the
+      # honest answer there since only `--force` writes that record.
+      case "$recorded" in decided) want=3 ;; *) want=2 ;; esac
+      if [ "$v" = "$recorded" ] && [ "$vrc" = 0 ] && [ "$src" = 0 ] && [ "$drc" = "$want" ]; then
         echo "ok   a closed room ($recorded) still reports itself closed over an unreadable $door"
       else
-        echo "FAIL closed room, $door damaged: verdict='$v' rc=$vrc, status rc=$src, decide rc=$drc (want $recorded/0/0/3)"; fail=1
+        echo "FAIL closed room, $door damaged: verdict='$v' rc=$vrc, status rc=$src, decide rc=$drc (want $recorded/0/0/$want)"; fail=1
       fi
       cp "$R/roster.bak" "$R/roster.json"
     done ;;

@@ -187,12 +187,29 @@ v_verdict() {
   #
   # A room whose record is written is not going to change its mind, so nothing computed below
   # can alter this answer -- which is why short-circuiting here is safe as well as correct.
+  # EMIT THE SAME KEY SET AS THE FULL PATH BELOW. `v_status` reads `.budget`, `.since_last_claim`
+  # and `.lap` out of this, and `v_decide` reads `.turns` and `.budget` into the record header,
+  # so a short-circuit that returns only the verdict renders `turns 5/null` and writes
+  # `* turns: null of null` into the room's durable output -- on EVERY closed room, healthy ones
+  # included, and with the suite green. That is what a first version of this did.
+  #
+  # The three readers used here are total and independent of both `_graph` and the roster, which
+  # is the whole reason this branch can answer at all: `c_turns` always echoes an integer,
+  # `c_int_field` returns its default for anything that is not one, and `c_npeers` is a `wc -l`.
+  # `c_turns_since_last_claim` is total too -- it falls back to -1 for anything it cannot read --
+  # so the window is computed exactly as the full path computes it rather than being invented,
+  # and a healthy closed room's block is byte-identical to what it was before this branch.
   recorded=$(c_recorded_status)
   if [ -n "$recorded" ]; then
+    local rturns rbudget rlap rwin rsince
+    rturns=$(c_turns); rbudget=$(c_int_field turns_budget 30); rlap=$(c_npeers)
+    rwin=$(c_turns_since_last_claim); rsince=$(( rwin < 0 ? rturns : rwin ))
     if [ "${1:-}" = "--json" ]; then
-      printf '{"verdict":"%s","recorded":true}\n' "$recorded"
+      printf '{"verdict":"%s","turns":%s,"budget":%s,"since_last_claim":%s,"lap":%s,"live":0,"open":0,"open_ids":[],"decide_msg":null,"recorded":true}\n' \
+        "$recorded" "$rturns" "$rbudget" "$rsince" "$rlap"
     else
-      printf '%s  (recorded; the room is closed)\n' "$recorded"
+      printf '%s  turns %s/%s  nothing new for %s turns (lap %s)  (recorded; the room is closed)\n' \
+        "$recorded" "$rturns" "$rbudget" "$rsince" "$rlap"
     fi
     return 0
   fi
