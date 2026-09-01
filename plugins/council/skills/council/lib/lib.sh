@@ -18,12 +18,17 @@ ROOM="$COUNCIL_ROOM"
 ME="${COUNCIL_ME:-}"
 C_IDLE="${COUNCIL_IDLE:-2}"        # bell-loss fallback, seconds
 
-# The roster never changes while a room lives, so read it once: c_send would
-# otherwise pay two jq spawns per message just to learn who to ring.
+# The roster never changes while a room lives, so the read is memoised. The memo lives in a
+# shell variable, so it only covers repeat calls WITHIN one shell: every use site below sits in
+# a command substitution or a pipeline, each of which is a subshell that throws it away.
+# Measured with a counting jq shim on this code: one in-turn `c_send` still performs three
+# roster reads and one `c_drain` performs one. Do not read "read it once" as "once per verb" —
+# a call here is a jq spawn — and note that the refusal diagnostic below is printed once per
+# subshell for the same reason.
 #
 # `roster.json` is a file in the room, so every participant can write it — and what comes out
 # of here is INTERPOLATED INTO LANE PATHS by c_new_files, into JSON keys by c_deps_json, and
-# word-split by two unquoted `for p in $(c_peers)` loops. Ungated, an `.order` entry of
+# word-split by unquoted `for p in $(c_peers)` loops. Ungated, an `.order` entry of
 # `"../../outside"` made `recv` deliver a message read from a file OUTSIDE the room, attributed
 # to a peer called `outside`, and wrote a cursor for it. Measured on a two-seat room; a
 # hand-edited roster or a template with an odd name is all it takes.
@@ -49,8 +54,11 @@ C_IDLE="${COUNCIL_IDLE:-2}"        # bell-loss fallback, seconds
 # hole that a `^...$` version shipped with. Asking instead whether the string contains a
 # character outside the set has no end-of-string semantics to get wrong, so every entry that
 # survives is a bare word: no `/`, no `..`, no quote, no glob character, no whitespace, no
-# newline. That is what makes the two unquoted `for p in $(c_peers)` loops below safe by
-# construction rather than by care.
+# newline. That is what makes EVERY unquoted `for p in $(c_peers)` loop safe by construction
+# rather than by care — the three in this file and the one in `council_down`. Deliberately not
+# a count: an earlier version of this sentence said "the two", was already wrong by one when it
+# was written, and went wrong by another the moment `down` was moved onto this reader. A number
+# here has to be re-checked on every new call site, and it was not.
 #
 # What this does NOT do, stated because a green guard reads as coverage: two entries differing
 # only in case (`a` and `A`) still probe one lane on a case-insensitive filesystem, and an
@@ -641,16 +649,27 @@ c_drain() {
 #
 # `[ -p ]` before the open, because `exec 3<>` SUCCEEDS on a regular file and the read that
 # follows then returns instantly at EOF instead of sleeping -- and that read is the only sleep
-# in v_recv's loop. A room whose bells are ordinary files does not fail; it spins for the
-# whole timeout. Measured over an identical 3-second `recv`, child CPU user/sys: 0.038/0.070
-# with a real fifo, 0.868/1.683 with a regular file in its place.
+# in v_recv's loop. A room whose bells are ordinary files did not fail; it spun for the whole
+# timeout. Measured over an identical 3-second `recv`, child CPU user/sys, and stated with the
+# tree each figure belongs to, because two of the three are not this one:
+#
+#     0.038 / 0.070   a real fifo, this tree
+#     0.868 / 1.683   a regular file, WITH THE `[ -p ]` GATE REMOVED -- the behaviour above
+#     0.060 / 0.103   a regular file, this tree, taking the fallback that ships
+#
+# The middle row is the cost this gate exists to avoid and is NOT what the shipped code does;
+# an earlier version of this comment printed it in the present tense with no condition, which
+# is the third measurement in this repo to have been stated against a tree other than the one
+# committed. The third row is asserted by t9g.
 #
 # Nothing repairs a bell that stopped being a fifo: `_mkroom` writes one only when there is no
 # `-p` there, and it does not run again over a live room. An archive-and-restore of a room
 # directory, or any copy that does not preserve fifos, produces exactly this -- so the reader
 # has to survive it rather than assume it away. Falling back to a real sleep makes bell loss
-# degrade to the poll this transport already documents as its fallback (C_IDLE above), which
-# is the behaviour a participant gets anyway when a bell is merely missed.
+# degrade to a poll at whatever interval the CALLER asks for, which in the shipped skill is
+# v_recv's 0.5 s -- so latency is unchanged and only CPU differs. Not `C_IDLE`: that default
+# is reachable only by a caller that passes no interval, and v_recv is the sole production
+# caller and always passes one, so `COUNCIL_IDLE` tunes nothing here.
 _C_BELL=0
 # NO redirection on the `exec` below, however tempting `2>/dev/null` looks on a line that can
 # fail. `exec` with no command applies its redirections to the CURRENT SHELL and KEEPS them:
