@@ -339,12 +339,10 @@ c_recorded_status() {
 c_max_lamport() {
   local mine disk
   mine=$(c_lamport)
-  # rc 1 is an empty room and is swallowed; rc 2 is a log that does not parse and is NOT, or
-  # c_send would stamp a lamport derived from a log it could not read.
-  local log lrc
-  log=$(c_all); lrc=$?
-  [ "$lrc" -le 1 ] || return "$lrc"
-  disk=$(printf '%s\n' "$log" | jq -s 'if length == 0 then 0 else (max_by(.lamport).lamport) end')
+  # `|| true` because an empty room is a normal state (see c_canon). c_all's failure is NOT
+  # propagated from here -- see the header at c_all for the whole account of why that was tried
+  # and reverted.
+  disk=$({ c_all || true; } | jq -s 'if length == 0 then 0 else (max_by(.lamport).lamport) end')
   # c_send feeds this straight into `lam=$(( ... + 1 ))`, so BOTH paths out of here have to
   # be integers -- the value read off disk, gated on the next line, and `mine`, which is what
   # this function returns whenever the comparison below is false or errors. `mine` is gated
@@ -399,13 +397,7 @@ c_int_field() { # <field> <default>  -- a roster integer, or the default if it i
 c_quorum() { c_int_field round_quorum ''; }
 
 # Positions posted in the opening round, as JSON lines.
-c_round0() {
-  local log rc
-  log=$(c_all); rc=$?
-  [ "$rc" -le 1 ] || return "$rc"
-  [ -n "$log" ] || return 0
-  printf '%s\n' "$log" | jq -c 'select(.round == 0)'
-}
+c_round0() { { c_all || true; } | jq -c 'select(.round == 0)'; }
 
 # open | closed. Closed for good once everyone has posted, or once the deadline has passed
 # with a quorum — one participant that never starts must not hold the room forever.
@@ -468,32 +460,18 @@ c_send() {
   # reply before what it replies to. Observing a message by counting it is still observing
   # it, so the clock rises to match.
   #
-  # CAPTURED AND CHECKED, NEVER INTERPOLATED INTO `$(( ))`. c_max_lamport returns a status as
-  # well as a number, and arithmetic cannot see a status: on an unreadable log it returned 2
-  # printing nothing, `$(( $(c_max_lamport) + 1 ))` became `$(( + 1 ))`, and bash reads that as
-  # 1 -- so every send during the outage stamped `lamport: 1` at rc 0 and PERSISTED the rewound
-  # clock a few lines below. Measured against origin/main on the same room, which stamped 5, 6,
-  # 7 where this stamped 1, 1, 1; after the bad file was removed the outage messages sorted
-  # above the objection they answered, and they shared the key (1,"a"), which sort_by cannot
-  # break. An empty VARIABLE is read as 0 by `$(( ))` just as an empty substitution is, so the
-  # capture alone fixes nothing: the status and the digits are both checked, and neither check
-  # can be satisfied by an empty string.
+  # `$(( $(f) + 1 ))` IS SAFE HERE ONLY BECAUSE c_max_lamport IS TOTAL, and that is a property
+  # to preserve rather than an accident to rely on. Arithmetic cannot see an exit status, and an
+  # empty substitution is read as `$(( + 1 ))` = 1 -- so the moment c_max_lamport was given a
+  # failure path that printed nothing, every send during that failure stamped `lamport: 1` and
+  # persisted the rewound clock, silently, at rc 0. That experiment is reverted, so the function
+  # is total again; if it is ever given a way to fail, THIS LINE has to be capture-and-check
+  # before that lands, and an empty VARIABLE is read as 0 exactly as an empty substitution is,
+  # so capturing alone would not be enough.
   #
-  # The one other site with this shape, `seq=$(( $(c_seq) + 1 ))` above, is safe for a reason
-  # worth preserving rather than re-deriving: c_slurp ALWAYS prints a number, 0 for a missing
-  # or unusable file, so it has no empty path to misread. c_turns likewise. Keep any function
-  # feeding `$(( ))` either total, like those, or checked, like this one -- the hole is a
-  # function that is neither.
-  local mx
-  mx=$(c_max_lamport) || {
-    echo "council send: this room's log could not be read — refusing to stamp a clock from it. The error above says what could not be read." >&2
-    return 1
-  }
-  case "$mx" in ''|*[!0-9]*)
-    echo "council send: this room's clock could not be computed — refusing to send." >&2
-    return 1 ;;
-  esac
-  lam=$(( mx + 1 ))
+  # The same holds for `seq=$(( $(c_seq) + 1 ))` above: c_slurp always prints a number, 0 for a
+  # missing or unusable file. Every function feeding `$(( ))` in this file is total; keep it so.
+  lam=$(( $(c_max_lamport) + 1 ))
   deps=$(c_deps_json)
   # Which turn this message claims. A hand (raised out of turn) claims none, and neither
   # does an opening position: the whole point of the barrier round is that N participants
@@ -832,24 +810,35 @@ c_all() {
   #     and `floor` -- which `recv --until-floor` polls -- 0.23 s -> 4.86 s. Both numbers are
   #     from that tree, not this one; on this one the read fails instead of re-probing.
   #
-  # So the whole log is read or none of it is, and the failure is loud: c_max_lamport, c_round0
-  # and c_canon — the three callers, two of which sit ABOVE this function in the file — no
-  # longer suppress jq's parse error, which names the offending file. `recv` still degrades one
+  # THE READ FAILS AS A WHOLE, AND ITS THREE CALLERS SWALLOW THAT. `recv` still degrades one
   # message at a time, because c_drain reads only what is NEW and moves its cursor past the bad
-  # file; that is where issue #67's point 4 is actually fixed, and it is the only place the
-  # trade pays for itself.
+  # file; that is where issue #67's point 4 is fixed, and it is the only place the trade pays.
+  #
+  # SO A CORRUPT LANE FILE STILL READS AS AN EMPTY ROOM HERE, and `decide --force` will still
+  # write a record over it. That is a known remainder, disclosed on the pull request, and it is
+  # the state `origin/main` is in. It is left rather than fixed because BOTH available fixes
+  # were tried on this branch and both were worse:
+  #
+  #   * Dropping the unparseable file and reading the rest turned "unreadable" into "silently
+  #     INCOMPLETE": an objection whose file had one bad byte simply vanished, `claims` said
+  #     `open objections: 0`, and `decide` wrote "(there were no objections)" at rc 0 -- past
+  #     the guard written to stop it, because a partial log computes a clean verdict. It also
+  #     cost O(files) per call for the room's life; see the measurements above.
+  #   * Giving this function a second exit status and propagating it made `_graph` fail, which
+  #     made `v_verdict` return before it consults `c_recorded_status` -- so a room that had
+  #     ALREADY CLOSED stopped reporting itself closed the moment any lane file was damaged:
+  #     `verdict` printed nothing at rc 1 and `decide` returned 1 where SKILL.md promises 3.
+  #     A supervisor keyed on `status` exit 0 waits for ever on a room whose record is on disk.
+  #     Bisected across five trees; `origin/main` answers `decided` rc 0 in that state.
+  #
+  # The second attempt is the one to understand before trying a third. Its shape was right --
+  # the caller must be able to tell an unreadable log from an empty one -- and it still failed,
+  # because this function is not the only source of truth about a room: the RECORD is, and it
+  # never passes through here. Any future attempt has to let the record answer first.
   local prog='[ inputs
       | select(type == "object")
       | .from = (input_filename | split("/") | .[-2]) ]
     | _untrusted | sort_by(.lamport, .from)[]'
-  # TWO failure modes, and every caller must be able to tell them apart. The `return 1` above
-  # is an EMPTY room, which is an ordinary state and which every caller swallows. A log that
-  # does not PARSE is not an empty room, and reporting it as one is how a single corrupt byte
-  # became a confident verdict: an empty log computes `no-proposal` perfectly well, so
-  # `v_decide`'s `[ -n "$verd" ]` waved it through and `--force` wrote a record saying
-  # "(there were no objections)" over a room whose objection was standing. Measured on three
-  # trees; the reading was identical on all of them. So an unreadable log exits **2**, and the
-  # three callers propagate that instead of turning it into silence.
   #
   # jq's own message names the offending file, which is the useful part, and it is NOT safe to
   # print raw. The lane set is a glob, so a peer can create a file -- or a lane directory --
@@ -883,7 +872,10 @@ c_all() {
   # cause would be wrong in two of those three.
   printf 'council: this room'\''s log could not be read (jq exited %s): %s\n' \
     "$rc" "$(printf '%s' "$err" | LC_ALL=C tr -c '\40-\176' ' ' | cut -c1-300)" >&2
-  return 2
+  # ONE failure status, the same one an empty room returns, because the callers cannot act on
+  # the difference -- see above. The diagnostic is the whole signal, which is why it survives
+  # and why it is sanitised rather than suppressed.
+  return 1
 }
 
 # --- canonicalisation ----------------------------------------------------------
@@ -903,17 +895,9 @@ c_canon() {
   # and under `set -e` + pipefail in a caller that propagated through the command substitution
   # and killed the very first send in a fresh room. So rc 1 is swallowed.
   #
-  # rc 2 is NOT. That is a lane file that does not parse, and it is the whole reason c_all
-  # grew a second status: this function is what `_graph` and therefore `verdict`, `status`,
-  # `claims` and `decide` all read the room through, so silence here is what let a corrupt
-  # byte reach the durable record as "(there were no objections)". Propagating it makes
-  # `_graph` fail, which makes `v_verdict` return 1 printing nothing, which is exactly the
-  # empty verdict `v_status`'s alarm and `v_decide`'s refusal are written to catch --
-  # `--force` included, because that guard sits before the force case.
-  local log rc
-  log=$(c_all); rc=$?
-  [ "$rc" -le 1 ] || return "$rc"
-  printf '%s\n' "$log" | jq -s -c '
+  # A log that does not parse is swallowed here too, and that is a REVERTED experiment rather
+  # than an oversight -- c_all's header carries the account.
+  { c_all || true; } | jq -s -c '
     sort_by(.lamport, .from)
     | ( [ .[] | select(.hand == false and .turn != null) ]
         | group_by(.turn) | map(sort_by(.lamport, .from) | .[0].id) ) as $win

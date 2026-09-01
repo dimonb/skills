@@ -241,59 +241,42 @@ case "$al" in
   *) echo "ok   an ordinary room raised no floor-age alarm" ;;
 esac
 
-# --- 8. a log that cannot be READ must never become a written record --------------
-# The room's one durable output, written over a log the reader could not parse, is the worst
-# outcome this codebase has. It reached that state twice by the same mechanism and from both
-# directions: first because a dropped file made the log silently INCOMPLETE, then because an
-# unreadable log was reported as an EMPTY one -- and an empty log computes `no-proposal` just
-# as cleanly as an incomplete one computes a verdict, so `decide`'s "state could not be
-# computed" guard waved both through and `--force` walked past it.
+# --- 8. a room that has CLOSED keeps reporting itself closed -----------------------
+# The record is `board/decision.md` plus `board/status`, and neither goes through the lane log.
+# So a room that has already produced its output must keep saying so even when the log becomes
+# unreadable — `verdict` answers `decided` at rc 0, `status` exits 0 ("the room is finished",
+# which is the supervising contract), and `decide` returns 3 ("already decided"), exactly as
+# SKILL.md promises.
 #
-# `--force` is the case that matters. It exists precisely to write a record over a room that
-# has not converged, so it is the one path where "refuse" has to be stronger than "not ripe".
-# Both positions of the corruption are asserted: the file holding the objection, and a
-# neighbouring file that holds something else entirely -- the second one is how the whole log
-# was lost while the objection's own bytes were still on disk.
-corrupt_and_force() { # <which: objection|neighbour> -> echoes rc, leaves the room at $R
-  fresh
-  say_floor propose '[]' "Adopt the thing." >/dev/null
-  say_floor object '["a-1"]' "This breaks the thing." >/dev/null
-  say_floor msg '[]' "an unrelated filler message" >/dev/null
-  local obj target
-  obj=$(grep -rl 'This breaks the thing' "$R/lane" 2>/dev/null | head -1)
-  if [ "$1" = objection ]; then target="$obj"
-  else target=$(ls "$R"/lane/*/*.json | grep -v -F "$obj" | tail -1); fi
-  printf 'x{' > "$target"
-  COUNCIL_ME=a bash "$CLI" decide --force >/dev/null 2>&1
-  printf '%s' "$?"
-}
-for where in objection neighbour; do
-  rc=$(corrupt_and_force "$where")
-  if [ "$rc" != 0 ] && [ ! -f "$R/board/decision.md" ]; then
-    echo "ok   a corrupt lane file ($where) made decide --force refuse, writing no record"
-  else
-    echo "FAIL decide --force returned $rc and $([ -f "$R/board/decision.md" ] && echo 'wrote a record' || echo 'wrote none') over a corrupt $where file"; fail=1
-  fi
-done
-
-# A send over an unreadable log must refuse rather than stamp a clock it could not compute.
-# c_max_lamport returns a status as well as a number, and `$(( $(c_max_lamport) + 1 ))` cannot
-# see a status: an empty substitution reads as `$(( + 1 ))` = 1, so every send during an outage
-# stamped `lamport: 1` and PERSISTED the rewound clock. The damage outlives the outage — once
-# the bad file is gone those messages sort above what they answered — so the clock is asserted
-# as well as the exit code.
+# THIS IS A REGRESSION GUARD FOR AN EXPERIMENT THAT WAS REVERTED, and the shape of the mistake
+# is worth keeping. Giving c_all a second exit status and propagating it made `_graph` fail,
+# which made `v_verdict` return before it reaches `recorded=$(c_recorded_status)` — so a closed
+# room went to `verdict` rc 1 printing nothing, `status` rc 1 and `decide` rc 1, and a
+# supervisor keyed on status exit 0 waited for ever on a room whose record was already on disk.
+# It is the inversion this file's own header names: the cheap way to make an unreadable log
+# refuse is to stop believing the record, and that breaks every room that legitimately closed.
+# Any future attempt at that seam has to let the record answer FIRST; this assertion is how it
+# finds out that it did not.
 fresh
 say_floor propose '[]' "Adopt the thing." >/dev/null
 for i in 1 2 3; do say_floor msg '[]' "filler $i" >/dev/null; done
-before=$(cat "$R/state/a.lamport" 2>/dev/null || echo 0)
-printf 'x{' > "$(ls "$R"/lane/*/*.json | tail -1)"
-COUNCIL_ME=a bash "$CLI" send --act msg "during the outage" >/dev/null 2>&1; src=$?
-after=$(cat "$R/state/a.lamport" 2>/dev/null || echo 0)
-if [ "$src" != 0 ] && [ "$after" = "$before" ]; then
-  echo "ok   a send over an unreadable log refused and left the clock at $after"
-else
-  echo "FAIL send returned $src and the clock went $before -> $after"; fail=1
-fi
+COUNCIL_ME=a bash "$CLI" decide --force >/dev/null 2>&1
+recorded=$(cat "$R/board/status" 2>/dev/null)
+case "$recorded" in
+  decided|unresolved)
+    printf 'x{' > "$(ls "$R"/lane/*/*.json | head -1)"
+    v=$(bash "$CLI" verdict 2>/dev/null | cut -d' ' -f1); vrc=$?
+    bash "$CLI" status >/dev/null 2>&1; src=$?
+    COUNCIL_ME=a bash "$CLI" decide >/dev/null 2>&1; drc=$?
+    # The verdict must be the RECORDED word, whichever it is, and the two exit codes the
+    # supervising contract rests on must survive the corruption.
+    if [ "$v" = "$recorded" ] && [ "$vrc" = 0 ] && [ "$src" = 0 ] && [ "$drc" = 3 ]; then
+      echo "ok   a closed room ($recorded) still reports itself closed over an unreadable log"
+    else
+      echo "FAIL closed room after corruption: verdict='$v' rc=$vrc, status rc=$src, decide rc=$drc (want $recorded/0/0/3)"; fail=1
+    fi ;;
+  *) echo "FAIL could not close the room to set up the corrupted-log case (board/status='$recorded')"; fail=1 ;;
+esac
 
 # --- 9. the failure must not carry a peer's bytes to a terminal --------------------
 # The lane set is a glob, so a peer can name a file -- or a lane directory -- anything, and jq

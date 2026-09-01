@@ -122,15 +122,7 @@ v_transcript() {
   c_canon | jq -r '"[\(.from) \(.act)\(if (.refs|length)>0 then " →"+(.refs|join(",")) else "" end)\(if .valid then "" else " (out of turn)" end)] \(.text)"'
 }
 
-# Not a pipeline: a pipeline's status is the LAST command's, so `c_canon | jq` reported jq's
-# success over a log c_canon could not read, and every caller's `|| return 1` was dead code for
-# that case. The read is taken first so its status survives.
-_graph() {
-  local log rc
-  log=$(c_canon); rc=$?
-  [ "$rc" = 0 ] || return "$rc"
-  printf '%s\n' "$log" | jq -s -f "$SKILL/lib/claims.jq"
-}
+_graph() { c_canon | jq -s -f "$SKILL/lib/claims.jq"; }
 
 v_claims() {
   local g; g=$(_graph) || return 1
