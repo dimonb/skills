@@ -181,9 +181,20 @@ compute. Exit 2 still means "not ripe" and 3 "already decided", so a supervisor 
 
 Repairing such a room: the whole-log readers — `order`, `transcript`, `claims`, `verdict`,
 `status` — all refuse together, because a log read in part is what produced the false records
-this rule exists to prevent. The diagnostic on stderr names the offending file, and that is the
-thing to act on. `recv` keeps working throughout: it reads only what is new and steps over a
-file it cannot parse, so participants are not wedged while the room is repaired.
+this rule exists to prevent. The diagnostic on stderr says what could not be read, and that is
+the thing to act on. **`floor` is the exception**: it still answers, at exit 0, from a log it
+could not read, so do not use it to decide whose turn it is while a room is in this state.
+
+**The two causes behave differently for participants**, and the shared message above does not
+distinguish them:
+
+* **A lane file that does not parse.** The error names that file. `recv` keeps working — it
+  reads only what is new and steps over the file — so seats are not wedged while it is
+  repaired. `send` refuses, because a clock stamped from a log that could not be read is what
+  reorders the transcript afterwards.
+* **A roster whose participant list cannot be read.** The error names no file, because no file
+  is at fault. `recv` returns 4 delivering nothing and `send` returns 6, for every seat, until
+  `roster.json` is repaired — so the room is fully stopped, not degraded.
 
 ## Verbs
 

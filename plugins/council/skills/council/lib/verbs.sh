@@ -263,7 +263,7 @@ v_status() {
   # `alarms: —`. That is a broken room reported as a quiet one, on the one display a supervisor
   # is told to watch — so the emptiness gets an alarm of its own rather than a blank field.
   [ -n "$verd" ] && [ -n "$g" ] \
-    || alarms="$alarms 🛑 this room's state could not be computed — the lines above are incomplete (the error names the file; recv still reads new messages)"
+    || alarms="$alarms 🛑 this room's state could not be computed — the lines above are incomplete (the error above says what could not be read)"
   t=$(c_turns); floor=$(c_floor_at "$t"); last=$(c_last_turn_ms)
   held=$([ "$last" = 0 ] && echo 0 || echo $(( ($(c_ms) - last) / 1000 )))
   conf=$(c_conflicts)
@@ -376,7 +376,7 @@ v_decide() {
   # live room: its rc is a STATUS, not a success flag, and reading it as one would refuse every
   # `--force` on a room that had not converged, which is precisely the case --force exists for.
   [ -n "$verd" ] || {
-    echo "council decide: this room's state could not be computed — refusing to write a record. The error above names the file; recv still reads new messages." >&2
+    echo "council decide: this room's state could not be computed — refusing to write a record. The error above says what could not be read." >&2
     return 1
   }
   case "$verd" in
@@ -385,7 +385,7 @@ v_decide() {
     *) [ "$force" = 1 ] || { echo "council: verdict '$verd', the decision is not ripe. --force writes an honest unresolved." >&2; return 2; } ;;
   esac
   g=$(_graph) && [ -n "$g" ] || {
-    echo "council decide: this room's argument graph could not be computed — refusing to write a record. The error above names the file; recv still reads new messages." >&2
+    echo "council decide: this room's argument graph could not be computed — refusing to write a record. The error above says what could not be read." >&2
     return 1
   }
   out="$ROOM/board/decision.md"
