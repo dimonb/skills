@@ -376,6 +376,14 @@ c_barrier() {
   [ "$(c_mode)" = roundtable ] || { printf 'closed'; return; }
   local n posted quorum first deadline
   n=$(c_npeers)
+  # The same precondition c_floor_at and v_verdict carry, and here for the sharper reason: at
+  # n=0 the test below is `[ "$posted" -ge 0 ]`, which is unconditionally true, so a room whose
+  # roster nobody can read reported its opening barrier CLOSED before a single position had been
+  # posted -- the barrier deleting itself, which is the failure c_int_field's own header names.
+  # A roster nobody can read leaves the barrier UP: `open` is the conservative answer, and it
+  # matches c_floor_at's "the floor is nobody's" rather than inventing a second reading of one
+  # unreadable file.
+  [ "$n" -gt 0 ] || { printf 'open'; return; }
   posted=$(c_round0 | wc -l | tr -d ' ')
   [ "$posted" -ge "$n" ] && { printf 'closed'; return; }
   # A quorum below 2 is not a quorum: at N=2 the N-1 default would let ONE position plus a

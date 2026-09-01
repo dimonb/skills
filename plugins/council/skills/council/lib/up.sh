@@ -253,12 +253,22 @@ council_up() {
 council_rooms() {
   local base; base=$(room_base) || return 1
   [ -d "$base" ] || { echo "no rooms"; return 0; }
-  local d
+  local d name line
   for d in "$base"/*/; do
     [ -d "$d" ] || continue
     d="${d%/}"
-    printf '%-24s %s\n' "$(basename "$d")" \
-      "$(COUNCIL_ROOM="$d" bash "$SKILL/council.sh" verdict 2>/dev/null || true)"
+    name=$(basename "$d")
+    line=$(COUNCIL_ROOM="$d" bash "$SKILL/council.sh" verdict 2>/dev/null || true)
+    # `verdict` returns 1 having printed NOTHING for a room whose state cannot be read, and this
+    # listing drops its stderr, so without a fallback such a room shows a blank second column --
+    # reading as ordinary in the one view that lists every room at once.
+    #
+    # Written as `[ -n ... ] ||` rather than the obvious `"${line:-...}"`: an apostrophe inside a
+    # `:-` default closes the surrounding double-quoted string, and bash then misparses the REST
+    # OF THE FILE, surfacing the syntax error over a hundred lines away in a function this one
+    # never calls. Found the hard way; do not "simplify" it back.
+    [ -n "$line" ] || line="🛑 this room's state could not be read — council.sh status --room $name"
+    printf '%-24s %s\n' "$name" "$line"
   done
 }
 

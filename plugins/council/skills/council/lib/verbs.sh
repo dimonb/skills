@@ -180,6 +180,20 @@ v_verdict() {
   # are numbers, and both make the `[ -ge ]` below error, which silently disables the room's
   # only stop condition and puts the same value into `--argjson`. roster.json is peer-writable.
   n=$(c_npeers); budget=$(c_int_field turns_budget 30)
+  # A room with no readable participant list has no lap to measure convergence against, and
+  # `lap` is exactly what both thresholds below compare against. At n=0, `[ "$since" -ge 0 ]` is
+  # UNCONDITIONALLY true, so such a room reported ready-to-decide on its very first proposal and
+  # `decide` -- without --force -- wrote a permanent `decided` record at rc 0, carrying a blank
+  # participant list, for a room in which nobody could take the floor. No hostile peer is needed:
+  # a truncated, absent or half-written roster.json does it, and roster.json is written with a
+  # plain `>`.
+  #
+  # Returning 1 having printed nothing is the SAME contract `g=$(_graph) || return 1` above
+  # already uses, so the two now agree: a room this verb cannot read yields no verdict at all.
+  # This change's own guards then do the rest -- v_status raises its "state could not be
+  # computed" alarm and v_decide refuses to write a record, both written for exactly this case,
+  # the second already asserted by t9g. c_floor_at and c_barrier carry the same precondition.
+  [ "$n" -gt 0 ] || return 1
   # Two counts, and deliberately NOT the decide message's id alongside them. `@tsv` does not
   # escape spaces and `read` splits on them as well as on tabs, so a peer-chosen `.id` of
   # `b 9` used to shift every following field: live took the id's tail and open took
