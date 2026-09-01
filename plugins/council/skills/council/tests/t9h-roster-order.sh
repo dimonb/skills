@@ -172,15 +172,40 @@ fi
 # v_verdict: no readable participant list means no lap, so no verdict — and `decide` then has
 # the empty verdict its own guard is written for. Without this the room reported
 # `ready-to-decide` on its first proposal and `decide` wrote `**decided**` at rc 0.
+#
+# THE PROPOSAL IS WRITTEN FIRST, AND THAT ORDER IS THE TEST. Breaking the roster before anyone
+# speaks makes `say_floor` fail — there is no floor to find — so no lane file is ever written,
+# and against the unfixed code the room then reports `no-proposal` and `decide` refuses as not
+# ripe. The record half would be true for a reason that has nothing to do with the defect: a
+# tautology, which is how the first version of this assertion passed at the very baseline its
+# own comment cites. With a live proposal on the board, the unfixed code answers
+# `ready-to-decide (lap 0)` and writes `**decided**` at rc 0 with no `--force`.
 fresh
-set_order '["a","x/y"]'
 say_floor propose '[]' "A proposal." >/dev/null 2>&1
+set_order '["a","x/y"]'
 vout=$(bash "$CLI" verdict 2>/dev/null)
 COUNCIL_ME=a bash "$CLI" decide >/dev/null 2>&1
 if [ -z "$vout" ] && [ ! -f "$R/board/decision.md" ]; then
   echo "ok   an unreadable roster yields no verdict, and decide writes no record"
 else
   echo "FAIL verdict said '$vout' and the record was $([ -f "$R/board/decision.md" ] && echo written || echo absent)"; fail=1
+fi
+
+# c_floor_at: the arithmetic precondition. This guard came with the original change and was the
+# only one of the three that had a guard at all — but nothing asserted it, so a mutation sweep
+# found it green. `lap=$(( t / n ))` with n=0 is a division by zero, and `$idx` is then unbound
+# under `set -u`: stdout looks IDENTICAL either way (an empty floor), and the difference is
+# entirely on stderr, which is why an assertion on the printed floor would not have seen it.
+# What must not happen is a bash arithmetic error reaching a participant in place of the
+# skill's own diagnostic — a crash naming neither the room nor the roster.
+fresh
+say_floor propose '[]' "A proposal." >/dev/null 2>&1
+set_order '["a","x/y"]'
+bash "$CLI" floor >/dev/null 2>"$R/e"
+if grep -q "$REFUSED" "$R/e" && ! grep -qiE 'division by 0|unbound variable' "$R/e"; then
+  echo "ok   an unreadable roster left the floor to the diagnostic, not to an arithmetic error"
+else
+  echo "FAIL floor emitted an arithmetic error on an unreadable roster:"; head -2 "$R/e"; fail=1
 fi
 
 # c_barrier: the opening barrier must stay UP for a roster nobody can read. Without this it
