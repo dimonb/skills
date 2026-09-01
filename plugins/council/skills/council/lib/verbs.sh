@@ -287,18 +287,34 @@ v_status() {
                 else alarms="$alarms 🛑 the turn budget is spent — write an honest unresolved"; fi ;;
   esac
   [ "$conf" -gt 0 ] && alarms="$alarms ⚠️ $conf messages lost a turn conflict (their authors must take the floor again)"
-  # The held time comes from the floor holder's own `sent_ms`, so it is only as good as that
-  # seat's clock — and a held time longer than the ROOM has existed cannot be true. It is not
-  # reported as a smaller number either: clamping it would let an impossible value slip under
-  # the threshold and silence a real stall. It is reported as what it is, evidence of a wrong
-  # clock, naming the seat, so the supervisor looks at the right thing. A room that records no
-  # creation time (one made before `created_ms` existed) answers nothing and keeps the plain
-  # threshold, which is exactly its behaviour before this branch was here.
+  # The held time comes from the last turn-consuming message's `sent_ms`, so it is only as good
+  # as the clock of whichever seat wrote that message — and a held time longer than the ROOM has
+  # existed cannot be true. It is not reported as a smaller number: clamping it would let an
+  # impossible value slip under the threshold and silence a real stall.
+  #
+  # THE THRESHOLD IS TESTED FIRST, AND THE IMPOSSIBLE-VALUE CASE ONLY CHOOSES THE WORDING. That
+  # ordering is the whole point and it must not be inverted back. `created_ms` lives in
+  # roster.json, which every participant can write, so when the impossible case was an `elif`
+  # ABOVE the threshold a seat could set `created_ms` to now, make `room_age` 0, and every held
+  # time then exceeded it — which silently replaced a real STALL with "the clock is wrong",
+  # permanently. Measured on a room genuinely stalled for two hours. A peer-writable field must
+  # never be able to REMOVE an alarm; here the alarm fires on exactly the same condition it
+  # always did, and the untrusted value can only change how it reads.
+  #
+  # The wording does not name a seat, because the one it could name would be the wrong one: the
+  # value comes from the last turn-consuming message, whose author is the previous speaker,
+  # while `$floor` is the seat that is waiting. `$floor` is correct for STALL, which is about
+  # who holds the floor now, and it is used only there.
+  #
+  # A room that records no creation time (one made before `created_ms` existed) answers nothing
+  # and keeps the plain threshold, which is exactly its behaviour before this branch was here.
   room_age=$(c_room_age_s) || room_age=""
-  if [ -n "$room_age" ] && [ "$held" -gt "$room_age" ]; then
-    alarms="$alarms 🛑 $floor's clock is wrong: its last turn is stamped ${held}s ago, longer than this room has existed (${room_age}s) — no stall can be read from it"
-  elif [ "$held" -gt "${COUNCIL_STALL_SECS:-900}" ]; then
-    alarms="$alarms 🛑 STALL: $floor has held the floor for ${held}s — check its terminal, it may be sitting on a permission prompt"
+  if [ "$held" -gt "${COUNCIL_STALL_SECS:-900}" ]; then
+    if [ -n "$room_age" ] && [ "$held" -gt "$room_age" ]; then
+      alarms="$alarms 🛑 STALL: the floor has been held for ${held}s, which is longer than this room has existed (${room_age}s) — one seat's clock is wrong, so check every terminal rather than trusting the figure"
+    else
+      alarms="$alarms 🛑 STALL: $floor has held the floor for ${held}s — check its terminal, it may be sitting on a permission prompt"
+    fi
   fi
   printf 'alarms:%s\n' "${alarms:- —}"
   printf 'last messages:\n'

@@ -169,11 +169,18 @@ else
   echo "FAIL an ordinary room no longer writes a usable record"; fail=1
 fi
 
-# --- 7. a held floor older than the room is a wrong clock, not a stall ----------
+# --- 7. a held floor older than the room RELABELS the stall, it does not replace it ------
 # The held time is `now - sent_ms` of the last turn-consuming message, and `sent_ms` is
 # whatever the seat that sent it wrote. A value that predates the room cannot be a wait, so it
-# is reported as the clock problem it is, naming the seat — and NOT clamped to something
-# smaller, which could slip under the threshold and hide a stall that is real.
+# is reported as the clock problem it is — and NOT clamped to something smaller, which could
+# slip under the threshold and hide a stall that is real.
+#
+# The ordering is what is asserted here. `created_ms` lives in roster.json, which every
+# participant can write, so if the impossible-value case were tested BEFORE the threshold, a
+# seat could set `created_ms` to now and every held time would exceed it — silently replacing a
+# real STALL with a clock complaint, for good. So the alarm must fire on the same condition it
+# always did, and the untrusted value may only change its wording. An untrusted input that can
+# REMOVE an alarm is the bug; one that can only reword it is not.
 stale_turn() { # a proposal whose sent_ms is one millisecond after the epoch
   jq -n '{id:"a-1",from:"a",lamport:9,deps:{},act:"propose",refs:[],to:["*"],
           hand:false,turn:0,round:null,text:"a proposal from 1970",created_at:"test",sent_ms:1}' \
@@ -183,11 +190,26 @@ stale_turn() { # a proposal whose sent_ms is one millisecond after the epoch
 fresh; stale_turn
 al=$(bash "$CLI" status 2>/dev/null | sed -n 's/^alarms://p')
 case "$al" in
-  *"clock is wrong"*) case "$al" in
-      *STALL*) echo "FAIL a wrong clock raised a STALL as well:$al"; fail=1 ;;
-      *) echo "ok   a held time older than the room read as a wrong clock, not a stall" ;;
-    esac ;;
-  *) echo "FAIL a held time older than the room was not reported as a clock problem:$al"; fail=1 ;;
+  *STALL*"clock is wrong"*) echo "ok   an impossible held time still raised the stall, reworded" ;;
+  *STALL*) echo "FAIL an impossible held time was reported as an ordinary stall:$al"; fail=1 ;;
+  *) echo "FAIL an impossible held time raised no stall at all:$al"; fail=1 ;;
+esac
+# The alarm must not name a seat for the clock, because the only seat it could name is the
+# wrong one: the value comes from the last turn-CONSUMING message, whose author is the previous
+# speaker, while the floor has already rotated to the seat that is waiting.
+case "$al" in
+  *"a's clock"*|*"b's clock"*) echo "FAIL the clock alarm named a seat it cannot identify:$al"; fail=1 ;;
+  *) echo "ok   the clock alarm blamed no individual seat" ;;
+esac
+# A room whose created_ms says the room began just now must still raise the stall. This is the
+# suppression the ordering above exists to prevent, and it fails without it.
+fresh; stale_turn
+jq --argjson n "$(( 10#${EPOCHREALTIME/./} / 1000 ))" '.created_ms = $n' "$R/roster.json" > "$R/r.tmp" \
+  && mv "$R/r.tmp" "$R/roster.json"
+al=$(bash "$CLI" status 2>/dev/null | sed -n 's/^alarms://p')
+case "$al" in
+  *STALL*) echo "ok   a created_ms of 'now' could not suppress the stall" ;;
+  *) echo "FAIL a peer-writable created_ms removed the stall alarm:$al"; fail=1 ;;
 esac
 
 # A room that records no creation time cannot tell the two apart, and must keep its previous
