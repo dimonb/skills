@@ -831,10 +831,16 @@ c_all() {
   #     A supervisor keyed on `status` exit 0 waits for ever on a room whose record is on disk.
   #     Bisected across five trees; `origin/main` answers `decided` rc 0 in that state.
   #
-  # The second attempt is the one to understand before trying a third. Its shape was right --
-  # the caller must be able to tell an unreadable log from an empty one -- and it still failed,
-  # because this function is not the only source of truth about a room: the RECORD is, and it
-  # never passes through here. Any future attempt has to let the record answer first.
+  # Numbering, because three files reference this account: attempt 1 was the retry, attempt 2 is
+  # what ships (fail the whole read, say why on stderr), attempt 3 was the second exit status.
+  # 1 and 3 were reverted.
+  #
+  # ATTEMPT 3 IS THE ONE TO UNDERSTAND BEFORE TRYING A FOURTH. Its shape was right -- the caller
+  # must be able to tell an unreadable log from an empty one -- and it still failed, because
+  # this function is not the only source of truth about a room: the RECORD is, and it never
+  # passes through here. `v_verdict` now reads the record FIRST, which is what a fourth attempt
+  # has to build on; without that, any propagation from here silences a room that has already
+  # closed, and it will do so through whichever door is left unguarded.
   local prog='[ inputs
       | select(type == "object")
       | .from = (input_filename | split("/") | .[-2]) ]

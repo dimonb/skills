@@ -264,17 +264,29 @@ COUNCIL_ME=a bash "$CLI" decide --force >/dev/null 2>&1
 recorded=$(cat "$R/board/status" 2>/dev/null)
 case "$recorded" in
   decided|unresolved)
-    printf 'x{' > "$(ls "$R"/lane/*/*.json | head -1)"
-    v=$(bash "$CLI" verdict 2>/dev/null | cut -d' ' -f1); vrc=$?
-    bash "$CLI" status >/dev/null 2>&1; src=$?
-    COUNCIL_ME=a bash "$CLI" decide >/dev/null 2>&1; drc=$?
-    # The verdict must be the RECORDED word, whichever it is, and the two exit codes the
-    # supervising contract rests on must survive the corruption.
-    if [ "$v" = "$recorded" ] && [ "$vrc" = 0 ] && [ "$src" = 0 ] && [ "$drc" = 3 ]; then
-      echo "ok   a closed room ($recorded) still reports itself closed over an unreadable log"
-    else
-      echo "FAIL closed room after corruption: verdict='$v' rc=$vrc, status rc=$src, decide rc=$drc (want $recorded/0/0/3)"; fail=1
-    fi ;;
+    # BOTH DOORS. The inversion arrived twice, from two directions — through the LOG when a
+    # corrupt lane file made `_graph` fail, and through the ROSTER when the peer-count
+    # precondition returned — and each time the other door looked fine, so one fixture would
+    # have gone on passing while the defect was live. Damage each in turn, from the same
+    # closed room.
+    cp "$R/roster.json" "$R/roster.bak"
+    for door in log roster; do
+      case "$door" in
+        log)    printf 'x{' > "$(ls "$R"/lane/*/*.json | head -1)" ;;
+        roster) : > "$R/roster.json" ;;
+      esac
+      v=$(bash "$CLI" verdict 2>/dev/null | cut -d' ' -f1); vrc=$?
+      bash "$CLI" status >/dev/null 2>&1; src=$?
+      COUNCIL_ME=a bash "$CLI" decide >/dev/null 2>&1; drc=$?
+      # The verdict must be the RECORDED word, and the two exit codes the supervising contract
+      # rests on — `status` 0 for "finished", `decide` 3 for "already decided" — must survive.
+      if [ "$v" = "$recorded" ] && [ "$vrc" = 0 ] && [ "$src" = 0 ] && [ "$drc" = 3 ]; then
+        echo "ok   a closed room ($recorded) still reports itself closed over an unreadable $door"
+      else
+        echo "FAIL closed room, $door damaged: verdict='$v' rc=$vrc, status rc=$src, decide rc=$drc (want $recorded/0/0/3)"; fail=1
+      fi
+      cp "$R/roster.bak" "$R/roster.json"
+    done ;;
   *) echo "FAIL could not close the room to set up the corrupted-log case (board/status='$recorded')"; fail=1 ;;
 esac
 

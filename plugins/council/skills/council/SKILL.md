@@ -184,10 +184,13 @@ broken, and `decide --force` will write a record over it saying there were no ob
 the diagnostic on stderr says otherwise, and it is the thing to act on. Treat a `council:` line
 about a log that could not be read as invalidating every other answer in the same breath.
 
-That is a known remainder rather than a design: two fixes for it were built on this branch and
-both were reverted, one for turning "unreadable" into "silently incomplete", the other for
-making a room that had already CLOSED stop reporting itself closed. `lib/lib.sh`'s `c_all`
-carries the account; a third attempt has to let the record answer before the log does.
+That is a known remainder rather than a design. Three designs were tried on this branch and
+this is the second of them — the one that ships. The first, dropping the bad file and reading
+the rest, turned "unreadable" into "silently incomplete"; the third, giving the reader a second
+exit status, made a room that had already CLOSED stop reporting itself closed. Both were
+reverted. `lib/lib.sh`'s `c_all` carries the account, and a fourth attempt has to let the
+record answer before the log does — `v_verdict` now does exactly that, and it is why a closed
+room survives both an unreadable log and an unreadable roster.
 
 **The two causes differ for participants:**
 

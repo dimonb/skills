@@ -174,6 +174,28 @@ v_claims() {
 # which nobody added a proposal, an amendment or an objection. Not a mood anyone reports.
 v_verdict() {
   local g n budget turns live open since win lap v recorded
+  # THE RECORD ANSWERS BEFORE THE ROOM DOES. `board/decision.md` and `board/status` pass
+  # through neither the lane log nor the roster, so a room that has already closed must keep
+  # saying so even when neither can be read -- `status` exits 0 ("the room is finished"), which
+  # is the contract a supervising session polls on, and `decide` returns 3.
+  #
+  # This is read FIRST because reading it last has now produced the same inversion twice, from
+  # two different directions: once when an unreadable LOG made `_graph` fail (reverted -- see
+  # c_all's header), and once when an unreadable ROSTER made the peer-count precondition below
+  # return. Both left a closed room answering nothing at all, and both were invisible until a
+  # room was actually closed and then damaged. `origin/main` answers `decided` in both states.
+  #
+  # A room whose record is written is not going to change its mind, so nothing computed below
+  # can alter this answer -- which is why short-circuiting here is safe as well as correct.
+  recorded=$(c_recorded_status)
+  if [ -n "$recorded" ]; then
+    if [ "${1:-}" = "--json" ]; then
+      printf '{"verdict":"%s","recorded":true}\n' "$recorded"
+    else
+      printf '%s  (recorded; the room is closed)\n' "$recorded"
+    fi
+    return 0
+  fi
   g=$(_graph) || return 1
   # Held to digits, not `// 30` and not jq's `type == "number"`: a string is truthy in jq so
   # the alternative never fires, and a JSON number is not a bash integer -- `2.5` and `1e400`
@@ -351,7 +373,12 @@ v_decide() {
   local force=0; [ "${1:-}" = "--force" ] && force=1
   local j verd g out status
   j=$(v_verdict --json); verd=$(printf '%s' "$j" | jq -r '.verdict // empty' 2>/dev/null)
-  # A record is NEVER written from a state this verb could not read. Both reads below can come
+  # A record is never written from a ROSTER or a GRAPH this verb could not read. That is
+  # narrower than it once said here, and the narrowing is the point: an unreadable LANE FILE
+  # reaches this guard as a perfectly computable empty room, so `--force` does write a record
+  # over it, saying there were no objections. Three attempts to close that door are recorded at
+  # `c_all` in lib.sh, two of them reverted; do not re-derive them from this comment. Both reads
+  # below can come
   # back empty rather than wrong -- `_graph` is a jq program over peer-written messages, and one
   # message of the wrong shape aborts it mid-stream -- and every renderer further down treats
   # empty input as "nothing to say" rather than as a failure. `--force` then walked straight
