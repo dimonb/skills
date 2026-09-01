@@ -218,8 +218,13 @@ want 2 "a roster naming a traversing scenario" bash "$CLI" relaunch claude \
 restore_roster
 
 tamper "$(printf '.order += ["zz#w %s/sedout"]' "$ROOT")"
+# The refusal now comes from `c_peers`, the single reader of `.order`, rather than from
+# relaunch's own `_plain_name` loop: the roster is rejected before any name reaches a path or
+# the sed program. `_plain_name` is still there as an independent second statement of the rule,
+# so this asserts the OUTCOME — refused at rc 2, announced, nothing written — and not which of
+# the two said so, which is an internal detail that has now moved once.
 want 2 "a peer name that breaks out of the sed program" bash "$CLI" relaunch claude \
-  && says 'implausible participant name' "the refusal does not name the participant"
+  && says 'usable participant list' "the refusal does not say the roster was rejected"
 ls "$ROOT"/sedout* >/dev/null 2>&1 && { echo "FAIL a crafted peer name reached sed as script"; fail=1; }
 restore_roster
 

@@ -29,9 +29,16 @@ C_IDLE="${COUNCIL_IDLE:-2}"        # bell-loss fallback, seconds
 # hand-edited roster or a template with an odd name is all it takes.
 #
 # So the roster is validated where it is READ, and all-or-nothing: one unusable entry rejects
-# the whole list with a diagnostic, which is what `council relaunch` already does with the same
-# rule (see `_plain_name` and the roster block in up.sh). A partial list would be worse than
-# none — it silently redefines who the room is.
+# the whole list with a diagnostic. A partial list would be worse than none — it silently
+# redefines who the room is.
+#
+# THIS FUNCTION IS THE ONLY READER OF `.order`. `council relaunch` and `council down` both come
+# through here; `_plain_name` survives in relaunch as an independent second statement of the
+# rule over the names that reach a path, not as the gate. An earlier version of this comment
+# claimed relaunch "already" applied the same rule while relaunch was in fact reading `.order`
+# itself and validating the LINES — accepting four shapes this function refuses. A second copy
+# of a rule is the copy that stops being maintained; a comment asserting the copies agree, when
+# they do not, is worse than either.
 #
 # THE SHAPE OF THE TEST IS THE POINT, and it is chosen against the specific ways an earlier
 # attempt at this was defeated. Validate the ENTRIES of the JSON value, inside jq, never the

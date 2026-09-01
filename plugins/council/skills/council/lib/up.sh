@@ -380,25 +380,35 @@ council_relaunch() {
              peer="$1"; shift ;;
     esac
   done
-  # Read the roster ONCE, as an array, and do membership against that array.
+  # Read the roster ONCE, as an array, through c_peers — the same reader `down` and every verb
+  # in lib.sh use. relaunch runs after council.sh has sourced lib.sh, so it is in scope here.
+  #
+  # This used to read `.order` itself, and that made it the THIRD copy of one rule and the
+  # weakest: it validated the LINES that `$(jq -r '.order[]')` printed, which is exactly the
+  # defeat c_peers' own header enumerates. Command substitution splits an embedded newline and
+  # strips a trailing one, so `["a","b\nc"]` became three accepted seats and `["a","ab\n"]`
+  # passed a check that never saw the byte. Measured against c_peers on the same rosters: it
+  # accepted four shapes c_peers refuses. relaunch then regenerated a protocol naming a
+  # participant that is not in the room, and `_keeper_ensure` opened `bell/<phantom>.fifo` —
+  # which, the path not existing, CREATES a regular file that `_mkroom` will never revisit, so
+  # that bell can never become a fifo again. It printed `relaunched:` at rc 0 into a room where
+  # the seat it had just restarted could not run a single verb.
   #
   # `jq -e '.order | index($p)'` looked like a membership test and is not: on a STRING `.order`
   # it does SUBSTRING matching and succeeds, while `jq -r '.order[]'` then errors and leaves
   # the peer list empty — so a roster written as one string both passed the check for a
-  # traversing peer name and skipped every per-name check that follows it. A non-array `.order`
-  # is also a plain bug with nobody attacking: the protocol renders with no participants and
-  # the keeper comes back holding zero fifos, which is the silent bell loss this file exists
-  # to prevent.
-  jq -e '(.order | type) == "array"' "$ROOM/roster.json" >/dev/null 2>&1 \
-    || { echo "council relaunch: this room's roster has no usable participant list" >&2; return 2; }
+  # traversing peer name and skipped every per-name check that follows it. c_peers refuses a
+  # non-array `.order` outright, which covers that case and the newline ones together.
   local -a roster=(); local q
-  while IFS= read -r q; do [ -n "$q" ] && roster+=("$q"); done < <(jq -r '.order[]' "$ROOM/roster.json")
+  while IFS= read -r q; do [ -n "$q" ] && roster+=("$q"); done < <(c_peers)
   [ "${#roster[@]}" -ge 1 ] \
-    || { echo "council relaunch: this room's roster lists no participants" >&2; return 2; }
-  # Validate every name HERE, before any of them is built into a path or interpolated into the
-  # sed program that renders a protocol. `$peer` needs no separate check: it has to equal one
-  # of these to get past the membership test below, so checking them covers it — and a guard
-  # with no case that can fail is a guard nobody will notice breaking.
+    || { echo "council relaunch: this room's roster has no usable participant list — refusing to render a protocol from it" >&2; return 2; }
+  # `_plain_name` stays as a second, independent statement of the rule over the values that
+  # actually reach a path and the sed program that renders a protocol. It is belt-and-braces
+  # now rather than the only gate, and it is kept deliberately: this file must not depend on
+  # lib.sh being correct to avoid rendering a protocol from a name it should refuse. `$peer`
+  # needs no separate check — it has to equal one of these to get past the membership test
+  # below, so checking them covers it.
   for q in "${roster[@]}"; do
     _plain_name "$q" \
       || { echo "council relaunch: roster holds an implausible participant name ('$q') — refusing to render a protocol from it" >&2; return 2; }

@@ -11,8 +11,9 @@
 # the unquoted `for p in $(c_peers)` loops.
 #
 # The rule is ALL-OR-NOTHING and it is announced: one unusable entry rejects the whole list
-# with a diagnostic, the way `council relaunch` already treats the same file. A partial list
-# would be worse than none, because it silently redefines who the room is.
+# with a diagnostic. A partial list would be worse than none, because it silently redefines
+# who the room is. `c_peers` is the single reader of `.order` — `relaunch` and `down` both go
+# through it, so there is no second copy of this rule to drift.
 #
 # THE SHAPE OF THE TEST MATTERS as much as the cases. An earlier attempt at validating this
 # same field was reverted after four rounds, each finding the next layer of the same thing:
@@ -122,6 +123,42 @@ if grep -q "$REFUSED" "$R/e"; then
   echo "FAIL a legitimate name was refused: B-2_x"; fail=1
 else
   echo "ok   letters, digits, '_' and '-' are accepted in any mixture"
+fi
+
+# --- every verb that reads .order reads it through the SAME reader ---------------
+# `relaunch` used to read `.order` itself and validate the LINES that `$(jq -r)` printed, so it
+# accepted rosters every other verb refuses: it regenerated a protocol naming a participant that
+# is not in the room, created a regular file where that seat's bell fifo belongs, and reported
+# success at rc 0 into a room where the restarted seat could not run a single verb. A second
+# copy of this rule is the copy that stops being maintained.
+#
+# The backend is a name that cannot resolve, so nothing here can open a real terminal; each
+# case must fail on the ROSTER, long before that.
+#
+# Measured against the previous reader: the first FOUR shapes were accepted by it and are what
+# this change closes. The fifth, a non-array `.order`, it already refused with its own
+# `(.order | type) == "array"` check — so that row is forward cover, not evidence for this
+# change, and it is named here rather than left to read as a fifth proof.
+for bad in '["a","b\nc"]' '["a","ab\n"]' '["a",7]' '["a",""]' '"ab"'; do
+  fresh
+  set_order "$bad"
+  ( export COUNCIL_ROOM="$R" COUNCIL_BACKEND=none-for-tests
+    bash "$CLI" relaunch b >/dev/null 2>"$R/e" )
+  if grep -q "$REFUSED" "$R/e"; then
+    echo "ok   relaunch refused the roster the other verbs refuse: $bad"
+  else
+    echo "FAIL relaunch accepted a roster c_peers refuses: $bad"; fail=1
+  fi
+done
+# And it still accepts an ordinary one — a guard that refuses everything proves nothing.
+# It gets no further than the terminal it cannot open, which is past every roster check.
+fresh
+( export COUNCIL_ROOM="$R" COUNCIL_BACKEND=none-for-tests
+  bash "$CLI" relaunch b >/dev/null 2>"$R/e" )
+if grep -q "$REFUSED" "$R/e"; then
+  echo "FAIL relaunch refused an ordinary roster"; fail=1
+else
+  echo "ok   relaunch still accepts an ordinary roster"
 fi
 
 rm -rf "$outside"
