@@ -12,8 +12,10 @@
 #
 # The rule is ALL-OR-NOTHING and it is announced: one unusable entry rejects the whole list
 # with a diagnostic. A partial list would be worse than none, because it silently redefines
-# who the room is. `c_peers` is the single reader of `.order` — `relaunch` and `down` both go
-# through it, so there is no second copy of this rule to drift.
+# who the room is. `c_peers` is the only reader that VALIDATES `.order`, and every verb needing
+# the peer list goes through it — `relaunch` and `down` included — so there is no second copy of
+# this rule to drift. (`c_floor_at` indexes `.order[$i]` directly, which holds only while this
+# rule stays all-or-nothing; lib.sh says so where the rule lives.)
 #
 # THE SHAPE OF THE TEST MATTERS as much as the cases. An earlier attempt at validating this
 # same field was reverted after four rounds, each finding the next layer of the same thing:
@@ -160,6 +162,56 @@ if grep -q "$REFUSED" "$R/e"; then
 else
   echo "ok   relaunch still accepts an ordinary roster"
 fi
+
+# --- the three consumers of the refusal, each asserted so it cannot silently come back ------
+# Each of these guards was added because its absence ended in a false or unreadable durable
+# outcome, and each was shipped once with NO assertion: deleting any of the three left the whole
+# suite green. A fix with no test that fails without it is the vacuous check AGENTS.md names.
+# All three fail against the commit that introduced them.
+
+# v_verdict: no readable participant list means no lap, so no verdict — and `decide` then has
+# the empty verdict its own guard is written for. Without this the room reported
+# `ready-to-decide` on its first proposal and `decide` wrote `**decided**` at rc 0.
+fresh
+set_order '["a","x/y"]'
+say_floor propose '[]' "A proposal." >/dev/null 2>&1
+vout=$(bash "$CLI" verdict 2>/dev/null)
+COUNCIL_ME=a bash "$CLI" decide >/dev/null 2>&1
+if [ -z "$vout" ] && [ ! -f "$R/board/decision.md" ]; then
+  echo "ok   an unreadable roster yields no verdict, and decide writes no record"
+else
+  echo "FAIL verdict said '$vout' and the record was $([ -f "$R/board/decision.md" ] && echo written || echo absent)"; fail=1
+fi
+
+# c_barrier: the opening barrier must stay UP for a roster nobody can read. Without this it
+# reported itself closed before anyone had posted — the barrier deleting itself.
+fresh
+jq '.mode = "roundtable"' "$R/roster.json" > "$R/r.tmp" && mv "$R/r.tmp" "$R/roster.json"
+set_order '["a","x/y"]'
+if bash "$CLI" floor 2>/dev/null | grep -q '(barrier)'; then
+  echo "ok   an unreadable roster leaves the opening barrier up"
+else
+  echo "FAIL the opening barrier dissolved itself on an unreadable roster"; fail=1
+fi
+
+# council rooms: `verdict` prints nothing for such a room and that listing drops stderr, so
+# without a fallback the room shows a blank column and reads as ordinary in the one view that
+# lists every room at once.
+gd="$COUNCIL_TEST_ROOT/t9h-rooms"; rm -rf "$gd"; mkdir -p "$gd"
+( cd "$gd" && git init -q . ) 2>/dev/null
+mkdir -p "$gd/.git/council"
+mkroom "$gd/.git/council/broken" a b
+jq '.order = "not-a-list"' "$gd/.git/council/broken/roster.json" > "$gd/r.tmp" \
+  && mv "$gd/r.tmp" "$gd/.git/council/broken/roster.json"
+rooms_line=$( cd "$gd" && bash "$CLI" rooms 2>/dev/null | sed -n 's/^broken  *//p' )
+# Assert the fallback TEXT, not merely a non-empty column: before the guard that yields the
+# empty verdict, this listing printed a confident (and wrong) verdict line here, so a
+# "non-empty" test passes against the defect and proves nothing.
+case "$rooms_line" in
+  *"could not be read"*) echo "ok   the room list says an unreadable room could not be read" ;;
+  *) echo "FAIL the room list showed '$rooms_line' for an unreadable room"; fail=1 ;;
+esac
+rm -rf "$gd"
 
 rm -rf "$outside"
 [ "$fail" = 0 ] && echo "t9h PASS" || echo "t9h FAIL"
