@@ -125,10 +125,21 @@ else
   echo "FAIL a string .refs truncated the transcript (rc=$trc): $(printf '%s' "$tr_out" | grep -c .) lines"; fail=1
 fi
 COUNCIL_ME=a bash "$CLI" decide --force >/dev/null 2>&1
-if grep -q "This breaks the thing" "$R/board/decision.md" 2>/dev/null; then
-  echo "ok   the decision record still names the objection"
+# Assert the SECTION, not the file. Grepping the whole record for the objection's text passed
+# against unfixed code too, because when the graph aborts `v_transcript` still emits the message
+# into the record's `## Transcript` block while `## Objections, and how they were closed` is
+# left empty -- which is byte-for-byte the broken record this section exists to pin. Measured
+# both ways; the two assertions below are false without the fix and true with it.
+objs=$(sed -n '/^## Objections/,/^## /p' "$R/board/decision.md" 2>/dev/null | grep -c 'b-1' || true)
+if [ "$objs" -ge 1 ]; then
+  echo "ok   the decision record names the objection under its own heading"
 else
-  echo "FAIL the decision record dropped the objection it exists to record"; fail=1
+  echo "FAIL the record's objections section did not name b-1"; fail=1
+fi
+if grep -q 'verdict when written: `[a-z]' "$R/board/decision.md" 2>/dev/null; then
+  echo "ok   the record carries the verdict it was written from"
+else
+  echo "FAIL the record's header fields were left blank"; fail=1
 fi
 
 # --- 6. a .lamport that is a NUMBER but not an integer must not stall the clock --

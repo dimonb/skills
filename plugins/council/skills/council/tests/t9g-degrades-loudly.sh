@@ -41,6 +41,15 @@ pidgate() { # <file-content> <expected: the pid, or empty>
   if [ "$got" = "$2" ]; then echo "ok   pid file '$1' -> '${got:-(nothing)}'"
   else echo "FAIL pid file '$1' -> '$got', wanted '${2:-(nothing)}'"; fail=1; fi
 }
+# The table below is mostly NEGATIVE rows, which expect the empty string — and a reader that
+# does not exist returns the empty string too. Without this, renaming or deleting `_keeper_pid`
+# would turn six of these into `ok` while testing nothing at all. Assert the reader is really
+# there before believing anything the rows say.
+if ( SKILL="$SKILL"; . "$SKILL/lib/up.sh"; declare -F _keeper_pid >/dev/null ); then
+  echo "ok   the pid reader the table below is about exists"
+else
+  echo "FAIL _keeper_pid is not defined — every negative row below would pass vacuously"; fail=1
+fi
 pidgate '0'                     ''
 pidgate ''                      ''
 pidgate '-1'                    ''
