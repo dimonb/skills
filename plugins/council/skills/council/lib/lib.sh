@@ -37,13 +37,24 @@ C_IDLE="${COUNCIL_IDLE:-2}"        # bell-loss fallback, seconds
 # the whole list with a diagnostic. A partial list would be worse than none — it silently
 # redefines who the room is.
 #
-# THIS FUNCTION IS THE ONLY READER OF `.order`. `council relaunch` and `council down` both come
-# through here; `_plain_name` survives in relaunch as an independent second statement of the
-# rule over the names that reach a path, not as the gate. An earlier version of this comment
-# claimed relaunch "already" applied the same rule while relaunch was in fact reading `.order`
-# itself and validating the LINES — accepting four shapes this function refuses. A second copy
-# of a rule is the copy that stops being maintained; a comment asserting the copies agree, when
-# they do not, is worse than either.
+# THIS FUNCTION IS THE ONLY READER THAT VALIDATES `.order`, and every verb that needs the peer
+# LIST comes through it — `council relaunch` and `council down` included. `_plain_name` survives
+# in relaunch as an independent second statement of the rule over the names that reach a path,
+# not as the gate.
+#
+# ONE OTHER PLACE READS THE FIELD: `c_floor_at` indexes `.order[$i]` directly, and that is sound
+# only while this function stays ALL-OR-NOTHING and order- and length-preserving, because the
+# index is derived from `c_npeers`. Anything that makes it dedupe, sort, or return a partial
+# list desynchronises the floor from the list every routing site rings — say so here before
+# doing it. Named explicitly because the previous version of this comment said "the only reader
+# of .order", which is the more dangerous shape of wrong: a false COUNT invites a re-count, a
+# false UNIVERSAL tells the next reader not to look. That version replaced a count that was
+# also wrong, in the same commit.
+#
+# An earlier version also claimed relaunch "already" applied the same rule while relaunch was in
+# fact reading `.order` itself and validating the LINES — accepting four shapes this function
+# refuses. A second copy of a rule is the copy that stops being maintained; a comment asserting
+# the copies agree, when they do not, is worse than either.
 #
 # THE SHAPE OF THE TEST IS THE POINT, and it is chosen against the specific ways an earlier
 # attempt at this was defeated. Validate the ENTRIES of the JSON value, inside jq, never the
@@ -328,10 +339,12 @@ c_recorded_status() {
 c_max_lamport() {
   local mine disk
   mine=$(c_lamport)
-  # `|| true` because an empty room is a normal state (see c_canon), but NOT `2>/dev/null`: when
-  # c_all fails it is because a lane file does not parse, and jq's error names that file. The
-  # redirect that used to be here made the room merely look empty.
-  disk=$({ c_all || true; } | jq -s 'if length == 0 then 0 else (max_by(.lamport).lamport) end')
+  # rc 1 is an empty room and is swallowed; rc 2 is a log that does not parse and is NOT, or
+  # c_send would stamp a lamport derived from a log it could not read.
+  local log lrc
+  log=$(c_all); lrc=$?
+  [ "$lrc" -le 1 ] || return "$lrc"
+  disk=$(printf '%s\n' "$log" | jq -s 'if length == 0 then 0 else (max_by(.lamport).lamport) end')
   # c_send feeds this straight into `lam=$(( ... + 1 ))`, so BOTH paths out of here have to
   # be integers -- the value read off disk, gated on the next line, and `mine`, which is what
   # this function returns whenever the comparison below is false or errors. `mine` is gated
@@ -386,7 +399,13 @@ c_int_field() { # <field> <default>  -- a roster integer, or the default if it i
 c_quorum() { c_int_field round_quorum ''; }
 
 # Positions posted in the opening round, as JSON lines.
-c_round0() { { c_all || true; } | jq -c 'select(.round == 0)'; }
+c_round0() {
+  local log rc
+  log=$(c_all); rc=$?
+  [ "$rc" -le 1 ] || return "$rc"
+  [ -n "$log" ] || return 0
+  printf '%s\n' "$log" | jq -c 'select(.round == 0)'
+}
 
 # open | closed. Closed for good once everyone has posted, or once the deadline has passed
 # with a quorum — one participant that never starts must not hold the room forever.
@@ -786,7 +805,8 @@ c_all() {
   #     each forking one `jq empty` per file), and `floor` -- which `recv --until-floor` polls --
   #     from 0.23 s to 4.86 s.
   #
-  # So the whole log is read or none of it is, and the failure is loud: the callers below no
+  # So the whole log is read or none of it is, and the failure is loud: c_max_lamport, c_round0
+  # and c_canon — the three callers, two of which sit ABOVE this function in the file — no
   # longer suppress jq's parse error, which names the offending file. `recv` still degrades one
   # message at a time, because c_drain reads only what is NEW and moves its cursor past the bad
   # file; that is where issue #67's point 4 is actually fixed, and it is the only place the
@@ -795,7 +815,33 @@ c_all() {
       | select(type == "object")
       | .from = (input_filename | split("/") | .[-2]) ]
     | _untrusted | sort_by(.lamport, .from)[]'
-  jq -n -c "$C_UNTRUSTED$prog" "${files[@]}"
+  # TWO failure modes, and every caller must be able to tell them apart. The `return 1` above
+  # is an EMPTY room, which is an ordinary state and which every caller swallows. A log that
+  # does not PARSE is not an empty room, and reporting it as one is how a single corrupt byte
+  # became a confident verdict: an empty log computes `no-proposal` perfectly well, so
+  # `v_decide`'s `[ -n "$verd" ]` waved it through and `--force` wrote a record saying
+  # "(there were no objections)" over a room whose objection was standing. Measured on three
+  # trees; the reading was identical on all of them. So an unreadable log exits **2**, and the
+  # three callers propagate that instead of turning it into silence.
+  #
+  # jq's own message names the offending file, which is the useful part, and it is NOT safe to
+  # print raw. The lane set is a glob, so a peer can create a file -- or a lane directory --
+  # whose NAME contains newlines, and jq echoes the path verbatim. That put a forged
+  # `alarms: ...` block into another seat's terminal, and every seat here is an agent session
+  # reading its own output, so this is instruction injection and not a cosmetic problem. The
+  # message is flattened to one line behind a fixed marker and bounded before it is let out.
+  # Restoring `2>/dev/null` would "fix" it by re-hiding the only signal there is; that is the
+  # trade this function spent two rounds getting away from.
+  #
+  # `{ err=$( ... 2>&1 1>&3 ); } 3>&1` captures stderr while stdout still streams to the
+  # caller, so only the failing path pays anything -- and on failure the program SLURPS, so
+  # nothing has been emitted to stdout by the time it aborts.
+  local err rc
+  { err=$(jq -n -c "$C_UNTRUSTED$prog" "${files[@]}" 2>&1 1>&3); rc=$?; } 3>&1
+  [ "$rc" = 0 ] && return 0
+  printf 'council: the log could not be read (a lane file does not parse): %s\n' \
+    "$(printf '%s' "$err" | tr -d '\000' | tr '\n\r\t' '   ' | cut -c1-300)" >&2
+  return 2
 }
 
 # --- canonicalisation ----------------------------------------------------------
@@ -811,14 +857,21 @@ c_all() {
 # out-of-turn — nothing is lost, nobody blocks, and every reader reaches the same verdict
 # without asking anyone. A demoted author simply takes the floor again.
 c_canon() {
-  # `|| true`: an EMPTY room is a normal state, not an error. c_all reports "nothing
-  # here" with exit 1, and under `set -e` + pipefail in a caller that propagated
-  # through the command substitution and killed the very first send in a fresh room.
+  # An EMPTY room is a normal state, not an error: c_all reports "nothing here" with exit 1,
+  # and under `set -e` + pipefail in a caller that propagated through the command substitution
+  # and killed the very first send in a fresh room. So rc 1 is swallowed.
   #
-  # The stderr redirect that used to sit beside it is gone. c_all's OTHER exit-1 case is a lane
-  # file that does not parse, and hiding jq's error there made an unreadable room look like an
-  # empty one to every reader that goes through here -- which is all of them.
-  { c_all || true; } | jq -s -c '
+  # rc 2 is NOT. That is a lane file that does not parse, and it is the whole reason c_all
+  # grew a second status: this function is what `_graph` and therefore `verdict`, `status`,
+  # `claims` and `decide` all read the room through, so silence here is what let a corrupt
+  # byte reach the durable record as "(there were no objections)". Propagating it makes
+  # `_graph` fail, which makes `v_verdict` return 1 printing nothing, which is exactly the
+  # empty verdict `v_status`'s alarm and `v_decide`'s refusal are written to catch --
+  # `--force` included, because that guard sits before the force case.
+  local log rc
+  log=$(c_all); rc=$?
+  [ "$rc" -le 1 ] || return "$rc"
+  printf '%s\n' "$log" | jq -s -c '
     sort_by(.lamport, .from)
     | ( [ .[] | select(.hand == false and .turn != null) ]
         | group_by(.turn) | map(sort_by(.lamport, .from) | .[0].id) ) as $win
@@ -911,10 +964,15 @@ c_last_turn_ms() {
 # evidence that the clock which produced it is wrong, and the caller reports it as that.
 #
 # `created_ms` is written once, by `up`, when the room is created, and NOTHING refreshes it —
-# not `relaunch`, not a later `up`. That is load-bearing rather than incidental: a refreshed
-# timestamp makes the room permanently young, every held time then exceeds its age, and the
-# STALL alarm is suppressed for good. Suppressing a true alarm is worse than raising a false
-# one, so the value must only ever be able to make this function's answer OLDER.
+# not `relaunch`, not a later `up`. A refreshed timestamp makes the room permanently young, so
+# every held time exceeds its age.
+#
+# That USED to suppress the STALL alarm outright, because the caller tested this branch first
+# and the plain threshold as its `elif`. It no longer can: v_status tests the threshold FIRST
+# and this value only chooses the wording, so a peer-writable field can degrade the alarm to
+# the unattributed "one seat's clock is wrong" reading but cannot remove it. Keep it that way
+# round — suppressing a true alarm is worse than raising a false one — and keep `up` the only
+# writer, because a degraded alarm is still a real loss.
 #
 # Empty for a room created before this was recorded, and for a `created_ms` that is not a
 # plausible past instant. Both keep the caller's previous behaviour exactly, which is what

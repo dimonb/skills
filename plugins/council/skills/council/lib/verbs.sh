@@ -122,7 +122,15 @@ v_transcript() {
   c_canon | jq -r '"[\(.from) \(.act)\(if (.refs|length)>0 then " →"+(.refs|join(",")) else "" end)\(if .valid then "" else " (out of turn)" end)] \(.text)"'
 }
 
-_graph() { c_canon | jq -s -f "$SKILL/lib/claims.jq"; }
+# Not a pipeline: a pipeline's status is the LAST command's, so `c_canon | jq` reported jq's
+# success over a log c_canon could not read, and every caller's `|| return 1` was dead code for
+# that case. The read is taken first so its status survives.
+_graph() {
+  local log rc
+  log=$(c_canon); rc=$?
+  [ "$rc" = 0 ] || return "$rc"
+  printf '%s\n' "$log" | jq -s -f "$SKILL/lib/claims.jq"
+}
 
 v_claims() {
   local g; g=$(_graph) || return 1
@@ -255,7 +263,7 @@ v_status() {
   # `alarms: —`. That is a broken room reported as a quiet one, on the one display a supervisor
   # is told to watch — so the emptiness gets an alarm of its own rather than a blank field.
   [ -n "$verd" ] && [ -n "$g" ] \
-    || alarms="$alarms 🛑 this room's state could not be computed — the lines above are incomplete (council.sh order shows the log)"
+    || alarms="$alarms 🛑 this room's state could not be computed — the lines above are incomplete (the error names the file; recv still reads new messages)"
   t=$(c_turns); floor=$(c_floor_at "$t"); last=$(c_last_turn_ms)
   held=$([ "$last" = 0 ] && echo 0 || echo $(( ($(c_ms) - last) / 1000 )))
   conf=$(c_conflicts)
@@ -368,7 +376,7 @@ v_decide() {
   # live room: its rc is a STATUS, not a success flag, and reading it as one would refuse every
   # `--force` on a room that had not converged, which is precisely the case --force exists for.
   [ -n "$verd" ] || {
-    echo "council decide: this room's state could not be computed — refusing to write a record. See the error above; council.sh order shows the log." >&2
+    echo "council decide: this room's state could not be computed — refusing to write a record. The error above names the file; recv still reads new messages." >&2
     return 1
   }
   case "$verd" in
@@ -377,7 +385,7 @@ v_decide() {
     *) [ "$force" = 1 ] || { echo "council: verdict '$verd', the decision is not ripe. --force writes an honest unresolved." >&2; return 2; } ;;
   esac
   g=$(_graph) && [ -n "$g" ] || {
-    echo "council decide: this room's argument graph could not be computed — refusing to write a record. See the error above; council.sh order shows the log." >&2
+    echo "council decide: this room's argument graph could not be computed — refusing to write a record. The error above names the file; recv still reads new messages." >&2
     return 1
   }
   out="$ROOM/board/decision.md"

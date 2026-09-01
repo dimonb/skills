@@ -194,8 +194,10 @@ council_up() {
   # lib.sh carries the whole account). It is written HERE and nowhere else, once, on a room
   # directory that did not exist a moment ago — `relaunch` regenerates launchers and protocols
   # and deliberately does not touch this file. Refreshing it would make the room permanently
-  # young and suppress the stall alarm for good, which is worse than the false alarm it
-  # replaces. `EPOCHREALTIME` rather than `date`, matching c_ms, which lib.sh is not sourced
+  # young; that no longer removes the stall alarm (v_status tests the threshold first and this
+  # value only rewords it) but it does degrade every real stall to the unattributed "one seat's
+  # clock is wrong" reading, which is still a loss worth preventing at the writer.
+  # `EPOCHREALTIME` rather than `date`, matching c_ms, which lib.sh is not sourced
   # here to provide; under the `LC_ALL=C` council.sh exports, its separator is always a dot.
   local created_ms=$(( 10#${EPOCHREALTIME/./} / 1000 ))
   jq -n --argjson order "$(printf '%s\n' "${peers[@]}" | jq -R . | jq -s .)" \

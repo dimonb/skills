@@ -177,7 +177,13 @@ is not.
 unreadable roster, or a lane file that does not parse — `decide` refuses with **exit 1** and
 writes nothing, `--force` included. A record is never written from a state this verb could not
 compute. Exit 2 still means "not ripe" and 3 "already decided", so a supervisor that retries on
-2 must not retry on 1: read `council.sh order` and repair the room instead.
+2 must not retry on 1.
+
+Repairing such a room: the whole-log readers — `order`, `transcript`, `claims`, `verdict`,
+`status` — all refuse together, because a log read in part is what produced the false records
+this rule exists to prevent. The diagnostic on stderr names the offending file, and that is the
+thing to act on. `recv` keeps working throughout: it reads only what is new and steps over a
+file it cannot parse, so participants are not wedged while the room is repaired.
 
 ## Verbs
 
@@ -448,7 +454,12 @@ turn budget ran out reports `unresolved` and exits 0 before anyone has written a
 that the room's output exists.
 
 **Exit codes here mean status, not success.** `verdict` returns 1 on a live room and 2 on
-a stuck one. Piping such a command (`council.sh status | grep -q X` under
+a stuck one. It also returns **1 having printed nothing at all** when the room's state
+could not be read — an unreadable roster, or a lane file that does not parse. So rc 1 with
+output is a live room and rc 1 with no output is a broken one; a supervisor that treats
+every 1 as "still going" will wait forever on a room that cannot progress. `status` names
+the problem in its alarms line, and `council.sh rooms` says it in place of the verdict.
+Piping such a command (`council.sh status | grep -q X` under
 `set -o pipefail`) reads the room's state as a failure of the pipeline — that already
 produced one false test result during development. Do not pipe status through a gate.
 
