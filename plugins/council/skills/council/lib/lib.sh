@@ -925,23 +925,36 @@ c_canon() {
 # position posted, asking as a peer that had not posted, grepping each verb's output for that
 # position's text: recv 0 hits, transcript 1, claims 1, order 1, status 2.
 #
-# THE RULE IS THE ONE c_drain APPLIES, and that is the point rather than a convenience: a lane
-# is cut at the first opening position in it that is not mine, so what comes out here is
-# exactly the set `recv` has already released. Two readers withholding by two different rules
-# is the divergence c_all's header spends a page on; one rule in one helper is what stops it
-# recurring.
+# A LANE IS WITHHELD WHOLE, never as a prefix of itself, and that is the difference between a
+# construction and a check. c_drain cuts a lane at its first foreign opening position, which it
+# can do safely because it orders a lane by the FILE SEQUENCE its own reader built. This
+# function has no sequence: c_all does not carry one, and the only ordering key in a message is
+# `.lamport`, which the peer writes. Cutting a prefix in lamport order was tried here and is
+# reverted: a peer put a second document in its OWN lane with a lamport below its position's,
+# and every waiting seat rendered it -- measured on this tree, `status` printed the marker
+# directly under `nobody sees their positions yet`, while `recv` withheld it. Withholding the
+# whole lane needs no ordering at all, so there is nothing left for a peer to choose.
+#
+# What that buys, stated exactly: a participant is shown NO MORE than `recv` has released --
+# not exactly the same set. The two differ only for a lane holding an ordinary message
+# alongside an opening position, which `send` refuses to produce (exit 5) and only a
+# hand-written lane reaches. Erring toward withholding is the right side to be wrong on, and
+# "no more than recv" is a property of the shape rather than of a field's monotonicity, so it
+# cannot be argued away by a lane file somebody wrote by hand.
 #
 # GATED ON `ME` BEING SET, not on whether I have posted yet. A seat that has posted is still a
 # seat, and the promise the mode makes is "nobody reads anyone else's until the round is
 # complete" (SKILL.md, protocol/_channel.md) -- withholding only until I post would let the
 # first seat to speak read everybody else, and would put this reader and `recv` back out of
 # step. An EMPTY `ME` is the SUPERVISOR: `status`, `transcript`, `claims`, `order` and
-# `verdict` all run without `need_me`, and a supervisor has to see the whole room.
+# `verdict` all run without `need_me`, and a supervisor has to see the whole room. The one seat
+# that is a participant and has no `COUNCIL_ME` is the one a human takes with `up --me`, which
+# gets no launcher to export it; `up` and protocol/_channel.md both tell that seat to pass
+# `--me` on every command, reads included.
 #
-# NO ROSTER READ, deliberately. Testing membership would make an unreadable roster answer "not
-# a participant" and hand over everything -- the barrier deleting itself, which is the failure
-# c_barrier's own precondition exists to avoid. c_barrier already answers `open` when the
-# roster cannot be read, so an unreadable roster withholds MORE here, never less.
+# NO MEMBERSHIP TEST against the roster, deliberately: it would answer "not a participant" over
+# a roster nobody can read and hand everything over, which is the barrier deleting itself. The
+# roster IS read, but only to ask whether it parses at all -- see the function.
 #
 # NOT APPLIED to c_round0, c_turns, c_floor_at, c_conflicts, v_verdict or v_decide, and each
 # omission is deliberate. c_round0 is the barrier's OWN input: filter it and `posted k/N` never
@@ -949,22 +962,50 @@ c_canon() {
 # arithmetic and the durable record -- facts about the ROOM rather than about what one seat may
 # read. The record most of all: a decision record that is wrong is the worst outcome this
 # codebase has, so it is written from the whole log even when the seat writing it could not
-# read all of it.
+# read all of it. That is also the one door this function does not close: `decide --force`
+# during an open round writes a record holding every position, and `decision` then hands it to
+# anyone. SKILL.md and protocol/_channel.md say so rather than promising otherwise.
 c_visible() {
-  # `ME` first because it is free, and the barrier read is not: in a roundtable room c_barrier
-  # goes through c_round0, which is a whole c_all. In a `token` room it returns on c_mode alone,
-  # so the common case costs one jq.
-  if [ -z "$ME" ] || [ "$(c_barrier)" != open ]; then c_canon; return; fi
+  # `ME` first because it is free: an empty one is the supervisor and there is nothing to do.
+  [ -n "$ME" ] || { c_canon; return; }
+  local why=""
+  # THE BARRIER'S ANSWER IS ONLY WORTH HAVING IF THE ROSTER IT COMES FROM PARSED. c_barrier's
+  # first line is `[ "$(c_mode)" = roundtable ]`, and c_mode is a bare `jq -r '.mode //
+  # "token"'`: over a roster.json that is empty, truncated or missing, jq prints NOTHING, and
+  # over the literal `null` it prints `token` -- so c_barrier returns `closed` on that line and
+  # never reaches the `n > 0` precondition that would have answered `open`. An earlier version
+  # of this comment cited that precondition as the reason no roster read was needed here; it
+  # covers the `.order` half of an unreadable roster and not this half. Measured on this tree
+  # with the check below removed, three-peer roundtable room, two positions posted, asking as
+  # the peer that had posted none: recv 0 hits, transcript 2, claims 2, order 2, status 4 --
+  # the whole log, silently, in the state where withholding matters most.
+  #
+  # So a roster this reader cannot parse WITHHOLDS. It costs nothing where nothing is at stake:
+  # with no `round == 0` message in any other lane -- every `token` room -- the filter is the
+  # identity.
+  if ! jq -e 'type == "object"' "$ROOM/roster.json" >/dev/null 2>&1; then
+    why="this room's roster could not be read, so its opening barrier cannot be resolved — every other seat's opening position is withheld from you until it can be"
+  # The barrier read is not free: on the OPEN path c_barrier runs c_round0 TWICE (once for
+  # `posted`, once for the first `sent_ms`), each a whole c_all, and c_canon below is a third.
+  # In a `token` room it returns on c_mode alone. Measured cost is on the pull request.
+  elif [ "$(c_barrier)" = open ]; then
+    why="the opening round is not complete — the other seats' positions are withheld from you until it is"
+  else
+    c_canon; return
+  fi
+  # SAID OUT LOUD, every time, because the alternative is a reader that quietly shows less than
+  # the log -- which is how `claims` came to print `open objections: 0` over a standing
+  # objection in a room whose roster.json had one bad entry (c_npeers 0 pins the barrier open
+  # for the room's life). `status` has its own `OPEN ROUND` line; `transcript`, `claims` and
+  # `order` have nothing, and a reader that cannot tell "nothing was said" from "nothing was
+  # shown to you" is the broken-room-reported-as-a-quiet-one this file names as its worst class.
+  echo "council: $why" >&2
   # `.from` is c_all's derivation from the LANE DIRECTORY, never the message's claim about
-  # itself, so grouping and the `!= $me` test here rest on the same footing c_drain's do.
-  # `.round` reached this through `_untrusted` and is a number or null, so `== 0` cannot throw.
-  # Within a lane `.lamport` rises with every send (c_send stamps max+1), which is what makes
-  # sorting by it here the same order c_drain takes from the file sequence.
+  # itself, so grouping and the `!= $me` test rest on the same footing c_drain's do. `.round`
+  # reached this through `_untrusted` and is a number or null, so `== 0` cannot throw.
   c_canon | jq -s -c --arg me "$ME" '
     [ group_by(.from)[]
-      | sort_by(.lamport)
-      | (. as $g | ($g | map(.round == 0 and .from != $me) | index(true)) as $i
-         | if $i == null then $g else $g[0:$i] end) ]
+      | (if any(.[]; .round == 0 and .from != $me) then [] else . end) ]
     | flatten(1) | sort_by(.lamport, .from)[]'
 }
 

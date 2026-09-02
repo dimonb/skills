@@ -2,7 +2,8 @@
 # t7 — the opening barrier of `mode: roundtable`.
 #   * an opening position is invisible to everyone else until the round is complete, in
 #     EVERY reader — `recv`, `transcript`, `claims`, `order` and `status` — while a
-#     supervisor watching the room still sees all of it;
+#     supervisor watching the room still sees all of it, and a seat keeps seeing its own;
+#   * neither a roster nobody can parse nor a peer-chosen `.lamport` lifts that;
 #   * when the last one lands, all of them are released at once, in one order;
 #   * the round counts as one lap, and the room is turn-taking from there on;
 #   * a participant that never posts does not hold the room: the deadline plus a quorum
@@ -28,10 +29,16 @@ seen() { COUNCIL_ROOM="$R" COUNCIL_ME="$1" bash "$CLI" recv --peek | jq -r '.id'
 # already paid for: `status` returns 1 for a live room, which under pipefail reads as a failing
 # grep (council.sh's own usage says do not pipe status), and `grep -q` closes the pipe on its
 # first hit, so a match can come back as SIGPIPE rather than as a match.
-sees() { # <peer|""> <verb> <text>
+#
+# `$2` is deliberately UNQUOTED so a verb can carry a flag: `order` and `order --ids` are two
+# different code paths and verbs.sh argues that both must be filtered, so an assertion has to
+# be able to name the second one. Without the split, reverting only the `--ids` branch left
+# this file green.
+# shellcheck disable=SC2086
+sees() { # <peer|""> <verb [flag]> <text>
   local out
-  if [ -n "$1" ]; then out=$(COUNCIL_ROOM="$R" COUNCIL_ME="$1" bash "$CLI" "$2" 2>&1)
-  else out=$(env -u COUNCIL_ME COUNCIL_ROOM="$R" bash "$CLI" "$2" 2>&1); fi
+  if [ -n "$1" ]; then out=$(COUNCIL_ROOM="$R" COUNCIL_ME="$1" bash "$CLI" $2 2>&1)
+  else out=$(env -u COUNCIL_ME COUNCIL_ROOM="$R" bash "$CLI" $2 2>&1); fi
   case "$out" in *"$3"*) return 0 ;; *) return 1 ;; esac
 }
 
@@ -73,8 +80,20 @@ for v in transcript claims status order; do
   sees c "$v" "for the first lap only" && { echo "FAIL c saw a's position through '$v' while the round was open"; fail=1; }
   sees c "$v" "not needed at all" && { echo "FAIL c saw b's position through '$v' while the round was open"; fail=1; }
   sees a "$v" "not needed at all" && { echo "FAIL a saw b's position through '$v' after posting its own"; fail=1; }
+  # THE POSITIVE CONTROL, and it is not decoration: without it every assertion above is
+  # satisfied by a filter that returns NOTHING. Two one-token mutations proved that — making
+  # the filter yield an empty list, and dropping its `.from != $me` term so a seat loses sight
+  # of its own words — and this file reported PASS for both. The section-2 positives cannot
+  # cover it, because by then the barrier is closed and the filter is never exercised.
+  sees a "$v" "for the first lap only" || { echo "FAIL a lost sight of its OWN position through '$v' while the round was open"; fail=1; }
 done
-echo "the barrier holds in every reader: transcript, claims, order and status withhold what recv does"
+# `order --ids` is a second code path, and verbs.sh argues it must be filtered too: an id is
+# not content, but a list of them says who has posted. Reverting only that branch left this
+# file green until these three lines existed.
+sees c "order --ids" "a-1" && { echo "FAIL c saw a's id through 'order --ids' while the round was open"; fail=1; }
+sees a "order --ids" "b-1" && { echo "FAIL a saw b's id through 'order --ids' after posting its own"; fail=1; }
+sees a "order --ids" "a-1" || { echo "FAIL a lost its OWN id through 'order --ids' while the round was open"; fail=1; }
+echo "the barrier holds in every reader: transcript, claims, order (and --ids) and status withhold what recv does"
 
 # A supervisor is not a participant and owes no position. Gating it would blank the one block
 # a human is told to watch, at the one moment a room is most likely to need watching.
@@ -83,6 +102,44 @@ for v in transcript status; do
   sees "" "$v" "not needed at all" || { echo "FAIL a supervisor could not see b's position through '$v'"; fail=1; }
 done
 echo "a supervisor still sees the whole room while the round is open"
+
+# --------------------------------- 1c. a roster nobody can parse must not lift the barrier
+# c_barrier's first line is a c_mode read, and c_mode is a bare jq: over a roster.json that is
+# empty, truncated or missing it prints NOTHING, and over the literal `null` it prints `token`
+# — so the barrier answered `closed` and never reached the `n > 0` precondition that answers
+# `open`. Every reader then handed the whole log over, silently, in the state where withholding
+# matters most, while `recv` (which needs c_peers) stayed deaf. t9h's unreadable-roster case
+# cannot reach this: it damages `.order` in a roster that still parses.
+cp "$R/roster.json" "$R/roster.good"
+for shape in empty truncated null missing; do
+  case "$shape" in
+    empty)     : > "$R/roster.json" ;;
+    truncated) printf '{"order":["a","b"' > "$R/roster.json" ;;
+    null)      printf 'null' > "$R/roster.json" ;;
+    missing)   rm -f "$R/roster.json" ;;
+  esac
+  for v in transcript claims status order; do
+    sees c "$v" "for the first lap only" && { echo "FAIL a $shape roster let '$v' hand c the position the barrier withholds"; fail=1; }
+  done
+  cp "$R/roster.good" "$R/roster.json"
+done
+echo "a roster nobody can parse withholds rather than lifting the barrier (empty, truncated, null, missing)"
+
+# ------------------------- 1d. a peer cannot push its own words past the barrier
+# A lane is withheld WHOLE. Cutting a prefix of it needs an order, and the only ordering key a
+# message carries is `.lamport`, which the peer writes — so a peer put a second document in its
+# own lane below its position's lamport and every waiting seat rendered it, while `recv` (which
+# orders a lane by its file sequence) withheld it. `claims` is not asserted here: it renders
+# proposals and objections only, so a `msg` act could not appear in it either way.
+jq -n '{id:"a-2",from:"a",lamport:0,deps:{},act:"msg",refs:[],to:["*"],hand:false,turn:null,
+        round:null,text:"a pushes its own words past the barrier",created_at:"test",sent_ms:0}' \
+  > "$R/lane/a/000002.json"
+printf '2' > "$R/state/a.seq"
+for v in transcript status order; do
+  sees c "$v" "pushes its own words past the barrier" && { echo "FAIL a pushed its own words past the barrier through '$v'"; fail=1; }
+done
+rm -f "$R/lane/a/000002.json"; printf '1' > "$R/state/a.seq"
+echo "a peer cannot push its own words past the barrier by choosing a lamport"
 
 # ------------------------------------------------------- 2. the last one releases all
 say c propose '[]' "position c: the barrier is needed beyond the first lap too"
