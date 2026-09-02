@@ -222,6 +222,57 @@ live=$(bash "$CLI" verdict --json 2>/dev/null | jq -r '.live // "ERR"')
 if [ "$live" = 1 ]; then echo "ok   one bad document did not blank the whole room"
 else echo "FAIL a bad document collapsed the room: live=$live (want 1)"; fail=1; fi
 
+# --- 6e. content that does not PARSE costs its own message too -------------------
+# The remainder of 6c, and a different mechanism: `select(type == "object")` runs on a
+# document that has been read, and a byte that does not parse is never a document. jq cannot
+# recover from a parse error mid-stream, so one stray byte in a lane used to return recv 4
+# with the cursor unmoved — permanently, and 4 is the status a participant is told to retry —
+# while c_all's callers reported an empty room. The drop must also be VISIBLE: a lane holding
+# bytes nobody can read will not repair itself.
+fresh
+jq -c -n '{id:"a-1",from:"a",lamport:1,deps:{},act:"msg",refs:[],to:["*"],
+           hand:false,turn:null,round:null,text:"an honest earlier message",
+           created_at:"t",sent_ms:0}' > "$R/lane/a/000001.json"
+printf 'not json at all }{' > "$R/lane/a/000002.json"
+jq -c -n '{id:"a-3",from:"a",lamport:3,deps:{},act:"msg",refs:[],to:["*"],
+           hand:false,turn:null,round:null,text:"an honest later message",
+           created_at:"t",sent_ms:0}' > "$R/lane/a/000003.json"
+printf '3' > "$R/state/a.seq"
+err="$R/recv.err"
+out=$(COUNCIL_ME=b bash "$CLI" recv --timeout 1 2>"$err")
+n=$(printf '%s' "$out" | grep -c . || true)
+if printf '%s' "$out" | grep -q "an honest earlier message" \
+   && printf '%s' "$out" | grep -q "an honest later message" && [ "$n" = 2 ]; then
+  echo "ok   an unparseable document cost only its own message"
+else
+  echo "FAIL an unparseable document was not retired cleanly: $n line(s) released"; fail=1
+fi
+# Grep for the SKILL's own wording, not the bare filename: jq's own parse error already prints
+# the path, so `grep 000002.json` passed against unfixed code too and proved nothing. Measured
+# both ways; this form is false without the diagnostic and true with it.
+if grep -q 'not readable JSON' "$err" && grep -q '000002.json' "$err"; then
+  echo "ok   the unreadable file was named on stderr by this skill, not just by jq"
+else
+  echo "FAIL the drop carried no diagnostic of its own"; fail=1
+fi
+cur=$(cat "$R/cursor/b/a" 2>/dev/null)
+if [ "$cur" = 3 ]; then echo "ok   the cursor moved past it (=$cur)"
+else echo "FAIL the cursor stalled at '$cur' (want 3)"; fail=1; fi
+# The two readers deliberately DIFFER here, and the asymmetry is the point. c_drain reads what
+# is NEW and moves its cursor past the bad file, so `recv` keeps the room going at the cost of
+# one message -- that is this issue's point 4. c_all reads the WHOLE log on every call, and it
+# does NOT recover: it releases nothing and says why on stderr. It does not refuse -- `order`
+# exits 0 over an empty result -- so a reader of this room sees an EMPTY room, and only the
+# diagnostic disagrees. That asymmetry is the remainder disclosed at c_all in lib.sh; two
+# attempts to remove it were reverted, so assert what it does rather than what it should do.
+oerr="$R/order.err"
+live=$(bash "$CLI" order 2>"$oerr" | grep -c . || true); orc=$?
+if [ "$live" = 0 ] && [ "$orc" = 0 ] && grep -q '000002.json' "$oerr"; then
+  echo "ok   the whole-log reader released nothing and named the file on stderr"
+else
+  echo "FAIL the whole-log reader released $live message(s) and wrote $(wc -c <"$oerr" | tr -d ' ') bytes of stderr"; fail=1
+fi
+
 # --- 7. the room still works normally afterwards --------------------------------
 fresh
 p=$(say_floor propose '[]' "An ordinary proposal.")

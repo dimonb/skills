@@ -11,6 +11,33 @@
 # since every sink is either path-prefixed or a quoted operand.
 _plain_name() { case "$1" in ''|*[!A-Za-z0-9_-]*) return 1 ;; *) return 0 ;; esac; }
 
+# The keeper's pid, or nothing. Both callers hand the result to `kill`, and `kill` reads a
+# `0` as EVERY PROCESS IN THE SENDER'S PROCESS GROUP -- which is the supervisor's own session,
+# not the room. That is not a hypothetical: an early probe for this wrote `0` into a pid file
+# and its own cleanup then killed the probe's process group for real.
+#
+# A stale or malformed pid file is the ordinary case, with nobody attacking: a keeper that
+# died and left its pid behind, a room directory copied, an interrupted start that wrote an
+# empty value. `kill -0 0` also SUCCEEDS, so an unguarded `_keeper_ensure` reads `0` as "a
+# keeper is running", never starts one, and every bell in the room is then silently lost --
+# the exact failure that function's own header says it exists to prevent.
+#
+# So both readers go through here and `kill` only ever sees a positive integer. Digits then
+# `10#`, the idiom c_slurp carries for the same reason: a value like `010` is a legal pid file
+# and `$(( ))` would read it as octal. The ten-digit ceiling is there to make the arithmetic
+# itself exact rather than to judge what a plausible pid is -- past it `$(( ))` wraps a
+# 64-bit signed integer, and a wrapped value can land on a positive number that is somebody
+# else's live process.
+_keeper_pid() { # <pid-file> -> a positive integer on stdout, or nothing and rc 1
+  local v=""
+  [ -s "$1" ] || return 1
+  read -r v < "$1" 2>/dev/null
+  case "$v" in ''|*[!0-9]*) return 1 ;; esac
+  [ "${#v}" -le 10 ] || return 1
+  v=$((10#$v)); [ "$v" -gt 0 ] || return 1
+  printf '%s' "$v"
+}
+
 # A rename cannot be redirected by a symlink at the destination, but it can still land inside
 # one if a PARENT directory is a link — swap `state/` for a link to somewhere else and every
 # write below it goes there. Cheap to check, and there is no legitimate reason for either of
@@ -34,8 +61,8 @@ _room_dirs_sane() { # <room>
 # perfectly healthy while every bell rung at it went nowhere.
 _keeper_ensure() { # <room-dir> <peer>...
   local room="$1"; shift
-  local keep="$room/state/keeper.pid" p
-  [ -s "$keep" ] && kill -0 "$(cat "$keep")" 2>/dev/null && return 0
+  local keep="$room/state/keeper.pid" p pid
+  pid=$(_keeper_pid "$keep") && kill -0 "$pid" 2>/dev/null && return 0
   # Detach it from the caller's stdio COMPLETELY. A background process that keeps the
   # caller's stdout open holds any pipe reading it open too: `council.sh ... | tail`
   # then never sees EOF and hangs forever, with nothing wrong upstream. Cost one
@@ -162,13 +189,24 @@ council_up() {
   # wherever the supervisor happened to be standing, would silently move that seat to another
   # directory — and a supervisor is very often standing in a different worktree of the same
   # repo, which resolves to the same room.
+  # `created_at` is for a human; `created_ms` is the one a reader can do arithmetic on, and it
+  # exists so `status` can tell a genuine stall from a peer with a wrong clock (c_room_age_s in
+  # lib.sh carries the whole account). It is written HERE and nowhere else, once, on a room
+  # directory that did not exist a moment ago — `relaunch` regenerates launchers and protocols
+  # and deliberately does not touch this file. Refreshing it would make the room permanently
+  # young; that no longer removes the stall alarm (v_status tests the threshold first and this
+  # value only rewords it) but it does degrade every real stall to the unattributed "one seat's
+  # clock is wrong" reading, which is still a loss worth preventing at the writer.
+  # `EPOCHREALTIME` rather than `date`, matching c_ms, which lib.sh is not sourced
+  # here to provide; under the `LC_ALL=C` council.sh exports, its separator is always a dot.
+  local created_ms=$(( 10#${EPOCHREALTIME/./} / 1000 ))
   jq -n --argjson order "$(printf '%s\n' "${peers[@]}" | jq -R . | jq -s .)" \
         --argjson peers "$peers_json" --arg mode "$SC_MODE" --arg dec "$SC_DECIDE" \
         --argjson turns "$SC_TURNS" --arg sc "$scenario" --arg at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
-        --argjson rdl "$SC_RDEADLINE" --arg cwd "$cwd" \
+        --argjson rdl "$SC_RDEADLINE" --arg cwd "$cwd" --argjson cms "$created_ms" \
     '{order:$order, peers:$peers, scenario:$sc, mode:$mode, decide_by:$dec,
       order_rotate:true, turn_deadline_ms:180000, turns_budget:$turns,
-      round_deadline_ms:$rdl, cwd:$cwd, created_at:$at}' \
+      round_deadline_ms:$rdl, cwd:$cwd, created_at:$at, created_ms:$cms}' \
     > "$room/roster.json"
   printf '%s\n' "${agenda:-(no agenda given)}" > "$room/agenda.md"
 
@@ -217,12 +255,22 @@ council_up() {
 council_rooms() {
   local base; base=$(room_base) || return 1
   [ -d "$base" ] || { echo "no rooms"; return 0; }
-  local d
+  local d name line
   for d in "$base"/*/; do
     [ -d "$d" ] || continue
     d="${d%/}"
-    printf '%-24s %s\n' "$(basename "$d")" \
-      "$(COUNCIL_ROOM="$d" bash "$SKILL/council.sh" verdict 2>/dev/null || true)"
+    name=$(basename "$d")
+    line=$(COUNCIL_ROOM="$d" bash "$SKILL/council.sh" verdict 2>/dev/null || true)
+    # `verdict` returns 1 having printed NOTHING for a room whose state cannot be read, and this
+    # listing drops its stderr, so without a fallback such a room shows a blank second column --
+    # reading as ordinary in the one view that lists every room at once.
+    #
+    # Written as `[ -n ... ] ||` rather than the obvious `"${line:-...}"`: an apostrophe inside a
+    # `:-` default closes the surrounding double-quoted string, and bash then misparses the REST
+    # OF THE FILE, surfacing the syntax error over a hundred lines away in a function this one
+    # never calls. Found the hard way; do not "simplify" it back.
+    [ -n "$line" ] || line="🛑 this room's state could not be read — council.sh status --room $name"
+    printf '%-24s %s\n' "$name" "$line"
   done
 }
 
@@ -334,25 +382,35 @@ council_relaunch() {
              peer="$1"; shift ;;
     esac
   done
-  # Read the roster ONCE, as an array, and do membership against that array.
+  # Read the roster ONCE, as an array, through c_peers — the same reader `down` and every verb
+  # in lib.sh use. relaunch runs after council.sh has sourced lib.sh, so it is in scope here.
+  #
+  # This used to read `.order` itself, and that made it the THIRD copy of one rule and the
+  # weakest: it validated the LINES that `$(jq -r '.order[]')` printed, which is exactly the
+  # defeat c_peers' own header enumerates. Command substitution splits an embedded newline and
+  # strips a trailing one, so `["a","b\nc"]` became three accepted seats and `["a","ab\n"]`
+  # passed a check that never saw the byte. Measured against c_peers on the same rosters: it
+  # accepted four shapes c_peers refuses. relaunch then regenerated a protocol naming a
+  # participant that is not in the room, and `_keeper_ensure` opened `bell/<phantom>.fifo` —
+  # which, the path not existing, CREATES a regular file that `_mkroom` will never revisit, so
+  # that bell can never become a fifo again. It printed `relaunched:` at rc 0 into a room where
+  # the seat it had just restarted could not run a single verb.
   #
   # `jq -e '.order | index($p)'` looked like a membership test and is not: on a STRING `.order`
   # it does SUBSTRING matching and succeeds, while `jq -r '.order[]'` then errors and leaves
   # the peer list empty — so a roster written as one string both passed the check for a
-  # traversing peer name and skipped every per-name check that follows it. A non-array `.order`
-  # is also a plain bug with nobody attacking: the protocol renders with no participants and
-  # the keeper comes back holding zero fifos, which is the silent bell loss this file exists
-  # to prevent.
-  jq -e '(.order | type) == "array"' "$ROOM/roster.json" >/dev/null 2>&1 \
-    || { echo "council relaunch: this room's roster has no usable participant list" >&2; return 2; }
+  # traversing peer name and skipped every per-name check that follows it. c_peers refuses a
+  # non-array `.order` outright, which covers that case and the newline ones together.
   local -a roster=(); local q
-  while IFS= read -r q; do [ -n "$q" ] && roster+=("$q"); done < <(jq -r '.order[]' "$ROOM/roster.json")
+  while IFS= read -r q; do [ -n "$q" ] && roster+=("$q"); done < <(c_peers)
   [ "${#roster[@]}" -ge 1 ] \
-    || { echo "council relaunch: this room's roster lists no participants" >&2; return 2; }
-  # Validate every name HERE, before any of them is built into a path or interpolated into the
-  # sed program that renders a protocol. `$peer` needs no separate check: it has to equal one
-  # of these to get past the membership test below, so checking them covers it — and a guard
-  # with no case that can fail is a guard nobody will notice breaking.
+    || { echo "council relaunch: this room's roster has no usable participant list — refusing to render a protocol from it" >&2; return 2; }
+  # `_plain_name` stays as a second, independent statement of the rule over the values that
+  # actually reach a path and the sed program that renders a protocol. It is belt-and-braces
+  # now rather than the only gate, and it is kept deliberately: this file must not depend on
+  # lib.sh being correct to avoid rendering a protocol from a name it should refuse. `$peer`
+  # needs no separate check — it has to equal one of these to get past the membership test
+  # below, so checking them covers it.
   for q in "${roster[@]}"; do
     _plain_name "$q" \
       || { echo "council relaunch: roster holds an implausible participant name ('$q') — refusing to render a protocol from it" >&2; return 2; }
@@ -449,12 +507,18 @@ council_relaunch() {
 council_down() {
   local purge=0; [ "${1:-}" = "--purge" ] && purge=1
   . "$SKILL/lib/term.sh"
+  # Through c_peers, like every other reader of this list: `down` runs after council.sh has
+  # sourced lib.sh, so the validated reader is in scope here. Reading `.order` raw left the
+  # last unquoted word-split of an unvalidated peer list in the skill, one function away from
+  # `relaunch`'s own guard — and a third copy of a rule is the copy that stops being
+  # maintained. A roster nobody can read closes no terminal and says so; the keeper below
+  # still goes, and `--purge` still removes the room, which is what teardown is for.
   local p
-  for p in $(jq -r '.order[]' "$ROOM/roster.json"); do
+  for p in $(c_peers); do
     ct_kill "$p" 2>/dev/null && echo "terminal closed: $p"
   done
-  local keep="$ROOM/state/keeper.pid"
-  [ -s "$keep" ] && kill "$(cat "$keep")" 2>/dev/null
+  local keep="$ROOM/state/keeper.pid" pid
+  pid=$(_keeper_pid "$keep") && kill "$pid" 2>/dev/null
   if [ "$purge" = 1 ]; then
     # The room IS the record — the ADR and the transcript live in it. Deleting it throws
     # away the only durable output the room produced, so it takes an explicit flag.

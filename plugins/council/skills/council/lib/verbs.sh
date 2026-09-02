@@ -173,13 +173,78 @@ v_claims() {
 # The verdict is COMPUTED. "We agree" here means: no open objection, and a full lap in
 # which nobody added a proposal, an amendment or an objection. Not a mood anyone reports.
 v_verdict() {
-  local g n budget turns live open since win lap v recorded
-  g=$(_graph) || return 1
+  local g n budget turns live open since win lap v recorded gok
+  # THE RECORD ANSWERS BEFORE THE ROOM DOES. `board/decision.md` and `board/status` pass
+  # through neither the lane log nor the roster, so a room that has already closed must keep
+  # saying so even when neither can be read -- `status` exits 0 ("the room is finished"), which
+  # is the contract a supervising session polls on, and `decide` returns 3.
+  #
+  # This is read FIRST because reading it last has now produced the same inversion twice, from
+  # two different directions: once when an unreadable LOG made `_graph` fail (reverted -- see
+  # c_all's header), and once when an unreadable ROSTER made the peer-count precondition below
+  # return. Both left a closed room answering nothing at all, and both were invisible until a
+  # room was actually closed and then damaged. `origin/main` answers `decided` in both states.
+  #
+  # A room whose record is written is not going to change its mind, so nothing computed below
+  # can alter this answer -- which is why short-circuiting here is safe as well as correct.
+  # THE RECORD IS A FALLBACK, NOT A SUBSTITUTE. It answers only when the room cannot be read,
+  # so a room that can be read is reported from the room -- and the computed path below already
+  # gives the record the last word on the VERDICT (`if [ -n "$recorded" ]; then v=$recorded`),
+  # which is the part that must not be recomputed. Writing this as a parallel block that emits
+  # its own JSON instead cost two rounds: the first version omitted `turns`, `budget`,
+  # `since_last_claim` and `lap`, so every closed room rendered `turns 5/null` and wrote
+  # `* turns: null of null` into its durable record; the second invented `live`, `open`,
+  # `open_ids` and `decide_msg` as 0/0/[]/null, so `verdict --json` reported no open objection
+  # on a room recorded `unresolved` -- which is precisely a room that closed with objections
+  # standing -- while `status`, `claims` and the record all still said otherwise. A block that
+  # has to be kept in step with the one below by hand will fall out of step; falling through
+  # keeps them the same code.
+  recorded=$(c_recorded_status)
   # Held to digits, not `// 30` and not jq's `type == "number"`: a string is truthy in jq so
   # the alternative never fires, and a JSON number is not a bash integer -- `2.5` and `1e400`
   # are numbers, and both make the `[ -ge ]` below error, which silently disables the room's
   # only stop condition and puts the same value into `--argjson`. roster.json is peer-writable.
   n=$(c_npeers); budget=$(c_int_field turns_budget 30)
+  # `gok` rather than `[ -z "$g" ]`: an empty room's graph is a perfectly good JSON object, and
+  # testing the text would read an empty room as a broken one.
+  gok=1; g=$(_graph) && gok=0
+  # A room with no readable participant list has no lap to measure convergence against, and
+  # `lap` is exactly what both thresholds below compare against. At n=0, `[ "$since" -ge 0 ]` is
+  # UNCONDITIONALLY true, so such a room reported ready-to-decide on its very first proposal and
+  # `decide` -- without --force -- wrote a permanent `decided` record at rc 0, carrying a blank
+  # participant list, for a room in which nobody could take the floor. No hostile peer is needed:
+  # a truncated, absent or half-written roster.json does it, and roster.json is written with a
+  # plain `>`.
+  if [ "$gok" != 0 ] || [ "$n" -le 0 ]; then
+    # Neither door opens. If the room has already produced its output, say so from the record --
+    # `board/decision.md` and `board/status` pass through neither the log nor the roster, and a
+    # room whose record is written is not going to change its mind. Reading the record LAST
+    # produced the same inversion twice, from both doors: a closed room answering nothing at all,
+    # `status` rc 1 where a supervisor waits on rc 0, and `decide` rc 1 where SKILL.md promises 3.
+    #
+    # With no record either, return 1 having printed nothing -- the same contract `_graph`'s own
+    # failure already used, so the two agree: a room this verb cannot read yields no verdict.
+    # v_status then raises its "state could not be computed" alarm and v_decide refuses to write
+    # a record. c_floor_at and c_barrier carry the same precondition.
+    [ -n "$recorded" ] || return 1
+    # The counts are the honest ones for a room nothing can be read from; every other field comes
+    # from a reader that is TOTAL -- it falls back to a default rather than failing, so an
+    # unreadable roster costs accuracy, not an answer. They are not roster-INDEPENDENT: `c_turns`
+    # (through `c_mode` and `c_barrier`), `c_npeers` and `c_int_field` all read roster.json, and
+    # removing it moves `lap` to 0 and, in a roundtable room, `turns` down by a lap. Only
+    # `c_turns_since_last_claim` is independent of it, and it answers -1 rather than failing.
+    local rturns rwin rsince
+    rturns=$(c_turns); rwin=$(c_turns_since_last_claim)
+    rsince=$(( rwin < 0 ? rturns : rwin ))
+    if [ "${1:-}" = "--json" ]; then
+      printf '{"verdict":"%s","turns":%s,"budget":%s,"since_last_claim":%s,"lap":%s,"live":0,"open":0,"open_ids":[],"decide_msg":null,"recorded":true}\n' \
+        "$recorded" "$rturns" "$budget" "$rsince" "$n"
+    else
+      printf '%s  turns %s/%s  nothing new for %s turns (lap %s)  (recorded; the room is closed)\n' \
+        "$recorded" "$rturns" "$budget" "$rsince" "$n"
+    fi
+    return 0
+  fi
   # Two counts, and deliberately NOT the decide message's id alongside them. `@tsv` does not
   # escape spaces and `read` splits on them as well as on tabs, so a peer-chosen `.id` of
   # `b 9` used to shift every following field: live took the id's tail and open took
@@ -232,9 +297,16 @@ v_verdict() {
 }
 
 v_status() {
-  local j verd g t floor last held conf alarms=""
-  j=$(v_verdict --json); verd=$(printf '%s' "$j" | jq -r .verdict)
+  local j verd g t floor last held conf room_age alarms=""
+  j=$(v_verdict --json); verd=$(printf '%s' "$j" | jq -r '.verdict // empty' 2>/dev/null)
   g=$(_graph)
+  # This block is what a supervisor reads instead of the room, so it has to say when it cannot
+  # read the room either. Both reads above degrade to EMPTY, not to an error, and every printf
+  # above then renders a blank where a number belongs: `turns 3/`, `verdict: `, no proposals,
+  # `alarms: —`. That is a broken room reported as a quiet one, on the one display a supervisor
+  # is told to watch — so the emptiness gets an alarm of its own rather than a blank field.
+  [ -n "$verd" ] && [ -n "$g" ] \
+    || alarms="$alarms 🛑 this room's state could not be computed — the lines above are incomplete (the error above says what could not be read)"
   t=$(c_turns); floor=$(c_floor_at "$t"); last=$(c_last_turn_ms)
   held=$([ "$last" = 0 ] && echo 0 || echo $(( ($(c_ms) - last) / 1000 )))
   conf=$(c_conflicts)
@@ -266,7 +338,35 @@ v_status() {
                 else alarms="$alarms 🛑 the turn budget is spent — write an honest unresolved"; fi ;;
   esac
   [ "$conf" -gt 0 ] && alarms="$alarms ⚠️ $conf messages lost a turn conflict (their authors must take the floor again)"
-  [ "$held" -gt "${COUNCIL_STALL_SECS:-900}" ] && alarms="$alarms 🛑 STALL: $floor has held the floor for ${held}s — check its terminal, it may be sitting on a permission prompt"
+  # The held time comes from the last turn-consuming message's `sent_ms`, so it is only as good
+  # as the clock of whichever seat wrote that message — and a held time longer than the ROOM has
+  # existed cannot be true. It is not reported as a smaller number: clamping it would let an
+  # impossible value slip under the threshold and silence a real stall.
+  #
+  # THE THRESHOLD IS TESTED FIRST, AND THE IMPOSSIBLE-VALUE CASE ONLY CHOOSES THE WORDING. That
+  # ordering is the whole point and it must not be inverted back. `created_ms` lives in
+  # roster.json, which every participant can write, so when the impossible case was an `elif`
+  # ABOVE the threshold a seat could set `created_ms` to now, make `room_age` 0, and every held
+  # time then exceeded it — which silently replaced a real STALL with "the clock is wrong",
+  # permanently. Measured on a room genuinely stalled for two hours. A peer-writable field must
+  # never be able to REMOVE an alarm; here the alarm fires on exactly the same condition it
+  # always did, and the untrusted value can only change how it reads.
+  #
+  # The wording does not name a seat, because the one it could name would be the wrong one: the
+  # value comes from the last turn-consuming message, whose author is the previous speaker,
+  # while `$floor` is the seat that is waiting. `$floor` is correct for STALL, which is about
+  # who holds the floor now, and it is used only there.
+  #
+  # A room that records no creation time (one made before `created_ms` existed) answers nothing
+  # and keeps the plain threshold, which is exactly its behaviour before this branch was here.
+  room_age=$(c_room_age_s) || room_age=""
+  if [ "$held" -gt "${COUNCIL_STALL_SECS:-900}" ]; then
+    if [ -n "$room_age" ] && [ "$held" -gt "$room_age" ]; then
+      alarms="$alarms 🛑 STALL: the floor has been held for ${held}s, which is longer than this room has existed (${room_age}s) — one seat's clock is wrong, so check every terminal rather than trusting the figure"
+    else
+      alarms="$alarms 🛑 STALL: $floor has held the floor for ${held}s — check its terminal, it may be sitting on a permission prompt"
+    fi
+  fi
   printf 'alarms:%s\n' "${alarms:- —}"
   printf 'last messages:\n'
   v_transcript | tail -3 | sed 's/^/  /'
@@ -301,13 +401,42 @@ _agenda_is_long() { # <file> — more than one non-blank line
 v_decide() {
   local force=0; [ "${1:-}" = "--force" ] && force=1
   local j verd g out status
-  j=$(v_verdict --json); verd=$(printf '%s' "$j" | jq -r .verdict)
+  j=$(v_verdict --json); verd=$(printf '%s' "$j" | jq -r '.verdict // empty' 2>/dev/null)
+  # A record is never written from a ROSTER or a GRAPH this verb could not read. That is
+  # narrower than it once said here, and the narrowing is the point: an unreadable LANE FILE
+  # reaches this guard as a perfectly computable empty room, so `--force` does write a record
+  # over it, saying there were no objections. Three attempts to close that door are recorded at
+  # `c_all` in lib.sh, two of them reverted; do not re-derive them from this comment. Both reads
+  # below can come
+  # back empty rather than wrong -- `_graph` is a jq program over peer-written messages, and one
+  # message of the wrong shape aborts it mid-stream -- and every renderer further down treats
+  # empty input as "nothing to say" rather than as a failure. `--force` then walked straight
+  # through: `verd` was empty so it did not match `ready-to-decide`, `status` came out
+  # `unresolved`, and the room's one durable output was written at rc 0 with a blank verdict,
+  # blank turn counts and "(there were no objections)" over a transcript showing an objection.
+  #
+  # A refusal is the honest outcome, and it is not a wedge: `verdict` and `claims` fail the same
+  # way, loudly, and jq has already said on stderr which file it choked on. Writing a false
+  # record cannot be undone by re-running anything -- a reader who believed it is not a state
+  # this room can get back to.
+  #
+  # `verd` is checked rather than `j`'s exit status because v_verdict returns 1 for an ordinary
+  # live room: its rc is a STATUS, not a success flag, and reading it as one would refuse every
+  # `--force` on a room that had not converged, which is precisely the case --force exists for.
+  [ -n "$verd" ] || {
+    echo "council decide: this room's state could not be computed — refusing to write a record. The error above says what could not be read." >&2
+    return 1
+  }
   case "$verd" in
     ready-to-decide) ;;
     decided) echo "council: this room is already decided" >&2; return 3 ;;
     *) [ "$force" = 1 ] || { echo "council: verdict '$verd', the decision is not ripe. --force writes an honest unresolved." >&2; return 2; } ;;
   esac
-  g=$(_graph); out="$ROOM/board/decision.md"
+  g=$(_graph) && [ -n "$g" ] || {
+    echo "council decide: this room's argument graph could not be computed — refusing to write a record. The error above says what could not be read." >&2
+    return 1
+  }
+  out="$ROOM/board/decision.md"
   status=$([ "$verd" = ready-to-decide ] && echo decided || echo unresolved)
   {
     printf '# Decision of room `%s`\n\n' "$(basename "$ROOM")"

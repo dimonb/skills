@@ -24,6 +24,12 @@ it alone.
 timeout". The only correct reaction is to call `recv` again. Do not fix it, do not treat it
 as a breakage, do not leave the loop.
 
+**The one exception, and it is the only state in which you should stop looping.** If a
+`council:` line about this room's roster appears on stderr — or if `recv` keeps returning 4
+while `send` keeps returning 6, with nothing new arriving — the room is stopped rather than
+quiet: its participant list cannot be read, and no seat can speak until a human repairs
+`roster.json`. Say so to whoever is supervising and stop; looping cannot clear it.
+
 ## The opening round, if the room runs a barrier (`roundtable`)
 
 `council.sh status` says `OPEN ROUND` when that is your case. Then:

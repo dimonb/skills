@@ -70,6 +70,7 @@ council.sh <verb> [options]
     status  [--room <name>]        the supervisor block; exit 0 = the room is closed
     claims                         the argument graph
     verdict [--json]               verdict: exit 0 closed, 1 open, 2 stuck
+                                   (1 with NO output = the roster could not be read)
     order   [--ids]                the total order of messages
     transcript                     the transcript, for a human
 

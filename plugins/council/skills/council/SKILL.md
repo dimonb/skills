@@ -39,7 +39,9 @@ producing polite agreement.
 
 ```
 <git-common-dir>/council/<room>/
-  roster.json            participants, roles, mode, decision rule, turn budget, the cwd
+  roster.json            participants, roles, mode, decision rule, turn budget, the cwd,
+                         and created_ms — the room's creation instant, written once by `up`
+                         (a room without it keeps the plain stall threshold)
   agenda.md              the question
   protocol-<peer>.md     what each participant was told (channel rules + its role)
   lane/<peer>/NNNNNN.json    ← exactly ONE writer per lane, ever
@@ -72,6 +74,11 @@ from the write to a sleeping reader waking), and end-to-end delivery **~60 ms** 
 the wire. A poll loop would be 0–5 s. A keeper process holds every bell open read-write for the life of the room, so a
 bell rung at a participant that is not currently listening is buffered rather than lost,
 and the ring itself is backgrounded so a dead participant can never wedge a sender.
+A bell that is no longer a fifo — an archive-and-restore of a room directory, or any copy
+that does not preserve fifos — makes `recv` say so on stderr and fall back to a half-second
+poll (not the 0–5 s figure above: `recv` passes its own interval), because `exec` succeeds on
+a regular file and the read that follows would otherwise return at EOF instead of sleeping,
+spinning for the whole timeout. Delivery latency is therefore unchanged; only CPU differs.
 
 **Scan the inbox from the cursor upward, never by globbing the lane.** A lane is gapless
 and single-writer, so probing `cursor+1, cursor+2, …` until the first missing file is
@@ -165,6 +172,44 @@ is not.
 
 `council.sh decide` **refuses** a room that is not ready. `--force` writes an honest
 `unresolved` record listing what is still open — a valid outcome, not a failure to hide.
+
+`--force` is not unconditional: **while a room is still open**, if its **roster** cannot be
+read, `decide` refuses with **exit 1** and writes nothing, `--force` included, because there is
+then no participant list to write a record about. Exit 2 still means "not ripe" and 3 "already
+decided", so a supervisor that retries on 2 must not retry on 1.
+
+**A room that has already closed is the exception, and it is a remainder rather than a design.**
+`--force` over a room whose record is on disk rewrites that record, and it does so at exit 0
+even when the roster has since become unreadable — the rewritten header then carries
+`* participants: ` and `* mode: , rule: ` blank. That is `origin/main`'s behaviour, unchanged
+here; only the sentence above it is new, and an earlier revision of it claimed the refusal
+covered this case too. Re-forcing a closed room whose roster is broken is not something to do.
+
+**A lane file that does not parse is a different case, and a worse one.** The whole-log readers
+— `order`, `transcript`, `claims`, `verdict`, `status` — report the room as EMPTY rather than as
+broken, and `decide --force` will write a record over it saying there were no objections. Only
+the diagnostic on stderr says otherwise, and it is the thing to act on. Treat a `council:` line
+about a log that could not be read as invalidating every other answer in the same breath.
+
+That is a known remainder rather than a design. Three designs were tried on this branch and
+this is the second of them — the one that ships. The first, dropping the bad file and reading
+the rest, turned "unreadable" into "silently incomplete"; the third, giving the reader a second
+exit status, made a room that had already CLOSED stop reporting itself closed. Both were
+reverted. `lib/lib.sh`'s `c_all` carries the account, and a fourth attempt has to let the
+record answer before the log does — `v_verdict` now does exactly that, and it is why a closed
+room survives both an unreadable log and an unreadable roster.
+
+**The two causes differ for participants:**
+
+* **A lane file that does not parse.** The error names that file. `recv` keeps working — it
+  reads only what is new and steps over the file — so seats are not wedged while it is
+  repaired, and `send` keeps stamping from the clock it can still read.
+* **A roster whose participant list cannot be read.** The error names no file, because no file
+  is at fault. `recv` returns 4 delivering nothing and `send` returns 6, for every seat, until
+  `roster.json` is repaired — so the room is fully stopped, not degraded.
+
+**`floor` answers from an unread log at exit 0 in both cases**, so do not use it to decide whose
+turn it is while a room is in either state.
 
 ## Verbs
 
@@ -424,14 +469,26 @@ it.)*
 
 `council.sh status` is the block to read: whose floor and for how long, what is on the
 table, what is open, the verdict, and the alarms (`STUCK`, `STALL`, turn conflicts, budget
-exhausted). It exits **0 when the room is finished** and 1 while it is open — with one caveat
+exhausted, and **"this room's state could not be computed"** — that last one means the room's
+participant list could not be read, so the lines above it are incomplete and none of them
+should be believed; the diagnostic on stderr says what could not be read, and
+`council.sh decision` still prints the record if the room had already closed).
+A `STALL` whose held time is longer than the room has existed says so in the same alarm: one
+seat's clock is wrong, so the figure cannot be trusted even though the stall is real.
+It exits **0 when the room is finished** and 1 while it is open — with one caveat
 worth knowing: a room whose
 turn budget ran out reports `unresolved` and exits 0 before anyone has written a record, so
 `council.sh decision` (exit 0 only with a record) is the signal to trust when you need to know
 that the room's output exists.
 
 **Exit codes here mean status, not success.** `verdict` returns 1 on a live room and 2 on
-a stuck one. Piping such a command (`council.sh status | grep -q X` under
+a stuck one. It also returns **1 having printed nothing at all** when the room's ROSTER
+cannot be read. So rc 1 with output is a live room and rc 1 with no output is one whose
+participant list is unreadable; a supervisor that treats every 1 as "still going" will wait
+forever on the second. `status` names it in its alarms line, and `council.sh rooms` says it
+in place of the verdict. An unreadable lane FILE does not produce that signal — `verdict`
+answers confidently from what it takes to be an empty room, and only stderr disagrees.
+Piping such a command (`council.sh status | grep -q X` under
 `set -o pipefail`) reads the room's state as a failure of the pipeline — that already
 produced one false test result during development. Do not pipe status through a gate.
 

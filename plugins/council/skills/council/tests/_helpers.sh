@@ -21,6 +21,28 @@ fi
 # and loops for as long as its room exists, so they have to be tracked to be stopped.
 ROOM_KEEPERS=()
 
+# Signal a room's keeper, never whatever its pid file happens to hold. `kill` reads a `0` as
+# EVERY PROCESS IN THE SENDER'S PROCESS GROUP, so `kill "$(cat keeper.pid)"` over a stale or
+# hand-written pid file takes down the test that is running — and `kill -9` of a process group
+# cannot be caught, so the cleanup that was meant to tidy up is the thing that kills the suite.
+# That is not hypothetical: it is how the accident behind issue #67's second point was found,
+# by a probe script whose own cleanup did exactly this.
+#
+# The rule is duplicated here rather than taken from `lib/up.sh` ON PURPOSE. `_keeper_pid` over
+# there is one of the things these tests assert, and a harness whose safety depends on the code
+# under test being correct is not a test of that code — t13 makes the same argument about its
+# terminal backend. Ten digits at most, so `$(( ))` cannot wrap a 64-bit integer into somebody
+# else's live pid.
+kill_keeper() { # <pid-file> [signal]
+  local v=""
+  [ -s "$1" ] || return 0
+  read -r v < "$1" 2>/dev/null
+  case "$v" in ''|*[!0-9]*) return 0 ;; esac
+  [ "${#v}" -le 10 ] || return 0
+  v=$((10#$v)); [ "$v" -gt 0 ] || return 0
+  kill ${2:+"$2"} "$v" 2>/dev/null || true
+}
+
 # Take the keepers down and remove the root this test owns. A keeper polls `while [ -d "$room" ]`
 # (lib/up.sh), so removing the root reaps them within five seconds anyway; killing them first
 # makes it immediate and also covers a root this test does not own. Nothing else will ever do it:
@@ -38,7 +60,7 @@ _council_test_cleanup() {
   local rc=$?
   local k p i
   if [ "${#ROOM_KEEPERS[@]}" -gt 0 ]; then
-    for k in "${ROOM_KEEPERS[@]}"; do kill "$(cat "$k" 2>/dev/null)" 2>/dev/null; done
+    for k in "${ROOM_KEEPERS[@]}"; do kill_keeper "$k"; done
   fi
   # The listeners a test backgrounds itself are NOT keepers: they hold a bell fifo, they poll
   # nothing, and removing the root does not touch them. Their parent dies with the test, so
@@ -80,9 +102,11 @@ mkroom() { # <dir> <peer>... — a room with no terminals attached
   rm -rf "$room"
   ( SKILL="$SKILL"; . "$SKILL/lib/up.sh"; _mkroom "$room" "$@" )
   ROOM_KEEPERS+=("$room/state/keeper.pid")
-  printf '%s\n' "$@" | jq -R . | jq -s --argjson t 30 \
+  # `created_ms` the way `up` writes it: once, at creation, from the same clock `c_ms` reads.
+  # A test that wants a room which records no creation time deletes the field.
+  printf '%s\n' "$@" | jq -R . | jq -s --argjson t 30 --argjson cms "$(( 10#${EPOCHREALTIME/./} / 1000 ))" \
     '{order:., mode:"token", decide_by:"unanimous", order_rotate:true,
-      turn_deadline_ms:3000, turns_budget:$t, created_at:"test"}' > "$room/roster.json"
+      turn_deadline_ms:3000, turns_budget:$t, created_at:"test", created_ms:$cms}' > "$room/roster.json"
 }
 say() { # <peer> <act> <refs-json> <text>
   COUNCIL_ROOM="$ROOM" COUNCIL_ME="$1" bash "$CLI" send --act "$2" --refs "$3" "$4" >/dev/null
