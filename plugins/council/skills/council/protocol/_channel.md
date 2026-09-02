@@ -56,10 +56,11 @@ quiet: its participant list cannot be read, and no seat can speak until a human 
   the room with will hand you another seat's words. That is not a failure and not an empty
   room, it is the barrier — your position must be yours, not a reaction to someone else's.
   (`decision` is the exception, and it means the round is over: it prints the room's record,
-  which holds the whole log. If it ever prints while your round is still open, a seat that had
-  already posted ran `decide --force`, so the room is closed. Stop, and say so to whoever is
-  supervising; do not treat what you just read as a round you can still write into. You cannot
-  do it yourself before you have posted — `decide` refuses that, exit 2;)
+  which holds the whole log. If it ever prints while your round is still open, some seat ran
+  `decide --force`, so the room is closed. Stop, and say so to whoever is supervising; do not
+  treat what you just read as a round you can still write into. You can only do it yourself
+  while nobody else has stated a position — once one has, `decide` refuses you until you state
+  yours, exit 2;)
 * a second message in an open round is refused (exit 5) — **unless** it is an urgent `--hand`
   one (below), which is allowed before and after you post and is the one thing you may add.
   Once you have spoken, wait;

@@ -511,13 +511,21 @@ v_decide() {
   #
   # The message is the ONE authoritative statement of the rule: SKILL.md describes the behaviour
   # and its cost without restating it, and t7 asserts a substring rather than a copy.
-  # The last test asks only whether the round holds ANY position, not whether it holds someone
-  # else's, and that is not a shortcut: the test before it has already established that none of
-  # them is mine -- `c_posted_round0` and `c_round0` are the same reader, so if I had posted, the
-  # second test would have let me through. A `.from != $me` filter here would therefore be dead,
-  # and dead in a way no test could show; it also cost a jq the `head -1` does not.
+  # The last test asks for SOMEBODY ELSE'S position, and the `.from != $me` is not redundant
+  # with the test before it, though it looks it. `c_posted_round0` and `c_round0` read the same
+  # documents, but not the same way: the former pipes them through `jq -r … | .id | head -1`, so
+  # a round-0 message in MY OWN lane carrying an empty `.id` -- which `c_send` never mints, but a
+  # hand-written or harness-written lane file does -- comes back as an empty line that `$( )`
+  # strips, and the second test then reads "I have not posted" about a position I did post.
+  # Without this filter the gate refuses the ONE seat that had posted, telling it another seat
+  # has spoken and it has not, while withholding nothing from it. Measured.
+  #
+  # It prints `.from` and not `.id` for the same reason: `.from` is c_all's derivation from the
+  # LANE DIRECTORY, so it is a directory name and can never be empty, while `.id` is a string the
+  # message chose and an empty one would make this test read "nobody else posted" about a lane
+  # that did. Same defect, other direction.
   if [ "$(c_barrier)" != closed ] && [ -z "$(c_posted_round0)" ] && [ -z "$(c_recorded_status)" ] \
-     && [ -n "$(c_round0 | head -1)" ]; then
+     && [ -n "$(c_round0 | jq -r --arg me "$ME" 'select(.from != $me) | .from' | head -1)" ]; then
     echo "council decide: another seat has stated an opening position and you have not — refusing to close a round you have not taken part in, because the record would hand you every position in it. Post your position first; the round also closes on its own once its deadline passes." >&2
     return 2
   fi

@@ -501,7 +501,9 @@ every position to whoever runs `decision`.
 `decide` takes `--me`, so a supervisor cannot run it at all and any participant can. That made
 `decide --force` then `decision` a two-command bypass of the barrier, available to every seat
 and to none of the people watching — so **`decide` now refuses from a seat that has stated no
-position while the round is not verifiably closed** (see the `--force` conditions above). A
+position while the round is not verifiably closed and another seat has stated one** (see the
+`--force` conditions above; a round nobody has posted in holds nothing to disclose, so any seat
+may still close that). A
 seat that has posted can still close the room and read the record; what that costs it is the
 room, since the record is on disk, `board/status` is set, and every other seat's stop signal
 fires. Loud rather than quiet, and only for a seat that took part.

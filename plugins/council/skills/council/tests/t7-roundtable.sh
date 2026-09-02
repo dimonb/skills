@@ -330,7 +330,7 @@ case "$out" in
   *"who are you? set COUNCIL_ME"*) ;;
   *) echo "FAIL a supervisor's decide did not stop at need_me; it said: $out"; fail=1 ;;
 esac
-echo "a seat that has stated no position cannot close the round it owes one to"
+echo "a seat that has stated no position cannot close a round another seat has started"
 
 # ...but a round NOBODY has posted in holds nothing to disclose, so any seat may close it. This
 # is the wedge the gate had before it asked whether there was anything to buy: `c_barrier`
@@ -369,6 +369,25 @@ st=$(COUNCIL_ROOM="$R5" COUNCIL_ME=b bash -c ". $SKILL/lib/lib.sh; c_barrier")
 out=$(COUNCIL_ROOM="$R5" COUNCIL_ME=b bash "$CLI" decide --force 2>&1); rc=$?
 [ "$rc" = 0 ] || { echo "FAIL a room whose record is already written refused a seat (exit $rc): $out"; fail=1; }
 echo "once a record exists the gate stands down: decision already hands it to anyone"
+
+# ...and the gate asks for SOMEBODY ELSE'S position, which is not the same as asking whether any
+# exists. `c_posted_round0` reads the same documents through `.id`, so a round-0 message in my
+# own lane with an empty `.id` — never minted by `c_send`, but written by any hand that builds a
+# lane file — reads back as "I have not posted". Without the `.from != $me` filter the gate then
+# refuses the ONE seat that did post, and tells it another seat has spoken.
+R6="$COUNCIL_TEST_ROOT/t7f"; rm -rf "$R6"
+mkroom "$R6" a b c
+jq '.mode="roundtable" | .round_deadline_ms=600000' "$R6/roster.json" > "$R6/r.tmp" && mv "$R6/r.tmp" "$R6/roster.json"
+jq -n '{id:"",from:"a",lamport:1,deps:{},act:"propose",refs:[],to:["*"],hand:false,turn:null,
+        round:0,text:"position a, written by hand",created_at:"test",sent_ms:1}' > "$R6/lane/a/000001.json"
+printf '1' > "$R6/state/a.seq"
+[ -z "$(COUNCIL_ROOM="$R6" COUNCIL_ME=a bash -c ". $SKILL/lib/lib.sh; c_posted_round0")" ] \
+  || { echo "FAIL the fixture's empty id is visible to c_posted_round0, so it separates nothing"; fail=1; }
+[ -n "$(COUNCIL_ROOM="$R6" COUNCIL_ME=a bash -c ". $SKILL/lib/lib.sh; c_round0" | head -1)" ] \
+  || { echo "FAIL the fixture has no round-0 message at all"; fail=1; }
+out=$(COUNCIL_ROOM="$R6" COUNCIL_ME=a bash "$CLI" decide --force 2>&1); rc=$?
+[ "$rc" = 0 ] || { echo "FAIL the gate refused the only seat that had posted (exit $rc): $out"; fail=1; }
+echo "the gate asks for another seat's position, not merely for any position"
 
 # ...and the gate must not PREEMPT the verdict dispatch. Placed ahead of it, it answered a
 # recorded room with its own refusal as soon as `c_round0` came back empty — the inversion
