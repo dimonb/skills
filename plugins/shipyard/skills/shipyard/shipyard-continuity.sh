@@ -87,14 +87,16 @@ shipyard_continuity_live_prompt() {
   printf '%s' "$prompt"
 }
 
-# active | paused | none, using only Codex's root goal service line or live footer.
+# active | paused | blocked | none, using only Codex's root goal service line or live footer.
 shipyard_continuity_goal_state() {
   local screen="$1" line state=none
   while IFS= read -r line || [ -n "$line" ]; do
     case "$line" in
       '• Goal active'*) state=active ;;
-      '• Goal paused'*|'• Goal stalled'*) state=paused ;;
-      '  gpt-'*'Goal paused'*|'  gpt-'*'Goal stalled'*) state=paused ;;
+      '• Goal paused'*) state=paused ;;
+      '• Goal stalled'*) state=blocked ;;
+      '  gpt-'*'Goal paused'*) state=paused ;;
+      '  gpt-'*'Goal stalled'*) state=blocked ;;
       '  gpt-'*'Pursuing goal'*) state=active ;;
     esac
   done <<<"$screen"

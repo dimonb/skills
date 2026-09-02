@@ -109,12 +109,23 @@ check "" "$SHIPYARD_CONTINUITY_ACTION" "active session with draft is protected"
 
 shipyard_continuity_reset
 idle_paused=$(printf '%s\n%s' "$empty_prompt" \
-  '  gpt-example high · ./repo · Context 20% used        Goal stalled (/goal resume)')
+  '  gpt-example high · ./repo · Context 20% used        Goal paused (/goal resume)')
 shipyard_continuity_decide "$idle_paused" 400
 check goal "$SHIPYARD_CONTINUITY_ACTION" "idle paused goal resumes"
 shipyard_continuity_succeeded goal 400
 shipyard_continuity_decide "$idle_paused" 401
 check "" "$SHIPYARD_CONTINUITY_ACTION" "one paused goal marker is latched"
+
+shipyard_continuity_reset
+blocked_goal=$(printf '%s\n%s' "$empty_prompt" \
+  '  gpt-example high · ./repo · Context 20% used        Goal stalled (/goal resume)')
+shipyard_continuity_decide "$blocked_goal" 402
+check "" "$SHIPYARD_CONTINUITY_ACTION" "a blocked goal is never resumed automatically"
+
+SHIPYARD_CONTINUITY_PENDING_GOAL_AT=403
+shipyard_continuity_decide "$blocked_goal" 403
+check goal "$SHIPYARD_CONTINUITY_ACTION" \
+  "a watcher-owned post-capacity handoff can resume a stalled goal"
 
 # The terminal API must receive text and Return in distinct calls, and the live
 # prompt plus real-user idle clock must still belong to the watcher before Return.

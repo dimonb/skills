@@ -221,7 +221,11 @@ and let the parent perform the goal's own completion or blocked audit after all 
 and external gates have reached authoritative terminal states.
 
 The agterm continuity watcher is the execution bridge for that existing goal. It submits the
-draft-safe `/goal resume` steering described above when Codex reports the goal paused or stalled.
+draft-safe `/goal resume` steering described above when Codex reports the goal paused. A
+`Goal stalled` marker is the visible state of an explicitly blocked goal and is never resumed
+automatically, except when the watcher already owns the short post-capacity handoff. Immediately
+before the parent calls `update_goal` with `blocked`, run `shipyard_continuity_stop_all` from the
+sourced `shipyard-lib.sh`; a blocked goal must stay blocked until the user explicitly resumes it.
 Codex starts it as the foreground process of a dedicated, unselected agterm session beside the
 parent; the session closes when last-slot cleanup stops the watcher. This avoids relying on a
 detached tool descendant, which the Codex runtime reaps when the tool call ends. Each
