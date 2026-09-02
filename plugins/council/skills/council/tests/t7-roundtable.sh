@@ -42,6 +42,17 @@ sees() { # <peer|""> <verb [flag]> <text>
   case "$out" in *"$3"*) return 0 ;; *) return 1 ;; esac
 }
 
+# STDERR ALONE. `sees` folds the two streams together, which is right for asking what a
+# participant was shown but structurally blind to which stream anything arrived on — the exact
+# miss that put four green-but-empty assertions into an earlier change here. The withholding
+# diagnostic lives on stderr and protocol/_channel.md tells a participant to recognise it by
+# its opening words, so it needs an assertion that can only pass from stderr.
+says_err() { # <peer> <verb> <text>
+  local err
+  err=$(COUNCIL_ROOM="$R" COUNCIL_ME="$1" bash "$CLI" $2 2>&1 >/dev/null)
+  case "$err" in *"$3"*) return 0 ;; *) return 1 ;; esac
+}
+
 # a participant that owes a position must be released at once: in a barrier round there is
 # no floor holder to wait for, and --until-floor would otherwise wait forever (a live Codex
 # participant did exactly that the first time a roundtable room ran).
@@ -103,6 +114,31 @@ for v in transcript status; do
 done
 echo "a supervisor still sees the whole room while the round is open"
 
+# A THIN READ MUST SAY WHY. Without this the whole diagnostic can be deleted and the suite
+# stays green, while protocol/_channel.md instructs a participant to recognise the exact
+# opening words and keep going, and SKILL.md promises "nothing was said" cannot be mistaken
+# for "nothing was shown to you". The substring asserted is the one those two files quote.
+for v in transcript claims status order; do
+  says_err c "$v" "the opening round is not complete" \
+    || { echo "FAIL '$v' withheld from c without saying why on stderr"; fail=1; }
+done
+says_err "" transcript "the opening round is not complete" \
+  && { echo "FAIL a supervisor, which is withheld nothing, was told the round is incomplete"; fail=1; }
+echo "a withheld read says why on stderr, and a supervisor's read does not"
+
+# THE ROOM'S ARITHMETIC IS EXEMPT, and only an assertion taken while the round is OPEN can
+# hold that: after it closes the filter is the identity and every reader agrees anyway.
+# Rendering `verdict` through the barrier leaves the rest of the suite green.
+vp=$(COUNCIL_ROOM="$R" COUNCIL_ME=c bash "$CLI" verdict --json 2>/dev/null)
+vs=$(env -u COUNCIL_ME COUNCIL_ROOM="$R" bash "$CLI" verdict --json 2>/dev/null)
+for f in live open turns; do
+  [ "$(printf '%s' "$vp" | jq -r ".$f")" = "$(printf '%s' "$vs" | jq -r ".$f")" ] \
+    || { echo "FAIL verdict's '$f' differs between a withheld participant and a supervisor: $(printf '%s' "$vp" | jq -r ".$f") vs $(printf '%s' "$vs" | jq -r ".$f")"; fail=1; }
+done
+[ "$(printf '%s' "$vp" | jq -r .live)" = 2 ] \
+  || { echo "FAIL verdict did not count both posted positions for a participant: $(printf '%s' "$vp" | jq -r .live)"; fail=1; }
+echo "verdict counts the whole room for a participant that is being withheld from"
+
 # --------------------------------- 1c. a roster nobody can parse must not lift the barrier
 # c_barrier's first line is a c_mode read, and c_mode is a bare jq: over a roster.json that is
 # empty, truncated or missing it prints NOTHING, and over the literal `null` it prints `token`
@@ -121,9 +157,20 @@ for shape in empty truncated null missing; do
   for v in transcript claims status order; do
     sees c "$v" "for the first lap only" && { echo "FAIL a $shape roster let '$v' hand c the position the barrier withholds"; fail=1; }
   done
+  says_err c transcript "the opening barrier cannot be resolved" \
+    || { echo "FAIL a $shape roster withheld silently, with no word about the roster"; fail=1; }
   cp "$R/roster.good" "$R/roster.json"
 done
-echo "a roster nobody can parse withholds rather than lifting the barrier (empty, truncated, null, missing)"
+# `two` is its own shape and not a variation: a roster of TWO documents is valid JSON whose
+# LAST value is an object, so a per-value `type == "object"` test exits 0 and passes it — while
+# `c_mode` prints two lines, matches neither, and the barrier is gone. The check has to ask
+# about the file, which is what slurping does.
+printf '\n{}\n' >> "$R/roster.json"
+for v in transcript claims status order; do
+  sees c "$v" "for the first lap only" && { echo "FAIL a two-document roster let '$v' hand c the position the barrier withholds"; fail=1; }
+done
+cp "$R/roster.good" "$R/roster.json"
+echo "a roster that is not one JSON object withholds rather than lifting the barrier (empty, truncated, null, missing, two documents)"
 
 # ------------------------- 1d. a peer cannot push its own words past the barrier
 # A lane is withheld WHOLE. Cutting a prefix of it needs an order, and the only ordering key a
@@ -153,6 +200,20 @@ for v in transcript claims status order; do
   sees b "$v" "for the first lap only" || { echo "FAIL b could not see a's position through '$v' once the round had closed"; fail=1; }
 done
 echo "and once the round is complete every reader hands the positions over"
+
+# ...and the roster check governs the room's WHOLE LIFE, not just its opening round, because it
+# runs before the barrier read. A closed round plus a damaged roster is therefore withheld too.
+# That is the deliberate answer — an unresolvable barrier withholds — and it is asserted so a
+# later narrowing of the check to the open round cannot ship green.
+cp "$R/roster.json" "$R/roster.good2"; : > "$R/roster.json"
+sees b transcript "for the first lap only" \
+  && { echo "FAIL a damaged roster after the round closed handed b the positions anyway"; fail=1; }
+says_err b transcript "the opening barrier cannot be resolved" \
+  || { echo "FAIL a damaged roster after the round closed withheld silently"; fail=1; }
+sees "" transcript "for the first lap only" \
+  || { echo "FAIL a damaged roster blinded the supervisor as well"; fail=1; }
+cp "$R/roster.good2" "$R/roster.json"
+echo "an unresolvable barrier withholds for the room's whole life, not only during the round"
 
 # ---------------------------------------------- 3. one lap consumed, token from here on
 turns=$(COUNCIL_ME=a bash -c '. '"$SKILL"'/lib/lib.sh; c_turns')

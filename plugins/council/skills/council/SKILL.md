@@ -453,10 +453,14 @@ cursor runs ahead of unread words. A second message in an open round is refused 
 rather than queued.
 
 **Every reader holds it, not only `recv`.** `transcript`, `claims`, `order` and `status` show
-a participant no more than `recv` has already released — a lane is withheld whole — so none of
-the verbs a participant reads the room with hands it another seat's opening words. Each of
-them says on stderr when the barrier is why a read looks thin, so "nothing was said" cannot be
-mistaken for "nothing was shown to you".
+a participant no more than `recv` has already released **for any lane `recv` reads** — a lane
+is withheld whole — so none of the verbs a participant reads the room with hands it another
+seat's opening words. Each of them says on stderr when the barrier is why a read looks thin,
+so "nothing was said" cannot be mistaken for "nothing was shown to you". The bound is
+one-sided on purpose: a lane withheld for its opening position keeps that seat's other
+messages waiting with it (a `--hand` message is allowed during an open round), and a lane the
+roster does not list is read here and never delivered by `recv` at all — that second one is
+issue #66's divergence, not this mode's.
 
 A **supervisor** — anyone reading the room without `--me` — is exempt and sees all of it, which
 is what makes `status` usable for watching a round that has not finished. The seat a human
@@ -468,8 +472,14 @@ from the whole log, because they are facts about the room rather than about who 
 they report counts and message ids, never text. **The record is the one real exception, and
 deliberately so:** `decide` writes it from the whole log, because a record holding only the
 writer's own position would be worse than none, so a room `--force`-closed mid-round hands
-every position to whoever runs `decision`. Closing a round early is a supervisor act, and it
-ends the room it discloses.
+every position to whoever runs `decision`.
+
+Read that as a **bypass available to every seat**, because `decide` takes `need_me`: a
+supervisor with no `--me` cannot run it at all, and any participant can — including one that
+has posted nothing. Two documented commands (`decide --force`, then `decision`) hand it the
+whole opening round. What it costs the seat doing it is the room: the record is on disk,
+`board/status` is set, and every other seat's stop signal fires, so this is loud rather than
+quiet. It is a known remainder of the barrier, not a property of it.
 
 When the last position lands, all of them are released at once, in the room's one order.
 The round then counts as **one whole lap**, and everything after it is turn-taking, so no

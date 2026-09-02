@@ -117,9 +117,12 @@ v_floor() {
 }
 
 # The four verbs a PARTICIPANT reads the room with all go through c_visible, so an open
-# barrier round withholds from them exactly what it withholds from `recv`. `--ids` is filtered
-# too: an id is not content, but a list of them says who has posted, and a reader that agrees
-# with `recv` about the messages and not about their ids is the same divergence in miniature.
+# barrier round withholds from them NO LESS than it withholds from `recv` -- a lane holding a
+# foreign opening position is withheld whole. It is deliberately one-sided rather than an
+# equality; c_visible's header says why, and reading it as an equality is what produces the
+# lamport-ordered prefix cut that was reverted as a hole. `--ids` is filtered too: an id is not
+# content, but a list of them says who has posted, and a reader that withholds the messages
+# and not their ids is the same divergence in miniature.
 v_order() { if [ "${1:-}" = "--ids" ]; then c_visible | jq -r '.id'; else c_visible; fi; }
 
 # The renderer, over whatever stream it is given. `transcript` shows a participant what it may

@@ -409,9 +409,15 @@ c_barrier() {
   # n=0 the test below is `[ "$posted" -ge 0 ]`, which is unconditionally true, so a room whose
   # roster nobody can read reported its opening barrier CLOSED before a single position had been
   # posted -- the barrier deleting itself, which is the failure c_int_field's own header names.
-  # A roster nobody can read leaves the barrier UP: `open` is the conservative answer, and it
-  # matches c_floor_at's "the floor is nobody's" rather than inventing a second reading of one
-  # unreadable file.
+  # A roster whose `.order` cannot be read leaves the barrier UP: `open` is the conservative
+  # answer, and it matches c_floor_at's "the floor is nobody's" rather than inventing a second
+  # reading of one unreadable file.
+  #
+  # THAT IS ONLY THE `.order` HALF, and this comment used to claim the whole. If the FILE does
+  # not parse, or is not one object, the line above -- `[ "$(c_mode)" = roundtable ]` -- is
+  # false before execution ever reaches here, and the answer is `closed`: the barrier deletes
+  # itself for `recv` too. Nothing here fixes that; c_visible refuses to trust this function's
+  # answer in that state and withholds, and its header carries the measurements.
   [ "$n" -gt 0 ] || { printf 'open'; return; }
   posted=$(c_round0 | wc -l | tr -d ' ')
   [ "$posted" -ge "$n" ] && { printf 'closed'; return; }
@@ -935,12 +941,26 @@ c_canon() {
 # directly under `nobody sees their positions yet`, while `recv` withheld it. Withholding the
 # whole lane needs no ordering at all, so there is nothing left for a peer to choose.
 #
-# What that buys, stated exactly: a participant is shown NO MORE than `recv` has released --
-# not exactly the same set. The two differ only for a lane holding an ordinary message
-# alongside an opening position, which `send` refuses to produce (exit 5) and only a
-# hand-written lane reaches. Erring toward withholding is the right side to be wrong on, and
-# "no more than recv" is a property of the shape rather than of a field's monotonicity, so it
-# cannot be argued away by a lane file somebody wrote by hand.
+# What that buys, stated exactly: **for any lane `recv` reads, a participant is shown no more
+# than `recv` has released.** NOT the same set, and the difference is reachable by ordinary
+# use rather than only by a hand-written lane -- an earlier version of this comment said
+# otherwise and was wrong twice over:
+#
+#   `send --hand` is ALLOWED during an open round (c_send's `hand = true` branch precedes the
+#   exit-5 refusal, so it succeeds before AND after I have posted; only a second POSITION is
+#   refused). So a lane legitimately holds an ordinary message beside an opening position, and
+#   this reader withholds it with the lane while `recv` releases whatever preceded the
+#   position. Measured on this tree: a `notice --hand` then a `propose`, read as a peer that
+#   had posted nothing -- recv 1 hit, transcript 0. Nothing is lost; the round releases it.
+#
+#   A lane the ROSTER DOES NOT LIST is read here and never delivered by `recv` at all, because
+#   c_all globs `lane/*` while c_drain builds its list from `roster.order`. That divergence is
+#   issue #66's, is recorded at c_all, and is NOT fixed here -- which is why the guarantee is
+#   scoped to the lanes `recv` reads.
+#
+# Erring toward withholding is the right side to be wrong on, and the one-sided claim is a
+# property of the SHAPE -- a whole lane, no ordering key -- rather than of a field's
+# monotonicity, so no lane file anybody writes can argue it away.
 #
 # GATED ON `ME` BEING SET, not on whether I have posted yet. A seat that has posted is still a
 # seat, and the promise the mode makes is "nobody reads anyone else's until the round is
@@ -969,25 +989,33 @@ c_visible() {
   # `ME` first because it is free: an empty one is the supervisor and there is nothing to do.
   [ -n "$ME" ] || { c_canon; return; }
   local why=""
-  # THE BARRIER'S ANSWER IS ONLY WORTH HAVING IF THE ROSTER IT COMES FROM PARSED. c_barrier's
-  # first line is `[ "$(c_mode)" = roundtable ]`, and c_mode is a bare `jq -r '.mode //
-  # "token"'`: over a roster.json that is empty, truncated or missing, jq prints NOTHING, and
-  # over the literal `null` it prints `token` -- so c_barrier returns `closed` on that line and
-  # never reaches the `n > 0` precondition that would have answered `open`. An earlier version
-  # of this comment cited that precondition as the reason no roster read was needed here; it
-  # covers the `.order` half of an unreadable roster and not this half. Measured on this tree
-  # with the check below removed, three-peer roundtable room, two positions posted, asking as
-  # the peer that had posted none: recv 0 hits, transcript 2, claims 2, order 2, status 4 --
-  # the whole log, silently, in the state where withholding matters most.
+  # THE BARRIER'S ANSWER IS ONLY WORTH HAVING IF THE ROSTER IT COMES FROM IS ONE JSON OBJECT.
+  # c_barrier's first line is `[ "$(c_mode)" = roundtable ]`, and c_mode is a bare `jq -r
+  # '.mode // "token"'`: over a roster.json that is empty, truncated or missing, jq prints
+  # NOTHING; over the literal `null` it prints `token`; and over TWO documents it prints two
+  # lines, which equal neither -- so in every one of those c_barrier returns `closed` on that
+  # line and never reaches the `n > 0` precondition that would have answered `open`. An earlier
+  # version of this comment cited that precondition as the reason no roster read was needed
+  # here; it covers the `.order` half of an unreadable roster and not this half. Measured on
+  # this tree with the check below removed, three-peer roundtable room, two positions posted,
+  # asking as the peer that had posted none: recv 0 hits, transcript 2, claims 2, order 2,
+  # status 4 -- the whole log, silently, in the state where withholding matters most.
   #
-  # So a roster this reader cannot parse WITHHOLDS. It costs nothing where nothing is at stake:
+  # SLURPED (`-s`), not `jq -e 'type == "object"'`, and that is the difference between asking
+  # about the FILE and asking about its last value: `jq -e` over a two-document roster tests
+  # only the second one and exits 0 on `{...}\n{}`, which is exactly the shape that makes
+  # c_mode print two lines. Slurping asks "is this file one object", which is the question.
+  #
+  # So a roster that is not one object WITHHOLDS. It costs nothing where nothing is at stake:
   # with no `round == 0` message in any other lane -- every `token` room -- the filter is the
   # identity.
-  if ! jq -e 'type == "object"' "$ROOM/roster.json" >/dev/null 2>&1; then
-    why="this room's roster could not be read, so its opening barrier cannot be resolved — every other seat's opening position is withheld from you until it can be"
-  # The barrier read is not free: on the OPEN path c_barrier runs c_round0 TWICE (once for
-  # `posted`, once for the first `sent_ms`), each a whole c_all, and c_canon below is a third.
-  # In a `token` room it returns on c_mode alone. Measured cost is on the pull request.
+  if ! jq -e -s 'length == 1 and (.[0] | type) == "object"' "$ROOM/roster.json" >/dev/null 2>&1; then
+    why="the opening barrier cannot be resolved (this room's roster is not one JSON object) — every other seat's opening position is withheld from you until it can be"
+  # The barrier read is not free: on the path that answers `open` from a parseable roster,
+  # c_barrier runs c_round0 TWICE (once for `posted`, once for the first `sent_ms`), each a
+  # whole c_all, and c_canon below is a third. Two paths are cheaper and neither is the common
+  # one: `n == 0` answers `open` from its precondition having read no log at all, and a `token`
+  # room returns on c_mode alone. Measured cost is on the pull request.
   elif [ "$(c_barrier)" = open ]; then
     why="the opening round is not complete — the other seats' positions are withheld from you until it is"
   else
