@@ -493,12 +493,30 @@ shipyard_continuity_legacy_lock_reclaim() {
   rmdir "$lock" 2>/dev/null
 }
 
+# Bash 3.2 has no BASHPID and $$ keeps the parent shell's PID inside a
+# background subshell. Ask a direct child for its PPID without wrapping that
+# child in command substitution, then return the value through a global.
+shipyard_continuity_set_current_pid() {
+  local dir="$1" probe pid
+  probe=$(mktemp "$dir/continuity-owner.XXXXXXXX") || return 1
+  if ! sh -c 'printf "%s\n" "$PPID" >"$1"' shipyard-pid-probe "$probe"; then
+    rm -f "$probe"
+    return 1
+  fi
+  read -r pid <"$probe" || pid=""
+  rm -f "$probe"
+  case "$pid" in ''|0|0*|*[!0-9]*) return 1 ;; esac
+  kill -0 "$pid" 2>/dev/null || return 1
+  SHIPYARD_CONTINUITY_CURRENT_PID="$pid"
+}
+
 shipyard_continuity_acquire_lock() {
   local lock="$1" n=0 record pid token owner_pid claim claim_path lock_dir lock_name valid
-  owner_pid=$(sh -c 'printf "%s" "$PPID"') || return 1
+  lock_dir=${lock%/*}
+  shipyard_continuity_set_current_pid "$lock_dir" || return 1
+  owner_pid="$SHIPYARD_CONTINUITY_CURRENT_PID"
   SHIPYARD_CONTINUITY_LOCK_TOKEN="$owner_pid-$RANDOM-$(date +%s)"
   SHIPYARD_CONTINUITY_LOCK_OWNER_PID="$owner_pid"
-  lock_dir=${lock%/*}
   lock_name=${lock##*/}
   claim="$lock_name.claim.$owner_pid.$SHIPYARD_CONTINUITY_LOCK_TOKEN"
   claim_path="$lock_dir/$claim"
@@ -550,9 +568,10 @@ shipyard_continuity_acquire_lock() {
 shipyard_continuity_reap_claim() {
   local lock="$1" expected="$2" replacement="$3" age="$4"
   local owner_pid token lock_dir source candidate path suffix reaper_pid valid_target=0 rc=1
-  owner_pid=$(sh -c 'printf "%s" "$PPID"') || return 1
-  token="$owner_pid-$RANDOM-$(date +%s)"
   lock_dir=${lock%/*}
+  shipyard_continuity_set_current_pid "$lock_dir" || return 1
+  owner_pid="$SHIPYARD_CONTINUITY_CURRENT_PID"
+  token="$owner_pid-$RANDOM-$(date +%s)"
   case "$expected" in
     "${lock##*/}.claim."*/*|*'..'*) source="" ;;
     "${lock##*/}.claim."*) source="$lock_dir/$expected"; valid_target=1 ;;
@@ -696,6 +715,18 @@ shipyard_continuity_remove_dead_intents() {
   done
 }
 
+shipyard_continuity_remove_dead_owner_probes() {
+  local state="$1" probe pid
+  for probe in "$state"/continuity-owner.*; do
+    [ -f "$probe" ] || continue
+    read -r pid <"$probe" || pid=""
+    case "$pid" in
+      ''|0|0*|*[!0-9]*) rm -f "$probe" ;;
+      *) kill -0 "$pid" 2>/dev/null || rm -f "$probe" ;;
+    esac
+  done
+}
+
 shipyard_continuity_start_locked() {
   local state="$1" key="$2" lock="$3" lock_token="$4"
   local pidfile heartbeat control ack logfile pid token old_token n
@@ -755,7 +786,8 @@ shipyard_continuity_start() {
 
   state=$(shipyard_continuity_state_dir) || return 1
   key=$(printf '%s' "$AGTERM_SESSION_ID" | tr -c 'A-Za-z0-9._-' '_')
-  owner_pid=$(sh -c 'printf "%s" "$PPID"') || return 1
+  shipyard_continuity_set_current_pid "$state" || return 1
+  owner_pid="$SHIPYARD_CONTINUITY_CURRENT_PID"
   intent_token="$owner_pid-$RANDOM-$(date +%s)"
   intent="$state/continuity-start-$intent_token.intent"
   start_generation=$(shipyard_continuity_generation "$state")
@@ -776,6 +808,7 @@ shipyard_continuity_start() {
   rm -f "$state/continuity-stopping"
   rc=0
   shipyard_continuity_remove_dead_intents "$state"
+  shipyard_continuity_remove_dead_owner_probes "$state"
   recorded_generation=""
   [ ! -f "$intent" ] || read -r recorded_generation intent_session <"$intent" || true
   current_generation=$(shipyard_continuity_generation "$state")
@@ -805,6 +838,7 @@ shipyard_continuity_stop_all() {
   printf '%s %s\n' "$lock_owner_pid" "$lock_token" >"$marker" 2>/dev/null \
     || { shipyard_continuity_release_lock "$lock" "$lock_token" "$lock_owner_pid"; return 1; }
   rm -f "$state"/continuity-start-*.intent
+  rm -f "$state"/continuity-owner.*
   sleep "${_SHIPYARD_CONTINUITY_STOP_AFTER_SWEEP_DELAY:-0}"
   for f in "$state"/continuity-*.pid; do
     [ -f "$f" ] || continue
@@ -832,6 +866,7 @@ shipyard_continuity_stop_all() {
   done
   # Catch intents registered after the first sweep while the stop marker was live.
   rm -f "$state"/continuity-start-*.intent
+  rm -f "$state"/continuity-owner.*
   rm -f "$marker"
   shipyard_continuity_release_lock "$lock" "$lock_token" "$lock_owner_pid" || rc=1
   return "$rc"

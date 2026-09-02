@@ -365,7 +365,7 @@ files=$(runtime_state_paths)
 [ -z "$files" ] || find "$_SHIPYARD_CONTINUITY_DIR" -name 'continuity-*.log' -exec sed -n '1,80p' {} \;
 check "" "$files" "lifecycle cleanup removes watcher state"
 
-_SHIPYARD_CONTINUITY_INITIAL_DELAY=2
+_SHIPYARD_CONTINUITY_INITIAL_DELAY=30
 export _SHIPYARD_CONTINUITY_INITIAL_DELAY
 shipyard_continuity_start agterm >/dev/null 2>&1 &
 starter_pid=$!
@@ -491,6 +491,15 @@ while ! find "$_SHIPYARD_CONTINUITY_DIR" -name 'continuity-start-*.intent' -prin
   sleep 0.02
   n=$((n + 1))
 done
+admission_intent=$(find "$_SHIPYARD_CONTINUITY_DIR" -name 'continuity-start-*.intent' -print -quit)
+admission_owner=${admission_intent##*/continuity-start-}
+admission_owner=${admission_owner%%-*}
+if [ -n "$admission_owner" ] && kill -0 "$admission_owner" 2>/dev/null; then
+  admission_owner_alive=yes
+else
+  admission_owner_alive=no
+fi
+check yes "$admission_owner_alive" "start intent names the live starter process"
 admission_stop_rc=0
 shipyard_continuity_stop_all || admission_stop_rc=$?
 admission_start_rc=0; wait "$admission_start" || admission_start_rc=$?
@@ -648,6 +657,8 @@ shipyard_continuity_cleanup_last_slot 0 ""
 check 3 "$cleanup_calls" "successful empty enumeration performs last-slot cleanup"
 check 1 "$(grep -Fc 'shipyard_continuity_start "$BACKEND"' "$SKILL_DIR/shipyard-launch.sh")" \
   "child launch wires automatic parent continuity from the parent environment"
+check 1 "$(grep -Fc 'shipyard_continuity_start "$KIND"' "$SKILL_DIR/shipyard-report.sh")" \
+  "status monitoring re-arms Codex goal continuity"
 check 1 "$(grep -Fc 'shipyard_continuity_cleanup_last_slot' "$SKILL_DIR/shipyard-down.sh")" \
   "last-slot teardown uses status-aware continuity cleanup"
 
