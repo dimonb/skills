@@ -416,6 +416,40 @@ else
   done
 fi
 
+# --- 8c. the numbers the record fallback reports, not only the verdict word --------
+# A closed room whose ROSTER cannot be read is the one state that reaches the record fallback,
+# and that branch emits its own `turns`, `budget` and `since_last_claim`. While it ran on EVERY
+# closed room the healthy-room assertions in §8 covered those values; once it was narrowed to a
+# room that cannot be read, nothing did — a mutation setting all four to 0 left the whole suite
+# green, 139 ok and 0 FAIL.
+#
+# ITS OWN FIXTURE, deliberately. The loops above damage the log first and repair only the
+# roster, so by their roster pass BOTH doors are shut and `turns: 0` is the honest answer —
+# an assertion placed there would have compared 0 against 0 and caught nothing. Here the log
+# is intact, so the fallback has real counts available and has to report them.
+#
+# `lap` is not checked: it is the peer count, and 0 is the honest answer for a roster nobody
+# can read. `budget` comes from the same roster, so it falls back to its default of 30 — which
+# is what the room was created with, and the assertion below reads it from the room rather than
+# assuming it.
+fresh
+say_floor propose '[]' "Adopt the thing." >/dev/null
+say_floor object '["a-1"]' "This breaks the thing." >/dev/null
+for i in 1 2 3; do say_floor msg '[]' "filler $i" >/dev/null; done
+jclean=$(bash "$CLI" verdict --json 2>/dev/null)
+COUNCIL_ME=a bash "$CLI" decide --force >/dev/null 2>&1
+: > "$R/roster.json"
+jdeg=$(bash "$CLI" verdict --json 2>/dev/null)
+dt=$(printf '%s' "$jdeg"   | jq -r '.turns')
+ds=$(printf '%s' "$jdeg"   | jq -r '.since_last_claim')
+wt=$(printf '%s' "$jclean" | jq -r '.turns')
+ws=$(printf '%s' "$jclean" | jq -r '.since_last_claim')
+if [ "$dt" = "$wt" ] && [ "$ds" = "$ws" ] && [ "$dt" != 0 ]; then
+  echo "ok   a closed room with an unreadable roster still reports its real counts"
+else
+  echo "FAIL closed room, roster unreadable: turns=$dt (want $wt), since=$ds (want $ws)"; fail=1
+fi
+
 # --- 9. the failure must not carry a peer's bytes to a terminal --------------------
 # The lane set is a glob, so a peer can name a file -- or a lane directory -- anything, and jq
 # quotes the offending path verbatim. Every seat here is an agent session reading its own
