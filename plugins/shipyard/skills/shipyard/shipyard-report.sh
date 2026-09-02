@@ -61,12 +61,6 @@ ROOT=$(git rev-parse --show-toplevel 2>/dev/null || pwd)
 shipyard_backend_check || exit 1
 CONTAINER=$(shipyard_container)
 KIND=$(shipyard_container_kind)
-# A Codex goal can outlive a watcher process while its child ships remain active.
-# Every status tick therefore re-arms the idempotent Codex/agterm guard. The
-# function is deliberately a no-op for Claude parents and the tmux backend.
-if ! shipyard_continuity_start "$KIND"; then
-  echo "warning: could not ensure the Codex parent continuity guard" >&2
-fi
 if [ -z "${GITLAB_HOST:-}" ]; then
   GITLAB_HOST=$(git -C "$ROOT" remote get-url origin 2>/dev/null \
     | sed -E 's#(git@|https?://)([^:/]+).*#\2#')
@@ -194,6 +188,12 @@ if [ ${#SLOTS[@]} -eq 0 ]; then
     echo "_no live ship terminals in $KIND \`$CONTAINER\` ($(shipyard_backend))_"
   } | cat
   exit 0
+fi
+
+# Re-arm only while the report has work to supervise. Doing this before the
+# empty report would recreate a watcher immediately after last-slot cleanup.
+if ! shipyard_continuity_start "$KIND"; then
+  echo "warning: could not ensure the Codex parent continuity guard" >&2
 fi
 
 declare -a ROWS

@@ -669,6 +669,14 @@ check 1 "$(grep -Fc 'shipyard_continuity_start "$BACKEND"' "$SKILL_DIR/shipyard-
   "child launch wires automatic parent continuity from the parent environment"
 check 1 "$(grep -Fc 'shipyard_continuity_start "$KIND"' "$SKILL_DIR/shipyard-report.sh")" \
   "status monitoring re-arms Codex goal continuity"
+report_start_line=$(grep -n 'shipyard_continuity_start "$KIND"' "$SKILL_DIR/shipyard-report.sh" | cut -d: -f1)
+empty_exit_line=$(grep -n '^  exit 0$' "$SKILL_DIR/shipyard-report.sh" | head -1 | cut -d: -f1)
+if [ -n "$report_start_line" ] && [ -n "$empty_exit_line" ] \
+  && [ "$report_start_line" -gt "$empty_exit_line" ]; then
+  check yes yes "empty status cannot recreate the last-slot continuity watcher"
+else
+  check yes no "empty status cannot recreate the last-slot continuity watcher"
+fi
 check 1 "$(grep -Fc 'shipyard_continuity_cleanup_last_slot' "$SKILL_DIR/shipyard-down.sh")" \
   "last-slot teardown uses status-aware continuity cleanup"
 
