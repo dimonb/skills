@@ -636,6 +636,16 @@ tmux_error=$(
   printf 'rc=%s' "$rc"
 )
 check rc=1 "$tmux_error" "an unrelated tmux query failure preserves lifecycle state"
+
+report_rc=0
+CODEX_SESSION_ID= CODEX_THREAD_ID= AGTERM_ENABLED=0 SHIPYARD_BACKEND=agterm \
+  SHIPYARD_WORKSPACE=test-ai bash "$SKILL_DIR/shipyard-report.sh" \
+  >"$TMP/report.out" 2>"$TMP/report.err" || report_rc=$?
+check 0 "$report_rc" "status monitoring executes on macOS Bash 3.2"
+check "" "$(cat "$TMP/report.err")" "status monitoring uses no unavailable Bash 4 builtins"
+check 1 "$(grep -Fc '_no live ship terminals' "$TMP/report.out")" \
+  "status monitoring reaches its authoritative empty report"
+
 unset -f git
 unset -f agtermctl
 reset_fake

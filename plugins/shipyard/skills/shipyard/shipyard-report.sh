@@ -82,7 +82,9 @@ for a in "$@"; do
   esac
 done
 if [ ${#SLOTS[@]} -eq 0 ]; then
-  mapfile -t SLOTS < <(shipyard_slots)
+  while IFS= read -r slot; do
+    SLOTS+=("$slot")
+  done < <(shipyard_slots)
 fi
 
 # Where the last printed report's signature lives (shared .git, never committed).
