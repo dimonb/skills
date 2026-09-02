@@ -173,10 +173,17 @@ is not.
 `council.sh decide` **refuses** a room that is not ready. `--force` writes an honest
 `unresolved` record listing what is still open — a valid outcome, not a failure to hide.
 
-`--force` is not unconditional: if the room's **roster** cannot be read, `decide` refuses with
-**exit 1** and writes nothing, `--force` included, because there is then no participant list to
-write a record about. Exit 2 still means "not ripe" and 3 "already decided", so a supervisor
-that retries on 2 must not retry on 1.
+`--force` is not unconditional: **while a room is still open**, if its **roster** cannot be
+read, `decide` refuses with **exit 1** and writes nothing, `--force` included, because there is
+then no participant list to write a record about. Exit 2 still means "not ripe" and 3 "already
+decided", so a supervisor that retries on 2 must not retry on 1.
+
+**A room that has already closed is the exception, and it is a remainder rather than a design.**
+`--force` over a room whose record is on disk rewrites that record, and it does so at exit 0
+even when the roster has since become unreadable — the rewritten header then carries
+`* participants: ` and `* mode: , rule: ` blank. That is `origin/main`'s behaviour, unchanged
+here; only the sentence above it is new, and an earlier revision of it claimed the refusal
+covered this case too. Re-forcing a closed room whose roster is broken is not something to do.
 
 **A lane file that does not parse is a different case, and a worse one.** The whole-log readers
 — `order`, `transcript`, `claims`, `verdict`, `status` — report the room as EMPTY rather than as
