@@ -167,6 +167,22 @@ if [ "$vrc" != 0 ] && [ ! -e "$R/board/decision.md" ]; then
 else
   echo "FAIL decide wrote a record from a state it could not compute (rc $vrc)"; fail=1
 fi
+# The SAME uncomputable room, through the other verb written for it. `v_status` is what a
+# supervising session reads instead of the room, so when it cannot read the room either it has
+# to say so rather than render a blank where each number belongs -- `turns 3/`, `verdict: `, no
+# proposals, `alarms: -`, which is a broken room reported as a quiet one. That alarm was added
+# with no assertion at all: deleting the two lines that raise it left the whole suite green,
+# 134 ok and 0 FAIL, which is the case this file's own header says it exists to prevent.
+al=$( export COUNCIL_ROOM="$R" COUNCIL_ME=a
+      SKILL="$SKILL"
+      . "$SKILL/lib/lib.sh"
+      . "$SKILL/lib/verbs.sh"
+      _graph() { return 1; }
+      v_status 2>/dev/null | sed -n 's/^alarms://p' )
+case "$al" in
+  *"could not be computed"*) echo "ok   status raised an alarm for a room it could not compute" ;;
+  *) echo "FAIL status reported an uncomputable room as an ordinary one:$al"; fail=1 ;;
+esac
 
 # --- 6. a room that CAN be computed still gets its record -----------------------
 # The guard above must refuse a broken read, not refuse to close a room. Without this the
@@ -227,7 +243,12 @@ esac
 fresh; stale_turn
 jq 'del(.created_ms)' "$R/roster.json" > "$R/r.tmp" && mv "$R/r.tmp" "$R/roster.json"
 al=$(bash "$CLI" status 2>/dev/null | sed -n 's/^alarms://p')
+# The clock arm FIRST, because `case` takes the first match and BOTH messages begin `🛑 STALL:`.
+# Matching `*STALL*` alone cannot tell the plain threshold from the reworded clock warning, so
+# this assertion passed with `c_room_age_s` answering 0 instead of refusing -- the text flipped
+# underneath it and nothing went red.
 case "$al" in
+  *"clock is wrong"*) echo "FAIL a room with no recorded creation time reworded a stall it cannot justify:$al"; fail=1 ;;
   *STALL*) echo "ok   a room with no recorded creation time kept the plain stall threshold" ;;
   *) echo "FAIL a room with no recorded creation time lost the stall alarm:$al"; fail=1 ;;
 esac
@@ -244,9 +265,13 @@ esac
 # --- 8. a room that has CLOSED keeps reporting itself closed -----------------------
 # The record is `board/decision.md` plus `board/status`, and neither goes through the lane log.
 # So a room that has already produced its output must keep saying so even when the log becomes
-# unreadable — `verdict` answers `decided` at rc 0, `status` exits 0 ("the room is finished",
-# which is the supervising contract), and `decide` returns 3 ("already decided"), exactly as
-# SKILL.md promises.
+# unreadable — `verdict` answers the RECORDED word at rc 0, `status` exits 0 ("the room is
+# finished", which is the supervising contract), and `decide` refuses rather than reopening it.
+#
+# BOTH recorded words are exercised, and deliberately: the fixture below closes as `unresolved`,
+# where `decide` answers 2 and only `--force` rewrites, and §8b closes as `decided`, where it
+# answers 3. An earlier revision ran the `unresolved` fixture alone while its header promised
+# rc 3, so the rc-3 path was covered nowhere in the suite and the header said otherwise.
 #
 # THIS IS A REGRESSION GUARD FOR AN EXPERIMENT THAT WAS REVERTED, and the shape of the mistake
 # is worth keeping. Giving c_all a second exit status and propagating it made `_graph` fail,
@@ -359,6 +384,37 @@ case "$recorded" in
     done ;;
   *) echo "FAIL could not close the room to set up the corrupted-log case (board/status='$recorded')"; fail=1 ;;
 esac
+
+# --- 8b. the same, for a room recorded `decided` -----------------------------------
+# `decide` answers 3 here and 2 above, and 3 is the one SKILL.md names as "already decided" and
+# the one a supervisor must not retry on. It needs its own fixture because a room only records
+# `decided` when it closes with no objection standing, which is also why the block above cannot
+# produce it.
+fresh
+say_floor propose '[]' "Adopt the thing." >/dev/null
+for i in 1 2 3 4; do say_floor msg '[]' "filler $i" >/dev/null; done
+COUNCIL_ME=a bash "$CLI" decide >/dev/null 2>&1
+rec2=$(cat "$R/board/status" 2>/dev/null)
+if [ "$rec2" != decided ]; then
+  echo "FAIL could not close a room as decided (board/status='$rec2')"; fail=1
+else
+  cp "$R/roster.json" "$R/roster.bak"
+  for door in log roster; do
+    case "$door" in
+      log)    printf 'x{' > "$(ls "$R"/lane/*/*.json | head -1)" ;;
+      roster) : > "$R/roster.json" ;;
+    esac
+    v=$(bash "$CLI" verdict 2>/dev/null | cut -d' ' -f1); vrc=$?
+    bash "$CLI" status >/dev/null 2>&1; src=$?
+    COUNCIL_ME=a bash "$CLI" decide >/dev/null 2>&1; drc=$?
+    if [ "$v" = decided ] && [ "$vrc" = 0 ] && [ "$src" = 0 ] && [ "$drc" = 3 ]; then
+      echo "ok   a closed room (decided) still reports itself closed over an unreadable $door"
+    else
+      echo "FAIL closed room (decided), $door damaged: verdict='$v' rc=$vrc, status rc=$src, decide rc=$drc (want decided/0/0/3)"; fail=1
+    fi
+    cp "$R/roster.bak" "$R/roster.json"
+  done
+fi
 
 # --- 9. the failure must not carry a peer's bytes to a terminal --------------------
 # The lane set is a glob, so a peer can name a file -- or a lane directory -- anything, and jq
