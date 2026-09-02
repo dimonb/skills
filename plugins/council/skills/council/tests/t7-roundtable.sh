@@ -461,5 +461,13 @@ for t in "a record must not be written through the barrier" "nor may it lose the
 done
 echo "a record forced mid-round holds every position, not only the writer's own"
 
+# THE ROOMS THIS FILE ADDED ARE ITS OWN TO REMOVE. `run-all.sh` gives every test one shared root
+# and clears it only when the whole run ends, so a room left here outlives this file and sits
+# under every test that follows. This file used to leave two; the barrier work took it to eight,
+# and the four `--full` tests that run afterwards are timing tests measuring wall clock. Removing
+# them also stops their keepers, which poll `while [ -d "$room" ]`. R and R2 are left alone: they
+# predate this work, and changing what they leave behind is not this change's business.
+rm -rf "$R3" "$R4" "$R5" "$R6" "$R7" "$R8"
+
 [ "$fail" = 0 ] && echo "t7 PASS" || echo "t7 FAIL"
 exit $fail
