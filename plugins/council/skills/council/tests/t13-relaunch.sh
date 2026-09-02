@@ -93,6 +93,17 @@ case "$got" in /*) ;; *) echo "FAIL the recorded cwd is not absolute: $got"; fai
 [ -f "$ROOM/state/launch-claude.sh" ] || { echo "FAIL up wrote no launcher for claude"; fail=1; }
 [ -f "$ROOM/state/launch-codex.sh" ] && { echo "FAIL up wrote a launcher for the --me seat"; fail=1; }
 
+# NO LAUNCHER MEANS NOTHING EXPORTS `COUNCIL_ME` FOR THAT SEAT, and a council command without
+# it is a SUPERVISOR command — which the opening barrier deliberately does not withhold from.
+# So in a roundtable room the seat a human took was handed the positions it owed one of its own
+# against, by the `watch:` line this very function prints, on a healthy room. `up` has to say
+# so, because the protocol file that seat reads tells every OTHER seat its environment is
+# already exported.
+grep -q -- "--me codex" "$ROOT/up.log" \
+  || { echo "FAIL up did not tell the --me seat to pass --me on its own commands; output was:"; cat "$ROOT/up.log"; fail=1; }
+grep -qi "reads included" "$ROOT/up.log" \
+  || { echo "FAIL up did not say that the --me seat needs --me on READS, not only on send"; fail=1; }
+
 # A relative --cwd resolved under an exported CDPATH, in its own throwaway room. `cd` searches
 # CDPATH for an operand that does not start with `.` or `/`, and then ECHOES the directory it
 # found — so a resolution that forgets `CDPATH=` captures TWO lines naming the WRONG

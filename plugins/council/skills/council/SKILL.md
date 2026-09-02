@@ -185,9 +185,12 @@ even when the roster has since become unreadable — the rewritten header then c
 here; only the sentence above it is new, and an earlier revision of it claimed the refusal
 covered this case too. Re-forcing a closed room whose roster is broken is not something to do.
 
-**A lane file that does not parse is a different case, and a worse one.** The whole-log readers
-— `order`, `transcript`, `claims`, `verdict`, `status` — report the room as EMPTY rather than as
-broken, and `decide --force` will write a record over it saying there were no objections. Only
+**A lane file that does not parse is a different case, and a worse one.** The readers that glob
+the whole log on every call — `order`, `transcript`, `claims`, `verdict`, `status` — report the
+room as EMPTY rather than as broken, and `decide --force` will write a record over it saying
+there were no objections. (A participant's view of the first three, and of `status`'s display
+half, is cut further by an open barrier round; see Modes. That does not change this paragraph:
+an unreadable lane file empties them all either way.) Only
 the diagnostic on stderr says otherwise, and it is the thing to act on. Treat a `council:` line
 about a log that could not be read as invalidating every other answer in the same breath.
 
@@ -449,14 +452,24 @@ A lane stops at its withheld message instead of skipping past it, so nothing is 
 cursor runs ahead of unread words. A second message in an open round is refused (exit 5)
 rather than queued.
 
-**Every reader holds it, not only `recv`.** `transcript`, `claims`, `order` and `status`
-show a participant exactly what `recv` has already released, so no verb hands a participant
-another seat's opening words. A **supervisor** — anyone reading the room without `--me` — is
-exempt and sees all of it, which is what makes `status` usable for watching a round that has
-not finished. So is the room's own arithmetic: turn counts, the floor, `verdict` and the
-decision record are computed from the whole log, because they are facts about the room
-rather than about who is asking. Those report counts and message ids, never text, and
-`status`'s own `OPEN ROUND: posted k/N, waiting for …` line already says as much.
+**Every reader holds it, not only `recv`.** `transcript`, `claims`, `order` and `status` show
+a participant no more than `recv` has already released — a lane is withheld whole — so none of
+the verbs a participant reads the room with hands it another seat's opening words. Each of
+them says on stderr when the barrier is why a read looks thin, so "nothing was said" cannot be
+mistaken for "nothing was shown to you".
+
+A **supervisor** — anyone reading the room without `--me` — is exempt and sees all of it, which
+is what makes `status` usable for watching a round that has not finished. The seat a human
+takes with `up --me` gets no launcher, so nothing exports `COUNCIL_ME` for it: **that seat must
+pass `--me` on every command, reads included**, or its reads are supervisor reads.
+
+The room's own arithmetic is exempt too — turn counts, the floor and `verdict` are computed
+from the whole log, because they are facts about the room rather than about who is asking, and
+they report counts and message ids, never text. **The record is the one real exception, and
+deliberately so:** `decide` writes it from the whole log, because a record holding only the
+writer's own position would be worse than none, so a room `--force`-closed mid-round hands
+every position to whoever runs `decision`. Closing a round early is a supervisor act, and it
+ends the room it discloses.
 
 When the last position lands, all of them are released at once, in the room's one order.
 The round then counts as **one whole lap**, and everything after it is turn-taking, so no
