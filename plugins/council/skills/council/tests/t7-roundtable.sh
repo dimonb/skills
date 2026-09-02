@@ -415,7 +415,13 @@ out=$(COUNCIL_ROOM="$R7" COUNCIL_ME=a bash "$CLI" decide --force 2>&1); rc=$?
 R8="$COUNCIL_TEST_ROOT/t7h"; rm -rf "$R8"
 mkroom "$R8" a b c
 jq '.mode="roundtable" | .round_deadline_ms=600000' "$R8/roster.json" > "$R8/r.tmp" && mv "$R8/r.tmp" "$R8/roster.json"
-COUNCIL_ROOM="$R8" COUNCIL_ME=b bash "$CLI" send --act propose "position b, withheld from a" >/dev/null 2>&1
+# The send is ASSERTED, not fired and forgotten. Without b's real position the block still
+# passes — the newline lane is itself a foreign round-0 message, so the gate still refuses — but
+# the STAKE goes away: line by line below, what a stood-down gate would hand over is a real
+# withheld position, and that is what the second assertion checks. An unasserted precondition is
+# how the fixture two blocks up came to prove nothing.
+COUNCIL_ROOM="$R8" COUNCIL_ME=b bash "$CLI" send --act propose "position b, withheld from a" >/dev/null 2>&1 \
+  || { echo "FAIL could not plant the position the record must not disclose"; fail=1; }
 mkdir -p "$R8/lane/$(printf '\nz')"
 jq -n --argjson ms "$_t7f_ms" '{id:"z-1",from:"z",lamport:1,deps:{},act:"propose",refs:[],to:["*"],
       hand:false,turn:null,round:0,text:"a lane whose name starts with a newline",

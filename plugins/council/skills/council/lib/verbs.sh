@@ -521,16 +521,19 @@ v_decide() {
   # has spoken and it has not, while withholding nothing from it. Measured.
   #
   # It prints the WHOLE MESSAGE compactly rather than any field of it, and that is the third
-  # attempt at this line -- the two before it each picked a field whose first line can be empty
-  # while the message is not:
+  # attempt at this line. Each earlier one was defeated by a value whose FIRST LINE can be empty
+  # while the message is not, which is all `head -1` reads:
   #
-  #   `.id` is a string the message chose. An empty one in MY OWN lane made `c_posted_round0`
-  #   (which reads through `.id`) report that I had not posted, so the gate refused the one seat
-  #   that had, while withholding nothing from it.
+  #   The first printed no field at all -- `c_round0 | head -1`, no filter -- and leaned on
+  #   `c_posted_round0` to have established that no position was mine. That reader goes through
+  #   `.id`, a string the message chose, so an empty one in MY OWN lane made it report that I had
+  #   not posted and the gate refused the one seat that had, while withholding nothing from it.
+  #   The lesson of that one is the `.from != $me` filter, not the field.
   #
-  #   `.from` looked immune, being c_all's derivation from the LANE DIRECTORY and so a real
-  #   directory name -- but `head -1` reads its FIRST LINE, and a directory name may contain a
-  #   newline. A lane called $'\nz' holding a `round: 0` message made this test read empty, the
+  #   The second added the filter and printed `.from`, which looked immune: it is c_all's
+  #   derivation from the LANE DIRECTORY, so it is a real directory name. But `head -1` reads its
+  #   FIRST LINE, and a directory name may contain a newline. A lane called $'\nz' holding a
+  #   `round: 0` message made this test read empty, the
   #   gate stand down, and a seat that had posted nothing close the round and take the record
   #   with every position in it. Measured, end to end. That name cannot come from `c_send`
   #   (`c_atomic` does not mkdir), which is exactly the premise the `.id` case above rests on
