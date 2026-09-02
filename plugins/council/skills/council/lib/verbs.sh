@@ -173,7 +173,7 @@ v_claims() {
 # The verdict is COMPUTED. "We agree" here means: no open objection, and a full lap in
 # which nobody added a proposal, an amendment or an objection. Not a mood anyone reports.
 v_verdict() {
-  local g n budget turns live open since win lap v recorded
+  local g n budget turns live open since win lap v recorded gok
   # THE RECORD ANSWERS BEFORE THE ROOM DOES. `board/decision.md` and `board/status` pass
   # through neither the lane log nor the roster, so a room that has already closed must keep
   # saying so even when neither can be read -- `status` exits 0 ("the room is finished"), which
@@ -187,38 +187,27 @@ v_verdict() {
   #
   # A room whose record is written is not going to change its mind, so nothing computed below
   # can alter this answer -- which is why short-circuiting here is safe as well as correct.
-  # EMIT THE SAME KEY SET AS THE FULL PATH BELOW. `v_status` reads `.budget`, `.since_last_claim`
-  # and `.lap` out of this, and `v_decide` reads `.turns` and `.budget` into the record header,
-  # so a short-circuit that returns only the verdict renders `turns 5/null` and writes
-  # `* turns: null of null` into the room's durable output -- on EVERY closed room, healthy ones
-  # included, and with the suite green. That is what a first version of this did.
-  #
-  # The three readers used here are total and independent of both `_graph` and the roster, which
-  # is the whole reason this branch can answer at all: `c_turns` always echoes an integer,
-  # `c_int_field` returns its default for anything that is not one, and `c_npeers` is a `wc -l`.
-  # `c_turns_since_last_claim` is total too -- it falls back to -1 for anything it cannot read --
-  # so the window is computed exactly as the full path computes it rather than being invented,
-  # and a healthy closed room's block is byte-identical to what it was before this branch.
+  # THE RECORD IS A FALLBACK, NOT A SUBSTITUTE. It answers only when the room cannot be read,
+  # so a room that can be read is reported from the room -- and the computed path below already
+  # gives the record the last word on the VERDICT (`if [ -n "$recorded" ]; then v=$recorded`),
+  # which is the part that must not be recomputed. Writing this as a parallel block that emits
+  # its own JSON instead cost two rounds: the first version omitted `turns`, `budget`,
+  # `since_last_claim` and `lap`, so every closed room rendered `turns 5/null` and wrote
+  # `* turns: null of null` into its durable record; the second invented `live`, `open`,
+  # `open_ids` and `decide_msg` as 0/0/[]/null, so `verdict --json` reported no open objection
+  # on a room recorded `unresolved` -- which is precisely a room that closed with objections
+  # standing -- while `status`, `claims` and the record all still said otherwise. A block that
+  # has to be kept in step with the one below by hand will fall out of step; falling through
+  # keeps them the same code.
   recorded=$(c_recorded_status)
-  if [ -n "$recorded" ]; then
-    local rturns rbudget rlap rwin rsince
-    rturns=$(c_turns); rbudget=$(c_int_field turns_budget 30); rlap=$(c_npeers)
-    rwin=$(c_turns_since_last_claim); rsince=$(( rwin < 0 ? rturns : rwin ))
-    if [ "${1:-}" = "--json" ]; then
-      printf '{"verdict":"%s","turns":%s,"budget":%s,"since_last_claim":%s,"lap":%s,"live":0,"open":0,"open_ids":[],"decide_msg":null,"recorded":true}\n' \
-        "$recorded" "$rturns" "$rbudget" "$rsince" "$rlap"
-    else
-      printf '%s  turns %s/%s  nothing new for %s turns (lap %s)  (recorded; the room is closed)\n' \
-        "$recorded" "$rturns" "$rbudget" "$rsince" "$rlap"
-    fi
-    return 0
-  fi
-  g=$(_graph) || return 1
   # Held to digits, not `// 30` and not jq's `type == "number"`: a string is truthy in jq so
   # the alternative never fires, and a JSON number is not a bash integer -- `2.5` and `1e400`
   # are numbers, and both make the `[ -ge ]` below error, which silently disables the room's
   # only stop condition and puts the same value into `--argjson`. roster.json is peer-writable.
   n=$(c_npeers); budget=$(c_int_field turns_budget 30)
+  # `gok` rather than `[ -z "$g" ]`: an empty room's graph is a perfectly good JSON object, and
+  # testing the text would read an empty room as a broken one.
+  gok=1; g=$(_graph) && gok=0
   # A room with no readable participant list has no lap to measure convergence against, and
   # `lap` is exactly what both thresholds below compare against. At n=0, `[ "$since" -ge 0 ]` is
   # UNCONDITIONALLY true, so such a room reported ready-to-decide on its very first proposal and
@@ -226,13 +215,36 @@ v_verdict() {
   # participant list, for a room in which nobody could take the floor. No hostile peer is needed:
   # a truncated, absent or half-written roster.json does it, and roster.json is written with a
   # plain `>`.
-  #
-  # Returning 1 having printed nothing is the SAME contract `g=$(_graph) || return 1` above
-  # already uses, so the two now agree: a room this verb cannot read yields no verdict at all.
-  # This change's own guards then do the rest -- v_status raises its "state could not be
-  # computed" alarm and v_decide refuses to write a record, both written for exactly this case,
-  # the second already asserted by t9g. c_floor_at and c_barrier carry the same precondition.
-  [ "$n" -gt 0 ] || return 1
+  if [ "$gok" != 0 ] || [ "$n" -le 0 ]; then
+    # Neither door opens. If the room has already produced its output, say so from the record --
+    # `board/decision.md` and `board/status` pass through neither the log nor the roster, and a
+    # room whose record is written is not going to change its mind. Reading the record LAST
+    # produced the same inversion twice, from both doors: a closed room answering nothing at all,
+    # `status` rc 1 where a supervisor waits on rc 0, and `decide` rc 1 where SKILL.md promises 3.
+    #
+    # With no record either, return 1 having printed nothing -- the same contract `_graph`'s own
+    # failure already used, so the two agree: a room this verb cannot read yields no verdict.
+    # v_status then raises its "state could not be computed" alarm and v_decide refuses to write
+    # a record. c_floor_at and c_barrier carry the same precondition.
+    [ -n "$recorded" ] || return 1
+    # The counts are the honest ones for a room nothing can be read from; every other field comes
+    # from a reader that is TOTAL -- it falls back to a default rather than failing, so an
+    # unreadable roster costs accuracy, not an answer. They are not roster-INDEPENDENT: `c_turns`
+    # (through `c_mode` and `c_barrier`), `c_npeers` and `c_int_field` all read roster.json, and
+    # removing it moves `lap` to 0 and, in a roundtable room, `turns` down by a lap. Only
+    # `c_turns_since_last_claim` is independent of it, and it answers -1 rather than failing.
+    local rturns rwin rsince
+    rturns=$(c_turns); rwin=$(c_turns_since_last_claim)
+    rsince=$(( rwin < 0 ? rturns : rwin ))
+    if [ "${1:-}" = "--json" ]; then
+      printf '{"verdict":"%s","turns":%s,"budget":%s,"since_last_claim":%s,"lap":%s,"live":0,"open":0,"open_ids":[],"decide_msg":null,"recorded":true}\n' \
+        "$recorded" "$rturns" "$budget" "$rsince" "$n"
+    else
+      printf '%s  turns %s/%s  nothing new for %s turns (lap %s)  (recorded; the room is closed)\n' \
+        "$recorded" "$rturns" "$budget" "$rsince" "$n"
+    fi
+    return 0
+  fi
   # Two counts, and deliberately NOT the decide message's id alongside them. `@tsv` does not
   # escape spaces and `read` splits on them as well as on tabs, so a peer-chosen `.id` of
   # `b 9` used to shift every following field: live took the id's tail and open took

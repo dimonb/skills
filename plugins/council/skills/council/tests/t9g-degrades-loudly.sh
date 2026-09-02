@@ -265,26 +265,69 @@ fresh
 say_floor propose '[]' "Adopt the thing." >/dev/null
 say_floor object '["a-1"]' "This breaks the thing." >/dev/null
 for i in 1 2 3; do say_floor msg '[]' "filler $i" >/dev/null; done
+# CLOSING A ROOM CHANGES ITS VERDICT WORD AND NOTHING ELSE. Take the whole of `verdict --json`
+# before the close and again after, and require every other field to be unchanged. Two versions
+# of the record-first short circuit failed this, and both were green against an assertion that
+# tested the SHAPE of the output instead of its content:
+#
+#   * the first emitted only `{verdict, recorded}`, so `v_status` and `v_decide` read `.budget`,
+#     `.since_last_claim`, `.lap` and `.turns` as null -- every closed room rendered
+#     `turns 5/null ... (nothing new for null turns, lap null)` and a second `--force` wrote
+#     `* turns: null of null` into the durable record. An assertion for the substring `null`
+#     caught that one, and only that one.
+#   * the second invented `live`, `open`, `open_ids` and `decide_msg` as 0/0/[]/null. A room
+#     recorded `unresolved` -- which by definition closed with its objections STANDING -- then
+#     reported `open: 0`, contradicting `status`, `claims` and its own record, and the substring
+#     assertion passed because 0 is not the word null. Replacing all four readers with the
+#     constant 0 also passed it: `turns 4/0 ... lap 0` and `* turns: 0 of 0` are digits too.
+#
+# Comparing against the room's own pre-close reading needs no fixture constants, so it cannot be
+# defanged by a change of fixture -- which is how the assertion below this one was first written
+# wrong.
+jbefore=$(bash "$CLI" verdict --json 2>/dev/null)
 COUNCIL_ME=a bash "$CLI" decide --force >/dev/null 2>&1
 recorded=$(cat "$R/board/status" 2>/dev/null)
-# Before damaging anything: a HEALTHY closed room must still render real numbers. The
-# short-circuit that lets the record answer returns its own JSON, and `v_status` and `v_decide`
-# read `.turns`, `.budget`, `.since_last_claim` and `.lap` out of it — so a version of it that
-# emitted only the verdict printed `turns 5/null … (nothing new for null turns, lap null)` on
-# every closed room, healthy ones included, and wrote `* turns: null of null` into the durable
-# record on a second `--force`. The suite was green with both live. Assert the numbers here,
-# where a closed room already exists, rather than trusting the shape.
-sblock=$(bash "$CLI" status 2>/dev/null)
-if printf '%s' "$sblock" | grep -q 'null'; then
-  echo "FAIL a healthy closed room rendered null in its status block:"; printf '%s\n' "$sblock" | sed -n '2,3p'; fail=1
+jafter=$(bash "$CLI" verdict --json 2>/dev/null)
+sblock=$(bash "$CLI" status 2>/dev/null); srcx=$?
+b=$(printf '%s' "$jbefore" | jq -S 'del(.verdict, .recorded)' 2>/dev/null)
+a=$(printf '%s' "$jafter"  | jq -S 'del(.verdict, .recorded)' 2>/dev/null)
+if [ -n "$b" ] && [ "$a" = "$b" ]; then
+  echo "ok   closing a room changed its verdict word and nothing else"
 else
-  echo "ok   a healthy closed room renders real numbers, not null"
+  echo "FAIL closing the room changed more than the verdict:"; echo "     before: $b"; echo "     after:  $a"; fail=1
 fi
-COUNCIL_ME=a bash "$CLI" decide --force >/dev/null 2>&1
-if grep -q '^\* turns: [0-9][0-9]* of [0-9][0-9]*$' "$R/board/decision.md" 2>/dev/null; then
-  echo "ok   a second --force rewrote the record with real turn counts"
+# And the same again through the two surfaces a supervisor actually reads: the plain line must
+# still carry both counts, and `status` must exit 0 having printed a block. A short circuit that
+# returned rc 0 printing NOTHING passed the old substring assertion too -- `status` then exited 1
+# rendering `turns 5/` and `verdict:  (nothing new for  turns, lap )`, with no `null` anywhere.
+vline=$(bash "$CLI" verdict 2>/dev/null)
+case "$vline" in
+  *"live proposals "*"open objections "*) echo "ok   a closed room's verdict line still carries both counts" ;;
+  *) echo "FAIL a closed room's verdict line lost its counts: $vline"; fail=1 ;;
+esac
+if [ "$srcx" = 0 ] && [ -n "$sblock" ] && printf '%s' "$sblock" | grep -q "turns $(bash "$CLI" verdict --json 2>/dev/null | jq -r .turns)/"; then
+  echo "ok   a healthy closed room's status block exits 0 and carries its real turn count"
 else
-  echo "FAIL the rewritten record's turn line is not two integers: $(grep -m1 '^\* turns:' "$R/board/decision.md" 2>/dev/null)"; fail=1
+  echo "FAIL a healthy closed room's status block: rc=$srcx"; printf '%s\n' "$sblock" | sed -n '2,3p'; fail=1
+fi
+# The SECOND `--force` is the one that rewrites, and only over a room recorded `unresolved` --
+# `decide` on a `decided` room returns 3 and rewrites nothing, which is why this fixture carries
+# an objection. Assert that it really rewrote (the file changed) and that what it wrote matches
+# the room, rather than merely matching `[0-9]+ of [0-9]+`, which `* turns: 0 of 0` also does.
+before_sum=$(cksum < "$R/board/decision.md" 2>/dev/null)
+# From the PRE-CLOSE reading, which goes through the computed path and is therefore always the
+# room's real count. Taking it from the post-close reading instead would compare the record with
+# whatever the short circuit just said, so a short circuit that invented both consistently -- all
+# four readers replaced by 0, giving `* turns: 0 of 0` -- would still pass. The assertion above
+# pins the two readings equal, so if a close ever does stamp a turn this line is not what breaks.
+want_turns="* turns: $(printf '%s' "$jbefore" | jq -r .turns) of $(printf '%s' "$jbefore" | jq -r .budget)"
+COUNCIL_ME=a bash "$CLI" decide --force >/dev/null 2>&1; frc=$?
+after_sum=$(cksum < "$R/board/decision.md" 2>/dev/null)
+got_turns=$(grep -m1 '^\* turns:' "$R/board/decision.md" 2>/dev/null)
+if [ "$frc" = 0 ] && [ "$before_sum" != "$after_sum" ] && [ "$got_turns" = "$want_turns" ]; then
+  echo "ok   a second --force rewrote the record, with the counts the room reports"
+else
+  echo "FAIL second --force rc=$frc rewrote=$([ "$before_sum" != "$after_sum" ] && echo yes || echo no) turns='$got_turns' want='$want_turns'"; fail=1
 fi
 case "$recorded" in
   decided|unresolved)
