@@ -37,8 +37,9 @@ quiet: its participant list cannot be read, and no seat can speak until a human 
 * **speak straight away, do not wait for your turn** — one message with your position on
   the agenda;
 * **you will not see anyone else's position** until everyone has spoken: `recv` withholds
-  them. That is not a failure and not an empty room, it is the point of the barrier — your
-  position must be yours, not a reaction to someone else's;
+  them, and so do `transcript`, `claims`, `order` and `status` — no verb will hand you
+  another seat's words. That is not a failure and not an empty room, it is the barrier —
+  your position must be yours, not a reaction to someone else's;
 * a second message in an open round is refused (exit 5). Once you have spoken, wait;
 * when the round completes, `recv` hands you every position at once, and from there the
   room is turn-taking.
@@ -52,9 +53,10 @@ like agreement but will never become a decision.
 ## Starting into a room that is already running
 
 **If `status` says `OPEN ROUND`, stop here — the section above is your case.** Post your
-position first and read nothing: the barrier is the point, and `transcript` and `claims` do
-not respect it, so reading them would hand you exactly what `recv` is withholding. Catch up
-when the round releases.
+position first: the barrier is the point, and your position must be yours. Reading is safe
+while you wait — `transcript`, `claims` and `status` hold the barrier exactly as `recv`
+does, so they will show you everything except the positions you are not allowed to have
+yet. Those arrive when the round releases.
 
 **Otherwise, if the room is not empty, read `council.sh transcript` before you speak.**
 

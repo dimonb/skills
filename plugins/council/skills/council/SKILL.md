@@ -268,8 +268,9 @@ rebuilt.
 cursors are files that outlived it, so `recv` hands it nothing — from inside, a room
 twenty turns deep looks brand new. This is why `protocol/_channel.md` carries a section
 telling *every* participant, relaunched or not, to read `council.sh transcript` when it
-starts into a room that is not empty — and to skip that when the opening barrier is still
-open, because `transcript` does not respect the barrier and `recv` does. The room is not
+starts into a room that is not empty. It is safe to read during an open barrier round as
+well: every reader holds the barrier, so a restarted seat is caught up on everything except
+the positions it is not allowed to have yet. The room is not
 replayed to a restarted seat, and it is not made to be: a cursor has exactly one writer,
 which is the participant itself, and that invariant is what lets the whole transport work
 without a lock.
@@ -444,9 +445,18 @@ Rotation moves the anchor, it does not remove it — in a room of two or three t
 speaker still sees the first position before forming its own, which is exactly the case
 `debate` exists for. So in a roundtable room every participant writes its opening position
 without waiting for a turn, and **nobody reads anyone else's until the round is complete**.
-`recv` withholds them; a lane stops at its withheld message instead of skipping past it, so
-nothing is lost and no cursor runs ahead of unread words. A second message in an open round
-is refused (exit 5) rather than queued.
+A lane stops at its withheld message instead of skipping past it, so nothing is lost and no
+cursor runs ahead of unread words. A second message in an open round is refused (exit 5)
+rather than queued.
+
+**Every reader holds it, not only `recv`.** `transcript`, `claims`, `order` and `status`
+show a participant exactly what `recv` has already released, so no verb hands a participant
+another seat's opening words. A **supervisor** — anyone reading the room without `--me` — is
+exempt and sees all of it, which is what makes `status` usable for watching a round that has
+not finished. So is the room's own arithmetic: turn counts, the floor, `verdict` and the
+decision record are computed from the whole log, because they are facts about the room
+rather than about who is asking. Those report counts and message ids, never text, and
+`status`'s own `OPEN ROUND: posted k/N, waiting for …` line already says as much.
 
 When the last position lands, all of them are released at once, in the room's one order.
 The round then counts as **one whole lap**, and everything after it is turn-taking, so no

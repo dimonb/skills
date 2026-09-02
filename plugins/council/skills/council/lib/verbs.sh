@@ -116,16 +116,31 @@ v_floor() {
     "$t" "$f" "$(c_floor_at $((t+1)))" "$age" "$(c_conflicts)"
 }
 
-v_order() { if [ "${1:-}" = "--ids" ]; then c_canon | jq -r '.id'; else c_canon; fi; }
+# The four verbs a PARTICIPANT reads the room with all go through c_visible, so an open
+# barrier round withholds from them exactly what it withholds from `recv`. `--ids` is filtered
+# too: an id is not content, but a list of them says who has posted, and a reader that agrees
+# with `recv` about the messages and not about their ids is the same divergence in miniature.
+v_order() { if [ "${1:-}" = "--ids" ]; then c_visible | jq -r '.id'; else c_visible; fi; }
 
-v_transcript() {
-  c_canon | jq -r '"[\(.from) \(.act)\(if (.refs|length)>0 then " →"+(.refs|join(",")) else "" end)\(if .valid then "" else " (out of turn)" end)] \(.text)"'
+# The renderer, over whatever stream it is given. `transcript` shows a participant what it may
+# see; v_decide renders the SAME lines from the whole log into the record, because the record
+# is the room's output rather than one seat's view of it.
+_render_transcript() {
+  jq -r '"[\(.from) \(.act)\(if (.refs|length)>0 then " →"+(.refs|join(",")) else "" end)\(if .valid then "" else " (out of turn)" end)] \(.text)"'
 }
 
-_graph() { c_canon | jq -s -f "$SKILL/lib/claims.jq"; }
+v_transcript() { c_visible | _render_transcript; }
+
+_graph_of() { jq -s -f "$SKILL/lib/claims.jq"; }
+# The whole room. `verdict` reports the room's state and `decide` writes its record, and
+# neither is a function of who is asking.
+_graph() { c_canon | _graph_of; }
+# What the asker may see. `claims` and the display half of `status` render proposal and
+# objection TEXT, which is precisely what an open barrier round withholds.
+_graph_seen() { c_visible | _graph_of; }
 
 v_claims() {
-  local g; g=$(_graph) || return 1
+  local g; g=$(_graph_seen) || return 1
   [ "${1:-}" = "--raw" ] && { printf '%s\n' "$g"; return 0; }
   # Turns from c_turns here too. The graph counts turn-claiming messages only, so in a
   # roundtable room it is short by the whole opening lap, and `claims` and `verdict` printed
@@ -299,7 +314,11 @@ v_verdict() {
 v_status() {
   local j verd g t floor last held conf room_age alarms=""
   j=$(v_verdict --json); verd=$(printf '%s' "$j" | jq -r '.verdict // empty' 2>/dev/null)
-  g=$(_graph)
+  # The verdict line above is the room's, the lines below are the reader's. During an open
+  # barrier round those differ on purpose: `verdict` counts the whole log, and counts and ids
+  # are not content -- `OPEN ROUND: posted k/N` discloses the same existence three lines down
+  # -- while `on the table:` and the objection list print TEXT and so must respect the barrier.
+  g=$(_graph_seen)
   # This block is what a supervisor reads instead of the room, so it has to say when it cannot
   # read the room either. Both reads above degrade to EMPTY, not to an error, and every printf
   # above then renders a blank where a number belongs: `turns 3/`, `verdict: `, no proposals,
@@ -495,7 +514,12 @@ v_decide() {
       printf '\n'
     fi
     printf '## Transcript\n\n'
-    v_transcript | sed 's/^/* /'
+    # c_canon, NOT v_transcript: the record is the room's durable output and must hold the
+    # whole log, while `transcript` is what the seat running this may see. The two differ only
+    # while an opening barrier round is open -- a room `--force`-closed mid-round -- and there
+    # the difference is a record missing every position but the writer's own, written at rc 0
+    # and impossible to tell from a complete one afterwards.
+    c_canon | _render_transcript | sed 's/^/* /'
     if [ -f "$ROOM/agenda.md" ] && _agenda_is_long "$ROOM/agenda.md"; then
       printf '\n## The agenda in full\n\n'
       cat "$ROOM/agenda.md"

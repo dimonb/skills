@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
 # t7 — the opening barrier of `mode: roundtable`.
-#   * an opening position is invisible to everyone else until the round is complete;
+#   * an opening position is invisible to everyone else until the round is complete, in
+#     EVERY reader — `recv`, `transcript`, `claims`, `order` and `status` — while a
+#     supervisor watching the room still sees all of it;
 #   * when the last one lands, all of them are released at once, in one order;
 #   * the round counts as one lap, and the room is turn-taking from there on;
 #   * a participant that never posts does not hold the room: the deadline plus a quorum
@@ -17,6 +19,21 @@ export COUNCIL_ROOM="$R" ROOM="$R"
 jq '.mode="roundtable" | .round_deadline_ms=600000' "$R/roster.json" > "$R/r.tmp" && mv "$R/r.tmp" "$R/roster.json"
 
 seen() { COUNCIL_ROOM="$R" COUNCIL_ME="$1" bash "$CLI" recv --peek | jq -r '.id' | paste -sd, -; }
+
+# Does <peer>'s view of the room, through <verb>, contain <text>? An EMPTY peer is a
+# supervisor — the verbs below all run without `--me`, and one that is watching the room must
+# keep seeing it.
+#
+# Captured and matched in the shell rather than piped into grep, for two reasons this suite has
+# already paid for: `status` returns 1 for a live room, which under pipefail reads as a failing
+# grep (council.sh's own usage says do not pipe status), and `grep -q` closes the pipe on its
+# first hit, so a match can come back as SIGPIPE rather than as a match.
+sees() { # <peer|""> <verb> <text>
+  local out
+  if [ -n "$1" ]; then out=$(COUNCIL_ROOM="$R" COUNCIL_ME="$1" bash "$CLI" "$2" 2>&1)
+  else out=$(env -u COUNCIL_ME COUNCIL_ROOM="$R" bash "$CLI" "$2" 2>&1); fi
+  case "$out" in *"$3"*) return 0 ;; *) return 1 ;; esac
+}
 
 # a participant that owes a position must be released at once: in a barrier round there is
 # no floor holder to wait for, and --until-floor would otherwise wait forever (a live Codex
@@ -39,11 +56,46 @@ echo "the barrier holds: b and c see nothing, though two positions are already w
 COUNCIL_ROOM="$R" COUNCIL_ME=a bash "$CLI" send --act msg "and one more thing" >/dev/null 2>&1
 [ $? = 5 ] || { echo "FAIL a second message in an open round was not refused"; fail=1; }
 
+# ------------------------------------------------- 1b. EVERY reader holds the barrier
+# It used to live in c_drain alone, so `recv` withheld a position while `transcript`,
+# `claims`, `order` and `status` printed it — `status` directly under its own line saying
+# nobody can see it yet, and `status` is the verb protocol/_channel.md tells a participant to
+# run in exactly this situation.
+#
+# The barrier is asserted OPEN first: with it closed nothing below can fail, and an assertion
+# whose fixture cannot produce the defect reports coverage that is not there.
+st=$(COUNCIL_ME=a bash -c '. '"$SKILL"'/lib/lib.sh; c_barrier')
+[ "$st" = open ] || { echo "FAIL the round is $st, so the reader checks below prove nothing"; fail=1; }
+# Both peers are checked, and that is the point of the pair: c has not posted, a has. The
+# promise is "nobody reads anyone else's until the round is complete", not "until you have
+# spoken", so posting does not release the rest of the room to you.
+for v in transcript claims status order; do
+  sees c "$v" "for the first lap only" && { echo "FAIL c saw a's position through '$v' while the round was open"; fail=1; }
+  sees c "$v" "not needed at all" && { echo "FAIL c saw b's position through '$v' while the round was open"; fail=1; }
+  sees a "$v" "not needed at all" && { echo "FAIL a saw b's position through '$v' after posting its own"; fail=1; }
+done
+echo "the barrier holds in every reader: transcript, claims, order and status withhold what recv does"
+
+# A supervisor is not a participant and owes no position. Gating it would blank the one block
+# a human is told to watch, at the one moment a room is most likely to need watching.
+for v in transcript status; do
+  sees "" "$v" "for the first lap only" || { echo "FAIL a supervisor could not see a's position through '$v'"; fail=1; }
+  sees "" "$v" "not needed at all" || { echo "FAIL a supervisor could not see b's position through '$v'"; fail=1; }
+done
+echo "a supervisor still sees the whole room while the round is open"
+
 # ------------------------------------------------------- 2. the last one releases all
 say c propose '[]' "position c: the barrier is needed beyond the first lap too"
 got=$(seen b)
 [ "$got" = "a-1,c-1" ] || { echo "FAIL b got '$got', expected both other positions at once"; fail=1; }
 echo "round complete: b got both other positions in one batch ($got)"
+
+# ...and the readers open with it. A filter that never lifts would be the same defect wearing
+# the opposite sign, and it would show up as a room whose transcript is permanently empty.
+for v in transcript claims status order; do
+  sees b "$v" "for the first lap only" || { echo "FAIL b could not see a's position through '$v' once the round had closed"; fail=1; }
+done
+echo "and once the round is complete every reader hands the positions over"
 
 # ---------------------------------------------- 3. one lap consumed, token from here on
 turns=$(COUNCIL_ME=a bash -c '. '"$SKILL"'/lib/lib.sh; c_turns')
@@ -90,6 +142,27 @@ st=$(COUNCIL_ME=a bash -c '. '"$SKILL"'/lib/lib.sh; c_barrier')
 turns=$(COUNCIL_ME=a bash -c '. '"$SKILL"'/lib/lib.sh; c_turns')
 [ "$turns" -ge 3 ] || { echo "FAIL the turn count after a closed round is wrong: $turns"; fail=1; }
 echo "a latecomer does not reopen the round: its message is an ordinary turn, the round stayed closed"
+
+# ------------------- 5. the RECORD holds the whole log, not the writer's view of it
+# `decide --force` mid-round is the supervisor's escape hatch, and the record is the room's one
+# durable output. Rendered through the barrier it would hold only the writer's own position,
+# written at rc 0 and afterwards indistinguishable from a complete record — which is this
+# codebase's worst failure mode, so the record reads the log and not the seat.
+R3="$COUNCIL_TEST_ROOT/t7c"; rm -rf "$R3"
+mkroom "$R3" a b c
+ROOM="$R3"; export COUNCIL_ROOM="$R3"
+jq '.mode="roundtable" | .round_deadline_ms=600000' "$R3/roster.json" > "$R3/r.tmp" && mv "$R3/r.tmp" "$R3/roster.json"
+say a propose '[]' "position a: a record must not be written through the barrier"
+say b propose '[]' "position b: nor may it lose the seat that did not write it"
+st=$(COUNCIL_ME=a bash -c '. '"$SKILL"'/lib/lib.sh; c_barrier')
+[ "$st" = open ] || { echo "FAIL the round is $st, so the record check below proves nothing"; fail=1; }
+COUNCIL_ME=a bash "$CLI" decide --force >/dev/null 2>&1
+rec="$R3/board/decision.md"
+[ -s "$rec" ] || { echo "FAIL no record was written at all"; fail=1; }
+for t in "a record must not be written through the barrier" "nor may it lose the seat that did not write it"; do
+  grep -qF "$t" "$rec" || { echo "FAIL the record forced mid-round is missing: $t"; fail=1; }
+done
+echo "a record forced mid-round holds every position, not only the writer's own"
 
 [ "$fail" = 0 ] && echo "t7 PASS" || echo "t7 FAIL"
 exit $fail

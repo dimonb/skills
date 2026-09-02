@@ -913,6 +913,61 @@ c_canon() {
     | .[]'
 }
 
+# --- what THIS reader is allowed to see -----------------------------------------
+# The canonical log, minus whatever the opening barrier is still withholding from ME.
+#
+# The barrier used to be enforced in exactly ONE place -- c_drain, which feeds `recv` -- while
+# every other reader came through c_canon and knew nothing about it. So `transcript`, `claims`,
+# `order` and `status` printed the very positions `recv` was withholding, and `status` is the
+# one that mattered: protocol/_channel.md sends a participant to it in precisely this
+# situation, and it printed `nobody sees their positions yet` immediately above the text of a
+# position. Measured on this tree before the fix, on a three-peer roundtable room with one
+# position posted, asking as a peer that had not posted, grepping each verb's output for that
+# position's text: recv 0 hits, transcript 1, claims 1, order 1, status 2.
+#
+# THE RULE IS THE ONE c_drain APPLIES, and that is the point rather than a convenience: a lane
+# is cut at the first opening position in it that is not mine, so what comes out here is
+# exactly the set `recv` has already released. Two readers withholding by two different rules
+# is the divergence c_all's header spends a page on; one rule in one helper is what stops it
+# recurring.
+#
+# GATED ON `ME` BEING SET, not on whether I have posted yet. A seat that has posted is still a
+# seat, and the promise the mode makes is "nobody reads anyone else's until the round is
+# complete" (SKILL.md, protocol/_channel.md) -- withholding only until I post would let the
+# first seat to speak read everybody else, and would put this reader and `recv` back out of
+# step. An EMPTY `ME` is the SUPERVISOR: `status`, `transcript`, `claims`, `order` and
+# `verdict` all run without `need_me`, and a supervisor has to see the whole room.
+#
+# NO ROSTER READ, deliberately. Testing membership would make an unreadable roster answer "not
+# a participant" and hand over everything -- the barrier deleting itself, which is the failure
+# c_barrier's own precondition exists to avoid. c_barrier already answers `open` when the
+# roster cannot be read, so an unreadable roster withholds MORE here, never less.
+#
+# NOT APPLIED to c_round0, c_turns, c_floor_at, c_conflicts, v_verdict or v_decide, and each
+# omission is deliberate. c_round0 is the barrier's OWN input: filter it and `posted k/N` never
+# reaches N, so the round never closes and the room deadlocks. The rest are counts, turn
+# arithmetic and the durable record -- facts about the ROOM rather than about what one seat may
+# read. The record most of all: a decision record that is wrong is the worst outcome this
+# codebase has, so it is written from the whole log even when the seat writing it could not
+# read all of it.
+c_visible() {
+  # `ME` first because it is free, and the barrier read is not: in a roundtable room c_barrier
+  # goes through c_round0, which is a whole c_all. In a `token` room it returns on c_mode alone,
+  # so the common case costs one jq.
+  if [ -z "$ME" ] || [ "$(c_barrier)" != open ]; then c_canon; return; fi
+  # `.from` is c_all's derivation from the LANE DIRECTORY, never the message's claim about
+  # itself, so grouping and the `!= $me` test here rest on the same footing c_drain's do.
+  # `.round` reached this through `_untrusted` and is a number or null, so `== 0` cannot throw.
+  # Within a lane `.lamport` rises with every send (c_send stamps max+1), which is what makes
+  # sorting by it here the same order c_drain takes from the file sequence.
+  c_canon | jq -s -c --arg me "$ME" '
+    [ group_by(.from)[]
+      | sort_by(.lamport)
+      | (. as $g | ($g | map(.round == 0 and .from != $me) | index(true)) as $i
+         | if $i == null then $g else $g[0:$i] end) ]
+    | flatten(1) | sort_by(.lamport, .from)[]'
+}
+
 # A message consumes a turn unless it was raised out of turn, or lost a turn conflict.
 # A CLOSED barrier round counts as one whole lap: turn-taking then resumes at lap 1, with
 # the rotation already applied, and the opening positions never compete for a turn.
