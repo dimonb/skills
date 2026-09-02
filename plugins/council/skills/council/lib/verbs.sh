@@ -423,36 +423,6 @@ _agenda_is_long() { # <file> — more than one non-blank line
 v_decide() {
   local force=0; [ "${1:-}" = "--force" ] && force=1
   local j verd g out status
-  # A SEAT THAT OWES A POSITION MAY NOT CLOSE THE ROUND IT OWES IT TO. Closing a room writes
-  # the record from the WHOLE log -- deliberately, because one holding only the writer's own
-  # position would be worse than none -- and `decision` then hands that record to anyone. So
-  # without this gate, `decide --force` followed by `decision` was a two-command bypass of the
-  # opening barrier, available to every participant and to NO supervisor, since `decide` takes
-  # `need_me`. A seat that has stated its position keeps the escape hatch; a seat that has said
-  # nothing cannot buy the log with it.
-  #
-  # FAIL CLOSED, and the shape of the test is what makes that true rather than the comment:
-  #
-  #   `!= closed`, never `= open`. A c_barrier that dies mid-function prints NEITHER word (its
-  #   own header carries that failure), so `= open` would read false and let the close through
-  #   exactly when the room could not be read. `!= closed` reads true there and refuses.
-  #
-  #   `c_posted_round0` that fails prints nothing, so `-z` is true and this refuses. It is the
-  #   same reader `c_send` uses to refuse a second position, so the two cannot disagree about
-  #   whether I have spoken.
-  #
-  # NO ROSTER READ HERE, and that is measured rather than assumed: with roster.json emptied,
-  # `decide --force` already returns 1 and writes nothing, in a `token` room and a `roundtable`
-  # one alike, because v_verdict cannot compute a state and the guard below refuses. Adding a
-  # second roster check would be machinery that never fires.
-  #
-  # The refusal names the way out, and this message is the ONE authoritative statement of the
-  # rule: SKILL.md describes the behaviour and its cost but does not restate the sentence, and
-  # t7 asserts a substring of it rather than a copy.
-  if [ "$(c_barrier)" != closed ] && [ -z "$(c_posted_round0)" ]; then
-    echo "council decide: the opening round is still open and you have stated no position — refusing to close a round you have not taken part in. Post your position first, or wait for the round to close on its own." >&2
-    return 2
-  fi
   j=$(v_verdict --json); verd=$(printf '%s' "$j" | jq -r '.verdict // empty' 2>/dev/null)
   # A record is never written from a ROSTER or a GRAPH this verb could not read. That is
   # narrower than it once said here, and the narrowing is the point: an unreadable LANE FILE
@@ -484,6 +454,73 @@ v_decide() {
     decided) echo "council: this room is already decided" >&2; return 3 ;;
     *) [ "$force" = 1 ] || { echo "council: verdict '$verd', the decision is not ripe. --force writes an honest unresolved." >&2; return 2; } ;;
   esac
+  # A SEAT THAT OWES A POSITION MAY NOT CLOSE THE ROUND IT OWES IT TO. Closing a room writes
+  # the record from the WHOLE log -- deliberately, because one holding only the writer's own
+  # position would be worse than none -- and `decision` then hands that record to anyone. So
+  # without this gate, `decide --force` followed by `decision` was a two-command bypass of the
+  # opening barrier, available to every participant and to NO supervisor, since `decide` takes
+  # `need_me`. A seat that has stated its position keeps the escape hatch; a seat that has said
+  # nothing cannot buy the log with it.
+  #
+  # AFTER the verdict dispatch above, not before it, and that placement is load-bearing. Ahead
+  # of it this gate preempted the answers v_verdict exists to give: a room whose RECORD is on
+  # disk answered 2 instead of the documented 3 as soon as one lane file stopped parsing, which
+  # is the same inversion v_verdict's own header records as having been introduced and reverted
+  # twice. Here it guards only the record WRITE, which is all it was ever about -- an
+  # already-decided room needs no gate anyway, since `decision` hands that record to anyone.
+  #
+  # IT REFUSES EXACTLY WHEN THE RECORD WOULD DISCLOSE A POSITION THE CALLER MAY NOT READ, which
+  # is why the third test is here rather than only the first two. Without it the gate fired on a
+  # round nobody had posted in at all: `c_barrier` returns `open` from its `[ "$first" = 0 ]`
+  # short-circuit before it ever consults the deadline, so that round never closes on its own,
+  # every seat is refused for ever, and no supervisor can run `decide` -- measured, with
+  # `round_deadline_ms=1`, and the pre-gate tree wrote an honest `unresolved` record there. It
+  # protected nothing while doing it: with no position in the log, `c_visible` withholds nothing
+  # (measured: a seat that had posted nothing read byte-identically to the supervisor).
+  #
+  # So the rule is about DISCLOSURE, not about manners. When `c_round0` yields no foreign
+  # position the record cannot carry one, whatever the reason -- an empty round, or a log this
+  # reader cannot parse. The second of those leaves `--force` able to write a record over a log
+  # it could not read, which is a REMAINDER THIS GATE DELIBERATELY DOES NOT TAKE ON: it is
+  # recorded at `c_all` and in SKILL.md, three attempts at it are recorded there, and two were
+  # reverted. Do not quietly make this gate the fourth.
+  #
+  # The first two tests fail closed. `!= closed`, never `= open`: a c_barrier that dies
+  # mid-function prints NEITHER word (its own header carries that failure), so `= open` would
+  # read false and let the close through exactly when the room could not be read. That is
+  # reasoned, not measured -- no reachable input on this tree makes c_barrier print nothing, so
+  # no test pins it. `c_posted_round0` that fails prints nothing, so `-z` refuses; it is the
+  # same reader `c_send` uses to refuse a second position, so the two cannot disagree about
+  # whether I have spoken.
+  #
+  # NO ROSTER READ HERE. With roster.json emptied -- and in the other shapes that leave c_mode
+  # blank -- `decide --force` already returns 1 and writes nothing, in a `token` room and a
+  # `roundtable` one alike, because v_verdict cannot compute a state. Measured. It is NOT true
+  # of every unusable roster: over `{...}\n{}` c_barrier answers `closed`, this gate passes, and
+  # a record is written from a roster c_visible refuses to trust. That shape is left alone
+  # because `recv` releases the round on it too, so a check here would close no leak.
+  #
+  # AND NOT ONCE A RECORD EXISTS, for the same disclosure reason: `decision` hands that record
+  # to anyone, so the positions are already out and refusing the rewrite protects nothing while
+  # costing the documented exit codes. Two reachable states need it. A room recorded `decided`
+  # must still answer 3, which the placement above already secures. A room recorded
+  # `unresolved` falls through `*)` under `--force`, and there this fired absurdly: closing an
+  # EMPTY round stamps the closer's own trailing `decide` message `round: 0` -- c_send does that
+  # whenever the barrier is open and the sender has not posted -- so that message then reads as
+  # a foreign opening position and gated every other seat out of ever re-closing. Measured.
+  #
+  # The message is the ONE authoritative statement of the rule: SKILL.md describes the behaviour
+  # and its cost without restating it, and t7 asserts a substring rather than a copy.
+  # The last test asks only whether the round holds ANY position, not whether it holds someone
+  # else's, and that is not a shortcut: the test before it has already established that none of
+  # them is mine -- `c_posted_round0` and `c_round0` are the same reader, so if I had posted, the
+  # second test would have let me through. A `.from != $me` filter here would therefore be dead,
+  # and dead in a way no test could show; it also cost a jq the `head -1` does not.
+  if [ "$(c_barrier)" != closed ] && [ -z "$(c_posted_round0)" ] && [ -z "$(c_recorded_status)" ] \
+     && [ -n "$(c_round0 | head -1)" ]; then
+    echo "council decide: another seat has stated an opening position and you have not — refusing to close a round you have not taken part in, because the record would hand you every position in it. Post your position first; the round also closes on its own once its deadline passes." >&2
+    return 2
+  fi
   g=$(_graph) && [ -n "$g" ] || {
     echo "council decide: this room's argument graph could not be computed — refusing to write a record. The error above says what could not be read." >&2
     return 1

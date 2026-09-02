@@ -268,6 +268,16 @@ echo "a silent participant does not hold the room: the round closed on the deadl
 # rotation come round to it and check what its first message then IS.
 rc0=$(COUNCIL_ME=c bash "$CLI" send --act msg "I am late" >/dev/null 2>&1; echo $?)
 [ "$rc0" = 6 ] || { echo "FAIL the latecomer spoke out of turn (exit $rc0)"; fail=1; }
+
+# ...and once the round has CLOSED, the latecomer may close the room like anyone else. This is
+# the only fixture in the file where a seat has posted nothing while somebody else has AND the
+# round is over, so it is the only one that can show the decide gate consulting the barrier at
+# all: drop that test and the gate refuses c here for ever, on a round it can no longer join.
+out=$(COUNCIL_ME=c bash "$CLI" decide --force 2>&1); rc=$?
+[ "$rc" = 0 ] || { echo "FAIL a closed round refused the seat that missed it (exit $rc): $out"; fail=1; }
+[ -s "$R2/board/decision.md" ] || { echo "FAIL closing a completed round wrote no record"; fail=1; }
+rm -f "$R2/board/decision.md" "$R2/board/status"
+echo "a seat that missed the round can still close it once the round is over"
 while [ "$(bash "$CLI" floor | sed -n 's/.*floor=\([^ ]*\).*/\1/p')" != c ]; do
   say_floor msg '[]' "a turn" >/dev/null || break
 done
@@ -303,7 +313,7 @@ out=$(COUNCIL_ME=c bash "$CLI" decide --force 2>&1); rc=$?
 [ "$rc" = 2 ] || { echo "FAIL a seat that has posted nothing closed the open round (exit $rc)"; fail=1; }
 [ -s "$R3/board/decision.md" ] && { echo "FAIL the refused close wrote a record anyway"; fail=1; }
 case "$out" in
-  *"you have stated no position"*) ;;
+  *"another seat has stated an opening position and you have not"*) ;;
   *) echo "FAIL the refusal did not say why; it said: $out"; fail=1 ;;
 esac
 case "$out" in
@@ -311,9 +321,73 @@ case "$out" in
   *) echo "FAIL the refusal did not name the way out; it said: $out"; fail=1 ;;
 esac
 # ...and a supervisor cannot reach it at all, which is why the gate has to live on the seat.
+# The MESSAGE is asserted and not only the code: `need_me` and the gate both exit 2, so a bare
+# `[ "$rc" = 2 ]` passes with `need_me` deleted — the gate catches the supervisor instead and
+# the assertion's own failure text becomes false. Measured: it does.
 out=$(env -u COUNCIL_ME COUNCIL_ROOM="$R3" bash "$CLI" decide --force 2>&1); rc=$?
 [ "$rc" = 2 ] || { echo "FAIL a supervisor's decide did not stop at need_me (exit $rc)"; fail=1; }
+case "$out" in
+  *"who are you? set COUNCIL_ME"*) ;;
+  *) echo "FAIL a supervisor's decide did not stop at need_me; it said: $out"; fail=1 ;;
+esac
 echo "a seat that has stated no position cannot close the round it owes one to"
+
+# ...but a round NOBODY has posted in holds nothing to disclose, so any seat may close it. This
+# is the wedge the gate had before it asked whether there was anything to buy: `c_barrier`
+# returns `open` from its `[ "$first" = 0 ]` short-circuit before it consults the deadline, so
+# such a round never closes on its own — every seat refused, for ever, and no supervisor able to
+# run `decide` at all. The deadline here is 1ms and the fixture still proves it by consequence.
+R4="$COUNCIL_TEST_ROOT/t7d"; rm -rf "$R4"
+mkroom "$R4" a b c
+jq '.mode="roundtable" | .round_deadline_ms=1 | .round_quorum=2' "$R4/roster.json" > "$R4/r.tmp" && mv "$R4/r.tmp" "$R4/roster.json"
+sleep 0.1
+st=$(COUNCIL_ROOM="$R4" COUNCIL_ME=a bash -c ". $SKILL/lib/lib.sh; c_barrier")
+[ "$st" = open ] || { echo "FAIL an empty round reads $st past its own deadline, so the wedge check below proves nothing"; fail=1; }
+out=$(COUNCIL_ROOM="$R4" COUNCIL_ME=c bash "$CLI" decide --force 2>&1); rc=$?
+[ "$rc" = 0 ] || { echo "FAIL a round nobody had posted in could not be closed by anyone (exit $rc): $out"; fail=1; }
+[ -s "$R4/board/decision.md" ] || { echo "FAIL closing an empty round wrote no record"; fail=1; }
+[ "$(cat "$R4/board/status" 2>/dev/null)" = unresolved ] \
+  || { echo "FAIL an empty round did not close as unresolved: $(cat "$R4/board/status" 2>/dev/null)"; fail=1; }
+echo "a round nobody has posted in holds nothing to disclose, so it can still be closed"
+
+# ...and ONCE A RECORD EXISTS the gate stands down, because `decision` already hands that record
+# to anyone: refusing the rewrite would protect nothing and cost the documented exit codes. It
+# needs its own room, because it is the one state the other fixtures cannot reach — a record on
+# disk, a foreign `round: 0` message in the log, and a barrier still open. Closing an empty round
+# produces exactly that: `c_send` stamps the closer's own trailing `decide` message `round: 0`
+# (the barrier is open and it has not posted), and with a long deadline the round stays open, so
+# from then on every other seat looks like a latecomer to a round it never joined.
+R5="$COUNCIL_TEST_ROOT/t7e"; rm -rf "$R5"
+mkroom "$R5" a b c
+jq '.mode="roundtable" | .round_deadline_ms=600000' "$R5/roster.json" > "$R5/r.tmp" && mv "$R5/r.tmp" "$R5/roster.json"
+COUNCIL_ROOM="$R5" COUNCIL_ME=a bash "$CLI" decide --force >/dev/null 2>&1 \
+  || { echo "FAIL could not close the empty round to set up the recorded-room case"; fail=1; }
+[ -n "$(COUNCIL_ROOM="$R5" COUNCIL_ME=b bash -c ". $SKILL/lib/lib.sh; c_round0" | head -1)" ] \
+  || { echo "FAIL the fixture has no round-0 message, so it cannot separate the two tests"; fail=1; }
+st=$(COUNCIL_ROOM="$R5" COUNCIL_ME=b bash -c ". $SKILL/lib/lib.sh; c_barrier")
+[ "$st" = open ] || { echo "FAIL the fixture's barrier reads $st, so the check below proves nothing"; fail=1; }
+out=$(COUNCIL_ROOM="$R5" COUNCIL_ME=b bash "$CLI" decide --force 2>&1); rc=$?
+[ "$rc" = 0 ] || { echo "FAIL a room whose record is already written refused a seat (exit $rc): $out"; fail=1; }
+echo "once a record exists the gate stands down: decision already hands it to anyone"
+
+# ...and the gate must not PREEMPT the verdict dispatch. Placed ahead of it, it answered a
+# recorded room with its own refusal as soon as `c_round0` came back empty — the inversion
+# v_verdict's header records as introduced and reverted twice. t9g pins the `decided` room's
+# exit 3 over a damaged log, but only in a `token` room, where this gate never fires; a
+# roundtable room is the case the gate put at risk, so it is pinned here, by the WORDING of the
+# refusal rather than by its code — `decide` on a room recorded `unresolved` answers 2 either
+# way, so only the message can tell which of the two refused.
+[ "$(cat "$R4/board/status" 2>/dev/null)" = unresolved ] || { echo "FAIL the fixture is not a closed room"; fail=1; }
+printf 'not json' > "$R4/lane/c/000001.json"
+for who in a b c; do
+  out=$(COUNCIL_ROOM="$R4" COUNCIL_ME="$who" bash "$CLI" decide 2>&1); rc=$?
+  [ "$rc" = 2 ] || { echo "FAIL a closed room answered $rc to $who, not the documented 2"; fail=1; }
+  case "$out" in
+    *"the decision is not ripe"*) ;;
+    *) echo "FAIL the gate preempted the verdict dispatch for $who on a closed room; it said: $out"; fail=1 ;;
+  esac
+done
+echo "the gate does not preempt the verdict dispatch: a closed room still answers from its record"
 
 COUNCIL_ME=a bash "$CLI" decide --force >/dev/null 2>&1
 rec="$R3/board/decision.md"

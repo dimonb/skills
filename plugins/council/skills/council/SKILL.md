@@ -178,19 +178,27 @@ is not.
 * **while a room is still open**, if its **roster** cannot be read, `decide` refuses with
   **exit 1** and writes nothing, `--force` included, because there is then no participant list
   to write a record about;
-* **while an opening barrier round is not verifiably closed**, a seat that has stated no
-  position is refused with **exit 2**. Closing a room writes the record from the whole log and
-  `decision` hands it to anyone, so without this a seat that owed a position could read every
-  other by closing the round — two commands, available to every participant and to no
-  supervisor, since `decide` takes `--me`. A seat that has posted keeps the escape hatch.
+* **while an opening barrier round is not verifiably closed and another seat has stated a
+  position**, a seat that has stated none is refused with **exit 2**. Closing a room writes the
+  record from the whole log and `decision` hands it to anyone, so without this a seat that owed
+  a position could read every other by closing the round — two commands, available to every
+  participant and to no supervisor, since `decide` takes `--me`. A seat that has posted keeps
+  the escape hatch.
 
-That second one has a cost, and it is named here rather than left to be discovered: **a human
-sitting as a seat who has not posted cannot close a stuck opening round immediately.** Post a
-position first, or wait — the round closes on its own past `round_deadline_ms` with a quorum,
-and unconditionally past twice it. The refusal names both ways out.
+That second one refuses exactly when the record would hand over a position the caller may not
+read, and **not** merely because the round is open: a round nobody has posted in holds nothing
+to disclose, so any seat may still close it. That distinction is the difference between a gate
+and a wedge — a barrier round with no positions in it never closes on its own (the deadline is
+only measured from the first position), so refusing there would have left the room unclosable
+by anyone, `decide` being `--me`-gated.
+
+It still has a cost, named here rather than left to be discovered: **a seat that has not posted
+cannot close a round others have started.** Post a position first — that is always available,
+and it is what the refusal names. Waiting also works once a position exists, since the round
+then closes past `round_deadline_ms` with a quorum and unconditionally past twice it.
 
 Exit 2 still means "not ripe" and 3 "already decided", so a supervisor that retries on 2 must
-not retry on 1. Both refusals above clear themselves, so a retry on 2 converges.
+not retry on 1.
 
 **A room that has already closed is the exception, and it is a remainder rather than a design.**
 `--force` over a room whose record is on disk rewrites that record, and it does so at exit 0

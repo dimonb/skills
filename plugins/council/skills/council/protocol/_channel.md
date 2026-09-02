@@ -29,20 +29,21 @@ timeout". The only correct reaction is to call `recv` again. Do not fix it, do n
 as a breakage, do not leave the loop.
 
 **The one exception, and it is the only state in which you should stop looping.** If a
-`council:` line about this room's roster appears on stderr — **`council: the opening barrier
-cannot be resolved` is one of them** — or if `recv` keeps returning 4 while `send` keeps
-returning 6, with nothing new arriving, the room is stopped rather than quiet: its participant
-list cannot be read, and no seat can speak until a human repairs `roster.json`. Say so to
-whoever is supervising and stop; looping cannot clear it.
+`council:` line about this room's roster appears on stderr — or if `recv` keeps returning 4
+while `send` keeps returning 6, with nothing new arriving — the room is stopped rather than
+quiet: its participant list cannot be read, and no seat can speak until a human repairs
+`roster.json`. Say so to whoever is supervising and stop; looping cannot clear it.
 
-That line is worth naming here because it can be the room's **only** roster signal: on a
-`roster.json` holding two JSON documents, `send` fails for every seat with a message about the
-floor that does not mention the roster at all. Measured on that shape, and on eight others: no
-seat can speak in any of them.
+**Two `council:` lines begin `the opening`, and they mean opposite things.**
 
-**`council: the opening round is not complete` is the one `council:` line that is NOT that
-state.** It is the barrier telling you why a read looks thin, it clears itself when the round
-completes, and the correct reaction is to keep going.
+* `the opening round is not complete` is the barrier telling you why a read looks thin. It
+  clears itself when the round completes — keep going.
+* `the opening barrier cannot be resolved` means `roster.json` needs a human. **Try `send`
+  before you conclude anything**: in most damaged shapes it fails for every seat and you are in
+  the state above, but in some a seat that has not yet posted can still post its position, and
+  an urgent `--hand` message goes through in all of them. Measured on ten damaged shapes:
+  `--hand` succeeded in all ten, an ordinary position in two. So report the line to whoever is
+  supervising, take your turn if `send` lets you, and stop once `send` is failing too.
 
 ## The opening round, if the room runs a barrier (`roundtable`)
 
