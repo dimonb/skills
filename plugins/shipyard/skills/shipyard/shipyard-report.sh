@@ -49,6 +49,8 @@ set -o pipefail
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=shipyard-lib.sh
 . "$DIR/shipyard-lib.sh"
+# shellcheck source=shipyard-continuity.sh
+. "$DIR/shipyard-continuity.sh"
 # The ctx column's logic lives in its own file so that it can be SOURCED — this one cannot be,
 # because shipyard_backend_check below exits a process that tries. See shipyard-ctx.sh and its
 # tests/ directory.
@@ -74,7 +76,9 @@ for a in "$@"; do
   esac
 done
 if [ ${#SLOTS[@]} -eq 0 ]; then
-  mapfile -t SLOTS < <(shipyard_slots)
+  while IFS= read -r slot; do
+    SLOTS+=("$slot")
+  done < <(shipyard_slots)
 fi
 
 # Where the last printed report's signature lives (shared .git, never committed).
@@ -184,6 +188,12 @@ if [ ${#SLOTS[@]} -eq 0 ]; then
     echo "_no live ship terminals in $KIND \`$CONTAINER\` ($(shipyard_backend))_"
   } | cat
   exit 0
+fi
+
+# Re-arm only while the report has work to supervise. Doing this before the
+# empty report would recreate a watcher immediately after last-slot cleanup.
+if ! shipyard_continuity_start "$KIND"; then
+  echo "warning: could not ensure the Codex parent continuity guard" >&2
 fi
 
 declare -a ROWS

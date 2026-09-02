@@ -212,6 +212,27 @@ in that narrow race the inputs can concatenate, and the combined line can be alt
 An existing draft is still a hard veto, and the late checks minimize the exposed window. This guard
 is for a Codex parent in agterm; Claude parents and the tmux backend are deliberate no-ops.
 
+### Codex `/goal` integration
+
+When shipyard runs inside an existing Codex goal, the goal remains the parent session's
+authority. Do not create, replace, narrow, complete, or block a goal merely because shipyard
+started or one child changed state. Treat every child as work toward the existing objective,
+and let the parent perform the goal's own completion or blocked audit after all relevant slots
+and external gates have reached authoritative terminal states.
+
+The agterm continuity watcher is the execution bridge for that existing goal. It submits the
+draft-safe `/goal resume` steering described above when Codex reports the goal paused. A
+`Goal stalled` marker is the visible state of an explicitly blocked goal and is never resumed
+automatically, except when the watcher already owns the short post-capacity handoff. Immediately
+before the parent calls `update_goal` with `blocked`, run `shipyard_continuity_stop_all` from the
+sourced `shipyard-lib.sh`; a blocked goal must stay blocked until the user explicitly resumes it.
+Codex starts it as the foreground process of a dedicated, unselected agterm session beside the
+parent; the session closes when last-slot cleanup stops the watcher. This avoids relying on a
+detached tool descendant, which the Codex runtime reaps when the tool call ends. Each
+`shipyard-report.sh` status tick idempotently ensures the watcher again, so losing the watcher
+process while children remain active does not silently strand the goal. This integration is
+Codex-only: Claude parents and every tmux run neither inspect nor steer goal state.
+
 The primary path for anything needing a human is the escalation mailbox (Step 3);
 `shipyard-tell.sh` (Step 4) is the way back when the child did not ask. `--remote-control` is
 left on as a manual escape hatch for a human at another client — it has no send-side CLI,
