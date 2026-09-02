@@ -173,10 +173,24 @@ is not.
 `council.sh decide` **refuses** a room that is not ready. `--force` writes an honest
 `unresolved` record listing what is still open — a valid outcome, not a failure to hide.
 
-`--force` is not unconditional: **while a room is still open**, if its **roster** cannot be
-read, `decide` refuses with **exit 1** and writes nothing, `--force` included, because there is
-then no participant list to write a record about. Exit 2 still means "not ripe" and 3 "already
-decided", so a supervisor that retries on 2 must not retry on 1.
+`--force` is not unconditional. Two conditions refuse it:
+
+* **while a room is still open**, if its **roster** cannot be read, `decide` refuses with
+  **exit 1** and writes nothing, `--force` included, because there is then no participant list
+  to write a record about;
+* **while an opening barrier round is not verifiably closed**, a seat that has stated no
+  position is refused with **exit 2**. Closing a room writes the record from the whole log and
+  `decision` hands it to anyone, so without this a seat that owed a position could read every
+  other by closing the round — two commands, available to every participant and to no
+  supervisor, since `decide` takes `--me`. A seat that has posted keeps the escape hatch.
+
+That second one has a cost, and it is named here rather than left to be discovered: **a human
+sitting as a seat who has not posted cannot close a stuck opening round immediately.** Post a
+position first, or wait — the round closes on its own past `round_deadline_ms` with a quorum,
+and unconditionally past twice it. The refusal names both ways out.
+
+Exit 2 still means "not ripe" and 3 "already decided", so a supervisor that retries on 2 must
+not retry on 1. Both refusals above clear themselves, so a retry on 2 converges.
 
 **A room that has already closed is the exception, and it is a remainder rather than a design.**
 `--force` over a room whose record is on disk rewrites that record, and it does so at exit 0
@@ -272,8 +286,9 @@ cursors are files that outlived it, so `recv` hands it nothing — from inside, 
 twenty turns deep looks brand new. This is why `protocol/_channel.md` carries a section
 telling *every* participant, relaunched or not, to read `council.sh transcript` when it
 starts into a room that is not empty. It is safe to read during an open barrier round as
-well: every reader holds the barrier, so a restarted seat is caught up on everything except
-the positions it is not allowed to have yet. The room is not
+well: every reader holds the barrier, so a restarted seat is caught up on no more than `recv`
+has released — a lane holding another seat's opening position is withheld whole, and
+everything in it arrives when the round does. The room is not
 replayed to a restarted seat, and it is not made to be: a cursor has exactly one writer,
 which is the participant itself, and that invariant is what lets the whole transport work
 without a lock.
@@ -450,7 +465,8 @@ speaker still sees the first position before forming its own, which is exactly t
 without waiting for a turn, and **nobody reads anyone else's until the round is complete**.
 A lane stops at its withheld message instead of skipping past it, so nothing is lost and no
 cursor runs ahead of unread words. A second message in an open round is refused (exit 5)
-rather than queued.
+rather than queued — unless it is an urgent `--hand` one, which is allowed before and after a
+seat posts.
 
 **Every reader holds it, not only `recv`.** `transcript`, `claims`, `order` and `status` show
 a participant no more than `recv` has already released **for any lane `recv` reads** — a lane
@@ -474,12 +490,13 @@ deliberately so:** `decide` writes it from the whole log, because a record holdi
 writer's own position would be worse than none, so a room `--force`-closed mid-round hands
 every position to whoever runs `decision`.
 
-Read that as a **bypass available to every seat**, because `decide` takes `need_me`: a
-supervisor with no `--me` cannot run it at all, and any participant can — including one that
-has posted nothing. Two documented commands (`decide --force`, then `decision`) hand it the
-whole opening round. What it costs the seat doing it is the room: the record is on disk,
-`board/status` is set, and every other seat's stop signal fires, so this is loud rather than
-quiet. It is a known remainder of the barrier, not a property of it.
+`decide` takes `--me`, so a supervisor cannot run it at all and any participant can. That made
+`decide --force` then `decision` a two-command bypass of the barrier, available to every seat
+and to none of the people watching — so **`decide` now refuses from a seat that has stated no
+position while the round is not verifiably closed** (see the `--force` conditions above). A
+seat that has posted can still close the room and read the record; what that costs it is the
+room, since the record is on disk, `board/status` is set, and every other seat's stop signal
+fires. Loud rather than quiet, and only for a seat that took part.
 
 When the last position lands, all of them are released at once, in the room's one order.
 The round then counts as **one whole lap**, and everything after it is turn-taking, so no

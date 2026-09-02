@@ -413,11 +413,16 @@ c_barrier() {
   # answer, and it matches c_floor_at's "the floor is nobody's" rather than inventing a second
   # reading of one unreadable file.
   #
-  # THAT IS ONLY THE `.order` HALF, and this comment used to claim the whole. If the FILE does
-  # not parse, or is not one object, the line above -- `[ "$(c_mode)" = roundtable ]` -- is
-  # false before execution ever reaches here, and the answer is `closed`: the barrier deletes
-  # itself for `recv` too. Nothing here fixes that; c_visible refuses to trust this function's
-  # answer in that state and withholds, and its header carries the measurements.
+  # THAT IS ONLY THE `.order` HALF, and this comment used to claim the whole. When the FILE
+  # itself is unusable, the line above -- `[ "$(c_mode)" = roundtable ]` -- decides before
+  # execution ever reaches here, and WHICH WAY IT DECIDES VARIES, so do not read a rule into
+  # it. Measured on this tree: empty, whitespace-only, missing, `null`, an array, a scalar and
+  # `{...}\n{}` all make c_mode print nothing, `token`, or two lines, so the answer is `closed`
+  # and the barrier deletes itself for `recv` as well; but `{...}\n"x"` and `{...} garbage`
+  # leave a usable FIRST line -- jq streams, and its partial stdout survives the later error --
+  # so c_mode prints `roundtable` and the answer is `open`. Nothing here fixes either half.
+  # c_visible does not depend on which way it went: it refuses to trust this function's answer
+  # whenever the file is not one JSON object, and withholds. Its header carries that.
   [ "$n" -gt 0 ] || { printf 'open'; return; }
   posted=$(c_round0 | wc -l | tr -d ' ')
   [ "$posted" -ge "$n" ] && { printf 'closed'; return; }
@@ -992,9 +997,12 @@ c_visible() {
   # THE BARRIER'S ANSWER IS ONLY WORTH HAVING IF THE ROSTER IT COMES FROM IS ONE JSON OBJECT.
   # c_barrier's first line is `[ "$(c_mode)" = roundtable ]`, and c_mode is a bare `jq -r
   # '.mode // "token"'`: over a roster.json that is empty, truncated or missing, jq prints
-  # NOTHING; over the literal `null` it prints `token`; and over TWO documents it prints two
-  # lines, which equal neither -- so in every one of those c_barrier returns `closed` on that
-  # line and never reaches the `n > 0` precondition that would have answered `open`. An earlier
+  # NOTHING; over the literal `null` it prints `token`; and over `{...}\n{}` it prints two
+  # lines -- none of which equals `roundtable`, so c_barrier returns `closed` on that line and
+  # never reaches the `n > 0` precondition that would have answered `open`. Other not-one-object
+  # shapes go the other way (`{...}\n"x"` leaves a usable first line, so the answer is `open`);
+  # c_barrier's own header enumerates both, and this guard deliberately does not care which,
+  # because it withholds either way. An earlier
   # version of this comment cited that precondition as the reason no roster read was needed
   # here; it covers the `.order` half of an unreadable roster and not this half. Measured on
   # this tree with the check below removed, three-peer roundtable room, two positions posted,

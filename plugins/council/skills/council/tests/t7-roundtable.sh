@@ -156,6 +156,11 @@ for shape in empty truncated null missing; do
   esac
   for v in transcript claims status order; do
     sees c "$v" "for the first lap only" && { echo "FAIL a $shape roster let '$v' hand c the position the barrier withholds"; fail=1; }
+    # The positive control this branch belongs to, for the same reason the round path has one:
+    # every assertion above is a negative, and a branch that returns NOTHING satisfies them all.
+    # Blanking a reader is the failure class this file names as its worst.
+    sees a "$v" "for the first lap only" \
+      || { echo "FAIL a $shape roster cost a sight of its OWN position through '$v'"; fail=1; }
   done
   says_err c transcript "the opening barrier cannot be resolved" \
     || { echo "FAIL a $shape roster withheld silently, with no word about the roster"; fail=1; }
@@ -227,6 +232,20 @@ conf=$(bash "$CLI" floor | sed -n 's/.*conflicts=\([0-9]*\).*/\1/p')
 [ "$conf" = 0 ] || { echo "FAIL the opening positions fought over a turn: conflicts=$conf"; fail=1; }
 echo "the round is one lap, token from there on: turns=$turns, conflicts=$conf"
 
+# THE TURN ARITHMETIC IS EXEMPT FROM THE FILTER, and this is the only fixture in the file where
+# that can be shown: it needs the filter LIVE and a foreign lane holding a TURN-CLAIMING
+# message, and an opening position claims no turn. So the damaged roster (which withholds for
+# the room's whole life) plus b's objection above is the one state where a filtered c_turns
+# would be visible — everywhere else it reads the same either way, and rendering c_turns
+# through c_visible leaves the whole suite green.
+cp "$R/roster.json" "$R/roster.good3"; : > "$R/roster.json"
+tp=$(COUNCIL_ME=a bash -c '. '"$SKILL"'/lib/lib.sh; c_turns' 2>/dev/null)
+ts=$(env -u COUNCIL_ME bash -c 'COUNCIL_ROOM="'"$R"'"; . '"$SKILL"'/lib/lib.sh; c_turns' 2>/dev/null)
+[ -n "$tp" ] && [ "$tp" = "$ts" ] \
+  || { echo "FAIL the turn count differs between a withheld participant and a supervisor: '$tp' vs '$ts'"; fail=1; }
+cp "$R/roster.good3" "$R/roster.json"
+echo "the turn count is the room's, not the reader's: $tp for a withheld seat and for a supervisor alike"
+
 # ------------------------------------------- 4. a silent participant does not hold it
 R2="$COUNCIL_TEST_ROOT/t7b"; rm -rf "$R2"
 mkroom "$R2" a b c
@@ -262,10 +281,11 @@ turns=$(COUNCIL_ME=a bash -c '. '"$SKILL"'/lib/lib.sh; c_turns')
 echo "a latecomer does not reopen the round: its message is an ordinary turn, the round stayed closed"
 
 # ------------------- 5. the RECORD holds the whole log, not the writer's view of it
-# `decide --force` mid-round is the supervisor's escape hatch, and the record is the room's one
-# durable output. Rendered through the barrier it would hold only the writer's own position,
-# written at rc 0 and afterwards indistinguishable from a complete record — which is this
-# codebase's worst failure mode, so the record reads the log and not the seat.
+# `decide --force` mid-round is reachable by any participant that has posted and by NO
+# supervisor (`decide` takes `need_me`), and the record is the room's one durable output.
+# Rendered through the barrier it would hold only the writer's own position, written at rc 0
+# and afterwards indistinguishable from a complete record — which is this codebase's worst
+# failure mode, so the record reads the log and not the seat.
 R3="$COUNCIL_TEST_ROOT/t7c"; rm -rf "$R3"
 mkroom "$R3" a b c
 ROOM="$R3"; export COUNCIL_ROOM="$R3"
@@ -274,6 +294,27 @@ say a propose '[]' "position a: a record must not be written through the barrier
 say b propose '[]' "position b: nor may it lose the seat that did not write it"
 st=$(COUNCIL_ME=a bash -c '. '"$SKILL"'/lib/lib.sh; c_barrier')
 [ "$st" = open ] || { echo "FAIL the round is $st, so the record check below proves nothing"; fail=1; }
+
+# BOTH DIRECTIONS OF THE GATE, before the record check, because the record check itself depends
+# on the allowed direction still working. Closing a room writes the record from the whole log
+# and `decision` hands it to anyone, so a seat that has stated no position must not be able to
+# close the round it owes one to — that is two commands away from reading everybody.
+out=$(COUNCIL_ME=c bash "$CLI" decide --force 2>&1); rc=$?
+[ "$rc" = 2 ] || { echo "FAIL a seat that has posted nothing closed the open round (exit $rc)"; fail=1; }
+[ -s "$R3/board/decision.md" ] && { echo "FAIL the refused close wrote a record anyway"; fail=1; }
+case "$out" in
+  *"you have stated no position"*) ;;
+  *) echo "FAIL the refusal did not say why; it said: $out"; fail=1 ;;
+esac
+case "$out" in
+  *"Post your position first"*) ;;
+  *) echo "FAIL the refusal did not name the way out; it said: $out"; fail=1 ;;
+esac
+# ...and a supervisor cannot reach it at all, which is why the gate has to live on the seat.
+out=$(env -u COUNCIL_ME COUNCIL_ROOM="$R3" bash "$CLI" decide --force 2>&1); rc=$?
+[ "$rc" = 2 ] || { echo "FAIL a supervisor's decide did not stop at need_me (exit $rc)"; fail=1; }
+echo "a seat that has stated no position cannot close the round it owes one to"
+
 COUNCIL_ME=a bash "$CLI" decide --force >/dev/null 2>&1
 rec="$R3/board/decision.md"
 [ -s "$rec" ] || { echo "FAIL no record was written at all"; fail=1; }

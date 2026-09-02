@@ -423,6 +423,36 @@ _agenda_is_long() { # <file> — more than one non-blank line
 v_decide() {
   local force=0; [ "${1:-}" = "--force" ] && force=1
   local j verd g out status
+  # A SEAT THAT OWES A POSITION MAY NOT CLOSE THE ROUND IT OWES IT TO. Closing a room writes
+  # the record from the WHOLE log -- deliberately, because one holding only the writer's own
+  # position would be worse than none -- and `decision` then hands that record to anyone. So
+  # without this gate, `decide --force` followed by `decision` was a two-command bypass of the
+  # opening barrier, available to every participant and to NO supervisor, since `decide` takes
+  # `need_me`. A seat that has stated its position keeps the escape hatch; a seat that has said
+  # nothing cannot buy the log with it.
+  #
+  # FAIL CLOSED, and the shape of the test is what makes that true rather than the comment:
+  #
+  #   `!= closed`, never `= open`. A c_barrier that dies mid-function prints NEITHER word (its
+  #   own header carries that failure), so `= open` would read false and let the close through
+  #   exactly when the room could not be read. `!= closed` reads true there and refuses.
+  #
+  #   `c_posted_round0` that fails prints nothing, so `-z` is true and this refuses. It is the
+  #   same reader `c_send` uses to refuse a second position, so the two cannot disagree about
+  #   whether I have spoken.
+  #
+  # NO ROSTER READ HERE, and that is measured rather than assumed: with roster.json emptied,
+  # `decide --force` already returns 1 and writes nothing, in a `token` room and a `roundtable`
+  # one alike, because v_verdict cannot compute a state and the guard below refuses. Adding a
+  # second roster check would be machinery that never fires.
+  #
+  # The refusal names the way out, and this message is the ONE authoritative statement of the
+  # rule: SKILL.md describes the behaviour and its cost but does not restate the sentence, and
+  # t7 asserts a substring of it rather than a copy.
+  if [ "$(c_barrier)" != closed ] && [ -z "$(c_posted_round0)" ]; then
+    echo "council decide: the opening round is still open and you have stated no position — refusing to close a round you have not taken part in. Post your position first, or wait for the round to close on its own." >&2
+    return 2
+  fi
   j=$(v_verdict --json); verd=$(printf '%s' "$j" | jq -r '.verdict // empty' 2>/dev/null)
   # A record is never written from a ROSTER or a GRAPH this verb could not read. That is
   # narrower than it once said here, and the narrowing is the point: an unreadable LANE FILE
@@ -518,10 +548,13 @@ v_decide() {
     fi
     printf '## Transcript\n\n'
     # c_canon, NOT v_transcript: the record is the room's durable output and must hold the
-    # whole log, while `transcript` is what the seat running this may see. The two differ only
-    # while an opening barrier round is open -- a room `--force`-closed mid-round -- and there
-    # the difference is a record missing every position but the writer's own, written at rc 0
-    # and impossible to tell from a complete one afterwards.
+    # whole log, while `transcript` is what the seat running this may see. They differ while an
+    # opening barrier round is open -- a room `--force`-closed mid-round -- AND for the room's
+    # whole life whenever `roster.json` is not one JSON object, because c_visible withholds on
+    # that too (its header says why). Do not narrow this to the open round: with the roster
+    # damaged after the round has closed, the seat's view is its own lane and the record
+    # rendered from it would be missing every other position, written at rc 0 and impossible to
+    # tell from a complete one afterwards.
     c_canon | _render_transcript | sed 's/^/* /'
     if [ -f "$ROOM/agenda.md" ] && _agenda_is_long "$ROOM/agenda.md"; then
       printf '\n## The agenda in full\n\n'

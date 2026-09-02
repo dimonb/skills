@@ -29,16 +29,20 @@ timeout". The only correct reaction is to call `recv` again. Do not fix it, do n
 as a breakage, do not leave the loop.
 
 **The one exception, and it is the only state in which you should stop looping.** If a
-`council:` line about this room's roster appears on stderr — or if `recv` keeps returning 4
-while `send` keeps returning 6, with nothing new arriving — the room is stopped rather than
-quiet: its participant list cannot be read, and no seat can speak until a human repairs
-`roster.json`. Say so to whoever is supervising and stop; looping cannot clear it.
+`council:` line about this room's roster appears on stderr — **`council: the opening barrier
+cannot be resolved` is one of them** — or if `recv` keeps returning 4 while `send` keeps
+returning 6, with nothing new arriving, the room is stopped rather than quiet: its participant
+list cannot be read, and no seat can speak until a human repairs `roster.json`. Say so to
+whoever is supervising and stop; looping cannot clear it.
 
-**A `council:` line that begins `the opening` is NOT that state.** Those are the barrier
-telling you why a read looks thin. `the opening round is not complete` clears itself when the
-round completes — keep going. `the opening barrier cannot be resolved` means `roster.json`
-needs a human, but seats may still be able to speak: report it and keep going, and if `send`
-starts failing too you are in the state above.
+That line is worth naming here because it can be the room's **only** roster signal: on a
+`roster.json` holding two JSON documents, `send` fails for every seat with a message about the
+floor that does not mention the roster at all. Measured on that shape, and on eight others: no
+seat can speak in any of them.
+
+**`council: the opening round is not complete` is the one `council:` line that is NOT that
+state.** It is the barrier telling you why a read looks thin, it clears itself when the round
+completes, and the correct reaction is to keep going.
 
 ## The opening round, if the room runs a barrier (`roundtable`)
 
@@ -51,11 +55,13 @@ starts failing too you are in the state above.
   the room with will hand you another seat's words. That is not a failure and not an empty
   room, it is the barrier — your position must be yours, not a reaction to someone else's.
   (`decision` is the exception, and it means the round is over: it prints the room's record,
-  which holds the whole log. If it ever prints while your round is still open, somebody ran
-  `decide --force` — any seat can — so the room is closed. Stop, and say so to whoever is
-  supervising; do not treat what you just read as a round you can still write into;)
-* a second **position** in an open round is refused (exit 5). Once you have spoken, wait — an
-  urgent `--hand` message is still allowed (below), and is the one thing you may add;
+  which holds the whole log. If it ever prints while your round is still open, a seat that had
+  already posted ran `decide --force`, so the room is closed. Stop, and say so to whoever is
+  supervising; do not treat what you just read as a round you can still write into. You cannot
+  do it yourself before you have posted — `decide` refuses that, exit 2;)
+* a second message in an open round is refused (exit 5) — **unless** it is an urgent `--hand`
+  one (below), which is allowed before and after you post and is the one thing you may add.
+  Once you have spoken, wait;
 * when the round completes, `recv` hands you every position at once, and from there the
   room is turn-taking.
 
