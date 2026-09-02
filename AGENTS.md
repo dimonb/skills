@@ -199,6 +199,14 @@ it. Say in the change which parts you verified by running and which you reasoned
   states and the gate cannot see is carried by judgement alone; pretending otherwise is how a
   green gate gets read as coverage. Adding a check is better than adding a caveat — and a new
   check needs a probe in `check-test.sh`, or it may be vacuous and nothing will ever say so.
+* **A throwaway script that builds a plugin's runtime state owns its teardown.** A council
+  room, for one, starts a detached keeper process that lives as long as the room's directory
+  does. A probe script that builds rooms under a fixed path and never removes it leaves such a
+  process behind on every run, and they accumulate until the machine reboots — dozens of them
+  once drove the load average into the hundreds with memory and disk idle. Build under a fresh
+  `mktemp -d` root and `trap 'rm -rf "$ROOT"' EXIT`, or source the plugin's own test helpers,
+  which already do both. `make check` cannot see this; a process count after the script exits
+  can, so take one.
 * **A skill's documented behaviour must match the skill.** These files are read by agents as
   instructions, so a stale copy of a command, a flag, or a state name is not a documentation
   bug — it is a defect that makes an agent do the wrong thing confidently. Prefer pointing at

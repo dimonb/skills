@@ -67,9 +67,21 @@ _keeper_ensure() { # <room-dir> <peer>...
   # caller's stdout open holds any pipe reading it open too: `council.sh ... | tail`
   # then never sees EOF and hangs forever, with nothing wrong upstream. Cost one
   # mystifying "the suite hangs" during development.
+  # The loop watches the PID FILE as well as the directory. `[ -d "$room" ]` alone cannot tell
+  # a room from a room rebuilt at the same path: `rm -rf` then `_mkroom` again wipes the pid file
+  # and starts a second keeper, but the first one sees its directory back within five seconds
+  # and keeps polling — one more forever-process per rebuild, each forking `sleep` every five
+  # seconds. Several dozen of them from throwaway probe scripts once put a machine at a load
+  # in the hundreds with memory and disk idle. So a keeper whose room no longer names it steps
+  # down: the file it reads is written by the shell that forked it (below), so by the time the
+  # first check runs the name is there, and a rebuilt room either carries a newer pid or, for the
+  # instant before its own keeper writes one, none at all — both mean this one is done.
   ( exec >/dev/null 2>&1 <&-
     for p in "$@"; do exec {fd}<> "$room/bell/$p.fifo"; done
-    while [ -d "$room" ]; do sleep 5; done ) &
+    while [ -d "$room" ]; do
+      sleep 5
+      [ "$(_keeper_pid "$keep" 2>/dev/null)" = "$BASHPID" ] || exit 0
+    done ) &
   echo $! > "$keep"
 }
 
