@@ -2,9 +2,9 @@
 # shipyard-continuity.sh - keep a Codex parent supervising after a capacity stop.
 #
 # Source this file for the lifecycle and parser functions. `shipyard-launch.sh`
-# starts one detached watcher per parent agterm session; the watcher exits when
-# that session disappears, and `shipyard-down.sh` stops every watcher after the
-# last ship slot is removed.
+# starts one session-hosted watcher per parent agterm session; the watcher exits
+# when that session disappears, and `shipyard-down.sh` stops every watcher after
+# the last ship slot is removed.
 
 SHIPYARD_CONTINUITY_SCRIPT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/shipyard-continuity.sh"
 
@@ -87,14 +87,16 @@ shipyard_continuity_live_prompt() {
   printf '%s' "$prompt"
 }
 
-# active | paused | none, using only Codex's root goal service line or live footer.
+# active | paused | blocked | none, using only Codex's root goal service line or live footer.
 shipyard_continuity_goal_state() {
   local screen="$1" line state=none
   while IFS= read -r line || [ -n "$line" ]; do
     case "$line" in
       '• Goal active'*) state=active ;;
-      '• Goal paused'*|'• Goal stalled'*) state=paused ;;
-      '  gpt-'*'Goal paused'*|'  gpt-'*'Goal stalled'*) state=paused ;;
+      '• Goal paused'*) state=paused ;;
+      '• Goal stalled'*) state=blocked ;;
+      '  gpt-'*'Goal paused'*) state=paused ;;
+      '  gpt-'*'Goal stalled'*) state=blocked ;;
       '  gpt-'*'Pursuing goal'*) state=active ;;
     esac
   done <<<"$screen"
@@ -369,6 +371,15 @@ shipyard_continuity_watch() {
   done
 }
 
+# Run the watcher as the foreground process of a dedicated agterm session. Codex
+# tool processes reap detached descendants after the tool exits, so nohup alone
+# cannot provide parent continuity there.
+shipyard_continuity_watch_foreground() {
+  local pidfile="$5" heartbeat="$6" control="$7" ack="$8" token="$9"
+  shipyard_continuity_write_record "$pidfile" "$$" "$token" || return 1
+  shipyard_continuity_watch "$@"
+}
+
 shipyard_continuity_state_dir() {
   if [ -n "${_SHIPYARD_CONTINUITY_DIR:-}" ]; then
     mkdir -p "$_SHIPYARD_CONTINUITY_DIR" || return 1
@@ -381,6 +392,11 @@ shipyard_continuity_state_dir() {
 shipyard_continuity_pid_is_healthy() {
   local pid="$1" token="$2" heartbeat="$3" seen beat now stale
   kill -0 "$pid" 2>/dev/null || return 1
+  shipyard_continuity_heartbeat_is_healthy "$token" "$heartbeat"
+}
+
+shipyard_continuity_heartbeat_is_healthy() {
+  local token="$1" heartbeat="$2" seen beat now stale
   [ -f "$heartbeat" ] || return 1
   read -r seen beat <"$heartbeat" || return 1
   [ "$seen" = "$token" ] || return 1
@@ -426,7 +442,7 @@ shipyard_continuity_terminate_pid() {
 }
 
 shipyard_continuity_request() {
-  local verb="$1" pid="$2" token="$3" control="$4" ack="$5"
+  local verb="$1" pid="$2" token="$3" control="$4" ack="$5" heartbeat="${6:-}"
   local nonce n=0 seen got_verb got_nonce
   nonce="$$-$RANDOM-$(date +%s)"
   shipyard_continuity_write_record "$control" "$token" "$verb $nonce" || return 1
@@ -438,7 +454,10 @@ shipyard_continuity_request() {
         return 0
       fi
     fi
-    kill -0 "$pid" 2>/dev/null || return 1
+    if ! kill -0 "$pid" 2>/dev/null; then
+      [ -n "$heartbeat" ] && shipyard_continuity_heartbeat_is_healthy "$token" "$heartbeat" \
+        || return 1
+    fi
     sleep "${_SHIPYARD_CONTINUITY_CONTROL_SLEEP:-0.1}"
     n=$((n + 1))
   done
@@ -493,12 +512,30 @@ shipyard_continuity_legacy_lock_reclaim() {
   rmdir "$lock" 2>/dev/null
 }
 
+# Bash 3.2 has no BASHPID and $$ keeps the parent shell's PID inside a
+# background subshell. Ask a direct child for its PPID without wrapping that
+# child in command substitution, then return the value through a global.
+shipyard_continuity_set_current_pid() {
+  local dir="$1" probe pid
+  probe=$(mktemp "$dir/continuity-owner.XXXXXXXX") || return 1
+  if ! sh -c 'printf "%s\n" "$PPID" >"$1"' shipyard-pid-probe "$probe"; then
+    rm -f "$probe"
+    return 1
+  fi
+  read -r pid <"$probe" || pid=""
+  rm -f "$probe"
+  case "$pid" in ''|0|0*|*[!0-9]*) return 1 ;; esac
+  kill -0 "$pid" 2>/dev/null || return 1
+  SHIPYARD_CONTINUITY_CURRENT_PID="$pid"
+}
+
 shipyard_continuity_acquire_lock() {
   local lock="$1" n=0 record pid token owner_pid claim claim_path lock_dir lock_name valid
-  owner_pid=$(sh -c 'printf "%s" "$PPID"') || return 1
+  lock_dir=${lock%/*}
+  shipyard_continuity_set_current_pid "$lock_dir" || return 1
+  owner_pid="$SHIPYARD_CONTINUITY_CURRENT_PID"
   SHIPYARD_CONTINUITY_LOCK_TOKEN="$owner_pid-$RANDOM-$(date +%s)"
   SHIPYARD_CONTINUITY_LOCK_OWNER_PID="$owner_pid"
-  lock_dir=${lock%/*}
   lock_name=${lock##*/}
   claim="$lock_name.claim.$owner_pid.$SHIPYARD_CONTINUITY_LOCK_TOKEN"
   claim_path="$lock_dir/$claim"
@@ -550,9 +587,10 @@ shipyard_continuity_acquire_lock() {
 shipyard_continuity_reap_claim() {
   local lock="$1" expected="$2" replacement="$3" age="$4"
   local owner_pid token lock_dir source candidate path suffix reaper_pid valid_target=0 rc=1
-  owner_pid=$(sh -c 'printf "%s" "$PPID"') || return 1
-  token="$owner_pid-$RANDOM-$(date +%s)"
   lock_dir=${lock%/*}
+  shipyard_continuity_set_current_pid "$lock_dir" || return 1
+  owner_pid="$SHIPYARD_CONTINUITY_CURRENT_PID"
+  token="$owner_pid-$RANDOM-$(date +%s)"
   case "$expected" in
     "${lock##*/}.claim."*/*|*'..'*) source="" ;;
     "${lock##*/}.claim."*) source="$lock_dir/$expected"; valid_target=1 ;;
@@ -696,30 +734,55 @@ shipyard_continuity_remove_dead_intents() {
   done
 }
 
-shipyard_continuity_start_locked() {
-  local state="$1" key="$2" lock="$3" lock_token="$4"
-  local pidfile heartbeat control ack logfile pid token old_token n
-  pidfile="$state/continuity-$key.pid"
-  heartbeat="$state/continuity-$key.heartbeat"
-  control="$state/continuity-$key.control"
-  ack="$state/continuity-$key.ack"
-  logfile="$state/continuity-$key.log"
-  if [ -f "$pidfile" ]; then
-    read -r pid old_token <"$pidfile" || true
-    if [ -n "${pid:-}" ] && [ -n "${old_token:-}" ] && kill -0 "$pid" 2>/dev/null; then
-      if shipyard_continuity_request ping "$pid" "$old_token" "$control" "$ack"; then
+shipyard_continuity_remove_dead_owner_probes() {
+  local state="$1" probe pid
+  for probe in "$state"/continuity-owner.*; do
+    [ -f "$probe" ] || continue
+    read -r pid <"$probe" || pid=""
+    case "$pid" in
+      ''|0|0*|*[!0-9]*) rm -f "$probe" ;;
+      *) kill -0 "$pid" 2>/dev/null || rm -f "$probe" ;;
+    esac
+  done
+}
+
+shipyard_continuity_shq() {
+  printf "'%s'" "$(printf '%s' "$1" | sed "s/'/'\\\\''/g")"
+}
+
+shipyard_continuity_start_agterm_session_locked() {
+  local pidfile="$1" heartbeat="$2" control="$3" ack="$4" logfile="$5"
+  local token="$6" lock="$7" lock_token="$8" command="" arg guard_session pid seen n=0
+  for arg in /bin/bash "$SHIPYARD_CONTINUITY_SCRIPT" watch-foreground \
+    "$AGTERM_SESSION_ID" "$AGTERM_SOCKET" "${AGTERM_PANE:-primary}" "$AGTERM_WINDOW_ID" \
+    "$pidfile" "$heartbeat" "$control" "$ack" "$token" "$lock" "$lock_token" "$logfile"; do
+    command="$command $(shipyard_continuity_shq "$arg")"
+  done
+  : >"$logfile" || return 1
+  guard_session=$(agtermctl session new --after "$AGTERM_SESSION_ID" --no-select \
+    --name "shipyard-goal-$(printf '%.8s' "$AGTERM_SESSION_ID")" \
+    --command "${command# }" --socket "$AGTERM_SOCKET" 2>>"$logfile") || return 1
+  while [ "$n" -lt "${_SHIPYARD_CONTINUITY_PUBLICATION_POLLS:-40}" ]; do
+    if [ -f "$pidfile" ]; then
+      read -r pid seen <"$pidfile" || true
+      if [ "${seen:-}" = "$token" ] \
+        && shipyard_continuity_heartbeat_is_healthy "$token" "$heartbeat"; then
+        printf 'parent continuity guard started for Codex session %s\n' "$AGTERM_SESSION_ID"
         return 0
       fi
-      return 1
     fi
-    if [ -n "${old_token:-}" ]; then
-      shipyard_continuity_remove_owned_state "$pidfile" "$heartbeat" "$control" "$ack" "$old_token"
-    else
-      rm -f "$pidfile" "$heartbeat" "$control" "$ack"
-    fi
-  fi
+    sleep "${_SHIPYARD_CONTINUITY_PUBLICATION_SLEEP:-0.05}"
+    n=$((n + 1))
+  done
+  agtermctl session close --target "$guard_session" --socket "$AGTERM_SOCKET" >/dev/null 2>&1 || true
+  shipyard_continuity_remove_owned_state "$pidfile" "$heartbeat" "$control" "$ack" "$token"
+  rm -f "$logfile"
+  return 1
+}
 
-  token="$$-$RANDOM-$(date +%s)"
+shipyard_continuity_start_nohup_locked() {
+  local pidfile="$1" heartbeat="$2" control="$3" ack="$4" logfile="$5"
+  local token="$6" lock="$7" lock_token="$8" pid n=0
   nohup bash "$SHIPYARD_CONTINUITY_SCRIPT" watch "$AGTERM_SESSION_ID" \
     "$AGTERM_SOCKET" "${AGTERM_PANE:-primary}" "$AGTERM_WINDOW_ID" \
     "$pidfile" "$heartbeat" "$control" "$ack" "$token" "$lock" "$lock_token" "$logfile" \
@@ -728,7 +791,6 @@ shipyard_continuity_start_locked() {
   sleep "${_SHIPYARD_CONTINUITY_PUBLISH_DELAY:-0}"
   shipyard_continuity_write_record "$pidfile" "$pid" "$token" \
     || { shipyard_continuity_terminate_pid "$pid" || true; rm -f "$logfile"; return 1; }
-  n=0
   while ! shipyard_continuity_pid_is_healthy "$pid" "$token" "$heartbeat"; do
     if ! kill -0 "$pid" 2>/dev/null || [ "$n" -ge 20 ]; then
       shipyard_continuity_terminate_pid "$pid" || true
@@ -740,6 +802,47 @@ shipyard_continuity_start_locked() {
     n=$((n + 1))
   done
   printf 'parent continuity guard started for Codex session %s\n' "$AGTERM_SESSION_ID"
+}
+
+shipyard_continuity_start_locked() {
+  local state="$1" key="$2" lock="$3" lock_token="$4"
+  local pidfile heartbeat control ack logfile pid token old_token
+  pidfile="$state/continuity-$key.pid"
+  heartbeat="$state/continuity-$key.heartbeat"
+  control="$state/continuity-$key.control"
+  ack="$state/continuity-$key.ack"
+  logfile="$state/continuity-$key.log"
+  if [ -f "$pidfile" ]; then
+    read -r pid old_token <"$pidfile" || true
+    if [ -n "${pid:-}" ] && [ -n "${old_token:-}" ]; then
+      if shipyard_continuity_heartbeat_is_healthy "$old_token" "$heartbeat"; then
+        shipyard_continuity_request ping "$pid" "$old_token" "$control" "$ack" "$heartbeat" \
+          && return 0
+        return 1
+      elif kill -0 "$pid" 2>/dev/null; then
+        shipyard_continuity_request ping "$pid" "$old_token" "$control" "$ack" && return 0
+        return 1
+      fi
+    fi
+    if [ -n "${old_token:-}" ]; then
+      shipyard_continuity_remove_owned_state "$pidfile" "$heartbeat" "$control" "$ack" "$old_token"
+    else
+      rm -f "$pidfile" "$heartbeat" "$control" "$ack"
+    fi
+  fi
+
+  token="$$-$RANDOM-$(date +%s)"
+  case "${_SHIPYARD_CONTINUITY_LAUNCH_MODE:-agterm-session}" in
+    agterm-session)
+      shipyard_continuity_start_agterm_session_locked \
+        "$pidfile" "$heartbeat" "$control" "$ack" "$logfile" \
+        "$token" "$lock" "$lock_token" ;;
+    nohup)
+      shipyard_continuity_start_nohup_locked \
+        "$pidfile" "$heartbeat" "$control" "$ack" "$logfile" \
+        "$token" "$lock" "$lock_token" ;;
+    *) return 1 ;;
+  esac
 }
 
 shipyard_continuity_start() {
@@ -755,7 +858,8 @@ shipyard_continuity_start() {
 
   state=$(shipyard_continuity_state_dir) || return 1
   key=$(printf '%s' "$AGTERM_SESSION_ID" | tr -c 'A-Za-z0-9._-' '_')
-  owner_pid=$(sh -c 'printf "%s" "$PPID"') || return 1
+  shipyard_continuity_set_current_pid "$state" || return 1
+  owner_pid="$SHIPYARD_CONTINUITY_CURRENT_PID"
   intent_token="$owner_pid-$RANDOM-$(date +%s)"
   intent="$state/continuity-start-$intent_token.intent"
   start_generation=$(shipyard_continuity_generation "$state")
@@ -776,6 +880,7 @@ shipyard_continuity_start() {
   rm -f "$state/continuity-stopping"
   rc=0
   shipyard_continuity_remove_dead_intents "$state"
+  shipyard_continuity_remove_dead_owner_probes "$state"
   recorded_generation=""
   [ ! -f "$intent" ] || read -r recorded_generation intent_session <"$intent" || true
   current_generation=$(shipyard_continuity_generation "$state")
@@ -805,6 +910,7 @@ shipyard_continuity_stop_all() {
   printf '%s %s\n' "$lock_owner_pid" "$lock_token" >"$marker" 2>/dev/null \
     || { shipyard_continuity_release_lock "$lock" "$lock_token" "$lock_owner_pid"; return 1; }
   rm -f "$state"/continuity-start-*.intent
+  rm -f "$state"/continuity-owner.*
   sleep "${_SHIPYARD_CONTINUITY_STOP_AFTER_SWEEP_DELAY:-0}"
   for f in "$state"/continuity-*.pid; do
     [ -f "$f" ] || continue
@@ -814,8 +920,10 @@ shipyard_continuity_stop_all() {
     ack="${f%.pid}.ack"
     log="${f%.pid}.log"
     stop_rc=0
-    if [ -n "${pid:-}" ] && [ -n "${token:-}" ] && kill -0 "$pid" 2>/dev/null; then
-      shipyard_continuity_request stop "$pid" "$token" "$control" "$ack" || stop_rc=$?
+    if [ -n "${pid:-}" ] && [ -n "${token:-}" ] \
+      && { kill -0 "$pid" 2>/dev/null \
+        || shipyard_continuity_heartbeat_is_healthy "$token" "$heartbeat"; }; then
+      shipyard_continuity_request stop "$pid" "$token" "$control" "$ack" "$heartbeat" || stop_rc=$?
       [ "$stop_rc" -ne 0 ] || shipyard_continuity_wait_state_gone "$f" "$token" || stop_rc=$?
     fi
     if [ "$stop_rc" -eq 0 ] && [ -n "${token:-}" ]; then
@@ -832,6 +940,7 @@ shipyard_continuity_stop_all() {
   done
   # Catch intents registered after the first sweep while the stop marker was live.
   rm -f "$state"/continuity-start-*.intent
+  rm -f "$state"/continuity-owner.*
   rm -f "$marker"
   shipyard_continuity_release_lock "$lock" "$lock_token" "$lock_owner_pid" || rc=1
   return "$rc"
@@ -851,6 +960,7 @@ shipyard_continuity_cleanup_last_slot() {
 if [ "${BASH_SOURCE[0]}" = "$0" ]; then
   case "${1:-}" in
     watch) shift; shipyard_continuity_watch "$@" ;;
+    watch-foreground) shift; shipyard_continuity_watch_foreground "$@" >>"${12}" 2>&1 ;;
     *) echo 'usage: shipyard-continuity.sh watch <session> <socket> <pane> <window> <pidfile> <heartbeat> <control> <ack> <token> <lock> <lock-token> <log>' >&2; exit 2 ;;
   esac
 fi

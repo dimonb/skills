@@ -109,12 +109,23 @@ check "" "$SHIPYARD_CONTINUITY_ACTION" "active session with draft is protected"
 
 shipyard_continuity_reset
 idle_paused=$(printf '%s\n%s' "$empty_prompt" \
-  '  gpt-example high · ./repo · Context 20% used        Goal stalled (/goal resume)')
+  '  gpt-example high · ./repo · Context 20% used        Goal paused (/goal resume)')
 shipyard_continuity_decide "$idle_paused" 400
 check goal "$SHIPYARD_CONTINUITY_ACTION" "idle paused goal resumes"
 shipyard_continuity_succeeded goal 400
 shipyard_continuity_decide "$idle_paused" 401
 check "" "$SHIPYARD_CONTINUITY_ACTION" "one paused goal marker is latched"
+
+shipyard_continuity_reset
+blocked_goal=$(printf '%s\n%s' "$empty_prompt" \
+  '  gpt-example high · ./repo · Context 20% used        Goal stalled (/goal resume)')
+shipyard_continuity_decide "$blocked_goal" 402
+check "" "$SHIPYARD_CONTINUITY_ACTION" "a blocked goal is never resumed automatically"
+
+SHIPYARD_CONTINUITY_PENDING_GOAL_AT=403
+shipyard_continuity_decide "$blocked_goal" 403
+check goal "$SHIPYARD_CONTINUITY_ACTION" \
+  "a watcher-owned post-capacity handoff can resume a stalled goal"
 
 # The terminal API must receive text and Return in distinct calls, and the live
 # prompt plus real-user idle clock must still belong to the watcher before Return.
@@ -127,10 +138,32 @@ FAKE_RETURN_FAILURES="$TMP/return-failures"
 FAKE_READ_FAILURES="$TMP/read-failures"
 FAKE_STALE_READS="$TMP/stale-reads"
 FAKE_LATE_PROMPT="$TMP/late-prompt"
+FAKE_GUARD_PID="$TMP/guard-pid"
 export FAKE_LOG FAKE_PROMPT FAKE_IDLE FAKE_MODE FAKE_RETURN_FAILURES FAKE_READ_FAILURES
-export FAKE_STALE_READS FAKE_LATE_PROMPT
+export FAKE_STALE_READS FAKE_LATE_PROMPT FAKE_GUARD_PID
 cat >"$TMP/bin/agtermctl" <<'EOF'
 #!/usr/bin/env bash
+if [ "${1:-} ${2:-}" = "session new" ]; then
+  shift 2
+  command=""
+  while [ "$#" -gt 0 ]; do
+    case "$1" in
+      --command) command="$2"; shift 2 ;;
+      *) shift ;;
+    esac
+  done
+  [ -n "$command" ] || exit 1
+  printf 'session-new:%s\n' "$command" >>"$FAKE_LOG"
+  nohup /bin/bash -c "$command" </dev/null >/dev/null 2>&1 &
+  printf '%s\n' "$!" >"$FAKE_GUARD_PID"
+  printf '%s\n' guard-session
+  exit 0
+fi
+if [ "${1:-} ${2:-}" = "session close" ]; then
+  printf '%s\n' session-close >>"$FAKE_LOG"
+  [ ! -s "$FAKE_GUARD_PID" ] || kill "$(cat "$FAKE_GUARD_PID")" 2>/dev/null || true
+  exit 0
+fi
 if [ "${1:-} ${2:-}" = "session type" ]; then
   shift 2
   if [ "${1:-}" = --stdin ]; then
@@ -208,6 +241,7 @@ reset_fake() {
   printf '%s\n' 0 >"$FAKE_READ_FAILURES"
   printf '%s\n' 0 >"$FAKE_STALE_READS"
   : >"$FAKE_LATE_PROMPT"
+  : >"$FAKE_GUARD_PID"
   : >"$FAKE_LOG"
   shipyard_continuity_reset
 }
@@ -339,6 +373,24 @@ export CODEX_SESSION_ID AGTERM_ENABLED AGTERM_SESSION_ID AGTERM_SOCKET AGTERM_WI
 export SHIPYARD_AGENT
 export _SHIPYARD_CONTINUITY_POLL_SECS
 reset_fake
+session_start_rc=0
+shipyard_continuity_start agterm >/dev/null || session_start_rc=$?
+session_pidfile=$(find "$_SHIPYARD_CONTINUITY_DIR" -name 'continuity-*.pid' -print -quit)
+session_pid=$(awk '{print $1}' "$session_pidfile" 2>/dev/null)
+if [ -n "$session_pid" ] && kill -0 "$session_pid" 2>/dev/null; then
+  session_alive=yes
+else
+  session_alive=no
+fi
+check 0 "$session_start_rc" "Codex continuity starts through a dedicated agterm session"
+check yes "$session_alive" "the agterm foreground watcher survives its launcher"
+check 1 "$(grep -c '^session-new:.*watch-foreground' "$FAKE_LOG")" \
+  "the agterm guard session runs the foreground watcher entrypoint"
+shipyard_continuity_stop_all
+
+_SHIPYARD_CONTINUITY_LAUNCH_MODE=nohup
+export _SHIPYARD_CONTINUITY_LAUNCH_MODE
+reset_fake
 printf '%s\n' 4 >"$FAKE_READ_FAILURES"
 start_rc=0
 shipyard_continuity_start agterm >/dev/null || start_rc=$?
@@ -365,7 +417,7 @@ files=$(runtime_state_paths)
 [ -z "$files" ] || find "$_SHIPYARD_CONTINUITY_DIR" -name 'continuity-*.log' -exec sed -n '1,80p' {} \;
 check "" "$files" "lifecycle cleanup removes watcher state"
 
-_SHIPYARD_CONTINUITY_INITIAL_DELAY=2
+_SHIPYARD_CONTINUITY_INITIAL_DELAY=30
 export _SHIPYARD_CONTINUITY_INITIAL_DELAY
 shipyard_continuity_start agterm >/dev/null 2>&1 &
 starter_pid=$!
@@ -491,6 +543,15 @@ while ! find "$_SHIPYARD_CONTINUITY_DIR" -name 'continuity-start-*.intent' -prin
   sleep 0.02
   n=$((n + 1))
 done
+admission_intent=$(find "$_SHIPYARD_CONTINUITY_DIR" -name 'continuity-start-*.intent' -print -quit)
+admission_owner=${admission_intent##*/continuity-start-}
+admission_owner=${admission_owner%%-*}
+if [ -n "$admission_owner" ] && kill -0 "$admission_owner" 2>/dev/null; then
+  admission_owner_alive=yes
+else
+  admission_owner_alive=no
+fi
+check yes "$admission_owner_alive" "start intent names the live starter process"
 admission_stop_rc=0
 shipyard_continuity_stop_all || admission_stop_rc=$?
 admission_start_rc=0; wait "$admission_start" || admission_start_rc=$?
@@ -627,6 +688,16 @@ tmux_error=$(
   printf 'rc=%s' "$rc"
 )
 check rc=1 "$tmux_error" "an unrelated tmux query failure preserves lifecycle state"
+
+report_rc=0
+CODEX_SESSION_ID= CODEX_THREAD_ID= AGTERM_ENABLED=0 SHIPYARD_BACKEND=agterm \
+  SHIPYARD_WORKSPACE=test-ai bash "$SKILL_DIR/shipyard-report.sh" \
+  >"$TMP/report.out" 2>"$TMP/report.err" || report_rc=$?
+check 0 "$report_rc" "status monitoring executes on macOS Bash 3.2"
+check "" "$(cat "$TMP/report.err")" "status monitoring uses no unavailable Bash 4 builtins"
+check 1 "$(grep -Fc '_no live ship terminals' "$TMP/report.out")" \
+  "status monitoring reaches its authoritative empty report"
+
 unset -f git
 unset -f agtermctl
 reset_fake
@@ -648,7 +719,19 @@ shipyard_continuity_cleanup_last_slot 0 ""
 check 3 "$cleanup_calls" "successful empty enumeration performs last-slot cleanup"
 check 1 "$(grep -Fc 'shipyard_continuity_start "$BACKEND"' "$SKILL_DIR/shipyard-launch.sh")" \
   "child launch wires automatic parent continuity from the parent environment"
+check 1 "$(grep -Fc 'shipyard_continuity_start "$KIND"' "$SKILL_DIR/shipyard-report.sh")" \
+  "status monitoring re-arms Codex goal continuity"
+report_start_line=$(grep -n 'shipyard_continuity_start "$KIND"' "$SKILL_DIR/shipyard-report.sh" | cut -d: -f1)
+empty_exit_line=$(grep -n '^  exit 0$' "$SKILL_DIR/shipyard-report.sh" | head -1 | cut -d: -f1)
+if [ -n "$report_start_line" ] && [ -n "$empty_exit_line" ] \
+  && [ "$report_start_line" -gt "$empty_exit_line" ]; then
+  check yes yes "empty status cannot recreate the last-slot continuity watcher"
+else
+  check yes no "empty status cannot recreate the last-slot continuity watcher"
+fi
 check 1 "$(grep -Fc 'shipyard_continuity_cleanup_last_slot' "$SKILL_DIR/shipyard-down.sh")" \
   "last-slot teardown uses status-aware continuity cleanup"
+
+unset _SHIPYARD_CONTINUITY_LAUNCH_MODE
 
 exit "$failures"
