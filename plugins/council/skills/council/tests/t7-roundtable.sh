@@ -375,19 +375,58 @@ echo "once a record exists the gate stands down: decision already hands it to an
 # own lane with an empty `.id` — never minted by `c_send`, but written by any hand that builds a
 # lane file — reads back as "I have not posted". Without the `.from != $me` filter the gate then
 # refuses the ONE seat that did post, and tells it another seat has spoken.
-R6="$COUNCIL_TEST_ROOT/t7f"; rm -rf "$R6"
-mkroom "$R6" a b c
-jq '.mode="roundtable" | .round_deadline_ms=600000' "$R6/roster.json" > "$R6/r.tmp" && mv "$R6/r.tmp" "$R6/roster.json"
-jq -n '{id:"",from:"a",lamport:1,deps:{},act:"propose",refs:[],to:["*"],hand:false,turn:null,
-        round:0,text:"position a, written by hand",created_at:"test",sent_ms:1}' > "$R6/lane/a/000001.json"
-printf '1' > "$R6/state/a.seq"
+#
+# `sent_ms` comes from the LIVE CLOCK, and the barrier is asserted open below, because neither
+# is decoration: an earlier version of this fixture stamped `sent_ms: 1`, which put the message
+# older than twice the deadline, so `c_barrier` answered `closed` through its backstop, the
+# gate's first condition short-circuited, and the whole block passed without the gate running at
+# all. Both directions of the filter survived it.
+_t7f_ms=$(( 10#${EPOCHREALTIME/./} / 1000 ))
+mk_t7f() { # <room> <lane>  — one hand-written round-0 message with an empty id, in <lane>
+  rm -rf "$1"; mkroom "$1" a b c
+  jq '.mode="roundtable" | .round_deadline_ms=600000' "$1/roster.json" > "$1/r.tmp" && mv "$1/r.tmp" "$1/roster.json"
+  jq -n --argjson ms "$_t7f_ms" --arg who "$2" \
+    '{id:"",from:$who,lamport:1,deps:{},act:"propose",refs:[],to:["*"],hand:false,turn:null,
+      round:0,text:"a position written by hand",created_at:"test",sent_ms:$ms}' > "$1/lane/$2/000001.json"
+  printf '1' > "$1/state/$2.seq"
+}
+
+R6="$COUNCIL_TEST_ROOT/t7f"; mk_t7f "$R6" a
+st=$(COUNCIL_ROOM="$R6" COUNCIL_ME=a bash -c ". $SKILL/lib/lib.sh; c_barrier")
+[ "$st" = open ] || { echo "FAIL the fixture's barrier reads $st, so the gate never runs and this proves nothing"; fail=1; }
 [ -z "$(COUNCIL_ROOM="$R6" COUNCIL_ME=a bash -c ". $SKILL/lib/lib.sh; c_posted_round0")" ] \
   || { echo "FAIL the fixture's empty id is visible to c_posted_round0, so it separates nothing"; fail=1; }
 [ -n "$(COUNCIL_ROOM="$R6" COUNCIL_ME=a bash -c ". $SKILL/lib/lib.sh; c_round0" | head -1)" ] \
   || { echo "FAIL the fixture has no round-0 message at all"; fail=1; }
 out=$(COUNCIL_ROOM="$R6" COUNCIL_ME=a bash "$CLI" decide --force 2>&1); rc=$?
 [ "$rc" = 0 ] || { echo "FAIL the gate refused the only seat that had posted (exit $rc): $out"; fail=1; }
-echo "the gate asks for another seat's position, not merely for any position"
+
+# ...and the mirror: the same message in SOMEBODY ELSE'S lane must still refuse me. Without it
+# the filter could be inverted and only the case above would notice.
+R7="$COUNCIL_TEST_ROOT/t7g"; mk_t7f "$R7" b
+out=$(COUNCIL_ROOM="$R7" COUNCIL_ME=a bash "$CLI" decide --force 2>&1); rc=$?
+[ "$rc" = 2 ] || { echo "FAIL another seat's position with an empty id did not stop the close (exit $rc): $out"; fail=1; }
+[ -s "$R7/board/decision.md" ] && { echo "FAIL the refused close wrote a record anyway"; fail=1; }
+
+# ...and neither may a lane whose NAME carries a newline defeat the test. `.from` is derived from
+# the lane directory, so it is a real name — but `head -1` reads only its first line, and a lane
+# called $'\nz' made a field-printing form of this condition come back empty, stand the gate
+# down, and hand a seat that had posted nothing the whole record. `jq -c` escapes the newline.
+R8="$COUNCIL_TEST_ROOT/t7h"; rm -rf "$R8"
+mkroom "$R8" a b c
+jq '.mode="roundtable" | .round_deadline_ms=600000' "$R8/roster.json" > "$R8/r.tmp" && mv "$R8/r.tmp" "$R8/roster.json"
+COUNCIL_ROOM="$R8" COUNCIL_ME=b bash "$CLI" send --act propose "position b, withheld from a" >/dev/null 2>&1
+mkdir -p "$R8/lane/$(printf '\nz')"
+jq -n --argjson ms "$_t7f_ms" '{id:"z-1",from:"z",lamport:1,deps:{},act:"propose",refs:[],to:["*"],
+      hand:false,turn:null,round:0,text:"a lane whose name starts with a newline",
+      created_at:"test",sent_ms:$ms}' > "$R8/lane/$(printf '\nz')/000001.json"
+st=$(COUNCIL_ROOM="$R8" COUNCIL_ME=a bash -c ". $SKILL/lib/lib.sh; c_barrier")
+[ "$st" = open ] || { echo "FAIL the newline-lane fixture's barrier reads $st, so it proves nothing"; fail=1; }
+out=$(COUNCIL_ROOM="$R8" COUNCIL_ME=a bash "$CLI" decide --force 2>&1); rc=$?
+[ "$rc" = 2 ] || { echo "FAIL a lane named with a newline stood the gate down (exit $rc)"; fail=1; }
+grep -qF "position b, withheld from a" "$R8/board/decision.md" 2>/dev/null \
+  && { echo "FAIL the record was written and it carried the withheld position"; fail=1; }
+echo "the gate asks for another seat's position, and no lane name or empty id gets round it"
 
 # ...and the gate must not PREEMPT the verdict dispatch. Placed ahead of it, it answered a
 # recorded room with its own refusal as soon as `c_round0` came back empty — the inversion

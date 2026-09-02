@@ -520,12 +520,28 @@ v_decide() {
   # Without this filter the gate refuses the ONE seat that had posted, telling it another seat
   # has spoken and it has not, while withholding nothing from it. Measured.
   #
-  # It prints `.from` and not `.id` for the same reason: `.from` is c_all's derivation from the
-  # LANE DIRECTORY, so it is a directory name and can never be empty, while `.id` is a string the
-  # message chose and an empty one would make this test read "nobody else posted" about a lane
-  # that did. Same defect, other direction.
+  # It prints the WHOLE MESSAGE compactly rather than any field of it, and that is the third
+  # attempt at this line -- the two before it each picked a field whose first line can be empty
+  # while the message is not:
+  #
+  #   `.id` is a string the message chose. An empty one in MY OWN lane made `c_posted_round0`
+  #   (which reads through `.id`) report that I had not posted, so the gate refused the one seat
+  #   that had, while withholding nothing from it.
+  #
+  #   `.from` looked immune, being c_all's derivation from the LANE DIRECTORY and so a real
+  #   directory name -- but `head -1` reads its FIRST LINE, and a directory name may contain a
+  #   newline. A lane called $'\nz' holding a `round: 0` message made this test read empty, the
+  #   gate stand down, and a seat that had posted nothing close the round and take the record
+  #   with every position in it. Measured, end to end. That name cannot come from `c_send`
+  #   (`c_atomic` does not mkdir), which is exactly the premise the `.id` case above rests on
+  #   too, so it is the same threat and not a smaller one.
+  #
+  # `jq -c` emits one line per document with every control byte escaped, so the value is
+  # non-empty whenever a document matched and there is no field left to be empty. c_all's own
+  # header records the same class -- a peer-chosen lane name reaching a reader raw -- for its
+  # error path.
   if [ "$(c_barrier)" != closed ] && [ -z "$(c_posted_round0)" ] && [ -z "$(c_recorded_status)" ] \
-     && [ -n "$(c_round0 | jq -r --arg me "$ME" 'select(.from != $me) | .from' | head -1)" ]; then
+     && [ -n "$(c_round0 | jq -c --arg me "$ME" 'select(.from != $me)' | head -1)" ]; then
     echo "council decide: another seat has stated an opening position and you have not — refusing to close a round you have not taken part in, because the record would hand you every position in it. Post your position first; the round also closes on its own once its deadline passes." >&2
     return 2
   fi
