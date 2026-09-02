@@ -127,10 +127,32 @@ FAKE_RETURN_FAILURES="$TMP/return-failures"
 FAKE_READ_FAILURES="$TMP/read-failures"
 FAKE_STALE_READS="$TMP/stale-reads"
 FAKE_LATE_PROMPT="$TMP/late-prompt"
+FAKE_GUARD_PID="$TMP/guard-pid"
 export FAKE_LOG FAKE_PROMPT FAKE_IDLE FAKE_MODE FAKE_RETURN_FAILURES FAKE_READ_FAILURES
-export FAKE_STALE_READS FAKE_LATE_PROMPT
+export FAKE_STALE_READS FAKE_LATE_PROMPT FAKE_GUARD_PID
 cat >"$TMP/bin/agtermctl" <<'EOF'
 #!/usr/bin/env bash
+if [ "${1:-} ${2:-}" = "session new" ]; then
+  shift 2
+  command=""
+  while [ "$#" -gt 0 ]; do
+    case "$1" in
+      --command) command="$2"; shift 2 ;;
+      *) shift ;;
+    esac
+  done
+  [ -n "$command" ] || exit 1
+  printf 'session-new:%s\n' "$command" >>"$FAKE_LOG"
+  nohup /bin/bash -c "$command" </dev/null >/dev/null 2>&1 &
+  printf '%s\n' "$!" >"$FAKE_GUARD_PID"
+  printf '%s\n' guard-session
+  exit 0
+fi
+if [ "${1:-} ${2:-}" = "session close" ]; then
+  printf '%s\n' session-close >>"$FAKE_LOG"
+  [ ! -s "$FAKE_GUARD_PID" ] || kill "$(cat "$FAKE_GUARD_PID")" 2>/dev/null || true
+  exit 0
+fi
 if [ "${1:-} ${2:-}" = "session type" ]; then
   shift 2
   if [ "${1:-}" = --stdin ]; then
@@ -208,6 +230,7 @@ reset_fake() {
   printf '%s\n' 0 >"$FAKE_READ_FAILURES"
   printf '%s\n' 0 >"$FAKE_STALE_READS"
   : >"$FAKE_LATE_PROMPT"
+  : >"$FAKE_GUARD_PID"
   : >"$FAKE_LOG"
   shipyard_continuity_reset
 }
@@ -338,6 +361,24 @@ SHIPYARD_AGENT=claude
 export CODEX_SESSION_ID AGTERM_ENABLED AGTERM_SESSION_ID AGTERM_SOCKET AGTERM_WINDOW_ID AGTERM_PANE
 export SHIPYARD_AGENT
 export _SHIPYARD_CONTINUITY_POLL_SECS
+reset_fake
+session_start_rc=0
+shipyard_continuity_start agterm >/dev/null || session_start_rc=$?
+session_pidfile=$(find "$_SHIPYARD_CONTINUITY_DIR" -name 'continuity-*.pid' -print -quit)
+session_pid=$(awk '{print $1}' "$session_pidfile" 2>/dev/null)
+if [ -n "$session_pid" ] && kill -0 "$session_pid" 2>/dev/null; then
+  session_alive=yes
+else
+  session_alive=no
+fi
+check 0 "$session_start_rc" "Codex continuity starts through a dedicated agterm session"
+check yes "$session_alive" "the agterm foreground watcher survives its launcher"
+check 1 "$(grep -c '^session-new:.*watch-foreground' "$FAKE_LOG")" \
+  "the agterm guard session runs the foreground watcher entrypoint"
+shipyard_continuity_stop_all
+
+_SHIPYARD_CONTINUITY_LAUNCH_MODE=nohup
+export _SHIPYARD_CONTINUITY_LAUNCH_MODE
 reset_fake
 printf '%s\n' 4 >"$FAKE_READ_FAILURES"
 start_rc=0
@@ -679,5 +720,7 @@ else
 fi
 check 1 "$(grep -Fc 'shipyard_continuity_cleanup_last_slot' "$SKILL_DIR/shipyard-down.sh")" \
   "last-slot teardown uses status-aware continuity cleanup"
+
+unset _SHIPYARD_CONTINUITY_LAUNCH_MODE
 
 exit "$failures"

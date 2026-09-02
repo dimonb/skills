@@ -222,9 +222,12 @@ and external gates have reached authoritative terminal states.
 
 The agterm continuity watcher is the execution bridge for that existing goal. It submits the
 draft-safe `/goal resume` steering described above when Codex reports the goal paused or stalled.
-Each `shipyard-report.sh` status tick idempotently ensures the watcher again, so losing the
-watcher process while children remain active does not silently strand the goal. This integration
-is Codex-only: Claude parents and every tmux run neither inspect nor steer goal state.
+Codex starts it as the foreground process of a dedicated, unselected agterm session beside the
+parent; the session closes when last-slot cleanup stops the watcher. This avoids relying on a
+detached tool descendant, which the Codex runtime reaps when the tool call ends. Each
+`shipyard-report.sh` status tick idempotently ensures the watcher again, so losing the watcher
+process while children remain active does not silently strand the goal. This integration is
+Codex-only: Claude parents and every tmux run neither inspect nor steer goal state.
 
 The primary path for anything needing a human is the escalation mailbox (Step 3);
 `shipyard-tell.sh` (Step 4) is the way back when the child did not ask. `--remote-control` is
