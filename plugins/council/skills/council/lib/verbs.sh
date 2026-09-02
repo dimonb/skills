@@ -116,16 +116,34 @@ v_floor() {
     "$t" "$f" "$(c_floor_at $((t+1)))" "$age" "$(c_conflicts)"
 }
 
-v_order() { if [ "${1:-}" = "--ids" ]; then c_canon | jq -r '.id'; else c_canon; fi; }
+# The four verbs a PARTICIPANT reads the room with all go through c_visible, so an open
+# barrier round withholds from them NO LESS than it withholds from `recv` -- a lane holding a
+# foreign opening position is withheld whole. It is deliberately one-sided rather than an
+# equality; c_visible's header says why, and reading it as an equality is what produces the
+# lamport-ordered prefix cut that was reverted as a hole. `--ids` is filtered too: an id is not
+# content, but a list of them says who has posted, and a reader that withholds the messages
+# and not their ids is the same divergence in miniature.
+v_order() { if [ "${1:-}" = "--ids" ]; then c_visible | jq -r '.id'; else c_visible; fi; }
 
-v_transcript() {
-  c_canon | jq -r '"[\(.from) \(.act)\(if (.refs|length)>0 then " →"+(.refs|join(",")) else "" end)\(if .valid then "" else " (out of turn)" end)] \(.text)"'
+# The renderer, over whatever stream it is given. `transcript` shows a participant what it may
+# see; v_decide renders the SAME lines from the whole log into the record, because the record
+# is the room's output rather than one seat's view of it.
+_render_transcript() {
+  jq -r '"[\(.from) \(.act)\(if (.refs|length)>0 then " →"+(.refs|join(",")) else "" end)\(if .valid then "" else " (out of turn)" end)] \(.text)"'
 }
 
-_graph() { c_canon | jq -s -f "$SKILL/lib/claims.jq"; }
+v_transcript() { c_visible | _render_transcript; }
+
+_graph_of() { jq -s -f "$SKILL/lib/claims.jq"; }
+# The whole room. `verdict` reports the room's state and `decide` writes its record, and
+# neither is a function of who is asking.
+_graph() { c_canon | _graph_of; }
+# What the asker may see. `claims` and the display half of `status` render proposal and
+# objection TEXT, which is precisely what an open barrier round withholds.
+_graph_seen() { c_visible | _graph_of; }
 
 v_claims() {
-  local g; g=$(_graph) || return 1
+  local g; g=$(_graph_seen) || return 1
   [ "${1:-}" = "--raw" ] && { printf '%s\n' "$g"; return 0; }
   # Turns from c_turns here too. The graph counts turn-claiming messages only, so in a
   # roundtable room it is short by the whole opening lap, and `claims` and `verdict` printed
@@ -299,7 +317,11 @@ v_verdict() {
 v_status() {
   local j verd g t floor last held conf room_age alarms=""
   j=$(v_verdict --json); verd=$(printf '%s' "$j" | jq -r '.verdict // empty' 2>/dev/null)
-  g=$(_graph)
+  # The verdict line above is the room's, the lines below are the reader's. During an open
+  # barrier round those differ on purpose: `verdict` counts the whole log, and counts and ids
+  # are not content -- `OPEN ROUND: posted k/N` discloses the same existence three lines down
+  # -- while `on the table:` and the objection list print TEXT and so must respect the barrier.
+  g=$(_graph_seen)
   # This block is what a supervisor reads instead of the room, so it has to say when it cannot
   # read the room either. Both reads above degrade to EMPTY, not to an error, and every printf
   # above then renders a blank where a number belongs: `turns 3/`, `verdict: `, no proposals,
@@ -432,6 +454,100 @@ v_decide() {
     decided) echo "council: this room is already decided" >&2; return 3 ;;
     *) [ "$force" = 1 ] || { echo "council: verdict '$verd', the decision is not ripe. --force writes an honest unresolved." >&2; return 2; } ;;
   esac
+  # A SEAT THAT OWES A POSITION MAY NOT CLOSE THE ROUND IT OWES IT TO. Closing a room writes
+  # the record from the WHOLE log -- deliberately, because one holding only the writer's own
+  # position would be worse than none -- and `decision` then hands that record to anyone. So
+  # without this gate, `decide --force` followed by `decision` was a two-command bypass of the
+  # opening barrier, available to every participant and to NO supervisor, since `decide` takes
+  # `need_me`. A seat that has stated its position keeps the escape hatch; a seat that has said
+  # nothing cannot buy the log with it.
+  #
+  # AFTER the verdict dispatch above, not before it, and that placement is load-bearing. Ahead
+  # of it this gate preempted the answers v_verdict exists to give: a room whose RECORD is on
+  # disk answered 2 instead of the documented 3 as soon as one lane file stopped parsing, which
+  # is the same inversion v_verdict's own header records as having been introduced and reverted
+  # twice. Here it guards only the record WRITE, which is all it was ever about -- an
+  # already-decided room needs no gate anyway, since `decision` hands that record to anyone.
+  #
+  # IT REFUSES EXACTLY WHEN THE RECORD WOULD DISCLOSE A POSITION THE CALLER MAY NOT READ, which
+  # is why the third test is here rather than only the first two. Without it the gate fired on a
+  # round nobody had posted in at all: `c_barrier` returns `open` from its `[ "$first" = 0 ]`
+  # short-circuit before it ever consults the deadline, so that round never closes on its own,
+  # every seat is refused for ever, and no supervisor can run `decide` -- measured, with
+  # `round_deadline_ms=1`, and the pre-gate tree wrote an honest `unresolved` record there. It
+  # protected nothing while doing it: with no position in the log, `c_visible` withholds nothing
+  # (measured: a seat that had posted nothing read byte-identically to the supervisor).
+  #
+  # So the rule is about DISCLOSURE, not about manners. When `c_round0` yields no foreign
+  # position the record cannot carry one, whatever the reason -- an empty round, or a log this
+  # reader cannot parse. The second of those leaves `--force` able to write a record over a log
+  # it could not read, which is a REMAINDER THIS GATE DELIBERATELY DOES NOT TAKE ON: it is
+  # recorded at `c_all` and in SKILL.md, three attempts at it are recorded there, and two were
+  # reverted. Do not quietly make this gate the fourth.
+  #
+  # The first two tests fail closed. `!= closed`, never `= open`: a c_barrier that dies
+  # mid-function prints NEITHER word (its own header carries that failure), so `= open` would
+  # read false and let the close through exactly when the room could not be read. That is
+  # reasoned, not measured -- no reachable input on this tree makes c_barrier print nothing, so
+  # no test pins it. `c_posted_round0` that fails prints nothing, so `-z` refuses; it is the
+  # same reader `c_send` uses to refuse a second position, so the two cannot disagree about
+  # whether I have spoken.
+  #
+  # NO ROSTER READ HERE. With roster.json emptied -- and in the other shapes that leave c_mode
+  # blank -- `decide --force` already returns 1 and writes nothing, in a `token` room and a
+  # `roundtable` one alike, because v_verdict cannot compute a state. Measured. It is NOT true
+  # of every unusable roster: over `{...}\n{}` c_barrier answers `closed`, this gate passes, and
+  # a record is written from a roster c_visible refuses to trust. That shape is left alone
+  # because `recv` releases the round on it too, so a check here would close no leak.
+  #
+  # AND NOT ONCE A RECORD EXISTS, for the same disclosure reason: `decision` hands that record
+  # to anyone, so the positions are already out and refusing the rewrite protects nothing while
+  # costing the documented exit codes. Two reachable states need it. A room recorded `decided`
+  # must still answer 3, which the placement above already secures. A room recorded
+  # `unresolved` falls through `*)` under `--force`, and there this fired absurdly: closing an
+  # EMPTY round stamps the closer's own trailing `decide` message `round: 0` -- c_send does that
+  # whenever the barrier is open and the sender has not posted -- so that message then reads as
+  # a foreign opening position and gated every other seat out of ever re-closing. Measured.
+  #
+  # The message is the ONE authoritative statement of the rule: SKILL.md describes the behaviour
+  # and its cost without restating it, and t7 asserts a substring rather than a copy.
+  # The last test asks for SOMEBODY ELSE'S position, and the `.from != $me` is not redundant
+  # with the test before it, though it looks it. `c_posted_round0` and `c_round0` read the same
+  # documents, but not the same way: the former pipes them through `jq -r … | .id | head -1`, so
+  # a round-0 message in MY OWN lane carrying an empty `.id` -- which `c_send` never mints, but a
+  # hand-written or harness-written lane file does -- comes back as an empty line that `$( )`
+  # strips, and the second test then reads "I have not posted" about a position I did post.
+  # Without this filter the gate refuses the ONE seat that had posted, telling it another seat
+  # has spoken and it has not, while withholding nothing from it. Measured.
+  #
+  # It prints the WHOLE MESSAGE compactly rather than any field of it, and that is the third
+  # attempt at this line. Each earlier one was defeated by a value whose FIRST LINE can be empty
+  # while the message is not, which is all `head -1` reads:
+  #
+  #   The first printed no field at all -- `c_round0 | head -1`, no filter -- and leaned on
+  #   `c_posted_round0` to have established that no position was mine. That reader goes through
+  #   `.id`, a string the message chose, so an empty one in MY OWN lane made it report that I had
+  #   not posted and the gate refused the one seat that had, while withholding nothing from it.
+  #   The lesson of that one is the `.from != $me` filter, not the field.
+  #
+  #   The second added the filter and printed `.from`, which looked immune: it is c_all's
+  #   derivation from the LANE DIRECTORY, so it is a real directory name. But `head -1` reads its
+  #   FIRST LINE, and a directory name may contain a newline. A lane called $'\nz' holding a
+  #   `round: 0` message made this test read empty, the
+  #   gate stand down, and a seat that had posted nothing close the round and take the record
+  #   with every position in it. Measured, end to end. That name cannot come from `c_send`
+  #   (`c_atomic` does not mkdir), which is exactly the premise the `.id` case above rests on
+  #   too, so it is the same threat and not a smaller one.
+  #
+  # `jq -c` emits one line per document with every control byte escaped, so the value is
+  # non-empty whenever a document matched and there is no field left to be empty. c_all's own
+  # header records the same class -- a peer-chosen lane name reaching a reader raw -- for its
+  # error path.
+  if [ "$(c_barrier)" != closed ] && [ -z "$(c_posted_round0)" ] && [ -z "$(c_recorded_status)" ] \
+     && [ -n "$(c_round0 | jq -c --arg me "$ME" 'select(.from != $me)' | head -1)" ]; then
+    echo "council decide: another seat has stated an opening position and you have not — refusing to close a round you have not taken part in, because the record would hand you every position in it. Post your position first; the round also closes on its own once its deadline passes." >&2
+    return 2
+  fi
   g=$(_graph) && [ -n "$g" ] || {
     echo "council decide: this room's argument graph could not be computed — refusing to write a record. The error above says what could not be read." >&2
     return 1
@@ -495,7 +611,15 @@ v_decide() {
       printf '\n'
     fi
     printf '## Transcript\n\n'
-    v_transcript | sed 's/^/* /'
+    # c_canon, NOT v_transcript: the record is the room's durable output and must hold the
+    # whole log, while `transcript` is what the seat running this may see. They differ while an
+    # opening barrier round is open -- a room `--force`-closed mid-round -- AND for the room's
+    # whole life whenever `roster.json` is not one JSON object, because c_visible withholds on
+    # that too (its header says why). Do not narrow this to the open round: with the roster
+    # damaged after the round has closed, the seat's view is its own lane and the record
+    # rendered from it would be missing every other position, written at rc 0 and impossible to
+    # tell from a complete one afterwards.
+    c_canon | _render_transcript | sed 's/^/* /'
     if [ -f "$ROOM/agenda.md" ] && _agenda_is_long "$ROOM/agenda.md"; then
       printf '\n## The agenda in full\n\n'
       cat "$ROOM/agenda.md"

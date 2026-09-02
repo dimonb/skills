@@ -173,10 +173,32 @@ is not.
 `council.sh decide` **refuses** a room that is not ready. `--force` writes an honest
 `unresolved` record listing what is still open — a valid outcome, not a failure to hide.
 
-`--force` is not unconditional: **while a room is still open**, if its **roster** cannot be
-read, `decide` refuses with **exit 1** and writes nothing, `--force` included, because there is
-then no participant list to write a record about. Exit 2 still means "not ripe" and 3 "already
-decided", so a supervisor that retries on 2 must not retry on 1.
+`--force` is not unconditional. Two conditions refuse it:
+
+* **while a room is still open**, if its **roster** cannot be read, `decide` refuses with
+  **exit 1** and writes nothing, `--force` included, because there is then no participant list
+  to write a record about;
+* **while an opening barrier round is not verifiably closed and another seat has stated a
+  position**, a seat that has stated none is refused with **exit 2**. Closing a room writes the
+  record from the whole log and `decision` hands it to anyone, so without this a seat that owed
+  a position could read every other by closing the round — two commands, available to every
+  participant and to no supervisor, since `decide` takes `--me`. A seat that has posted keeps
+  the escape hatch.
+
+That second one refuses exactly when the record would hand over a position the caller may not
+read, and **not** merely because the round is open: a round nobody has posted in holds nothing
+to disclose, so any seat may still close it. That distinction is the difference between a gate
+and a wedge — a barrier round with no positions in it never closes on its own (the deadline is
+only measured from the first position), so refusing there would have left the room unclosable
+by anyone, `decide` being `--me`-gated.
+
+It still has a cost, named here rather than left to be discovered: **a seat that has not posted
+cannot close a round others have started.** Post a position first — that is always available,
+and it is what the refusal names. Waiting also works once a position exists, since the round
+then closes past `round_deadline_ms` with a quorum and unconditionally past twice it.
+
+Exit 2 still means "not ripe" and 3 "already decided", so a supervisor that retries on 2 must
+not retry on 1.
 
 **A room that has already closed is the exception, and it is a remainder rather than a design.**
 `--force` over a room whose record is on disk rewrites that record, and it does so at exit 0
@@ -185,9 +207,12 @@ even when the roster has since become unreadable — the rewritten header then c
 here; only the sentence above it is new, and an earlier revision of it claimed the refusal
 covered this case too. Re-forcing a closed room whose roster is broken is not something to do.
 
-**A lane file that does not parse is a different case, and a worse one.** The whole-log readers
-— `order`, `transcript`, `claims`, `verdict`, `status` — report the room as EMPTY rather than as
-broken, and `decide --force` will write a record over it saying there were no objections. Only
+**A lane file that does not parse is a different case, and a worse one.** The readers that glob
+the whole log on every call — `order`, `transcript`, `claims`, `verdict`, `status` — report the
+room as EMPTY rather than as broken, and `decide --force` will write a record over it saying
+there were no objections. (A participant's view of the first three, and of `status`'s display
+half, is cut further by an open barrier round; see Modes. That does not change this paragraph:
+an unreadable lane file empties them all either way.) Only
 the diagnostic on stderr says otherwise, and it is the thing to act on. Treat a `council:` line
 about a log that could not be read as invalidating every other answer in the same breath.
 
@@ -268,8 +293,10 @@ rebuilt.
 cursors are files that outlived it, so `recv` hands it nothing — from inside, a room
 twenty turns deep looks brand new. This is why `protocol/_channel.md` carries a section
 telling *every* participant, relaunched or not, to read `council.sh transcript` when it
-starts into a room that is not empty — and to skip that when the opening barrier is still
-open, because `transcript` does not respect the barrier and `recv` does. The room is not
+starts into a room that is not empty. It is safe to read during an open barrier round as
+well: every reader holds the barrier, so a restarted seat is caught up on no more than `recv`
+has released — a lane holding another seat's opening position is withheld whole, and
+everything in it arrives when the round does. The room is not
 replayed to a restarted seat, and it is not made to be: a cursor has exactly one writer,
 which is the participant itself, and that invariant is what lets the whole transport work
 without a lock.
@@ -444,9 +471,42 @@ Rotation moves the anchor, it does not remove it — in a room of two or three t
 speaker still sees the first position before forming its own, which is exactly the case
 `debate` exists for. So in a roundtable room every participant writes its opening position
 without waiting for a turn, and **nobody reads anyone else's until the round is complete**.
-`recv` withholds them; a lane stops at its withheld message instead of skipping past it, so
-nothing is lost and no cursor runs ahead of unread words. A second message in an open round
-is refused (exit 5) rather than queued.
+A lane stops at its withheld message instead of skipping past it, so nothing is lost and no
+cursor runs ahead of unread words. A second message in an open round is refused (exit 5)
+rather than queued — unless it is an urgent `--hand` one, which is allowed before and after a
+seat posts.
+
+**Every reader holds it, not only `recv`.** `transcript`, `claims`, `order` and `status` show
+a participant no more than `recv` has already released **for any lane `recv` reads** — a lane
+is withheld whole — so none of the verbs a participant reads the room with hands it another
+seat's opening words. Each of them says on stderr when the barrier is why a read looks thin,
+so "nothing was said" cannot be mistaken for "nothing was shown to you". The bound is
+one-sided on purpose: a lane withheld for its opening position keeps that seat's other
+messages waiting with it (a `--hand` message is allowed during an open round), and a lane the
+roster does not list is read here and never delivered by `recv` at all — that second one is
+issue #66's divergence, not this mode's.
+
+A **supervisor** — anyone reading the room without `--me` — is exempt and sees all of it, which
+is what makes `status` usable for watching a round that has not finished. The seat a human
+takes with `up --me` gets no launcher, so nothing exports `COUNCIL_ME` for it: **that seat must
+pass `--me` on every command, reads included**, or its reads are supervisor reads.
+
+The room's own arithmetic is exempt too — turn counts, the floor and `verdict` are computed
+from the whole log, because they are facts about the room rather than about who is asking, and
+they report counts and message ids, never text. **The record is the one real exception, and
+deliberately so:** `decide` writes it from the whole log, because a record holding only the
+writer's own position would be worse than none, so a room `--force`-closed mid-round hands
+every position to whoever runs `decision`.
+
+`decide` takes `--me`, so a supervisor cannot run it at all and any participant can. That made
+`decide --force` then `decision` a two-command bypass of the barrier, available to every seat
+and to none of the people watching — so **`decide` now refuses from a seat that has stated no
+position while the round is not verifiably closed and another seat has stated one** (see the
+`--force` conditions above; a round nobody has posted in holds nothing to disclose, so any seat
+may still close that). A
+seat that has posted can still close the room and read the record; what that costs it is the
+room, since the record is on disk, `board/status` is set, and every other seat's stop signal
+fires. Loud rather than quiet, and only for a seat that took part.
 
 When the last position lands, all of them are released at once, in the room's one order.
 The round then counts as **one whole lap**, and everything after it is turn-taking, so no

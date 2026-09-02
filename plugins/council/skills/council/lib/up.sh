@@ -250,6 +250,19 @@ council_up() {
     ( . "$SKILL/adapters/${kinds[$i]}.sh"; adapter_notes "${peers[$i]}" )
   done
   printf '\nwatch:  council.sh status --room %s\nspeak:  council.sh say <peer> "..." --room %s\n' "$rname" "$rname"
+  # THE SEAT YOU TOOK YOURSELF NEEDS `--me` ON READS, NOT JUST ON `send`, and it is the one
+  # seat nothing tells: the loop above skips `_write_launcher` for it, so no shell of yours
+  # ever exports COUNCIL_ME, and this function's own `watch:` line above omits it. A read
+  # without it is a SUPERVISOR read, which the opening barrier deliberately does not withhold
+  # from -- so in a roundtable room that seat was handed the positions it owed one of its own
+  # against, by the very command printed here, on a healthy room. `if`, not `&&`: this is the
+  # function's last statement and a false test would become its exit status.
+  if [ -n "$me" ]; then
+    printf 'as %s:  council.sh <verb> --room %s --me %s   <- on EVERY command, reads included:\n' \
+      "$me" "$rname" "$me"
+    printf '        you have no launcher to export COUNCIL_ME, and a read without --me is a\n'
+    printf '        supervisor read, which the opening barrier does not withhold from.\n'
+  fi
 }
 
 council_rooms() {

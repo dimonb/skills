@@ -8,7 +8,10 @@ Room: `__ROOM__`. Read the agenda first — `council.sh agenda`, not the path.
     bash __SKILL__/council.sh <verb> ...
 
 The environment (`COUNCIL_ROOM`, `COUNCIL_ME`) is already exported by your launcher — leave
-it alone.
+it alone. **One seat is the exception: the one a human took with `up --me <peer>`.** That seat
+has no launcher, so nothing exports `COUNCIL_ME` for it and it must pass `--me <peer>` on
+every command, **reads included** — a read without it is a supervisor read, and the opening
+barrier does not withhold from a supervisor.
 
     council.sh agenda                             the question this room is arguing
     council.sh protocol                           these rules and your role, again
@@ -18,7 +21,8 @@ it alone.
     council.sh status                             whose turn, what is on the table, what is open
     council.sh claims                             the objection graph
     council.sh decision                           the record (exit 1 = not written yet, not an error)
-    council.sh transcript                         everything said so far, in order
+    council.sh transcript                         everything you may see, in order (an open
+                                                  round withholds the rest — see below)
 
 **Exit code 4 from `recv` is NOT an error.** It means "nobody said anything within the
 timeout". The only correct reaction is to call `recv` again. Do not fix it, do not treat it
@@ -30,6 +34,17 @@ while `send` keeps returning 6, with nothing new arriving — the room is stoppe
 quiet: its participant list cannot be read, and no seat can speak until a human repairs
 `roster.json`. Say so to whoever is supervising and stop; looping cannot clear it.
 
+**Two `council:` lines begin `the opening`, and they mean opposite things.**
+
+* `the opening round is not complete` is the barrier telling you why a read looks thin. It
+  clears itself when the round completes — keep going.
+* `the opening barrier cannot be resolved` means `roster.json` needs a human. **Try `send`
+  before you conclude anything**: in most damaged shapes it fails for every seat and you are in
+  the state above, but in some a seat that has not yet posted can still post its position, and
+  an urgent `--hand` message goes through in all of them. Measured on ten damaged shapes:
+  `--hand` succeeded in all ten, an ordinary position in two. So report the line to whoever is
+  supervising, take your turn if `send` lets you, and stop once `send` is failing too.
+
 ## The opening round, if the room runs a barrier (`roundtable`)
 
 `council.sh status` says `OPEN ROUND` when that is your case. Then:
@@ -37,9 +52,18 @@ quiet: its participant list cannot be read, and no seat can speak until a human 
 * **speak straight away, do not wait for your turn** — one message with your position on
   the agenda;
 * **you will not see anyone else's position** until everyone has spoken: `recv` withholds
-  them. That is not a failure and not an empty room, it is the point of the barrier — your
-  position must be yours, not a reaction to someone else's;
-* a second message in an open round is refused (exit 5). Once you have spoken, wait;
+  them, and so do `transcript`, `claims`, `order` and `status` — none of the verbs you read
+  the room with will hand you another seat's words. That is not a failure and not an empty
+  room, it is the barrier — your position must be yours, not a reaction to someone else's.
+  (`decision` is the exception, and it means the round is over: it prints the room's record,
+  which holds the whole log. If it ever prints while your round is still open, some seat ran
+  `decide --force`, so the room is closed. Stop, and say so to whoever is supervising; do not
+  treat what you just read as a round you can still write into. You can only do it yourself
+  while nobody else has stated a position — once one has, `decide` refuses you until you state
+  yours, exit 2;)
+* a second message in an open round is refused (exit 5) — **unless** it is an urgent `--hand`
+  one (below), which is allowed before and after you post and is the one thing you may add.
+  Once you have spoken, wait;
 * when the round completes, `recv` hands you every position at once, and from there the
   room is turn-taking.
 
@@ -52,9 +76,12 @@ like agreement but will never become a decision.
 ## Starting into a room that is already running
 
 **If `status` says `OPEN ROUND`, stop here — the section above is your case.** Post your
-position first and read nothing: the barrier is the point, and `transcript` and `claims` do
-not respect it, so reading them would hand you exactly what `recv` is withholding. Catch up
-when the round releases.
+position first: the barrier is the point, and your position must be yours. Reading is safe
+while you wait — `transcript`, `claims`, `order` and `status` never show you more than `recv`
+has released, and they say on stderr when the barrier is why a read looks thin. They can show
+you *less*: a lane withheld for its opening position keeps that seat's other messages waiting
+with it. So a thin read during an open round is the barrier, not an empty room, and everything
+arrives when the round releases.
 
 **Otherwise, if the room is not empty, read `council.sh transcript` before you speak.**
 
