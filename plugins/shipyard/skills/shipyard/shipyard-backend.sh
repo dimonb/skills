@@ -60,12 +60,17 @@ DRV_CONTAINER_SUFFIX="-ai"
 . "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/agent-driver.sh"
 
 # --- naming: the repo-key rule that is shipyard's, not the driver's -------------------------
-# shipyard REQUIRES a git repo and sanitises ':' -> '_' in the stem — DISTINCT from council, which
-# takes the driver's forgiving default (basename of the git top-level, or of $PWD outside a repo).
-# So shipyard injects its own DRV_REPO_KEY. The driver reads it only on the repo-stem fallback path
-# (no live agterm workspace); an empty value outside a repo would fall back to the driver's pwd
-# basename rather than fail, but that is unreachable in practice — every shipyard entry point
-# already needs the repo for its mailbox and slot, so the container is never derived outside one.
+# shipyard sanitises ':' -> '_' in the stem and derives its container from a git repo — DISTINCT
+# from council, which takes the driver's forgiving default (basename of the git top-level, or of
+# $PWD outside a repo). shipyard injects its own DRV_REPO_KEY, which the driver reads only on the
+# repo-stem fallback path (no live agterm workspace), so the ':' -> '_' transform holds wherever a
+# container is actually derived (t8 asserts it). One edge is NOT reproduced exactly: outside a git
+# repo the old code failed (empty + exit 1), whereas an empty DRV_REPO_KEY here lets the driver
+# fall back to the pwd basename. shipyard is a per-repo tool (worktrees + a .git mailbox), so this
+# surfaces only if a report is run outside every repo — cosmetically naming a pwd-based container in
+# its "no live terminals" line; a same-named terminal container would then read as ship slots.
+# Reproducing the failure exactly would mean re-duplicating the driver's override/pin/derive
+# precedence in this adapter — the very duplication this migration removes — so it is left as is.
 shipyard_repo_key() {
   local root
   root=$(git rev-parse --show-toplevel 2>/dev/null) || {
