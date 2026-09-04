@@ -626,6 +626,18 @@ expect_fail "the untracked predicate fails CLOSED when git errors" \
 rm -rf .claude/skills/_probe-local
 cp "$SCRATCH/check-predicate.bak" scripts/check.sh
 
+# 25 — check 11: a vendored driver copy that drifts from the canonical reds the gate. Backup and
+# restore by hand (not `git checkout --`) so the probe holds whether or not the spike is committed.
+cp plugins/council/skills/council/lib/agent-driver.sh "$SCRATCH/drv-copy.bak"
+printf '# drift\n' >> plugins/council/skills/council/lib/agent-driver.sh
+expect_fail "shared driver copy drifted from canonical" "shared driver copy drifted"
+cp "$SCRATCH/drv-copy.bak" plugins/council/skills/council/lib/agent-driver.sh
+
+# 26 — check 11 fails CLOSED: a missing vendored copy reds too, it does not silently pass.
+mv plugins/shipyard/skills/shipyard/agent-driver.sh "$SCRATCH/drv-copy2.bak"
+expect_fail "a missing shared driver copy" "shared driver copy is missing"
+mv "$SCRATCH/drv-copy2.bak" plugins/shipyard/skills/shipyard/agent-driver.sh
+
 echo
 echo "assertions proven: $pass   not proven: $nocatch"
 [ "$nocatch" -eq 0 ] || exit 1

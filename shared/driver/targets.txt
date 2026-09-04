@@ -1,0 +1,5 @@
+# Vendored copies of shared/driver/agent-driver.sh — one path per line.
+# `scripts/sync-driver.sh` writes each; `scripts/check.sh` (check 11) fails the gate on drift.
+# Each plugin ships its own copy because a Codex plugin cannot depend on another plugin.
+plugins/council/skills/council/lib/agent-driver.sh
+plugins/shipyard/skills/shipyard/agent-driver.sh
