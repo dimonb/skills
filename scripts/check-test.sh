@@ -638,6 +638,27 @@ mv plugins/shipyard/skills/shipyard/agent-driver.sh "$SCRATCH/drv-copy2.bak"
 expect_fail "a missing shared driver copy" "shared driver copy is missing"
 mv "$SCRATCH/drv-copy2.bak" plugins/shipyard/skills/shipyard/agent-driver.sh
 
+# 27 — check 11 fails CLOSED: a missing canonical reds the gate, it does not silently pass. Backup
+# and restore by hand (like 25/26). check 1's bash -n also reds on the still-tracked missing file,
+# so the unique $2 "shared driver canonical is missing" is what keeps this probe on check 11's arm.
+mv shared/driver/agent-driver.sh "$SCRATCH/drv-canonical.bak"
+expect_fail "a missing shared driver canonical" "shared driver canonical is missing"
+mv "$SCRATCH/drv-canonical.bak" shared/driver/agent-driver.sh
+
+# 28 — check 11 fails CLOSED: a missing target list reds the gate. targets.txt is not a *.sh file,
+# so no other check touches it — this arm has no backstop but this probe.
+mv shared/driver/targets.txt "$SCRATCH/drv-targets.bak"
+expect_fail "a missing shared driver target list" "shared driver target list is missing"
+mv "$SCRATCH/drv-targets.bak" shared/driver/targets.txt
+
+# 29 — check 11's "compared nothing" guard: a target list with no active entries (only comments or
+# blanks) reds the gate rather than passing green having compared zero copies. Same no-backstop arm
+# as 28, and the one most likely to rot silently if the driver_n>0 guard is ever dropped.
+cp shared/driver/targets.txt "$SCRATCH/drv-targets-empty.bak"
+printf '# only a comment, no target paths\n' > shared/driver/targets.txt
+expect_fail "an empty shared driver target list" "shared driver target list is empty"
+cp "$SCRATCH/drv-targets-empty.bak" shared/driver/targets.txt
+
 echo
 echo "assertions proven: $pass   not proven: $nocatch"
 [ "$nocatch" -eq 0 ] || exit 1
