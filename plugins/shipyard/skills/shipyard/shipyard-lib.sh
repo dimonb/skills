@@ -122,9 +122,16 @@ shipyard_payload() {
   esac
 }
 
-# Resolve the container ONCE, here at the end — shipyard-backend.sh cannot do it itself: it is
-# sourced from the top of this file, before shipyard_mailbox (which the pin lookup needs) is
-# defined. Every dispatch asks via `$(shipyard_container)`, i.e. from a subshell, so without
-# this each one would re-read the pin file and, unpinned, re-query the agterm tree.
-# A failure here is not fatal: it just leaves the cache empty and the lookup lazy.
+# Point the shared driver's container pin at shipyard's mailbox — resolved HERE, at the end,
+# because shipyard-backend.sh (which sources the driver) is sourced from the top of this file,
+# before shipyard_mailbox is defined. Set in THIS (main) shell so every $(shipyard_*) fork inherits
+# it; NOT exported (a launched child and the tmux server must not see it). Empty when outside a
+# repo, which leaves the driver unpinned — exactly what the old pin lookup did when the mailbox
+# could not be resolved.
+DRV_CONTAINER_PIN_DIR=$(shipyard_mailbox 2>/dev/null) || DRV_CONTAINER_PIN_DIR=""
+
+# Resolve the container ONCE, here at the end, for the same reason: shipyard-backend.sh cannot do
+# it itself (the pin dir above is only known now). Every dispatch asks via `$(shipyard_container)`,
+# i.e. from a subshell, so without this each one would re-read the pin file and, unpinned, re-query
+# the agterm tree. A failure here is not fatal: it just leaves the cache empty and the lookup lazy.
 _SHIPYARD_CONTAINER=$(shipyard_container 2>/dev/null) || _SHIPYARD_CONTAINER=""

@@ -31,7 +31,7 @@ set -uo pipefail
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 tests=(t1-totals.sh t2-window.sh t3-probe.sh t4-band.sh t5-agent.sh t6-codex-ctx.sh
-       t7-continuity.sh)
+       t7-continuity.sh t8-backend-adapter.sh)
 
 rc=0
 for t in "${tests[@]}"; do

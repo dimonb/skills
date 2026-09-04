@@ -671,7 +671,9 @@ check 1 "$(grep -Fc 'lifecycle state was preserved' "$TMP/nested-down.err")" \
   "nested session failure preserves lifecycle state"
 
 tmux_absent=$(
-  _SHIPYARD_BE=tmux
+  # Force the tmux branch in-process. _DRV_BE is the shared driver's backend cache (shipyard's
+  # backend now delegates to it); it was _SHIPYARD_BE before the drv_* migration.
+  _DRV_BE=tmux
   _SHIPYARD_CONTAINER=test-ai
   tmux() { printf '%s\n' "can't find session: test-ai" >&2; return 1; }
   rc=0
@@ -680,7 +682,7 @@ tmux_absent=$(
 )
 check rc=0 "$tmux_absent" "an absent final tmux session is authoritative empty state"
 tmux_error=$(
-  _SHIPYARD_BE=tmux
+  _DRV_BE=tmux
   _SHIPYARD_CONTAINER=test-ai
   tmux() { printf '%s\n' 'permission denied' >&2; return 1; }
   rc=0
