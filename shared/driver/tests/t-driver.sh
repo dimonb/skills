@@ -4,11 +4,12 @@
 # Everything here is a PURE read over environment variables and two faked CLIs (agtermctl, tmux)
 # placed on PATH — NO live terminal, no network, no real agterm/tmux. It covers the driver's
 # deterministic surface: backend selection, drv_shq quoting, container-name derivation for BOTH
-# caller variants, drv_target handle construction, drv_signal, and the COMMAND each write/interaction
-# dispatch (launch/tell/submit/kill/read/focus) constructs — the fakes log their argv, so the
-# backend command line (new-session vs new-window, the AGTERM_* scrub, Enter vs KPEnter, the
-# send-keys -l literal) is asserted without a live terminal. Only a real spawn — the launched child
-# actually running — is out of scope.
+# caller variants, drv_target handle construction, drv_signal, and the COMMAND the write/interaction
+# dispatches construct — the fakes log their argv, so the command line is asserted without a live
+# terminal: drv_launch on BOTH backends (agterm's zsh -lc session; tmux new-session vs new-window
+# and the AGTERM_* scrub); drv_tell/submit/kill/focus on tmux (send-keys -l, Enter vs KPEnter,
+# kill-window, select-window); and drv_read on tmux plus, via drv_signal, agterm. Out of scope: a
+# real spawn (the launched child actually running) and the agterm argv of tell/submit/kill/focus.
 #
 # The driver's baseline interpreter is bash >= 5, so re-exec into one if a stock bash 3.2 started
 # us (the same guard council.sh uses), or a future bash-5-only construct in the driver would fail
