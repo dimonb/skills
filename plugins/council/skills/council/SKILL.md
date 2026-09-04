@@ -599,14 +599,19 @@ produced one false test result during development. Do not pipe status through a 
 | `lib/lib.sh` | transport: lanes, Lamport, cursors, bell, floor, turn conflicts |
 | `lib/verbs.sh` | send/recv/claims/verdict/status/decide |
 | `lib/up.sh` | room creation, roster, protocols, launchers, teardown |
-| `lib/term.sh` | the terminal a participant lives in (agterm or tmux) |
+| `lib/term.sh` | the terminal a participant lives in (agterm or tmux) — a thin adapter over the shared driver |
+| `lib/agent-driver.sh` | vendored copy of the shared agent-console driver (`shared/driver/agent-driver.sh`); `term.sh` delegates to it |
 | `lib/claims.jq` | the argument graph and the closure rules |
 | `adapters/*.sh` | how each agent CLI is launched, and what it needs |
 | `protocol/_channel.md` | the channel rules every participant gets |
 | `scenarios/*.md` | roles per scenario |
 | `tests/run-all.sh` | the suite (`--full` adds load and latency runs) |
 
-`lib/term.sh` is deliberately a **second copy** of the abstraction the `shipyard` skill
-carries, not a shared import: Codex has no plugin-dependency field, so a cross-plugin
-source would work in one agent and silently break in the other. It is kept small so the
-two cannot drift far — fix a backend bug in one, check the other.
+`lib/term.sh` is a thin council **adapter** over the shared agent-console driver
+(`shared/driver/agent-driver.sh`, vendored beside it as `lib/agent-driver.sh` and kept
+byte-identical by `scripts/sync-driver.sh` and the repo gate's check 11): it maps council's
+knobs onto the driver's `DRV_*` variables and delegates each `ct_*` verb to the matching
+`drv_*` one. A backend bug is fixed once, in the shared driver — there is no second copy here
+to keep in step. The driver is vendored rather than imported because a Codex plugin cannot
+depend on another plugin, so a cross-plugin source would work in one agent and silently break
+in the other.
