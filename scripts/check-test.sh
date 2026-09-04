@@ -27,7 +27,7 @@ cd "$(dirname "$0")/.."
 CORE=plugins/ship/skills/ship/SKILL.md
 TESTS_DIR=plugins/council/skills/council/tests
 RUNNER=$TESTS_DIR/run-all.sh
-GUARDED='.claude .agents plugins scripts .claude-plugin'
+GUARDED='.claude .agents plugins scripts .claude-plugin shared'
 
 # The guard comes FIRST and the trap is installed only after it passes. Installing the trap
 # earlier makes the guard's own early exit run the restore, which would discard exactly the
