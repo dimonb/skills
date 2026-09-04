@@ -11,7 +11,7 @@
 # a boundary a symlink cannot cross.
 #
 # STATUS: spike stub. Only the interface (the `drv_*` contract) is fixed here; the agterm|tmux
-# bodies and the per-kind adapters land in Phase 2 (see .planning/REQUIREMENTS.md, DRV-*).
+# bodies and the per-kind adapters land in a later change.
 
 # Bumping this is the cheapest way to prove sync + the drift gate end to end.
 _DRV_VERSION=0
