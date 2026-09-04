@@ -4,9 +4,11 @@
 # Everything here is a PURE read over environment variables and two faked CLIs (agtermctl, tmux)
 # placed on PATH — NO live terminal, no network, no real agterm/tmux. It covers the driver's
 # deterministic surface: backend selection, drv_shq quoting, container-name derivation for BOTH
-# caller variants, drv_target handle construction, and the minimal drv_signal read. The launch,
-# tell, submit, kill and focus dispatches are one-liners over the same drv_target + backend case,
-# so drv_target and the fakes are what pin them; a real spawn is deliberately out of scope.
+# caller variants, drv_target handle construction, drv_signal, and the COMMAND each write/interaction
+# dispatch (launch/tell/submit/kill/read/focus) constructs — the fakes log their argv, so the
+# backend command line (new-session vs new-window, the AGTERM_* scrub, Enter vs KPEnter, the
+# send-keys -l literal) is asserted without a live terminal. Only a real spawn — the launched child
+# actually running — is out of scope.
 #
 # The driver's baseline interpreter is bash >= 5, so re-exec into one if a stock bash 3.2 started
 # us (the same guard council.sh uses), or a future bash-5-only construct in the driver would fail
@@ -72,7 +74,14 @@ case "$1" in
   list-windows) cat "${FAKE_TMUX_WINDOWS:-/dev/null}"; exit 0 ;;
   has-session)  exit "${FAKE_TMUX_HASSESSION_RC:-0}" ;;
   capture-pane) cat "${FAKE_TMUX_CAPTURE:-/dev/null}"; exit 0 ;;
-  *) printf '%s\n' "$*" >>"${FAKE_TMUX_LOG:-/dev/null}"; exit 0 ;;
+  *) printf '%s\n' "$*" >>"${FAKE_TMUX_LOG:-/dev/null}"
+     # When the server is (re)started, record any AGTERM_* variable that survived into this
+     # process's environment, so the launch scrub can be asserted: a scrubbed var leaves no line.
+     case "$1" in
+       new-session|new-window)
+         env | sed -n 's/^\(AGTERM_[A-Za-z_]*\)=.*/leak:\1/p' >>"${FAKE_TMUX_LOG:-/dev/null}" ;;
+     esac
+     exit 0 ;;
 esac
 EOF
 chmod +x "$FAKEBIN/agtermctl" "$FAKEBIN/tmux"
@@ -187,7 +196,80 @@ tmux_miss_rc=0
 ( PATH="$FAKEBIN:$PATH" FAKE_TMUX_WINDOWS="$TMP/windows.txt" _DRV_BE=tmux DRV_CONTAINER_OVERRIDE=cont drv_target nope ) >/dev/null || tmux_miss_rc=$?
 ok "tmux target exits 1 for an absent name" 1 "$tmux_miss_rc"
 
-# --- 5. drv_signal: minimal liveness + capacity ----------------------------------------------
+# --- 5. dispatch command construction --------------------------------------------------------
+# The dispatches are one-liners, but the COMMAND each builds is deterministic and the fakes log it,
+# so a behavioural fork regresses silently unless asserted here. The fakes are on PATH already.
+printf '\n── dispatch command construction ──\n'
+# A window fixture so drv_target resolves "sess" -> cont:0 for the interaction dispatches.
+printf '%s\n' '0 sess' >"$TMP/win-dispatch.txt"
+export PATH="$FAKEBIN:$PATH"
+
+# drv_launch, tmux, NO existing session -> new-session; and every one of the seven AGTERM_* is
+# scrubbed before the server is born. All seven are set to sentinels here, so dropping any one from
+# the scrub array would leave it in the faked server's environment and fail the leak assertion.
+launch_new="$TMP/launch-new.log"
+( export FAKE_TMUX_LOG="$launch_new" FAKE_TMUX_HASSESSION_RC=1 _DRV_BE=tmux DRV_CONTAINER_OVERRIDE=cont \
+    AGTERM_ENABLED=1 AGTERM_PANE=p AGTERM_PANE_ID=pi AGTERM_SESSION_ID=s \
+    AGTERM_SOCKET=so AGTERM_WINDOW_ID=wi AGTERM_WORKSPACE_ID=ws
+  drv_launch sess /work/dir /path/to/launcher >/dev/null )
+grep -q 'new-session -d -s cont -n sess -c /work/dir' "$launch_new" && r=yes || r=no
+ok "tmux launch with no session spawns new-session" yes "$r"
+ok "tmux launch scrubs every AGTERM_* before the server" 0 \
+  "$(grep -cE 'leak:AGTERM_(ENABLED|PANE|PANE_ID|SESSION_ID|SOCKET|WINDOW_ID|WORKSPACE_ID)$' "$launch_new")"
+
+# drv_launch, tmux, EXISTING session -> new-window.
+launch_win="$TMP/launch-win.log"
+( export FAKE_TMUX_LOG="$launch_win" FAKE_TMUX_HASSESSION_RC=0 _DRV_BE=tmux DRV_CONTAINER_OVERRIDE=cont
+  drv_launch sess /work/dir /path/to/launcher >/dev/null )
+grep -q 'new-window -t cont -n sess -c /work/dir' "$launch_win" && r=yes || r=no
+ok "tmux launch with an existing session adds a new-window" yes "$r"
+
+# drv_launch, agterm -> a --create-workspace --no-select --wait session running `zsh -lc 'exec …'`.
+launch_at="$TMP/launch-at.log"
+( export FAKE_AT_LOG="$launch_at" _DRV_BE=agterm DRV_CONTAINER_OVERRIDE=cont
+  drv_launch sess /work/dir /path/to/launcher >/dev/null )
+at_line=$(cat "$launch_at" 2>/dev/null)
+case "$at_line" in
+  *"session new "*"--workspace-name cont"*"--create-workspace"*"--name sess"*"--no-select"*"--wait"*"zsh -lc"*"exec"*)
+    ok "agterm launch builds the zsh -lc --create-workspace --no-select --wait session" yes yes ;;
+  *) ok "agterm launch builds the zsh -lc --create-workspace --no-select --wait session" yes "no: [$at_line]" ;;
+esac
+
+# drv_tell -> send-keys with the literal -l flag.
+tell_log="$TMP/tell.log"
+( export FAKE_TMUX_WINDOWS="$TMP/win-dispatch.txt" FAKE_TMUX_LOG="$tell_log" _DRV_BE=tmux DRV_CONTAINER_OVERRIDE=cont
+  drv_tell sess "hello there" )
+grep -q 'send-keys -t cont:0 -l hello there' "$tell_log" && r=yes || r=no
+ok "tmux tell sends the literal text with -l" yes "$r"
+
+# drv_submit -> Enter by default, KPEnter with `alt`.
+sub_log="$TMP/submit.log"
+( export FAKE_TMUX_WINDOWS="$TMP/win-dispatch.txt" FAKE_TMUX_LOG="$sub_log" _DRV_BE=tmux DRV_CONTAINER_OVERRIDE=cont
+  drv_submit sess )
+grep -q 'send-keys -t cont:0 Enter' "$sub_log" && r=yes || r=no
+ok "tmux submit presses Enter by default" yes "$r"
+sub_alt="$TMP/submit-alt.log"
+( export FAKE_TMUX_WINDOWS="$TMP/win-dispatch.txt" FAKE_TMUX_LOG="$sub_alt" _DRV_BE=tmux DRV_CONTAINER_OVERRIDE=cont
+  drv_submit sess alt )
+grep -q 'send-keys -t cont:0 KPEnter' "$sub_alt" && r=yes || r=no
+ok "tmux submit with alt presses KPEnter" yes "$r"
+
+# drv_kill / drv_focus -> the right window verb; drv_read -> the captured pane.
+kill_log="$TMP/kill.log"
+( export FAKE_TMUX_WINDOWS="$TMP/win-dispatch.txt" FAKE_TMUX_LOG="$kill_log" _DRV_BE=tmux DRV_CONTAINER_OVERRIDE=cont
+  drv_kill sess )
+grep -q 'kill-window -t cont:0' "$kill_log" && r=yes || r=no
+ok "tmux kill closes the window" yes "$r"
+focus_log="$TMP/focus.log"
+( export FAKE_TMUX_WINDOWS="$TMP/win-dispatch.txt" FAKE_TMUX_LOG="$focus_log" _DRV_BE=tmux DRV_CONTAINER_OVERRIDE=cont
+  drv_focus sess )
+grep -q 'select-window -t cont:0' "$focus_log" && r=yes || r=no
+ok "tmux focus selects the window" yes "$r"
+printf '%s\n' 'pane contents here' >"$TMP/cap.txt"
+ok "tmux read returns the captured pane" "pane contents here" \
+  "$(FAKE_TMUX_WINDOWS="$TMP/win-dispatch.txt" FAKE_TMUX_CAPTURE="$TMP/cap.txt" _DRV_BE=tmux DRV_CONTAINER_OVERRIDE=cont drv_read sess)"
+
+# --- 6. drv_signal: minimal liveness + capacity ----------------------------------------------
 printf '\n── drv_signal ──\n'
 # Dead: the name has no live terminal in the tree -> "dead|gone", non-zero.
 sig_dead=$(PATH="$FAKEBIN:$PATH" FAKE_AT_TREE="$TMP/tree.json" _DRV_BE=agterm DRV_CONTAINER_OVERRIDE=proj drv_signal nope); sig_dead_rc=$?
@@ -202,6 +284,10 @@ ok "signal for a live session exits 0" 0 "$sig_idle_rc"
 printf '%s\n%s\n' '› earlier prompt' 'Working (2s · esc to interrupt)' >"$TMP/screen-busy.txt"
 ok "signal for a busy session" "live|busy" \
   "$(PATH="$FAKEBIN:$PATH" FAKE_AT_TREE="$TMP/tree.json" FAKE_AT_TEXT="$TMP/screen-busy.txt" _DRV_BE=agterm DRV_CONTAINER_OVERRIDE=proj drv_signal s1)"
+# The alternate idle prompt glyph the driver also accepts.
+printf '%s\n%s\n' 'earlier output' '❯ ready' >"$TMP/screen-idle2.txt"
+ok "signal idle via the alternate prompt glyph" "live|idle" \
+  "$(PATH="$FAKEBIN:$PATH" FAKE_AT_TREE="$TMP/tree.json" FAKE_AT_TEXT="$TMP/screen-idle2.txt" _DRV_BE=agterm DRV_CONTAINER_OVERRIDE=proj drv_signal s1)"
 # Live but an empty screen -> unknown (can't tell without a per-kind read).
 : >"$TMP/screen-empty.txt"
 ok "signal for a live but blank screen" "live|unknown" \
