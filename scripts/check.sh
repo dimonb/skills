@@ -13,6 +13,7 @@
 # 8. no non-Latin script in any file, untracked included (the checkable half of "English")
 # 9. no council test names the shared temp parent (the pre-run-root shape); see §9 for its limits
 # 10. every council test on disk is registered in run-all.sh, so none silently stops running
+# 11. every vendored copy of the shared driver is byte-identical to its one canonical source
 set -uo pipefail
 cd "$(dirname "$0")/.."
 ROOT_P=$(pwd -P)          # physical repo root; see the symlink containment check below
@@ -496,6 +497,31 @@ else
         "council test on disk but not registered in $runner (it never runs): $(printf '%s' "$unregistered" | tr '\n' ' ')"
     fi
   fi
+fi
+
+# 11 — the shared driver is one source of truth. Each plugin ships its own copy because a Codex
+# plugin cannot depend on another plugin, so a symlink cannot cross that boundary; the gate is
+# what keeps the copies identical. Fails CLOSED — a missing canonical, an absent or empty target
+# list, or a missing copy each red, so "compared nothing" is never read as OK.
+driver_canonical=shared/driver/agent-driver.sh
+driver_targets=shared/driver/targets.txt
+if [ ! -f "$driver_canonical" ]; then
+  fail "shared driver canonical is missing: $driver_canonical"
+elif [ ! -f "$driver_targets" ]; then
+  fail "shared driver target list is missing: $driver_targets"
+else
+  driver_n=0
+  while IFS= read -r t || [ -n "$t" ]; do
+    case "$t" in ''|\#*) continue ;; esac
+    driver_n=$((driver_n + 1))
+    if [ ! -f "$t" ]; then
+      fail "shared driver copy is missing (run scripts/sync-driver.sh): $t"
+    elif ! cmp -s "$driver_canonical" "$t"; then
+      fail "shared driver copy drifted from $driver_canonical (run scripts/sync-driver.sh): $t"
+    fi
+  done < "$driver_targets"
+  # A target list that matched nothing means the check compared nothing — loud, not silent.
+  [ "$driver_n" -gt 0 ] || fail "shared driver target list is empty: $driver_targets"
 fi
 
 [ $rc -eq 0 ] && echo "check: OK"

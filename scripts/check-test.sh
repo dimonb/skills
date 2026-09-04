@@ -27,7 +27,7 @@ cd "$(dirname "$0")/.."
 CORE=plugins/ship/skills/ship/SKILL.md
 TESTS_DIR=plugins/council/skills/council/tests
 RUNNER=$TESTS_DIR/run-all.sh
-GUARDED='.claude .agents plugins scripts .claude-plugin'
+GUARDED='.claude .agents plugins scripts .claude-plugin shared'
 
 # The guard comes FIRST and the trap is installed only after it passes. Installing the trap
 # earlier makes the guard's own early exit run the restore, which would discard exactly the
@@ -625,6 +625,39 @@ expect_fail "the untracked predicate fails CLOSED when git errors" \
   "skill name 'totally-different' != directory '_probe-local'"
 rm -rf .claude/skills/_probe-local
 cp "$SCRATCH/check-predicate.bak" scripts/check.sh
+
+# 25 — check 11: a vendored driver copy that drifts from the canonical reds the gate. Backup and
+# restore by hand (not `git checkout --`) so the probe holds whether or not the spike is committed.
+cp plugins/council/skills/council/lib/agent-driver.sh "$SCRATCH/drv-copy.bak"
+printf '# drift\n' >> plugins/council/skills/council/lib/agent-driver.sh
+expect_fail "shared driver copy drifted from canonical" "shared driver copy drifted"
+cp "$SCRATCH/drv-copy.bak" plugins/council/skills/council/lib/agent-driver.sh
+
+# 26 — check 11 fails CLOSED: a missing vendored copy reds too, it does not silently pass.
+mv plugins/shipyard/skills/shipyard/agent-driver.sh "$SCRATCH/drv-copy2.bak"
+expect_fail "a missing shared driver copy" "shared driver copy is missing"
+mv "$SCRATCH/drv-copy2.bak" plugins/shipyard/skills/shipyard/agent-driver.sh
+
+# 27 — check 11 fails CLOSED: a missing canonical reds the gate, it does not silently pass. Backup
+# and restore by hand (like 25/26). check 1's bash -n also reds on the still-tracked missing file,
+# so the unique $2 "shared driver canonical is missing" is what keeps this probe on check 11's arm.
+mv shared/driver/agent-driver.sh "$SCRATCH/drv-canonical.bak"
+expect_fail "a missing shared driver canonical" "shared driver canonical is missing"
+mv "$SCRATCH/drv-canonical.bak" shared/driver/agent-driver.sh
+
+# 28 — check 11 fails CLOSED: a missing target list reds the gate. targets.txt is not a *.sh file,
+# so no other check touches it — this arm has no backstop but this probe.
+mv shared/driver/targets.txt "$SCRATCH/drv-targets.bak"
+expect_fail "a missing shared driver target list" "shared driver target list is missing"
+mv "$SCRATCH/drv-targets.bak" shared/driver/targets.txt
+
+# 29 — check 11's "compared nothing" guard: a target list with no active entries (only comments or
+# blanks) reds the gate rather than passing green having compared zero copies. Same no-backstop arm
+# as 28, and the one most likely to rot silently if the driver_n>0 guard is ever dropped.
+cp shared/driver/targets.txt "$SCRATCH/drv-targets-empty.bak"
+printf '# only a comment, no target paths\n' > shared/driver/targets.txt
+expect_fail "an empty shared driver target list" "shared driver target list is empty"
+cp "$SCRATCH/drv-targets-empty.bak" shared/driver/targets.txt
 
 echo
 echo "assertions proven: $pass   not proven: $nocatch"
