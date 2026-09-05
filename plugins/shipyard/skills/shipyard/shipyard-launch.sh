@@ -116,6 +116,19 @@ fi
 NAME="ship-$SLOT"
 WORKTREE="$ROOT/.claude/worktrees/$NAME"
 
+# --- admission gate ------------------------------------------------------------
+# Refuse a launch this machine cannot take, BEFORE creating any worktree or terminal. Two
+# gates, each with a distinct exit code and an actionable message: a concurrency cap
+# (SHIPYARD_MAX_SLOTS, counting live ship-* slots) and, on macOS, a memory-pressure floor
+# (SHIPYARD_MEM_MIN_FREE_PCT via `memory_pressure`; a no-op where that detector is absent).
+# See shipyard-admission.sh. Evaluate once here; SHIPYARD_DRY reports the decision below
+# without enforcing it, so a dry run always shows what the gate would do.
+ADMISSION=$(shipyard_admission_report); ADMISSION_RC=$?
+if [ "$ADMISSION_RC" != 0 ] && [ "${SHIPYARD_DRY:-}" != 1 ]; then
+  printf '%s\n' "$ADMISSION" >&2
+  exit "$ADMISSION_RC"
+fi
+
 # --- first prompt --------------------------------------------------------------
 # `/ship` takes all three shapes itself: a number, a `#N`/`pr N` marker, and a
 # free-text description ("Create a new Issue (asks to confirm), then propose + spec
@@ -284,6 +297,7 @@ if [ "${SHIPYARD_DRY:-}" = 1 ]; then
   echo "dry-run: protocol $PROTO"
   echo "dry-run: launcher $LAUNCHER"
   echo "dry-run: env      $ENVSUM"
+  printf '%s\n' "$ADMISSION" | sed 's/^/dry-run: /'
   sed -n '3,$p' "$LAUNCHER" | sed 's/^/dry-run| /'
   echo "SLOT:$SLOT"
   exit 0

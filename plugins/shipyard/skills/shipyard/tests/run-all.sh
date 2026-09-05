@@ -32,7 +32,7 @@ DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # One single-line array: the gate (scripts/check.sh check 10) reads registrations from a
 # single-line `tests` array and reds loudly if a test file here is not listed, so a test cannot
 # silently stop running. Splitting this across lines hides the tail from that extraction.
-tests=(t1-totals.sh t2-window.sh t3-probe.sh t4-band.sh t5-agent.sh t6-codex-ctx.sh t7-continuity.sh t8-backend-adapter.sh)
+tests=(t1-totals.sh t2-window.sh t3-probe.sh t4-band.sh t5-agent.sh t6-codex-ctx.sh t7-continuity.sh t8-backend-adapter.sh t9-admission.sh)
 
 rc=0
 for t in "${tests[@]}"; do

@@ -33,6 +33,17 @@ equivalent field, so there it is a documented requirement only.
 — the number for an existing issue/PR/MR, a slug for a free-text idea. Numeric slots are
 deduplicated (two agents in one worktree collide); text slots get a numeric suffix.
 
+**A launch this machine cannot take is refused before it starts.** Each launch clears an
+admission gate first — a **concurrency cap** (`SHIPYARD_MAX_SLOTS`, default 2 live `ship-*`
+slots) and, on macOS, a **memory-pressure floor** (`SHIPYARD_MEM_MIN_FREE_PCT`, default 10%
+free, read from `memory_pressure`). Over either limit and the launch is refused, with a
+distinct exit code and a message naming the gate, the current value versus the limit, and the
+env var to override it — no worktree or terminal is created. This exists because an uncapped
+fleet once drove a 16 GB machine into swap until macOS recycled the whole GUI login session;
+the gate is that "stop the bleeding" check, not a scheduler. Where `memory_pressure` is
+unavailable the memory gate is a no-op, never a hard failure. `SHIPYARD_DRY=1` reports the
+gate's decision without enforcing it.
+
 **Two backends behind one abstraction.** [agterm](https://github.com/umputun/agterm) sessions
 when an agterm app is answering its control socket, tmux windows otherwise, selected by
 `SHIPYARD_BACKEND=agterm|tmux|auto`. Every terminal operation goes through a single script, so
@@ -111,6 +122,7 @@ message dies with the context that held it.
 | `shipyard-lib.sh` | mailbox paths, slot resolution, payload input, the child env preamble |
 | `shipyard-continuity.sh` | automatic capacity retry and paused-goal continuity for a Codex parent in agterm |
 | `shipyard-launch.sh` | start a child: slot, protocol, launcher, container |
+| `shipyard-admission.sh` | the pre-launch admission gate: concurrency cap + macOS memory-pressure |
 | `shipyard-report.sh` | the status table, stall watchdog, sidebar glyphs |
 | `shipyard-ctx.sh` | the ctx column: reads a child's transcript, infers its window, bands it |
 | `tests/run-all.sh` | the shipyard script suite — runs under `make test`; its registration is gated by `make check` |
@@ -159,7 +171,12 @@ starts nothing.
 
 Environment knobs: `SHIPYARD_AGENT`, `SHIPYARD_BACKEND`, `SHIPYARD_WORKSPACE`, `SHIPYARD_SESSION`,
 `SHIPYARD_ENV_PASS`, `SHIPYARD_ENV_SCRUB`, `SHIPYARD_SLOT`, `SHIPYARD_FORCE`, `SHIPYARD_DRY`,
-`SHIPYARD_STALL_SECS`, `SHIPYARD_CTX_WINDOW`, `SHIPYARD_TELL_MAXLINE`, `SHIPYARD_ASK_TIMEOUT`.
+`SHIPYARD_MAX_SLOTS`, `SHIPYARD_MEM_MIN_FREE_PCT`, `SHIPYARD_STALL_SECS`, `SHIPYARD_CTX_WINDOW`,
+`SHIPYARD_TELL_MAXLINE`, `SHIPYARD_ASK_TIMEOUT`.
+
+`SHIPYARD_MAX_SLOTS` (default `2`) and `SHIPYARD_MEM_MIN_FREE_PCT` (default `10`) are the two
+admission-gate knobs — the concurrency cap and the macOS free-memory floor a launch must clear.
+See **A launch this machine cannot take** above.
 
 `SHIPYARD_CTX_WINDOW` pins the context window, in tokens as a plain integer, that the `ctx`
 percentage is measured against. Without it the window is inferred from the largest total the
