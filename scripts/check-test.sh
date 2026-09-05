@@ -21,6 +21,13 @@
 # Requires a clean working tree, INCLUDING untracked files under the paths it restores:
 # the restore uses `git checkout --`, which cannot bring back a file that was never in git.
 # Run: make check-test
+#
+# This suite invokes `bash scripts/check.sh` directly, NOT `make check`. The two diverged when
+# `make check` began also running the driver suite (see the Makefile): check-test proves check.sh's
+# STATIC assertions fire, so it must not itself be gated on a test suite passing, nor pay that
+# suite's runtime on every one of its ~60 probes. The two deliberate exceptions both use `make
+# check` on purpose: the final "green after restore" check, and the one probe that proves `make
+# check` actually runs the driver suite.
 set -uo pipefail
 cd "$(dirname "$0")/.."
 
@@ -64,7 +71,9 @@ restore() {
     plugins/ship/skills/_probe-skill .claude/skills/_probe-skill .agents/skills/_probe-skill \
     .claude/skills/_probe-tracked plugins/ship/skills/_probe-pkg plugins/ship/skills/ship/_probe.sh \
     ".claude/skills/$NONASCII" ".agents/skills/$NONASCII" "plugins/ship/skills/$NONASCII" \
-    "$TESTS_DIR/t99-probe.sh" "$TESTS_DIR/t98-unregistered.sh" "$TESTS_DIR/nested" 2>/dev/null || true
+    "$TESTS_DIR/t99-probe.sh" "$TESTS_DIR/t98-unregistered.sh" "$TESTS_DIR/nested" \
+    shared/driver/tests/_probe-unreg.sh plugins/shipyard/skills/shipyard/tests/_probe-unreg.sh \
+    2>/dev/null || true
   rmdir docs 2>/dev/null || true
 }
 trap restore EXIT
@@ -86,7 +95,7 @@ pass=0; nocatch=0
 # are pre-existing and tracked in the follow-up issue rather than pinned here; do not read the
 # absence of a $2 as evidence that a probe does not need one.
 expect_fail() {
-  if make check >"$SCRATCH/out" 2>&1; then
+  if bash scripts/check.sh >"$SCRATCH/out" 2>&1; then
     echo "NOT CAUGHT: $1"; nocatch=$((nocatch+1))
   elif [ -n "${2:-}" ] && ! grep -qF -- "$2" "$SCRATCH/out"; then
     # Reddened, but on a different assertion than the one this probe names: the named arm is
@@ -108,7 +117,7 @@ expect_fail() {
 # prints is the only output in this gate that no `fail` arm backs, so it is the one thing here
 # that can rot in total silence.
 expect_pass() {
-  if ! make check >"$SCRATCH/out" 2>&1; then
+  if ! bash scripts/check.sh >"$SCRATCH/out" 2>&1; then
     echo "REDDENED:   $1   ->  $(grep -m1 '^FAIL' "$SCRATCH/out" | cut -c1-80)"
     nocatch=$((nocatch+1))
   elif [ -n "${2:-}" ] && ! grep -qF -- "$2" "$SCRATCH/out"; then
@@ -128,7 +137,7 @@ expect_pass() {
   fi
 }
 
-if make check >"$SCRATCH/out" 2>&1; then
+if bash scripts/check.sh >"$SCRATCH/out" 2>&1; then
   echo "clean:      baseline"; pass=$((pass+1))
 else
   echo "BASELINE DIRTY — the gate fails before any violation is injected:"
@@ -415,14 +424,14 @@ cp "$SCRATCH/check9.bak" scripts/check.sh
 # non-zero exit — which no real `git ls-files` produces, but the arm keys on the status alone.
 # Kill condition: revert check 9 to `done < <(git ls-files …)` and this must report NOT CAUGHT.
 cp scripts/check.sh "$SCRATCH/check9-list.bak"
-perl -pi -e 's{"\$tests_dir/\*\.sh"\)}{"\$tests_dir/*.sh"; exit 128)}' scripts/check.sh
-expect_fail "council-test listing fails LOUDLY when git ls-files errors (not open)"
+perl -pi -e 's{"\$dir/\*\.sh"\)}{"\$dir/*.sh"; exit 128)}' scripts/check.sh
+expect_fail "test listing fails LOUDLY when git ls-files errors (not open)"
 cp "$SCRATCH/check9-list.bak" scripts/check.sh
 
 # 14b — the listing succeeds and matches nothing, which is what a moved or renamed tests
 # directory looks like: zero iterations, no error anywhere, and the assertion silently gone.
 cp scripts/check.sh "$SCRATCH/check9-empty.bak"
-perl -pi -e 's{^tests_dir=plugins/council/skills/council/tests$}{tests_dir=plugins/council/skills/council/tests-moved-away}' scripts/check.sh
+perl -pi -e 's{^council_dir=plugins/council/skills/council/tests$}{council_dir=plugins/council/skills/council/tests-moved-away}' scripts/check.sh
 expect_fail "council-test scan fails LOUDLY when it inspects no file at all"
 cp "$SCRATCH/check9-empty.bak" scripts/check.sh
 
@@ -433,8 +442,25 @@ cat > "$TESTS_DIR/t98-unregistered.sh" <<'PROBE'
 #!/usr/bin/env bash
 R="$COUNCIL_TEST_ROOT/t98"; rm -rf "$R"
 PROBE
-expect_fail "council test on disk but not registered in run-all.sh"
+expect_fail "council test on disk but not registered in run-all.sh" \
+  "test on disk but not registered in"
 rm -f "$TESTS_DIR/t98-unregistered.sh"
+
+# 15b — the generalisation itself: an unregistered test must red for the DRIVER suite too, not only
+# council. Untracked (the state a new test is in at the `make check` just before `git add`), and
+# free of council's temp-path shape so check 9 (council-only) cannot fire and claim the catch. The
+# $2 pin keeps it on check 10's unregistered arm.
+printf '#!/usr/bin/env bash\ntrue\n' > shared/driver/tests/_probe-unreg.sh
+expect_fail "driver test on disk but not registered in run-all.sh" \
+  "test on disk but not registered in"
+rm -f shared/driver/tests/_probe-unreg.sh
+
+# 15c — ...and for the SHIPYARD suite. Together with 15 and 15b this proves the check 10 loop
+# actually visits all three suites, not just whichever one happens to be first.
+printf '#!/usr/bin/env bash\ntrue\n' > plugins/shipyard/skills/shipyard/tests/_probe-unreg.sh
+expect_fail "shipyard test on disk but not registered in run-all.sh" \
+  "test on disk but not registered in"
+rm -f plugins/shipyard/skills/shipyard/tests/_probe-unreg.sh
 
 # 16 — and check 10 must say it cannot find the list, rather than comparing the files on disk
 # against an empty set. BOTH assignments are renamed: renaming only `tests=(` leaves the `--full`
@@ -452,8 +478,8 @@ git checkout -- "$RUNNER"
 # The expected message is load-bearing: with no runner there is no list either, so the
 # `could not find the test list` arm reds too and would report this one caught while it slept.
 cp scripts/check.sh "$SCRATCH/check10-runner.bak"
-perl -pi -e 's{^runner=\$tests_dir/run-all\.sh$}{runner=\$tests_dir/run-all-gone.sh}' scripts/check.sh
-expect_fail "council test runner missing" "council test runner is missing"
+perl -pi -e 's{^\s*runner=\$suite_dir/run-all\.sh$}{  runner=\$suite_dir/run-all-gone.sh}' scripts/check.sh
+expect_fail "test runner missing" "test runner is missing"
 cp "$SCRATCH/check10-runner.bak" scripts/check.sh
 
 # 18 — and check 10 must not read a comparison that never ran as "nothing unregistered". Same
@@ -658,6 +684,22 @@ cp shared/driver/targets.txt "$SCRATCH/drv-targets-empty.bak"
 printf '# only a comment, no target paths\n' > shared/driver/targets.txt
 expect_fail "an empty shared driver target list" "shared driver target list is empty"
 cp "$SCRATCH/drv-targets-empty.bak" shared/driver/targets.txt
+
+# 30 — option B: `make check` (the Makefile target, NOT scripts/check.sh) actually RUNS the driver
+# suite, so a driver-suite regression reds every commit. This is the one probe that must invoke
+# `make check`: it tests the Makefile wiring, not a check.sh assertion. t-driver.sh is overwritten
+# with a failing stub rather than having a line appended — appending is unreliable when the real
+# file exits before reaching it. The stub still parses (check 1) and is still registered (check
+# 10), so scripts/check.sh stays green and only the suite run reds. Restored via git checkout.
+printf '#!/usr/bin/env bash\nexit 1\n' > shared/driver/tests/t-driver.sh
+if make check >"$SCRATCH/out" 2>&1; then
+  echo "NOT CAUGHT: make check does not run the driver suite (a driver failure did not red it)"
+  nocatch=$((nocatch+1))
+else
+  echo "caught:     make check runs the driver suite   ->  a failing driver test reds make check"
+  pass=$((pass+1))
+fi
+git checkout -- shared/driver/tests/t-driver.sh
 
 echo
 echo "assertions proven: $pass   not proven: $nocatch"

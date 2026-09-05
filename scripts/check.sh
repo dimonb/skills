@@ -12,7 +12,8 @@
 # 7. no non-generic strings (structural patterns only; no dependency on any untracked file)
 # 8. no non-Latin script in any file, untracked included (the checkable half of "English")
 # 9. no council test names the shared temp parent (the pre-run-root shape); see §9 for its limits
-# 10. every council test on disk is registered in run-all.sh, so none silently stops running
+# 10. every test on disk is registered in its suite's run-all.sh (driver, shipyard, council), so
+#     none silently stops running
 # 11. every vendored copy of the shared driver is byte-identical to its one canonical source
 set -uo pipefail
 cd "$(dirname "$0")/.."
@@ -369,34 +370,41 @@ elif [ "$g" -gt 1 ]; then
   fail "English check could not run (git grep rc=$g): $nonlatin"
 fi
 
-# --------------------------- council tests: ONE listing, shared by checks 9 and 10
-# Both checks below are about the same set of files, so the listing is derived once. A second
-# `git ls-files` here would be a second copy of the traps documented under check 9 — and the
-# copy is the one that goes stale while the original keeps being maintained.
-tests_dir=plugins/council/skills/council/tests
-runner=$tests_dir/run-all.sh
+# --------------------------- test suites: ONE listing helper, shared by checks 9 and 10
+# The listing logic lives in ONE function, called by check 9 (council-only, the temp-path scan)
+# and by check 10 (registration, once per suite). A second hand-written `git ls-files` would be a
+# second copy of the traps below — and the copy is the one that goes stale while the original keeps
+# being maintained.
+#
+# Lists the *.sh test files under a suite's tests/ dir (cached + untracked), echoing each path
+# RELATIVE to that dir, minus the two files that are not tests. Prints nothing and returns git's
+# non-zero status if the listing itself errors.
+#
 # stderr is deliberately NOT folded in with `2>&1`, unlike sections 7 and 8: a missing directory
-# makes `git ls-files` warn and still exit 0, and that captured warning would enter the loop as a
-# filename — firing the grep-error arm and leaving the count below vacuous with nothing saying so.
-tests_list=$(git ls-files --cached --others --exclude-standard "$tests_dir/*.sh")
-tests_rc=$?
-# What counts as a council test: everything the listing found, minus the two files that are not
-# tests. Exempt on the path RELATIVE TO the tests directory, never on the basename — the pathspec
-# above crosses directories, so a basename match also exempts a `tests/nested/run-all.sh`, which
-# would then be neither scanned by check 9 nor required to be registered by check 10. A helper
-# that genuinely is not a test belongs in this exemption list — the two names are matched
-# literally, and a `_` prefix means nothing to either check, so adding `_foo.sh` and expecting it
-# to be skipped reds the gate pointing at the runner instead of at this line.
-council_tests=""
-if [ "$tests_rc" -eq 0 ]; then
+# makes `git ls-files` warn and still exit 0, and that captured warning would enter a caller's loop
+# as a filename — firing an error arm over a phantom path and leaving the count vacuous with nothing
+# saying so.
+#
+# Exempt on the path RELATIVE to the tests directory, never on the basename — the pathspec crosses
+# directories, so a basename match would also exempt a `tests/nested/run-all.sh`, which check 9 must
+# still scan and check 10 must still require to be registered. A helper that genuinely is not a test
+# belongs in this exemption list — the two names are matched literally, and a `_` prefix means
+# nothing to either check, so adding `_foo.sh` and expecting it to be skipped reds the gate pointing
+# at the runner instead of at this line.
+list_suite_tests() {
+  local dir="$1" list rc f rel
+  list=$(git ls-files --cached --others --exclude-standard "$dir/*.sh")
+  rc=$?
+  [ "$rc" -eq 0 ] || return "$rc"
   while IFS= read -r f; do
     # A here-string over an empty listing still yields one empty line.
     [ -n "$f" ] || continue
-    rel=${f#"$tests_dir/"}
+    rel=${f#"$dir/"}
     case "$rel" in _helpers.sh|run-all.sh) continue ;; esac
-    council_tests="$council_tests$rel"$'\n'
-  done <<< "$tests_list"
-fi
+    printf '%s\n' "$rel"
+  done <<< "$list"
+  return 0
+}
 
 # --------------- 9. no council test names the shared temp parent (a pre-run-root shape)
 # A room path fixed by the test's own name let two concurrent suites delete each other's rooms
@@ -421,11 +429,13 @@ fi
 # substitution discards the lister's exit status, so a failing `git ls-files` silently becomes
 # zero iterations; and a `[ -d ]` guard around the loop skips it silently when the directory is
 # not where it is expected. Either way the assertion stops existing and the gate still prints
-# `check: OK`. So the listing (above, shared with check 10) runs BEFORE the loop with its status
-# captured, there is no directory guard, and the loop counts what it actually inspected: a check
-# that scanned nothing has not held, it has abstained, and those are not the same result.
-if [ "$tests_rc" -ne 0 ]; then
-  fail "could not list council tests (git ls-files rc=$tests_rc)"
+# `check: OK`. So `list_suite_tests` (above, shared with check 10) captures its status, there is no
+# directory guard, and the loop counts what it actually inspected: a check that scanned nothing has
+# not held, it has abstained, and those are not the same result.
+council_dir=plugins/council/skills/council/tests
+council_tests=$(list_suite_tests "$council_dir"); council_rc=$?
+if [ "$council_rc" -ne 0 ]; then
+  fail "could not list council tests (git ls-files rc=$council_rc)"
 else
   scanned=0
   while IFS= read -r rel; do
@@ -433,71 +443,77 @@ else
     scanned=$((scanned + 1))
     # grep exits 0 on a match, 1 on none, and >1 on an error. Reading an error as "no match" is
     # how a check reports success having scanned nothing — the same trap section 7 guards against.
-    grep -qE 'TMPDIR|council-test' "$tests_dir/$rel"
+    grep -qE 'TMPDIR|council-test' "$council_dir/$rel"
     case $? in
-      0) fail "council test names a fixed temp path instead of \$COUNCIL_TEST_ROOT: $tests_dir/$rel" ;;
+      0) fail "council test names a fixed temp path instead of \$COUNCIL_TEST_ROOT: $council_dir/$rel" ;;
       1) ;;
-      *) fail "could not scan council test for a fixed temp path: $tests_dir/$rel" ;;
+      *) fail "could not scan council test for a fixed temp path: $council_dir/$rel" ;;
     esac
   done <<< "$council_tests"
   [ "$scanned" -gt 0 ] \
-    || fail "scanned no council test at all — expected them under $tests_dir/ (moved? renamed?)"
+    || fail "scanned no council test at all — expected them under $council_dir/ (moved? renamed?)"
 fi
 
-# ------------------ 10. every council test on disk is registered in run-all.sh
-# The runner walks a hand-maintained list. Nothing connected that list to the files on disk, so a
+# ------------------ 10. every test on disk is registered in its suite's run-all.sh
+# Generalised from council-only to every suite the repo ships (driver, shipyard, council). The
+# runner walks a hand-maintained list. Nothing connected that list to the files on disk, so a
 # test could land, pass review, and then simply never run again — coverage lost with no symptom
 # anywhere, which is strictly worse than a red suite. It has already come close: during a run of
 # several parallel changes the registration line was the one place they all collided, and a
 # resolution that dropped a name would have looked exactly like a clean one.
 #
 # What this catches and what it does not. The extraction reads the space-separated words out of
-# every single-line `tests=(…)` / `tests+=(…)` assignment in the runner. Split that array across
-# lines, or build it in a loop, and it sees less than is really registered: the gate then reds
-# naming a test that IS registered — the wrong message, but loud. It can also OVER-read, and that
-# direction is the silent one: a commented-out or superseded `tests=(…)` line left in the runner
-# enrols names nothing walks, so a real unregistered test whose name still appears there is
-# masked. Keep the registration to one live array and this stays a non-issue. The reverse
+# every single-line `tests=(…)` / `tests+=(…)` assignment in the runner (council splits its list
+# into a default array and a `--full` one; both are read). Split an array across lines, or build it
+# in a loop, and it sees less than is really registered: the gate then reds naming a test that IS
+# registered — the wrong message, but loud. It can also OVER-read, and that direction is the silent
+# one: a commented-out or superseded `tests=(…)` line left in the runner enrols names nothing
+# walks, so a real unregistered test whose name still appears there is masked. Keep the
+# registration to one live array (or council's two) and this stays a non-issue. The reverse
 # direction (a registration naming a file that is gone) is deliberately not asserted here, because
 # the suite already reds on it at runtime, `bash` exiting 127 on the missing path.
-if [ "$tests_rc" -ne 0 ]; then
-  : # the listing failed; check 9 reported it. Reporting it twice would make a probe of either
-    # arm fire two assertions at once, which proves neither of them.
-elif [ -z "$council_tests" ]; then
-  : # no council test on disk at all — likewise check 9's failure to report, not this one's.
-elif [ ! -f "$runner" ]; then
-  fail "council test runner is missing: $runner"
-else
-  reg_lines=$(grep -cE 'tests\+?=\(' "$runner")
-  registered=$(sed -n 's/.*tests+\{0,1\}=(\([^)]*\)).*/\1/p' "$runner" \
-    | tr ' ' '\n' | sed '/^$/d' | sort -u)
-  # Same trap as everywhere above: an extraction that quietly matches nothing would compare the
-  # files on disk against an empty set. That is loud here — every test would read as unregistered
-  # — but it names the wrong defect, so say the real one instead.
-  # `${reg_lines:-0}`, not `$reg_lines`: grep prints nothing when it cannot read the file, and
-  # `[ "" -eq 0 ]` is a shell ERROR (`[: : integer expected` on stderr), not a false — so the
-  # arm was reached by way of a spurious diagnostic that looked like a gate bug.
-  if [ "${reg_lines:-0}" -eq 0 ] || [ -z "$registered" ]; then
-    fail "could not find the test list in $runner (expected a single-line \`tests=(…)\` array)"
+#
+# A missing input FAILS rather than skips: an errored listing, an empty one (a moved or renamed
+# tests dir), a missing runner, an unfindable list, and a comm that could not run each red, so
+# "compared nothing" is never read as OK. `list_suite_tests` captures git's status; the comm-rc
+# guard proves the comparison RAN (its limit: `pipefail` does not reach into a process
+# substitution, so a `sort` that died in either `<(…)` leaves comm at 0 over a truncated list —
+# a system-level failure, not a code path). Check 9 owns the council temp-path scan, so a council
+# listing error is reported once there; here a genuinely emptied council dir reds this arm too,
+# which is louder than the old dedicated skip but never silent.
+for suite_dir in \
+  shared/driver/tests \
+  plugins/shipyard/skills/shipyard/tests \
+  plugins/council/skills/council/tests; do
+  runner=$suite_dir/run-all.sh
+  suite_tests=$(list_suite_tests "$suite_dir"); suite_rc=$?
+  if [ "$suite_rc" -ne 0 ]; then
+    fail "could not list tests under $suite_dir (git ls-files rc=$suite_rc)"
+  elif [ -z "$suite_tests" ]; then
+    fail "no test on disk under $suite_dir (moved? renamed?)"
+  elif [ ! -f "$runner" ]; then
+    fail "test runner is missing: $runner"
   else
-    unregistered=$(comm -23 <(printf '%s' "$council_tests" | sort -u) \
-                            <(printf '%s\n' "$registered" | sort -u))
-    comm_rc=$?
-    # comm exits 0 on success whether or not it emitted a line, and non-zero only on failure, so
-    # empty output means "nothing unregistered" ONLY once the comparison is known to have run.
-    # Without this the check reports success having compared nothing — the same shape checks 7, 8
-    # and 9 each guard against, and that checks 4 and 6 still have.
-    # The limit: this proves comm RAN, not that its inputs were generated. `pipefail` does not
-    # reach into a process substitution, so a `sort` that died in either `<(…)` leaves comm at 0
-    # over a truncated list. Reaching that needs a system-level failure rather than a code path.
-    if [ "$comm_rc" -ne 0 ]; then
-      fail "could not compare the test list against the files on disk (comm rc=$comm_rc)"
+    reg_lines=$(grep -cE 'tests\+?=\(' "$runner")
+    registered=$(sed -n 's/.*tests+\{0,1\}=(\([^)]*\)).*/\1/p' "$runner" \
+      | tr ' ' '\n' | sed '/^$/d' | sort -u)
+    # `${reg_lines:-0}`, not `$reg_lines`: grep prints nothing when it cannot read the file, and
+    # `[ "" -eq 0 ]` is a shell ERROR (`[: : integer expected` on stderr), not a false.
+    if [ "${reg_lines:-0}" -eq 0 ] || [ -z "$registered" ]; then
+      fail "could not find the test list in $runner (expected a single-line \`tests=(…)\` array)"
     else
-      [ -z "$unregistered" ] || fail \
-        "council test on disk but not registered in $runner (it never runs): $(printf '%s' "$unregistered" | tr '\n' ' ')"
+      unregistered=$(comm -23 <(printf '%s' "$suite_tests" | sort -u) \
+                              <(printf '%s\n' "$registered" | sort -u))
+      comm_rc=$?
+      if [ "$comm_rc" -ne 0 ]; then
+        fail "could not compare the test list against the files on disk for $suite_dir (comm rc=$comm_rc)"
+      else
+        [ -z "$unregistered" ] || fail \
+          "test on disk but not registered in $runner (it never runs): $(printf '%s' "$unregistered" | tr '\n' ' ')"
+      fi
     fi
   fi
-fi
+done
 
 # 11 — the shared driver is one source of truth. Each plugin ships its own copy because a Codex
 # plugin cannot depend on another plugin, so a symlink cannot cross that boundary; the gate is
