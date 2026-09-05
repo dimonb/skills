@@ -1,0 +1,8 @@
+# Vendored copies of shared/policy/policy.sh — one path per line.
+# The shared-module sync writes each; the repo gate fails on drift. Each plugin ships its own
+# copy because a Codex plugin cannot depend on another plugin (the same reason shared/driver/ is
+# vendored, not symlinked). The drift gate + sync that cover shared/driver/ today are being
+# generalized to iterate every shared/<mod>/, so this list is what that generalization reads for
+# the policy module; until it lands the copies are kept byte-identical by hand.
+plugins/council/skills/council/lib/policy.sh
+plugins/shipyard/skills/shipyard/policy.sh
