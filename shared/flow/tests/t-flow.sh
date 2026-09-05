@@ -230,6 +230,19 @@ unknown_rc=0; ( flow_reset; FLOW_SESSION=s flow_run ghost ) 2>/dev/null || unkno
 ok "flow_run on an unknown node refuses"        66 "$unknown_rc"
 badact_rc=0; ( flow_reset; flow_node n --done-when 'budget 0' --on-done 'sideways'; FLOW_SESSION=s flow_run n ) 2>/dev/null || badact_rc=$?
 ok "a malformed transition action is refused"   67 "$badact_rc"
+# An empty goto target would blank the node and read as a clean close; it must be refused instead.
+emptygoto_rc=0; ( flow_reset; flow_node n --done-when 'budget 0' --on-done 'goto:'; FLOW_SESSION=s flow_run n ) 2>/dev/null || emptygoto_rc=$?
+ok "an empty goto target is refused, not a clean close" 67 "$emptygoto_rc"
+# A non-numeric FLOW_MAX_POLLS must FAIL CLOSED (block at once), never loop forever: the node is
+# busy and never done, on_block routes the forced timeout to a terminal node, so the run RETURNS.
+# Were the guard to regress to a bare `-ge`, this case would hang instead — the same way the cycle
+# case above would hang if FLOW_MAX_NODES regressed.
+failclosed_rc=0
+( flow_reset
+  flow_node spin2 --done-when "artifact $TMP/never2" --on-block goto:stop2
+  flow_node stop2 --done-when 'budget 0' --on-done close
+  FAKE_SIG="live|busy" FLOW_SESSION=s FLOW_MAX_POLLS=notanumber flow_run spin2 ) 2>/dev/null || failclosed_rc=$?
+ok "a non-numeric FLOW_MAX_POLLS fails closed (blocks, no infinite loop)" 0 "$failclosed_rc"
 # A cycle is caught by the node budget rather than looping forever.
 cycle_rc=0; ( flow_reset; flow_node loop --done-when 'budget 0' --on-done goto:loop; FLOW_SESSION=s FLOW_MAX_NODES=5 flow_run loop ) 2>/dev/null || cycle_rc=$?
 ok "a cycle trips the node budget"              65 "$cycle_rc"

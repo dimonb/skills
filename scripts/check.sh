@@ -455,7 +455,7 @@ else
 fi
 
 # ------------------ 10. every test on disk is registered in its suite's run-all.sh
-# Generalised from council-only to every suite the repo ships (driver, shipyard, council). The
+# Generalised from council-only to every suite the repo ships (driver, flow, shipyard, council). The
 # runner walks a hand-maintained list. Nothing connected that list to the files on disk, so a
 # test could land, pass review, and then simply never run again — coverage lost with no symptom
 # anywhere, which is strictly worse than a red suite. It has already come close: during a run of

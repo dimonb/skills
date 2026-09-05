@@ -23,11 +23,11 @@
 # Run: make check-test
 #
 # This suite invokes `bash scripts/check.sh` directly, NOT `make check`. The two diverged when
-# `make check` began also running the driver suite (see the Makefile): check-test proves check.sh's
-# STATIC assertions fire, so it must not itself be gated on a test suite passing, nor pay that
-# suite's runtime on every one of its ~60 probes. The two deliberate exceptions both use `make
-# check` on purpose: the final "green after restore" check, and the one probe that proves `make
-# check` actually runs the driver suite.
+# `make check` began also running the driver and flow suites (see the Makefile): check-test proves
+# check.sh's STATIC assertions fire, so it must not itself be gated on a test suite passing, nor pay
+# those suites' runtime on every one of its ~60 probes. The deliberate exceptions all use `make
+# check` on purpose: the final "green after restore" check, and the probes that prove `make check`
+# actually runs the driver and flow suites.
 set -uo pipefail
 cd "$(dirname "$0")/.."
 
@@ -476,12 +476,20 @@ expect_fail "driver test on disk but not registered in run-all.sh" \
   "test on disk but not registered in"
 rm -f shared/driver/tests/_probe-unreg.sh
 
-# 15c — ...and for the SHIPYARD suite. Together with 15 and 15b this proves the check 10 loop
-# actually visits all three suites, not just whichever one happens to be first.
+# 15c — ...and for the SHIPYARD suite.
 printf '#!/usr/bin/env bash\ntrue\n' > plugins/shipyard/skills/shipyard/tests/_probe-unreg.sh
 expect_fail "shipyard test on disk but not registered in run-all.sh" \
   "test on disk but not registered in"
 rm -f plugins/shipyard/skills/shipyard/tests/_probe-unreg.sh
+
+# 15d — ...and for the FLOW suite. Together with 15, 15b and 15c this proves the check 10 loop
+# actually visits all four suites, not just whichever one happens to be first. Without this probe,
+# dropping shared/flow/tests from check 10's loop would go uncaught (the sibling probes still pass).
+# The fixture path is already in the restore trap's cleanup list.
+printf '#!/usr/bin/env bash\ntrue\n' > shared/flow/tests/_probe-unreg.sh
+expect_fail "flow test on disk but not registered in run-all.sh" \
+  "test on disk but not registered in"
+rm -f shared/flow/tests/_probe-unreg.sh
 
 # 16 — and check 10 must say it cannot find the list, rather than comparing the files on disk
 # against an empty set. BOTH assignments are renamed: renaming only `tests=(` leaves the `--full`

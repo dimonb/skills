@@ -58,7 +58,8 @@ _FLOW_SIG=""
 #                      flow_run time — the graph is the data, the session is the run.
 #   FLOW_MAX_POLLS     polls of drv_signal before a node is declared timed-out (a block). Default 600.
 #   FLOW_POLL_INTERVAL seconds `flow_sleep` waits between polls. Default 1.
-#   FLOW_MAX_BLOCKS    times ONE node may be resumed by policy before it is parked. Default 3.
+#   FLOW_MAX_BLOCKS    blocks ONE node may hit before it is parked instead of resumed — it is
+#                      resumed on the first FLOW_MAX_BLOCKS-1, parked on the last. Default 3.
 #   FLOW_MAX_NODES     transitions before flow_run aborts as a suspected cycle. Default 1000.
 #   FLOW_PARK_FILE     if set, `flow_park` appends its one-line record there. The real hand-off
 #                      destination is the policy layer's mailbox — deliberately NOT hard-coded here.
@@ -187,7 +188,10 @@ _flow_drive_node() {
       fi
       _flow_stalled "$sig" && break
       poll=$((poll + 1))
-      if [ "$poll" -ge "${FLOW_MAX_POLLS:-600}" ]; then sig="live|timeout"; break; fi
+      # Fail CLOSED on a non-numeric FLOW_MAX_POLLS: `! [ poll -lt MAX ]` reads the comparison
+      # error as "budget reached" (block now), never as "keep polling forever" the way a plain
+      # `-ge` that errored would — the same fail-closed stance FLOW_MAX_NODES takes.
+      if ! [ "$poll" -lt "${FLOW_MAX_POLLS:-600}" ] 2>/dev/null; then sig="live|timeout"; break; fi
       flow_sleep
     done
     # The node has blocked (stalled or timed out). If its on_block is not `policy`, hand the block
@@ -209,7 +213,8 @@ _flow_drive_node() {
 # or an error. Reads FLOW_SESSION. This is the whole coordination loop, and it is mechanical: it
 # transitions on _flow_drive_node's outcome, never on a model's say-so, and it names no skill.
 # Exit status: 0 a node closed cleanly; 10 parked (needs human); 64 no FLOW_SESSION; 65 node
-# budget exceeded (a cycle); 66 unknown node; 67 a malformed transition action.
+# budget exceeded (a cycle); 66 a missing or unknown node; 67 a malformed transition action
+# (a bad on_done/on_block, or an empty goto target).
 flow_run() {
   local node=${1:-} guard=0 act emit
   [ -n "$node" ] || { echo "flow_run: missing start node" >&2; return 66; }
@@ -233,7 +238,11 @@ flow_run() {
     fi
 
     case "$act" in
-      goto:*) node=${act#goto:} ;;
+      goto:*) node=${act#goto:}
+              # An empty goto target (`goto:` with nothing after it) would blank $node and let the
+              # `while [ -n "$node" ]` loop exit as a CLEAN close; reject it as malformed instead.
+              [ -n "$node" ] \
+                || { echo "flow_run: empty goto target in action '$act'" >&2; return 67; } ;;
       close)  return 0 ;;
       *) echo "flow_run: malformed action for node '$node': $act" >&2; return 67 ;;
     esac
