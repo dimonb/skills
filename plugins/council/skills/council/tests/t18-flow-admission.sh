@@ -76,6 +76,12 @@ say c propose '[]' "position c"
   || { echo "FAIL a completed round did not advance to 'exchange' (got '$(phase "$R2" a)')"; fail=1; }
 echo "c_phase tracks a roundtable room: opening (through the positions) -> exchange on completion"
 
+# ...and the guard's phase is SURFACED to a supervisor through the CLI — the production use of
+# c_phase. `status` runs v_status, which reads the phase via c_phase -> flow_phase over the graph.
+sout=$(COUNCIL_ROOM="$R2" COUNCIL_ME=a bash "$CLI" status 2>/dev/null)
+case "$sout" in *"phase: exchange"*) ;; *) echo "FAIL status did not surface 'phase: exchange' via the guard"; fail=1 ;; esac
+echo "status surfaces the room phase through the guard (c_phase is used in production, not only in tests)"
+
 # ------------------------------------------------- 2+3. the opening gate is ONE authority
 # Override the single computation (c_barrier) and read every consumer of the opening decision. All
 # move together — the accessors, and the graph's `opening` node through c_phase — so none holds a

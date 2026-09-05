@@ -59,13 +59,15 @@ council_room_graph() {
 }
 council_room_graph
 
-# c_phase — the room's phase, read from the declared graph by the shared guard:
-#   opening | exchange | closing | ""(empty = decided/closed).
-# This is the single authority: it is a PURE FUNCTION OF THE LOG (every predicate reads the log,
-# never the caller's cursor or timing), so a wedged or slow reader computes the SAME phase as an
-# up-to-date one — which is what makes "a reader cannot desync the round" structural rather than
-# careful. The transport's hot paths do NOT walk the whole graph on every read: they ask only the
-# opening gate through the cheap c_round_open / c_round_closed accessors (lib.sh), which are the
-# `opening` node's own predicate. c_phase is the full read, for a supervisor's "where is this
-# room" and for the tests that pin the graph end to end.
+# c_phase — the room's phase, read from the declared graph by the shared guard (this is where
+# council USES the interpreter's session-less evaluation mode): opening | exchange | closing |
+# ""(empty = decided/closed). It is a PURE FUNCTION OF THE LOG — every predicate reads the log,
+# never the caller's cursor or timing — so a wedged or slow reader computes the SAME phase as an
+# up-to-date one, which is what makes "a reader cannot desync the round" structural rather than
+# careful. `status` surfaces it (the supervisor's "where is this room"), and the tests pin it end
+# to end. It deliberately does NOT sit on the message hot paths: those ask only the opening gate,
+# through the cheap c_round_open / c_round_closed accessors (lib.sh) — which are the `opening`
+# node's own predicate, the ONE shared rule every reader consults instead of re-deriving the
+# barrier — because walking the whole graph per read would re-run the verdict (claims.jq), and the
+# barrier is meant to stay a cheap pure-log function.
 c_phase() { flow_phase opening; }

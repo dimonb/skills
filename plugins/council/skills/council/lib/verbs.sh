@@ -318,8 +318,14 @@ v_verdict() {
 }
 
 v_status() {
-  local j verd g t floor last held conf room_age alarms=""
+  local j verd g t floor last held conf room_age alarms="" phase
   j=$(v_verdict --json); verd=$(printf '%s' "$j" | jq -r '.verdict // empty' 2>/dev/null)
+  # Which phase of the turn cycle the room is in, from the declared flow graph via the shared
+  # guard (c_phase -> flow_phase over lib/room-graph.sh). This is the supervisor's "where is this
+  # room" read, and the one place the guard's session-less evaluation is surfaced to a person; the
+  # transport's hot paths gate on the cheap c_round_open/c_round_closed accessors, not this walk.
+  # Empty means the graph has closed out — the room is decided.
+  phase=$(c_phase); phase=${phase:-decided}
   # The verdict line above is the room's, the lines below are the reader's. During an open
   # barrier round those differ on purpose: `verdict` counts the whole log, and counts and ids
   # are not content -- `OPEN ROUND: posted k/N` discloses the same existence three lines down
@@ -342,6 +348,7 @@ v_status() {
     "$(printf '%s' "$j" | jq -r .budget)" "$floor" "$held" "$conf"
   printf 'verdict: %s (nothing new for %s turns, lap %s)\n' "$verd" \
     "$(printf '%s' "$j" | jq -r .since_last_claim)" "$(printf '%s' "$j" | jq -r .lap)"
+  printf 'phase: %s\n' "$phase"
   if c_round_open; then
     printf 'OPEN ROUND: posted %s/%s, waiting for %s — nobody sees their positions yet\n' \
       "$(c_round0 | wc -l | tr -d ' ')" "$(c_npeers)" \
