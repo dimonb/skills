@@ -247,6 +247,61 @@ ok "a non-numeric FLOW_MAX_POLLS fails closed (blocks, no infinite loop)" 0 "$fa
 cycle_rc=0; ( flow_reset; flow_node loop --done-when 'budget 0' --on-done goto:loop; FLOW_SESSION=s FLOW_MAX_NODES=5 flow_run loop ) 2>/dev/null || cycle_rc=$?
 ok "a cycle trips the node budget"              65 "$cycle_rc"
 
+# --- 7b. flow_phase: session-less graph evaluation (the authority mode, FLOW-04) --------------
+# The complement of flow_run: no session, no agent, no side effect — walk the declared graph and
+# report the node it currently sits in. Modelled with file-backed `check` predicates that a test
+# toggles, so the phase advances as facts appear, exactly as council's barrier/closure will.
+printf '\n── flow_phase: session-less graph evaluation ──\n'
+flow_reset
+flow_node p_open  --done-when "check test -f $TMP/ph_open" --on-done goto:p_exch
+flow_node p_exch  --done-when "check test -f $TMP/ph_exch" --on-done goto:p_close
+flow_node p_close --done-when "check test -f $TMP/ph_dec"  --on-done close
+rm -f "$TMP/ph_open" "$TMP/ph_exch" "$TMP/ph_dec"
+: > "$TELLLOG"
+ok "phase is the first not-done node"        "p_open"  "$(flow_phase p_open)"
+: > "$TMP/ph_open"
+ok "it advances when the first fact appears" "p_exch"  "$(flow_phase p_open)"
+: > "$TMP/ph_exch"
+ok "and again on the next fact"              "p_close" "$(flow_phase p_open)"
+: > "$TMP/ph_dec"
+ok "a graph met up to close reports empty"   ""        "$(flow_phase p_open)"
+# The authority read must consult NO agent: evaluating the graph tells the session nothing, even
+# though the whole walk ran (three nodes' predicates evaluated).
+ok "evaluating the graph prompted the agent nothing" 0 "$(wc -l < "$TELLLOG" | tr -d ' ')"
+
+# Session-free: a `signal` done_when needs a live drive, so an authority read holds the phase AT
+# that node — flow_phase reads no session at all (FAKE_SIG is set to idle to prove it is ignored).
+# It also must NOT fire the node's emit: an authority query has no side effect.
+flow_reset
+flow_node s_wait --done-when 'signal idle' --emit "$TMP/phase_emit" --on-done close
+rm -f "$TMP/phase_emit"
+: > "$TELLLOG"
+ok "a signal predicate is not met session-less (phase holds)" "s_wait" "$(FAKE_SIG='live|idle' flow_phase s_wait)"
+ok "flow_phase wrote no emit artifact"                         1 "$([ -f "$TMP/phase_emit" ]; echo $?)"
+# A budget>0 predicate likewise needs the drive loop's poll count, so it holds the phase too.
+flow_reset
+flow_node b_wait --done-when 'budget 3' --on-done close
+ok "budget>0 holds the phase (no poll loop to elapse)"        "b_wait" "$(flow_phase b_wait)"
+# budget 0 is the trivial member that IS met session-less.
+flow_reset
+flow_node b0 --done-when 'budget 0' --on-done close
+ok "budget 0 is met session-less (a complete graph -> empty)" "" "$(flow_phase b0)"
+
+# Guardrails mirror flow_run's, over the same registry and transition grammar.
+nostart_p=0; ( flow_reset; flow_phase "" ) 2>/dev/null || nostart_p=$?
+ok "flow_phase without a start node refuses"    66 "$nostart_p"
+unknown_p=0; ( flow_reset; flow_phase ghost ) 2>/dev/null || unknown_p=$?
+ok "flow_phase on an unknown node refuses"       66 "$unknown_p"
+# An unknown node reached via a goto is refused too (not read as complete).
+gotounknown_p=0; ( flow_reset; flow_node g --done-when 'budget 0' --on-done goto:nowhere; flow_phase g ) 2>/dev/null || gotounknown_p=$?
+ok "flow_phase on a goto to an unknown node refuses" 66 "$gotounknown_p"
+badact_p=0; ( flow_reset; flow_node n --done-when 'budget 0' --on-done sideways; flow_phase n ) 2>/dev/null || badact_p=$?
+ok "flow_phase on a malformed action refuses"    67 "$badact_p"
+emptygoto_p=0; ( flow_reset; flow_node n --done-when 'budget 0' --on-done 'goto:'; flow_phase n ) 2>/dev/null || emptygoto_p=$?
+ok "flow_phase on an empty goto target refuses"  67 "$emptygoto_p"
+cycle_p=0; ( flow_reset; flow_node loop --done-when 'budget 0' --on-done goto:loop; FLOW_MAX_NODES=5 flow_phase loop ) 2>/dev/null || cycle_p=$?
+ok "flow_phase trips the node budget on a cycle" 65 "$cycle_p"
+
 # --- 8. structural: no skill-specific branch in the interpreter -------------------------------
 # FLOW-01: the interpreter reads the graph and names no skill. The header comment legitimately
 # mentions both skills (it is shared BY them), so scan only the non-comment lines.

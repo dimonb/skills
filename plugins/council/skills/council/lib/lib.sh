@@ -446,6 +446,26 @@ c_barrier() {
     printf 'open'
   fi
 }
+# The opening-round decision, as NAMED accessors — the ONE authority every reader consults for
+# "is the opening barrier round still holding". FLOW-04 expresses the room's turn cycle as a
+# declared flow graph (lib/room-graph.sh) whose `opening` node gates on `c_round_complete`; these
+# three are that node's decision, read the same way everywhere so the rule is not re-derived at
+# each reader (the #74 "hold the opening barrier in every reader" class). The barrier itself stays
+# a PURE FUNCTION OF THE LOG — c_barrier is unchanged; these only give it one name per question.
+#
+# They are exit-status wrappers of c_barrier, and each maps to exactly one of the two words rather
+# than to "the other one", because c_barrier is documented (v_decide) to print NEITHER word if it
+# ever died mid-function: `c_round_open` is true iff c_barrier prints `open`, `c_round_closed` iff
+# it prints `closed`, and neither is the negation of the other. So a caller that used
+# `[ "$(c_barrier)" = open ]` becomes `c_round_open`; `!= open` becomes `! c_round_open`; `= closed`
+# becomes `c_round_closed`; and the fail-closed `!= closed` (open OR unreadable) becomes
+# `! c_round_closed` — each exit-status-identical to the test it replaces on every input, the
+# unreachable print-nothing case included. c_barrier is called exactly as often as before.
+c_round_open()     { [ "$(c_barrier)" = open ]; }
+c_round_closed()   { [ "$(c_barrier)" = closed ]; }
+# The `opening` node's mechanical predicate (see lib/room-graph.sh): the opening round is complete
+# once it is closed. Named for what the graph asks, so the graph and the transport share one rule.
+c_round_complete() { c_round_closed; }
 c_posted_round0() { c_round0 | jq -r --arg me "$ME" 'select(.from == $me) | .id' | head -1; }
 
 # --- send ----------------------------------------------------------------------
@@ -489,7 +509,7 @@ c_send() {
   # write at once, so making them compete for turn 0 would demote all but one of them.
   if [ "$hand" = true ]; then
     turn=null
-  elif [ "$(c_barrier)" = open ]; then
+  elif c_round_open; then
     if [ -n "$(c_posted_round0)" ]; then
       echo "council: the round is not complete — you have stated your position, wait for the others" >&2
       return 5
@@ -591,7 +611,7 @@ c_drain() {
   # While the opening barrier is open, an opening position is WITHHELD from every other
   # participant — that is the whole mechanism. A lane stops at its withheld message rather
   # than skipping it, so nothing is lost and the cursor never runs past unread words.
-  local open=false; [ "$(c_barrier)" = open ] && open=true
+  local open=false; c_round_open && open=true
   # WHO a message is from, WHICH LANE it came from and WHERE IN THAT LANE it sits are taken
   # from the PATH it was read at, never from the message. The path is chosen by the READER --
   # c_new_files builds it -- rather than supplied by the thing being read, which is the
@@ -1024,7 +1044,7 @@ c_visible() {
   # whole c_all, and c_canon below is a third. Two paths are cheaper and neither is the common
   # one: `n == 0` answers `open` from its precondition having read no log at all, and a `token`
   # room returns on c_mode alone. Measured cost is on the pull request.
-  elif [ "$(c_barrier)" = open ]; then
+  elif c_round_open; then
     why="the opening round is not complete — the other seats' positions are withheld from you until it is"
   else
     c_canon; return
@@ -1050,7 +1070,7 @@ c_visible() {
 # the rotation already applied, and the opening positions never compete for a turn.
 c_turns() {
   local base=0
-  if [ "$(c_mode)" = roundtable ] && [ "$(c_barrier)" = closed ]; then base=$(c_npeers); fi
+  if [ "$(c_mode)" = roundtable ] && c_round_closed; then base=$(c_npeers); fi
   local n; n=$(c_canon | jq -s '[.[] | select(.hand == false and .turn != null and .valid)] | length')
   echo $(( base + n ))
 }
