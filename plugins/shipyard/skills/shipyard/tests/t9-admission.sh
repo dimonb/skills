@@ -126,6 +126,10 @@ ok "a cap with a stray trailing space falls back" 2 \
   "$( export SHIPYARD_MAX_SLOTS='2 '; . "$ADMISSION"; shipyard_admission_cap )"
 ok "a non-integer floor falls back to the default" 10 \
   "$( export SHIPYARD_MEM_MIN_FREE_PCT=lots; . "$ADMISSION"; shipyard_admission_min_free_pct )"
+# An all-digit value long enough to overflow the [ ] integer test would itself error and fail
+# open, so it must fall back too — an unusable knob never disables the gate, digits or not.
+ok "an over-long all-digit floor falls back to the default" 10 \
+  "$( export SHIPYARD_MEM_MIN_FREE_PCT=999999999999999999999; . "$ADMISSION"; shipyard_admission_min_free_pct )"
 
 # --- 2. slot count reuses the backend's enumeration ------------------------------------------
 printf '\n── slot count ──\n'
@@ -193,6 +197,10 @@ ok "boundary: 9% free, floor 10 -> refuse" 5 "$rc"
 # A custom floor is honoured end to end.
 rc=0; ( export SHIPYARD_BACKEND=agterm SHIPYARD_MAX_SLOTS=10 SHIPYARD_MEM_MIN_FREE_PCT=50 FAKE_AT_TREE="$TREE1" FAKE_MEM_PCT=44; . "$BACKEND"; . "$ADMISSION"; shipyard_admission_report ) >/dev/null 2>&1 || rc=$?
 ok "custom floor 50, 44% free -> refuse" 5 "$rc"
+# An over-long floor (would overflow the [ ] test) falls back to the default (10), so at 5% free
+# the memory gate still ENFORCES (rc 5) instead of erroring and failing open.
+rc=0; ( export SHIPYARD_BACKEND=agterm SHIPYARD_MAX_SLOTS=10 SHIPYARD_MEM_MIN_FREE_PCT=999999999999999999999 FAKE_AT_TREE="$TREE1" FAKE_MEM_PCT=5; . "$BACKEND"; . "$ADMISSION"; shipyard_admission_report ) >/dev/null 2>&1 || rc=$?
+ok "over-long floor falls back and still enforces (rc 5)" 5 "$rc"
 
 # --- 6. degrade + precedence -----------------------------------------------------------------
 printf '\n── degrade and precedence ──\n'

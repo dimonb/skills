@@ -176,9 +176,10 @@ once drove a 16 GB machine into swap until macOS recycled the whole GUI session:
   gate degrades to a no-op — it never hard-fails a launch on a platform where it cannot run.
 
 Each refusal is actionable: it names which gate blocked, the current value versus the limit,
-and the env var to override it. A non-integer value for either knob falls back to its default,
-so a mistyped override hardens the gate rather than silently disabling it. There is no daemon,
-queue or state store — just this gate in the existing launch path.
+and the env var to override it. An unusable value for either knob — empty, non-numeric, or
+absurdly long — falls back to its default, so a mistyped override hardens the gate rather than
+silently disabling it. There is no daemon, queue or state store — just this gate in the
+existing launch path.
 
 What it launches:
 

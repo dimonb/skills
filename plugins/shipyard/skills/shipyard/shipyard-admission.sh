@@ -32,17 +32,20 @@
 # -failed on a platform where the detector cannot run. The concurrency cap is platform-neutral
 # and always applies.
 
-# _shipyard_admission_uint <value> <default> — the value when it is a non-empty run of digits,
-# else the default. The knobs feed integer `[ -ge ]`/`[ -lt ]` tests, which ERROR on a
-# non-integer operand; an `if` reads that error as false, so an unvalidated bad knob would make
-# the gate FAIL OPEN — the one outcome a crash-prevention gate must never have — and leak a raw
-# `integer expected` to stderr. A mistyped override (a typo, a stray space, `two`) therefore
-# falls back to the documented default: it HARDENS the gate rather than silently disabling it.
+# _shipyard_admission_uint <value> <default> — the value when it is a short run of digits, else
+# the default. The knobs feed integer `[ -ge ]`/`[ -lt ]` tests, which ERROR on a non-integer
+# operand; an `if` reads that error as false, so an unvalidated bad knob would make the gate FAIL
+# OPEN — the one outcome a crash-prevention gate must never have — and leak a raw `integer
+# expected` to stderr. So an unusable override ALWAYS falls back to the documented default rather
+# than silently disabling the gate. "Unusable" is empty, any non-digit (a typo, a stray space,
+# `two`, a negative), AND an absurdly long digit run: a value that overflows the `[ ]` test
+# (>= ~19 digits) would itself error and fail open, and no legitimate cap or percentage is
+# anywhere near 10 digits — so 10+ digits is capped back to the default too.
 _shipyard_admission_uint() {
   case "$1" in
-    ''|*[!0-9]*) printf '%s' "$2" ;;
-    *)           printf '%s' "$1" ;;
+    ''|*[!0-9]*) printf '%s' "$2"; return ;;
   esac
+  if [ "${#1}" -le 9 ]; then printf '%s' "$1"; else printf '%s' "$2"; fi
 }
 
 # shipyard_admission_cap — the effective concurrency cap (live ship-* slots allowed).
