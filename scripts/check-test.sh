@@ -73,6 +73,7 @@ restore() {
     ".claude/skills/$NONASCII" ".agents/skills/$NONASCII" "plugins/ship/skills/$NONASCII" \
     "$TESTS_DIR/t99-probe.sh" "$TESTS_DIR/t98-unregistered.sh" "$TESTS_DIR/nested" \
     shared/driver/tests/_probe-unreg.sh plugins/shipyard/skills/shipyard/tests/_probe-unreg.sh \
+    shared/flow/tests/_probe-unreg.sh shared/flow/extra.sh \
     2>/dev/null || true
   rmdir docs 2>/dev/null || true
 }
@@ -672,38 +673,70 @@ expect_fail "the untracked predicate fails CLOSED when git errors" \
 rm -rf .claude/skills/_probe-local
 cp "$SCRATCH/check-predicate.bak" scripts/check.sh
 
-# 25 — check 11: a vendored driver copy that drifts from the canonical reds the gate. Backup and
-# restore by hand (not `git checkout --`) so the probe holds whether or not the spike is committed.
+# 25 — check 11: a vendored copy that drifts from its canonical reds the gate. Backup and restore
+# by hand (not `git checkout --`) so the probe holds whether or not the module is committed. The
+# fixture drifts a DRIVER copy; probe 29b drifts a FLOW copy, so the one generalized loop is proven
+# to reach both modules.
 cp plugins/council/skills/council/lib/agent-driver.sh "$SCRATCH/drv-copy.bak"
 printf '# drift\n' >> plugins/council/skills/council/lib/agent-driver.sh
-expect_fail "shared driver copy drifted from canonical" "shared driver copy drifted"
+expect_fail "shared driver copy drifted from canonical" "shared module copy drifted"
 cp "$SCRATCH/drv-copy.bak" plugins/council/skills/council/lib/agent-driver.sh
 
 # 26 — check 11 fails CLOSED: a missing vendored copy reds too, it does not silently pass.
 mv plugins/shipyard/skills/shipyard/agent-driver.sh "$SCRATCH/drv-copy2.bak"
-expect_fail "a missing shared driver copy" "shared driver copy is missing"
+expect_fail "a missing shared driver copy" "shared module copy is missing"
 mv "$SCRATCH/drv-copy2.bak" plugins/shipyard/skills/shipyard/agent-driver.sh
 
-# 27 — check 11 fails CLOSED: a missing canonical reds the gate, it does not silently pass. Backup
-# and restore by hand (like 25/26). check 1's bash -n also reds on the still-tracked missing file,
-# so the unique $2 "shared driver canonical is missing" is what keeps this probe on check 11's arm.
+# 27 — check 11 fails CLOSED: a module with no canonical *.sh reds the gate — the generalized form
+# of "the canonical is missing". Backup and restore by hand (like 25/26). check 1's bash -n also
+# reds on the still-tracked missing file, so the unique $2 "shared module has no canonical" is what
+# keeps this probe on check 11's arm.
 mv shared/driver/agent-driver.sh "$SCRATCH/drv-canonical.bak"
-expect_fail "a missing shared driver canonical" "shared driver canonical is missing"
+expect_fail "a module with no canonical *.sh" "shared module has no canonical"
 mv "$SCRATCH/drv-canonical.bak" shared/driver/agent-driver.sh
 
 # 28 — check 11 fails CLOSED: a missing target list reds the gate. targets.txt is not a *.sh file,
 # so no other check touches it — this arm has no backstop but this probe.
 mv shared/driver/targets.txt "$SCRATCH/drv-targets.bak"
-expect_fail "a missing shared driver target list" "shared driver target list is missing"
+expect_fail "a missing shared module target list" "shared module target list is missing"
 mv "$SCRATCH/drv-targets.bak" shared/driver/targets.txt
 
-# 29 — check 11's "compared nothing" guard: a target list with no active entries (only comments or
-# blanks) reds the gate rather than passing green having compared zero copies. Same no-backstop arm
-# as 28, and the one most likely to rot silently if the driver_n>0 guard is ever dropped.
+# 29 — check 11's per-module "compared nothing" guard: a target list with no active entries (only
+# comments or blanks) reds the gate rather than passing green having compared zero copies. Same
+# no-backstop arm as 28, and the one most likely to rot silently if the per-module count guard is
+# ever dropped.
 cp shared/driver/targets.txt "$SCRATCH/drv-targets-empty.bak"
 printf '# only a comment, no target paths\n' > shared/driver/targets.txt
-expect_fail "an empty shared driver target list" "shared driver target list is empty"
+expect_fail "an empty shared module target list" "shared module target list is empty"
 cp "$SCRATCH/drv-targets-empty.bak" shared/driver/targets.txt
+
+# 29b — the generalization actually REACHES the flow module, not just the driver: a drifted flow
+# copy reds too. Without this, check 11 could iterate the driver alone and this suite would not
+# notice. Backup/restore by hand, like 25.
+cp plugins/council/skills/council/lib/flow.sh "$SCRATCH/flow-copy.bak"
+printf '# drift\n' >> plugins/council/skills/council/lib/flow.sh
+expect_fail "a drifted flow copy reds too (the loop reaches every module)" "shared module copy drifted"
+cp "$SCRATCH/flow-copy.bak" plugins/council/skills/council/lib/flow.sh
+
+# 29c — ...and a missing flow copy reds, the flow module's fail-closed arm.
+mv plugins/shipyard/skills/shipyard/flow.sh "$SCRATCH/flow-copy2.bak"
+expect_fail "a missing flow copy" "shared module copy is missing"
+mv "$SCRATCH/flow-copy2.bak" plugins/shipyard/skills/shipyard/flow.sh
+
+# 29d — a NEW malformed-module arm the generalization introduced: a module with SEVERAL *.sh has no
+# unique canonical and reds loudly rather than picking one at random. The stray file is untracked,
+# so the restore trap removes it explicitly.
+printf '# a second script\ntrue\n' > shared/flow/extra.sh
+expect_fail "a module with several *.sh has no unique canonical" "shared module has several *.sh"
+rm -f shared/flow/extra.sh
+
+# 29e — the top-level "compared nothing" guard: if no shared/<mod>/ exists at all, the whole check
+# must red rather than pass having scanned zero modules. Repointed inside check.sh (like 14b/20) so
+# the loop's glob matches nothing — moving shared/ for real would trip check 1 and others.
+cp scripts/check.sh "$SCRATCH/check11-nomod.bak"
+perl -pi -e 's{^for moddir in shared/\*/; do$}{for moddir in shared/none-xyz-*/; do}' scripts/check.sh
+expect_fail "check 11 reds when no shared module exists at all" "no shared/<mod>/ module found under shared/"
+cp "$SCRATCH/check11-nomod.bak" scripts/check.sh
 
 # 30 — option B: `make check` (the Makefile target, NOT scripts/check.sh) actually RUNS the driver
 # suite, so a driver-suite regression reds every commit. This is the one probe that must invoke
@@ -720,6 +753,19 @@ else
   pass=$((pass+1))
 fi
 git checkout -- shared/driver/tests/t-driver.sh
+
+# 30b — ...and `make check` RUNS the flow suite too, so a flow-guard regression reds every commit.
+# Same technique as 30: overwrite t-flow.sh with a failing stub (it still parses for check 1 and is
+# still registered for check 10, so scripts/check.sh stays green and only the suite run reds).
+printf '#!/usr/bin/env bash\nexit 1\n' > shared/flow/tests/t-flow.sh
+if make check >"$SCRATCH/out" 2>&1; then
+  echo "NOT CAUGHT: make check does not run the flow suite (a flow failure did not red it)"
+  nocatch=$((nocatch+1))
+else
+  echo "caught:     make check runs the flow suite   ->  a failing flow test reds make check"
+  pass=$((pass+1))
+fi
+git checkout -- shared/flow/tests/t-flow.sh
 
 # 31 — the mirror of 30 for the STATIC gate: `make check` must also invoke scripts/check.sh, not
 # only the driver suite. When this suite switched its ~60 probes from `make check` to

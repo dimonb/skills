@@ -12,9 +12,9 @@
 # 7. no non-generic strings (structural patterns only; no dependency on any untracked file)
 # 8. no non-Latin script in any file, untracked included (the checkable half of "English")
 # 9. no council test names the shared temp parent (the pre-run-root shape); see §9 for its limits
-# 10. every test on disk is registered in its suite's run-all.sh (driver, shipyard, council), so
-#     none silently stops running
-# 11. every vendored copy of the shared driver is byte-identical to its one canonical source
+# 10. every test on disk is registered in its suite's run-all.sh (driver, flow, shipyard, council),
+#     so none silently stops running
+# 11. every vendored copy of a shared module is byte-identical to its module's one canonical source
 set -uo pipefail
 cd "$(dirname "$0")/.."
 ROOT_P=$(pwd -P)          # physical repo root; see the symlink containment check below
@@ -483,6 +483,7 @@ fi
 # which is louder than the old dedicated skip but never silent.
 for suite_dir in \
   shared/driver/tests \
+  shared/flow/tests \
   plugins/shipyard/skills/shipyard/tests \
   plugins/council/skills/council/tests; do
   runner=$suite_dir/run-all.sh
@@ -515,30 +516,52 @@ for suite_dir in \
   fi
 done
 
-# 11 — the shared driver is one source of truth. Each plugin ships its own copy because a Codex
-# plugin cannot depend on another plugin, so a symlink cannot cross that boundary; the gate is
-# what keeps the copies identical. Fails CLOSED — a missing canonical, an absent or empty target
-# list, or a missing copy each red, so "compared nothing" is never read as OK.
-driver_canonical=shared/driver/agent-driver.sh
-driver_targets=shared/driver/targets.txt
-if [ ! -f "$driver_canonical" ]; then
-  fail "shared driver canonical is missing: $driver_canonical"
-elif [ ! -f "$driver_targets" ]; then
-  fail "shared driver target list is missing: $driver_targets"
-else
-  driver_n=0
+# 11 — every shared/<mod>/ module is one source of truth. Each plugin ships its own copy of a
+# shared module because a Codex plugin cannot depend on another plugin, so a symlink cannot cross
+# that boundary; the gate is what keeps the copies identical. Generalized from the driver alone to
+# EVERY shared/<mod>/ (driver, flow, and any later one such as the escalation policy), so a new
+# shared module is covered with NO gate edit — it just needs a lone *.sh canonical and a
+# targets.txt. Fails CLOSED: a malformed module (no canonical, several candidates, or no target
+# list), a missing or empty list, a missing or drifted copy, and no shared module at all each red,
+# so "compared nothing" is never read as OK. `scripts/sync-driver.sh` writes the copies (its name
+# is historical — it vendors every module, not the driver alone).
+shared_mods=0
+for moddir in shared/*/; do
+  [ -d "$moddir" ] || continue
+  shared_mods=$((shared_mods + 1))
+  mod=${moddir%/}
+  # canonical = the lone *.sh directly in the module dir; tests/ and examples/ are subdirs and do
+  # not count. The glob's literal-on-no-match is filtered by [ -f ], so a module with no direct
+  # *.sh counts zero and reds, rather than reading the unexpanded pattern as a filename.
+  canonical=""; ncanon=0
+  for f in "$mod"/*.sh; do
+    [ -f "$f" ] || continue
+    ncanon=$((ncanon + 1)); canonical=$f
+  done
+  if [ "$ncanon" -eq 0 ]; then
+    fail "shared module has no canonical *.sh (expected exactly one): $mod"; continue
+  elif [ "$ncanon" -gt 1 ]; then
+    fail "shared module has several *.sh, cannot pick one canonical: $mod"; continue
+  fi
+  targets="$mod/targets.txt"
+  if [ ! -f "$targets" ]; then
+    fail "shared module target list is missing: $targets"; continue
+  fi
+  mod_n=0
   while IFS= read -r t || [ -n "$t" ]; do
     case "$t" in ''|\#*) continue ;; esac
-    driver_n=$((driver_n + 1))
+    mod_n=$((mod_n + 1))
     if [ ! -f "$t" ]; then
-      fail "shared driver copy is missing (run scripts/sync-driver.sh): $t"
-    elif ! cmp -s "$driver_canonical" "$t"; then
-      fail "shared driver copy drifted from $driver_canonical (run scripts/sync-driver.sh): $t"
+      fail "shared module copy is missing (run scripts/sync-driver.sh): $t"
+    elif ! cmp -s "$canonical" "$t"; then
+      fail "shared module copy drifted from $canonical (run scripts/sync-driver.sh): $t"
     fi
-  done < "$driver_targets"
-  # A target list that matched nothing means the check compared nothing — loud, not silent.
-  [ "$driver_n" -gt 0 ] || fail "shared driver target list is empty: $driver_targets"
-fi
+  done < "$targets"
+  # A target list that matched nothing means this module compared nothing — loud, not silent.
+  [ "$mod_n" -gt 0 ] || fail "shared module target list is empty: $targets"
+done
+# And no shared module at all means the whole check compared nothing.
+[ "$shared_mods" -gt 0 ] || fail "no shared/<mod>/ module found under shared/"
 
 [ $rc -eq 0 ] && echo "check: OK"
 exit $rc
