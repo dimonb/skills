@@ -2,10 +2,12 @@
 #
 # SOURCE OF TRUTH: shared/policy/policy.sh. Do NOT edit the vendored copies listed in
 # shared/policy/targets.txt — edit here, re-vendor the copies, and commit the canonical AND the
-# copies together. The repo gate keeps every copy byte-identical to this file (the same
-# "one source, enforced by the gate" model that covers shared/driver/; the drift check + sync
-# that cover the driver today are being generalized to iterate every shared/<mod>/, which then
-# covers this module with no per-module gate code).
+# copies together. Today those copies are kept byte-identical BY HAND: shared/driver/ has drift
+# enforced (scripts/check.sh check 11 fails on a drifted driver copy; scripts/sync-driver.sh
+# writes them), but that check and sync are driver-specific and do NOT yet see shared/policy/.
+# They are being generalized to iterate every shared/<mod>/, which will then enforce this module
+# too with no per-module gate code; until that lands, re-vendoring here by hand is what keeps the
+# copies honest — the same "one source, enforced" model as shared/driver/, one step behind it.
 #
 # Why a vendored copy and not a symlink or an import: a Codex plugin is installed as a
 # self-contained directory and cannot depend on another plugin, so each plugin carries its own
@@ -217,6 +219,13 @@ policy_escalate() {
     *) echo "policy_escalate: kind must be question|decision|notice (got: ${kind:-})" >&2; return 2 ;;
   esac
   [ -n "$slot" ] || { echo "policy_escalate: missing slot (the id stem)" >&2; return 2; }
+  # The slot is an id STEM, not a path — it becomes the filename "<slot>-<n>.json". Reject a '/'
+  # or a '..' so no caller, now or a future one wiring in more sources, can make the write escape
+  # the mailbox directory. Defensive at the boundary (the repo's "refuse malformed input loudly"
+  # rule); the only live caller passes council-<basename>, which never contains either.
+  case "$slot" in
+    */*|*..*) echo "policy_escalate: slot must not contain '/' or '..' (got: $slot)" >&2; return 2 ;;
+  esac
   [ -n "$text" ] || { echo "policy_escalate: missing text" >&2; return 2; }
   if [ "$kind" = decision ] && [ -z "$ctx" ]; then
     echo "policy_escalate: kind 'decision' requires context" >&2; return 2

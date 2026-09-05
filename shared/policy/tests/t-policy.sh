@@ -193,6 +193,14 @@ ok "the first entry still exists"   yes  "$([ -f "$mb/room-abc-1.json" ] && echo
 esc_rc() { local rc=0; ( cd "$REPO" && policy_escalate "$@" ) >/dev/null 2>&1 || rc=$?; printf '%s' "$rc"; }
 ok "a bad kind is rejected"         2  "$(esc_rc bogus room-abc text)"
 ok "a missing slot is rejected"     2  "$(esc_rc notice '' text)"
+# A slot becomes the filename stem, so a '/' or '..' must be refused — the write can never escape
+# the mailbox directory, whatever a future caller passes.
+ok "a slot with a path separator is rejected" 2 "$(esc_rc notice 'sub/dir' text)"
+ok "a traversal slot is rejected"             2 "$(esc_rc notice '../evil' text)"
+ok "a slot containing .. is rejected"         2 "$(esc_rc notice 'x..y' text)"
+# ...and the rejected traversal wrote no file above the mailbox directory.
+ok "the rejected traversal wrote no file above the mailbox" absent \
+  "$([ -e "$mb/../evil-1.json" ] && echo present || echo absent)"
 ok "a missing text is rejected"     2  "$(esc_rc notice room-abc '')"
 ok "a decision with no context is rejected" 2 "$(esc_rc decision room-abc 'approve X?')"
 # ...and a decision WITH context is written, with the context field set.
