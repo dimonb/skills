@@ -52,11 +52,20 @@
 - **GSD adopted + tracked:** `.planning/` is now committed (`3853950`); AGENTS.md rewritten to
   reconcile GSD with the no-per-change-spec rule (plan-phase output = the issue) and `.planning/`
   added to the docs-only-to-main allowlist.
-- **NOW: Phase 3 + Phase 4 in parallel (2-slot cap):** Phase 3 ESC policy = issue **#94** (slot 94);
-  Phase 4 FLOW guard core = issue **#95** (slot 95). Both foundation pieces, independent. Expect
-  design escalations (I answer internal-design ones).
-- **Deferred:** DRV-02 adapter unification; FLOW-03/04/05 (migrate each skill onto the guard) are
-  later issues after the guard core.
+- **Phase 3 + Phase 4 core SHIPPED (ran parallel, 2-slot cap):**
+  - Phase 3 ESC policy — #94 → PR **#96** → `f47f15a`. One shared `policy_dispose` table
+    (default-deny, rate-limit-from-usage, council mailbox). Decision 94-1 coordination: no bespoke
+    drift check, rely on #97's generalized gate.
+  - Phase 4 FLOW guard core — #95 → PR **#97** → `4ba98ba`. Interpreter over a declared step-graph,
+    fixed mechanical `done_when` vocabulary. Decision 95-1 (mine): A1+B1+C1 — incl. **generalize
+    the shared-module drift gate** to iterate every `shared/<mod>/` (now covers driver+flow+policy).
+    Also made t10 robust under load.
+  - Merge order #97 → #96 (verified by a local trial-merge: 0 conflicts, generalized gate covers
+    policy). Both children hit a shared account **rate-limit** mid-run (2 parallel Opus) — nudged
+    back after reset; lesson: the cap guards memory, not API quota.
+- **REMAINING:** the FLOW **migrations** — FLOW-03 shipyard-as-one-node, FLOW-04 council-as-turn-
+  cycle, FLOW-05 multi-agent (the guard is behaviour-inert until a skill uses it); and DRV-02
+  adapter unification. Scope steer due on doing the migrations now.
 - **GSD record now COMPLETE and current.** Backfilled: `phases/01-stop-the-bleeding/`
   (CONTEXT + 01-01-SUMMARY + 01-VERIFICATION); `phases/02-driver/` per-task SUMMARY for 02-02..05
   + 02-VERIFICATION. Convention (both phase CONTEXTs): the **GitHub issue is the atomic plan**

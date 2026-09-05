@@ -35,6 +35,22 @@ macOS). Getting the suites onto Linux caught + fixed **2 latent portability bugs
 `ctx_mtime` BSD `stat -f`; council `t3-token` wall-clock wedge race → now turn-count deterministic).
 Decision 91-3 (mine): Option A (fix them in-PR), bounded fallback to B — A worked, no rabbit hole.
 
+**Phase 3 — ESC policy — COMPLETE (in prod)**
+| Task | Req | Issue → PR → merge | State |
+|------|-----|--------------------|-------|
+| 03-01 policy module | ESC-01/02/03/04 | #94 → #96 → `f47f15a` | ✅ |
+
+**Phase 4 — FLOW guard — CORE COMPLETE (in prod); migrations open**
+| Task | Req | Issue → PR → merge | State |
+|------|-----|--------------------|-------|
+| 04-01 interpreter core + C1 gate generalization | FLOW-01/02 | #95 → #97 → `4ba98ba` | ✅ |
+| 04-02 shipyard as a one-node graph | FLOW-03 | (open) | 🔲 |
+| 04-03 council as a turn-cycle graph | FLOW-04 | (open) | 🔲 |
+| 04-04 multi-agent turn-taking | FLOW-05 | (open) | 🔲 |
+
+Ran 03 + 04 in parallel (2-slot cap). Merge order #97 (generalize the gate) → #96 (policy,
+auto-covered). One generalized shared-module drift gate now covers driver + flow + policy.
+
 **Phase 3 (ESC policy) and Phase 4 (FLOW guard)** — not started; a scope steer is due after Phase 1.
 
 Deferred follow-ups tracked: CI (GitHub Actions, from #84), DRV-02 adapter unification, DRV-03 full
