@@ -43,19 +43,40 @@ restores with `git checkout --`, so it refuses to run at all while any untracked
 the paths it guards — `make check` is fine, but move your scratch directory before running the
 other one.
 
-## No spec-artifact stage
+## Planning with GSD, and no per-change spec artifact
 
-This repo keeps **no per-change spec artifact** — no spec tool, no design doc, no proposal
-directory. A change is an issue, a branch, and a pull request. Design discussion belongs in
-the issue and the PR description, where it is next to the thing it describes.
+Two rules that fit together.
 
-That is a deliberate choice for a repository of markdown and shell, and it is exactly what
-the bundled `ship` skill discovers and adapts to. The property that matters — an
-independent, adversarial review before the work is accepted — is not skipped: it moves
-wholly into the review passes over the diff, where a scope axis checks the change against
-what the issue asked for.
+**No per-change spec artifact.** A single change is an issue, a branch, and a pull request —
+nothing else gates it. There is no per-change spec tool, design doc, or proposal directory a PR
+must clear before its diff is reviewed. Design discussion for one change belongs in its issue and
+PR description, next to the thing it describes, and the independent adversarial review happens
+wholly in the passes over the diff (a scope axis checks the change against what the issue asked).
+This is deliberate for a repo of markdown and shell, and the bundled `ship` skill discovers and
+adapts to it.
 
-Do not introduce a spec-artifact stage here without changing this section first.
+**GSD for the arc across changes.** A multi-change effort — a refactor spanning many PRs — is
+planned with GSD (`open-gsd/gsd-core`), a brownfield planning pipeline, under `.planning/`: a
+grounded codebase map, `REQUIREMENTS.md` of capabilities with stable IDs, a phased `ROADMAP.md`,
+per-phase `CONTEXT.md` (the decisions taken) and `VERIFICATION.md` (each requirement traced to the
+PR that met it), a per-task `SUMMARY.md`, and a live `STATE.md`. It is committed — this repo's own
+development record, versioned like the code it plans. There is no OpenSpec here; GSD fills that
+role, and applied by hand (no `/gsd-*` CLI) it is the discipline that carries, not the ceremony:
+ground the plan on the code before proposing, give every requirement a traceable ID, and name in
+writing what you defer.
+
+The two reconcile through one rule: **GSD's plan-phase output here is the GitHub issue.** A task's
+atomic plan is its issue body — the same issue that is the per-change design surface above — so GSD
+buys a roadmap and requirement-to-PR traceability without reintroducing a per-change spec artifact.
+A PR is gated by its issue and its diff review, never by a `.planning/` document.
+
+`.planning/` ships in no plugin and gates no PR, so rule zero's generic-reusability test no more
+applies to it than to this file or the README — but, like them, it stays English and free of the
+leaks the gate forbids (`make check` reads it, committed or not). Keep it current: a stale roadmap
+is worse than none.
+
+Do not introduce a per-change spec-artifact stage — a document a PR must clear before its diff is
+reviewed — without changing this section first. Adding to the GSD `.planning/` roadmap is not that.
 
 ## Rule zero: everything here is generic
 
@@ -121,8 +142,8 @@ finding put to a skeptic that tries to refute it, and a bounded number of fix ro
 external clears a stage, and no stage waits on an actor nobody starts. What ends a change is a
 **human merging it** — a clean self-review is a better first pair of eyes, never a second one.
 
-Design discussion belongs in the issue and the PR description. There is no spec artifact
-(above).
+Design discussion for a change belongs in its issue and PR description; the multi-change arc
+is tracked in GSD's `.planning/` roadmap. There is no per-change spec artifact (above).
 
 ## How to add a skill
 
@@ -177,8 +198,9 @@ it. Say in the change which parts you verified by running and which you reasoned
 ## Rules
 
 * **Never commit or push to `main`** except docs-only changes (`README.md`, `AGENTS.md`,
-  anything under `docs/`). Everything else lands through a pull request on a branch named
-  `feat/`, `fix/`, `docs/`, `chore/`, `refactor/` or `test/`.
+  anything under `docs/`, and the GSD planning record under `.planning/`). Everything else lands
+  through a pull request on a branch named `feat/`, `fix/`, `docs/`, `chore/`, `refactor/` or
+  `test/`.
 * **`make check` must pass before every commit.** Extend it as the repo grows: a rule this
   file states and the gate cannot check is a rule that quietly stops holding.
 * **One logical change per commit**, Conventional Commits.

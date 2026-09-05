@@ -1,0 +1,16 @@
+{
+  "gsd": {
+    "mode": "brownfield",
+    "applied": "by-hand",
+    "note": "GSD Core methodology followed manually; no @opengsd/gsd-core CLI installed in this repo."
+  },
+  "project": "shared-agent-harness-core",
+  "requirements_prefixes": ["DRV", "FLOW", "ESC", "LIFE", "LOAD", "MIG", "GATE"],
+  "phases": 4,
+  "repo_law": {
+    "gate": "make check && make check-test",
+    "flow": "issue -> branch -> PR -> review battery -> human merges",
+    "no_spec_artifact_stage": true,
+    "planning_dir_tracked": false
+  }
+}
