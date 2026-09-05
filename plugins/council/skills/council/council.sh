@@ -53,7 +53,9 @@ council.sh <verb> [options]
 
   The room
     up      --scenario <name> --agents <spec> [--room <name>] [--turns N]
-            [--cwd <dir>] [--me <peer>] [<agenda>|@file]
+            [--cwd <dir>] [--me <peer>] [--hold] [<agenda>|@file]
+            --hold: stay foreground as the room's owner; this shell's death tears the room
+                    down. Default is detached: the room outlives the caller.
     relaunch <peer> [--cwd <dir>]         put one seat back up, in place, mid-room
     down    [--room <name>] [--purge]
     rooms                                 which rooms exist and what state they are in
