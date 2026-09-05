@@ -153,9 +153,11 @@ make check-test   # proves the gate's assertions actually fail when violated (ne
 slow for a per-commit gate. What it DOES enforce for all three suites, statically, is
 **registration**: a test file that stops being listed in its `run-all.sh` reds `make check`
 (`scripts/check.sh` check 10), so a suite cannot silently stop running. It also runs the driver
-suite (fast), so a driver regression reds a commit. The honest limit, with no CI: the shipyard
-and council suites' **runtime** errors are caught by `make test`, run by hand like
-`make check-test`, not by `make check`.
+suite (fast), so a driver regression reds a commit. CI (`.github/workflows/ci.yml`) then runs
+`make check`, `make check-test` and `make test` on every push to `main` and every pull request, so
+the shipyard and council suites' **runtime** errors — not only their registration — red a check the
+change must pass. Locally those still surface at `make test`, run by hand like `make check-test`,
+since `make check` deliberately does not run them.
 
 Then install it the way a user would, from this clone, in whichever agents the change affects
 (exact commands are in the README):
