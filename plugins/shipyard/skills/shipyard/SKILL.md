@@ -160,7 +160,24 @@ and prints `SLOT:<slot>` as its last line — **record the slots, the report nee
 
 Exit codes: `0` started, `3` a terminal for that numeric slot already exists (do not
 start a duplicate — look inside with the command the error prints), `1`/`2`
-environment/argument error.
+environment/argument error, `4` the admission gate refused on the concurrency cap, `5`
+the admission gate refused on memory pressure (see the admission gate below).
+
+**The admission gate — refuse a launch this machine cannot take.** Before it creates any
+worktree or terminal, `shipyard-launch.sh` runs two cheap checks, because an uncapped fleet
+once drove a 16 GB machine into swap until macOS recycled the whole GUI session:
+
+* **Concurrency cap.** It counts the live `ship-*` slots and refuses (exit `4`) when that
+  count is at or above `SHIPYARD_MAX_SLOTS`. The default is **2**, sized conservatively for a
+  ~16 GB machine — raise it on a bigger box.
+* **Memory-pressure floor (macOS).** It reads the system-wide free-memory percentage from
+  `memory_pressure` and refuses (exit `5`) when it is below `SHIPYARD_MEM_MIN_FREE_PCT`
+  (default **10**). Where `memory_pressure` is unavailable (non-macOS, or no reading) this
+  gate degrades to a no-op — it never hard-fails a launch on a platform where it cannot run.
+
+Each refusal is actionable: it names which gate blocked, the current value versus the limit,
+and the env var to override it. There is no daemon, queue or state store — just this gate in
+the existing launch path.
 
 What it launches:
 
@@ -185,8 +202,10 @@ parent watcher is the human it escalates to. Launching children and then not rea
 escalations removes the only judgement in the loop. Say this out loud to anyone you set this
 up for; it is the one property of the skill that is not recoverable after the fact.
 
-`SHIPYARD_DRY=1` prints the slot, the protocol path, the propagated env and the whole launcher
-without starting anything — use it when you are unsure what a child will get.
+`SHIPYARD_DRY=1` prints the slot, the protocol path, the propagated env, the admission-gate
+decision and the whole launcher without starting anything — use it when you are unsure what a
+child will get. The gate decision is reported but not enforced in a dry run, so you can see
+what it would do before a real launch.
 
 **Codex parent continuity starts automatically on the agterm path.** Once the first child is
 live, `shipyard-launch.sh` starts one idempotent `shipyard-continuity.sh` watcher for the Codex
@@ -743,6 +762,7 @@ collide with it.
 | `shipyard-ctx.sh` | the ctx column: reads a child's transcript, infers its window, bands it |
 | `tests/run-all.sh` | the shipyard script suite — run by hand: `bash <SKILL>/tests/run-all.sh` |
 | `shipyard-launch.sh` | start a child: slot, protocol, launcher, container |
+| `shipyard-admission.sh` | the pre-launch admission gate: concurrency cap + macOS memory-pressure |
 | `shipyard-report.sh` | the status table + stall watchdog + sidebar glyphs |
 | `shipyard-escalations.sh` | the escalation view (`--new` for the fast monitor) |
 | `shipyard-ask.sh` | CHILD side: raise a question / decision / notice |
