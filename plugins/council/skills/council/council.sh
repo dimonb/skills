@@ -160,7 +160,7 @@ case "$VERB" in
   claims) . "$SKILL/lib/verbs.sh"; v_claims "$@" ;;
   verdict) . "$SKILL/lib/verbs.sh"; v_verdict "$@" ;;
   status) . "$SKILL/lib/verbs.sh"; v_status ;;
-  decide) need_me; . "$SKILL/lib/verbs.sh"; v_decide "$@" ;;
+  decide) need_me; . "$SKILL/lib/verbs.sh"; . "$SKILL/lib/policy.sh"; v_decide "$@" ;;
   say)    . "$SKILL/lib/up.sh"; council_say "$@" ;;
   relaunch) . "$SKILL/lib/up.sh"; council_relaunch "$@" ;;
   down)   . "$SKILL/lib/up.sh"; council_down "$@" ;;
