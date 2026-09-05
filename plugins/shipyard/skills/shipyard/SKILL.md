@@ -254,6 +254,22 @@ detached tool descendant, which the Codex runtime reaps when the tool call ends.
 process while children remain active does not silently strand the goal. This integration is
 Codex-only: Claude parents and every tmux run neither inspect nor steer goal state.
 
+**Watcher owner and lifetime.** The continuity watcher is reaped, never left reparented to
+launchd. On the default agterm path it runs as the foreground process of that dedicated agterm
+session, so it dies when the session is torn down — by last-slot cleanup, or with agterm itself —
+and **that is the production owner-death guarantee**. A second, detached launch mode exists
+(`_SHIPYARD_CONTINUITY_LAUNCH_MODE=nohup`); by default it behaves as it always has — detached,
+outliving its transient launcher, ended by an explicit `stop` or by the parent session going
+authoritatively absent. That detached mode can additionally be bound to a live owner with
+`_SHIPYARD_CONTINUITY_OWNER_HOLD=1`: the owner holds the write end of a canary pipe, the watcher
+inherits the read end in its own process group and reaps itself the instant that end closes — the
+owner's death for any reason, SIGKILL included — detected purely as EOF, with no `$PPID`/`kill -0`
+on the parent (both read a reparented process as alive). Only a caller that stays alive for the
+watcher's intended life may arm this, and shipyard's own launchers are transient tool calls that
+never do — so **no production path holds that write end today**. The canary hardens the detached
+mode for a caller that can (a future long-lived supervisor, or the test suite); the agterm path
+remains the guarantee that ships.
+
 The primary path for anything needing a human is the escalation mailbox (Step 3);
 `shipyard-tell.sh` (Step 4) is the way back when the child did not ask. `--remote-control` is
 left on as a manual escape hatch for a human at another client — it has no send-side CLI,
