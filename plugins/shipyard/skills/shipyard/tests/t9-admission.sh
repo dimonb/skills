@@ -4,6 +4,13 @@
 # decision and the MEMORY-GATE decision with the detector faked (no real pressure needed),
 # analogous to t8's faked backend.
 #
+# WHAT IS NOT COVERED, so a green run is never read as more than it is: no test DRIVES
+# shipyard-launch.sh, so the gate's runtime effect in the launcher (that it really exits 4/5 on a
+# refusal, that SHIPYARD_DRY really prints the decision and still exits 0) is not exercised end to
+# end. Section 7 guards the WIRE statically instead — the report is evaluated, the enforcing exit
+# exists, and it precedes worktree/terminal creation — mirroring how t7 guards its own wire in the
+# same file. That catches the silent-removal mutation; it does not replace an integration test.
+#
 # Everything is a PURE read over environment variables and three faked CLIs (git, agtermctl,
 # memory_pressure) FIRST on PATH — NO live terminal, no real repo, no network, and crucially no
 # dependence on the machine's real memory state. The gate counts slots through the backend's own
@@ -111,6 +118,14 @@ ok "cap default is 2"                2  "$( . "$ADMISSION"; shipyard_admission_c
 ok "cap honours SHIPYARD_MAX_SLOTS"  5  "$( export SHIPYARD_MAX_SLOTS=5; . "$ADMISSION"; shipyard_admission_cap )"
 ok "free floor default is 10"        10 "$( . "$ADMISSION"; shipyard_admission_min_free_pct )"
 ok "free floor honours override"     25 "$( export SHIPYARD_MEM_MIN_FREE_PCT=25; . "$ADMISSION"; shipyard_admission_min_free_pct )"
+# A mistyped knob must NOT silently disable the gate: a non-integer falls back to the default so
+# the integer test never errors and never fails open.
+ok "a non-integer cap falls back to the default" 2 \
+  "$( export SHIPYARD_MAX_SLOTS=two; . "$ADMISSION"; shipyard_admission_cap )"
+ok "a cap with a stray trailing space falls back" 2 \
+  "$( export SHIPYARD_MAX_SLOTS='2 '; . "$ADMISSION"; shipyard_admission_cap )"
+ok "a non-integer floor falls back to the default" 10 \
+  "$( export SHIPYARD_MEM_MIN_FREE_PCT=lots; . "$ADMISSION"; shipyard_admission_min_free_pct )"
 
 # --- 2. slot count reuses the backend's enumeration ------------------------------------------
 printf '\n── slot count ──\n'
@@ -152,6 +167,13 @@ rc=0; ( export SHIPYARD_BACKEND=agterm SHIPYARD_MAX_SLOTS=1 FAKE_AT_TREE="$TREE1
 ok "boundary: 1 slot, cap 1 -> refuse" 4 "$rc"
 rc=0; ( export SHIPYARD_BACKEND=agterm SHIPYARD_MAX_SLOTS=3 FAKE_AT_TREE="$TREE2"; . "$BACKEND"; . "$ADMISSION"; shipyard_admission_report ) >/dev/null 2>&1 || rc=$?
 ok "boundary: 2 slots, cap 3 -> admit" 0 "$rc"
+# A mistyped cap must fall back to the default (2) and STILL enforce — never fail open — and must
+# not leak a raw `integer expected` to stderr.
+rc=0; ( export SHIPYARD_BACKEND=agterm SHIPYARD_MAX_SLOTS=two FAKE_AT_TREE="$TREE2"; . "$BACKEND"; . "$ADMISSION"; shipyard_admission_report ) >/dev/null 2>&1 || rc=$?
+ok "mistyped cap falls back to default and still enforces (rc 4)" 4 "$rc"
+err=$( export SHIPYARD_BACKEND=agterm SHIPYARD_MAX_SLOTS=two FAKE_AT_TREE="$TREE0"; . "$BACKEND" >/dev/null 2>&1; . "$ADMISSION"; shipyard_admission_report 2>&1 >/dev/null )
+case "$err" in *'integer expected'*) ok "no raw bash error leaks on a mistyped knob" clean "leaked: [$err]" ;;
+               *) ok "no raw bash error leaks on a mistyped knob" clean clean ;; esac
 
 # --- 5. the memory-pressure decision (below the cap, so the memory gate is the one in play) ----
 printf '\n── memory pressure ──\n'
@@ -182,6 +204,25 @@ names "unavailable is stated, not silent" "memory gate unavailable" "$out"
 out=$( export SHIPYARD_BACKEND=agterm SHIPYARD_MAX_SLOTS=2 FAKE_AT_TREE="$TREE2" FAKE_MEM_PCT=1; . "$BACKEND"; . "$ADMISSION"; shipyard_admission_report ); rc=$?
 ok "cap takes precedence over memory (rc 4)" 4 "$rc"
 names "precedence: the cap gate is the one reported" "concurrency cap" "$out"
+
+# --- 7. the launch-script wiring (static, mirroring t7's continuity-wire assertions) ----------
+# t9 sources the gate functions but never drives shipyard-launch.sh, so the WIRE that makes the
+# gate matter — evaluate the report, and exit on a refusal BEFORE any worktree or terminal is
+# created — is asserted statically here, exactly the way t7 guards shipyard_continuity_start
+# against silent removal. Without this, moving the admission block below the creation calls, or
+# deleting the enforcing exit, defeats the change's core property ("no worktree or terminal on
+# refusal") with every suite still green.
+printf '\n── launch wiring ──\n'
+LAUNCH="$SKILL/shipyard-launch.sh"
+ok "launch evaluates the admission report" 1 "$(grep -Fc 'shipyard_admission_report' "$LAUNCH")"
+ok "launch enforces the refusal with its exit code" 1 "$(grep -Fc 'exit "$ADMISSION_RC"' "$LAUNCH")"
+enforce_line=$(grep -n 'exit "$ADMISSION_RC"' "$LAUNCH" | head -1 | cut -d: -f1)
+create_line=$(grep -n 'shipyard_agent_prepare_worktree' "$LAUNCH" | head -1 | cut -d: -f1)
+if [ -n "$enforce_line" ] && [ -n "$create_line" ] && [ "$enforce_line" -lt "$create_line" ]; then
+  ok "the refusal exit precedes worktree/terminal creation" yes yes
+else
+  ok "the refusal exit precedes worktree/terminal creation" yes "no: exit@${enforce_line:-?} create@${create_line:-?}"
+fi
 
 printf '\n'
 if [ "$FAILURES" -eq 0 ]; then echo "t9 PASS ($CHECKS checks)"; else echo "t9 FAIL ($FAILURES/$CHECKS)"; exit 1; fi

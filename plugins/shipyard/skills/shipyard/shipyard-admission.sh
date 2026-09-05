@@ -32,13 +32,26 @@
 # -failed on a platform where the detector cannot run. The concurrency cap is platform-neutral
 # and always applies.
 
+# _shipyard_admission_uint <value> <default> — the value when it is a non-empty run of digits,
+# else the default. The knobs feed integer `[ -ge ]`/`[ -lt ]` tests, which ERROR on a
+# non-integer operand; an `if` reads that error as false, so an unvalidated bad knob would make
+# the gate FAIL OPEN — the one outcome a crash-prevention gate must never have — and leak a raw
+# `integer expected` to stderr. A mistyped override (a typo, a stray space, `two`) therefore
+# falls back to the documented default: it HARDENS the gate rather than silently disabling it.
+_shipyard_admission_uint() {
+  case "$1" in
+    ''|*[!0-9]*) printf '%s' "$2" ;;
+    *)           printf '%s' "$1" ;;
+  esac
+}
+
 # shipyard_admission_cap — the effective concurrency cap (live ship-* slots allowed).
 # Small by default, sized for ~16 GB; override with SHIPYARD_MAX_SLOTS.
-shipyard_admission_cap() { printf '%s' "${SHIPYARD_MAX_SLOTS:-2}"; }
+shipyard_admission_cap() { _shipyard_admission_uint "${SHIPYARD_MAX_SLOTS:-}" 2; }
 
 # shipyard_admission_min_free_pct — the effective free-memory floor, as a whole percent.
 # A launch is refused when the system has less than this fraction of memory free.
-shipyard_admission_min_free_pct() { printf '%s' "${SHIPYARD_MEM_MIN_FREE_PCT:-10}"; }
+shipyard_admission_min_free_pct() { _shipyard_admission_uint "${SHIPYARD_MEM_MIN_FREE_PCT:-}" 10; }
 
 # shipyard_admission_slot_count — how many ship-* slots currently have a live terminal.
 # Reuses the backend's own enumeration (shipyard_slots), so the count means exactly what the
