@@ -46,11 +46,17 @@
   shipyard has no long-lived owner, so the canary is opt-in; agterm-session path stays the
   production owner-death guarantee (honest docs). **Phase 1 done: LOAD #87 + LIFE council #89 +
   LIFE shipyard #93.**
-- **RUNNING IN PARALLEL (2-slot cap):** CI follow-up — issue #91 → PR **#92** (slot 91). It already
-  caught + fixed a real Linux bug (`stat -f` BSD/GNU) the macOS-only gate never would; re-review in
-  flight. Verify + merge when ready.
-- **REMAINING after CI merges:** Phase 3 (ESC policy), Phase 4 (FLOW guard), DRV-02 adapters. Scope
-  steer due.
+- **CI SHIPPED:** PR **#92 merged** (`090ab52`) — `.github/workflows/ci.yml` runs the whole gate on
+  push/PR (Linux + macOS). Caught + fixed 2 latent portability bugs (`ctx_mtime` `stat -f`,
+  `t3-token` wall-clock race → turn-count). Decision 91-3 (mine): Option A, bounded — worked.
+- **GSD adopted + tracked:** `.planning/` is now committed (`3853950`); AGENTS.md rewritten to
+  reconcile GSD with the no-per-change-spec rule (plan-phase output = the issue) and `.planning/`
+  added to the docs-only-to-main allowlist.
+- **NOW: Phase 3 + Phase 4 in parallel (2-slot cap):** Phase 3 ESC policy = issue **#94** (slot 94);
+  Phase 4 FLOW guard core = issue **#95** (slot 95). Both foundation pieces, independent. Expect
+  design escalations (I answer internal-design ones).
+- **Deferred:** DRV-02 adapter unification; FLOW-03/04/05 (migrate each skill onto the guard) are
+  later issues after the guard core.
 - **GSD record now COMPLETE and current.** Backfilled: `phases/01-stop-the-bleeding/`
   (CONTEXT + 01-01-SUMMARY + 01-VERIFICATION); `phases/02-driver/` per-task SUMMARY for 02-02..05
   + 02-VERIFICATION. Convention (both phase CONTEXTs): the **GitHub issue is the atomic plan**
