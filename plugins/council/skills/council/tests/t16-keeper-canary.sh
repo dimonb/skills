@@ -9,8 +9,9 @@
 # closes every participant terminal and exits. No real agent consoles: ct_kill is faked to record
 # which peers were closed (the t15/t13 argument — a harness must not depend on a live backend).
 #
-# The driver's baseline interpreter is bash >= 5 (read -t, {fd} redirections, EPOCHREALTIME). Stock
-# macOS starts scripts under bash 3.2, so re-exec into a modern bash, the guard council.sh uses.
+# This test needs bash >= 5 for what IT uses: `read -t`, {fd} redirections, and `exec {var}>&-`
+# (close the fd whose NUMBER is that variable's value). Stock macOS starts scripts under bash 3.2,
+# so re-exec into a modern bash — the same guard council.sh and t15 use.
 if [ "${BASH_VERSINFO[0]:-0}" -lt 5 ] && [ -z "${T16_BASH_REEXEC:-}" ]; then
   for _c in /opt/homebrew/bin/bash /usr/local/bin/bash /usr/bin/bash bash; do
     _p=$(command -v "$_c" 2>/dev/null) || continue
@@ -29,10 +30,14 @@ SKILL="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"
 ROOT=$(mktemp -d) || exit 1
 KEEPERS=()   # every keeper we spawn, reaped in the trap: they detach and reparent, so nothing
 OWNERS=()    # else would. Owners block on `wait`, so a failed case could leave one running too.
+DAEMONS="$ROOT/daemons.pids"; : > "$DAEMONS"   # case D's faked-daemon sleeps record their pids here
 cleanup() {
   local p
   for p in ${OWNERS[@]+"${OWNERS[@]}"};  do [ -n "$p" ] && kill -9 "$p" 2>/dev/null; done
   for p in ${KEEPERS[@]+"${KEEPERS[@]}"}; do [ -n "$p" ] && kill -9 "$p" 2>/dev/null; done
+  # Sweep the faked daemons too, so an abort between spawning them and the explicit reap loop
+  # cannot leak them — the same guarantee the trap gives every keeper and owner.
+  [ -f "$DAEMONS" ] && while read -r p; do [ -n "$p" ] && kill -9 "$p" 2>/dev/null; done < "$DAEMONS"
   rm -rf "$ROOT"
 }
 trap cleanup EXIT
@@ -146,7 +151,7 @@ rm -rf "$ROOM_C"                              # the directory-bound death trigge
 ok "keeper exits when the room directory is removed" gone "$(wait_gone "$kpid_c" 90)"
 
 # ---------------------------------------------------------------------------------------------
-echo "── case E: a launched backend daemon does not inherit the canary write end ──"
+echo "── case D: a launched backend daemon does not inherit the canary write end ──"
 # The bug this guards: a backend that cold-starts a DAEMON (the tmux server, on first use) has
 # that daemon inherit every fd open in the owner shell — so if it retained the canary WRITE end
 # the keeper would NEVER see owner death (measured on tmux 3.x: the read never EOFs). council_up
@@ -168,15 +173,35 @@ canary_probe() { # <expose-wfd:1|0> <pidfile> -> prints eof|timeout|data
   exec {cr}<&-
   printf '%s' "$r"
 }
-PIDS_E="$ROOT/E.pids"; : > "$PIDS_E"
-fix_r=$(canary_probe 1 "$PIDS_E")
-ctl_r=$(canary_probe 0 "$PIDS_E")
-for _d in $(cat "$PIDS_E" 2>/dev/null); do kill "$_d" 2>/dev/null; done   # reap the faked daemons
+fix_r=$(canary_probe 1 "$DAEMONS")
+ctl_r=$(canary_probe 0 "$DAEMONS")
+for _d in $(cat "$DAEMONS" 2>/dev/null); do kill "$_d" 2>/dev/null; done   # reap the faked daemons
 ok "with the guard, a launched daemon does not hold the canary open (owner death => EOF)" eof "$fix_r"
 ok "control: WITHOUT the guard the daemon does hold it (owner death => timeout)" timeout "$ctl_r"
 
 # ---------------------------------------------------------------------------------------------
-echo "── case D: no owner-liveness path reads \$PPID (acceptance) ──"
+echo "── case E: the real \`council.sh up --hold\` CLI path reaps the keeper on owner death ──"
+# Cases A-D arm _KEEPER_OWNER_HOLD directly and call _mkroom/_keeper_ensure, so the CLI itself —
+# the `--hold` flag parsing, the `[ \"\$hold\" = 1 ] && _KEEPER_OWNER_HOLD=1` wiring, and the final
+# `wait` — is never exercised. Drive it for real: a throwaway `git init` repo isolates room_base,
+# and COUNCIL_BACKEND=none-for-tests launches no terminal (t13's pattern). `up --hold` blocks on
+# `wait`, so background it, then kill it (the owner) and assert its keeper reaps and exits — proving
+# the flag actually reaches the canary, not just that the mechanism works when armed by hand.
+E_REPO="$ROOT/e-repo"; mkdir -p "$E_REPO"   # under $ROOT so the cleanup trap sweeps it
+( cd "$E_REPO" && git init -q . ) 2>/dev/null
+( cd "$E_REPO" && COUNCIL_BACKEND=none-for-tests bash "$SKILL/council.sh" --room r up \
+    --scenario debate --agents claude,codex --hold "hold me" ) >"$ROOT/E.log" 2>&1 &
+e_owner=$!; OWNERS+=("$e_owner")
+E_KP="$E_REPO/.git/council/r/state/keeper.pid"
+ok "up --hold created a room + keeper via the real CLI" yes "$(wait_file "$E_KP" 100)"
+e_kpid=$(cat "$E_KP" 2>/dev/null); [ -n "$e_kpid" ] && KEEPERS+=("$e_kpid")
+ok "the --hold owner is still holding (blocked on wait)" yes "$(kill -0 "$e_owner" 2>/dev/null && echo yes || echo no)"
+kill -TERM "$e_owner" 2>/dev/null
+ok "killing the --hold owner reaps its keeper" gone "$(wait_gone "$e_kpid" 100)"
+rm -rf "$E_REPO"
+
+# ---------------------------------------------------------------------------------------------
+echo "── case F: no owner-liveness path reads \$PPID (acceptance) ──"
 # Strip comments first: the canary comments MENTION $PPID to explain why the mechanism does not
 # use it, and a naive grep would flag exactly the lines that promise its absence. What must be
 # zero is $PPID in the CODE — reading a reparented process's parent tells you nothing on macOS.

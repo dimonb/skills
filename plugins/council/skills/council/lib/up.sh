@@ -119,16 +119,33 @@ _keeper_ensure() { # <room-dir> <peer>...
   local room="$1"; shift
   local keep="$room/state/keeper.pid" p pid
   pid=$(_keeper_pid "$keep") && kill -0 "$pid" 2>/dev/null && return 0
+  _KEEPER_CANARY_WFD=""   # a global (read by _ct_launch_owned); cleared here so a prior call's fd never leaks in
   local cr="" cw="" boot=""
   if [ -n "${_KEEPER_OWNER_HOLD:-}" ]; then
     local f; f=$(_canary_fifo "$room") || { echo "council: could not set up the room owner canary" >&2; return 1; }
-    exec {boot}<>"$f"; exec {cr}<"$f"; exec {cw}>"$f"; exec {boot}>&-
-    rm -f "$f"
-    # Hand the write-end fd number to council_up's launch loop (via _ct_launch_owned). A launched
-    # backend daemon — a cold-started tmux server does exactly this — otherwise INHERITS this fd
-    # and holds it open, so the pipe's write side never closes and the keeper never sees the
-    # owner's death. Measured on tmux 3.x: without closing it for the launch, the read never EOFs.
-    _KEEPER_CANARY_WFD="$cw"
+    # Chain the three opens with && so a FAILED open never falls through to the next. Load-bearing,
+    # not cosmetic: the `<>` bootstrap open exists only to give the read-only `exec {cr}<"$f"` a
+    # writer so it does not block — so if the bootstrap fails (fd exhaustion) and cr still runs, cr
+    # is a read-only open on a WRITER-LESS fifo and blocks FOREVER, wedging `up --hold` before it
+    # launches anything, silently. `exec` returns non-zero on a failed redirection WITHOUT exiting
+    # the shell, so on any failure we close whatever opened, drop the fifo, and refuse — never fork
+    # a keeper with a half-built or absent canary.
+    if exec {boot}<>"$f" && exec {cr}<"$f" && exec {cw}>"$f"; then
+      exec {boot}>&-
+      rm -f "$f"
+      # Hand the write-end fd number to council_up's launch loop (via _ct_launch_owned). A launched
+      # backend daemon — a cold-started tmux server does exactly this — otherwise INHERITS this fd
+      # and holds it open, so the pipe's write side never closes and the keeper never sees the
+      # owner's death. Measured on tmux 3.x: without closing it for the launch, the read never EOFs.
+      _KEEPER_CANARY_WFD="$cw"
+    else
+      echo "council: could not open the room owner canary" >&2
+      [ -n "$boot" ] && exec {boot}>&-
+      [ -n "$cr" ] && exec {cr}<&-
+      [ -n "$cw" ] && exec {cw}>&-
+      rm -f "$f"
+      return 1
+    fi
   fi
   # Own process group, so a signal to the OWNER's group — a Ctrl-C on `up --hold`, the SIGHUP of a
   # closing pane — reaches the owner but not the keeper, which must outlive that signal long
@@ -290,7 +307,7 @@ council_up() {
   # sees it — `relaunch` and the test harness both call _mkroom/_keeper_ensure without it and get
   # the historical detached keeper.
   [ "$hold" = 1 ] && _KEEPER_OWNER_HOLD=1
-  _mkroom "$room" "${peers[@]}" || return 1
+  if ! _mkroom "$room" "${peers[@]}"; then unset _KEEPER_OWNER_HOLD; return 1; fi
   unset _KEEPER_OWNER_HOLD
   local peers_json; peers_json=$(for i in "${!peers[@]}"; do
       jq -n --arg n "${peers[$i]}" --arg k "${kinds[$i]}" --arg r "${roles[$i]}" '{name:$n,kind:$k,role:$r}'
