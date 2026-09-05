@@ -625,7 +625,30 @@ v_decide() {
       cat "$ROOM/agenda.md"
     fi
   } > "$out"
+  # Read the PRIOR status before overwriting it, so the escalation below can fire ONCE. `decide
+  # --force` on an already-unresolved room rewrites the record idempotently; the escalation must
+  # be idempotent too, or N re-forces would accrue N notices in the mailbox.
+  local prev_status; prev_status=$(cat "$ROOM/board/status" 2>/dev/null || true)
   printf '%s' "$status" > "$ROOM/board/status"
+  # ESC-04: an unresolved close is council's needs-human signal — the room could not converge, so
+  # a person has to look. Route it to the shared escalation mailbox (the one shipyard's reporter
+  # already reads) as a fire-and-forget notice, so a council escalation surfaces alongside ship's
+  # from any worktree. This is the ONLY push channel council has ever had; the decision record and
+  # board/status remain exactly as before, so a supervisor that polls the room still works.
+  # Fire only on the FIRST close that lands unresolved (prev_status != unresolved), so re-forcing
+  # an already-unresolved room does not re-notify. Best-effort by design: a mailbox that cannot be
+  # resolved (not in a git repo) must never turn a written decision into a failure, and
+  # policy_escalate is present only because council.sh sourced lib/policy.sh for this verb — so a
+  # caller that did not is silently skipped rather than errored.
+  if [ "$status" = unresolved ] && [ "$prev_status" != unresolved ] \
+     && command -v policy_escalate >/dev/null 2>&1; then
+    local esc_room esc_ctx
+    esc_room=$(basename "$ROOM")
+    esc_ctx=$(printf '%s' "$j" | jq -r '"verdict \(.verdict); turns \(.turns)/\(.budget); open objections \(.open)"' 2>/dev/null)
+    policy_escalate notice "council-$esc_room" \
+      "council room '$esc_room' closed unresolved — the room did not converge; a human should look" \
+      "${esc_ctx:-unresolved}; record: $out" >/dev/null 2>&1 || true
+  fi
   c_send --act decide --text "decision written: $status (council.sh decision)" >/dev/null
   printf '%s\n' "$out"
 }

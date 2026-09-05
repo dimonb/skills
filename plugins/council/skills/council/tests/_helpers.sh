@@ -16,6 +16,14 @@ if [ -z "${COUNCIL_TEST_ROOT:-}" ]; then
   COUNCIL_TEST_ROOT_OWNED=1
 fi
 
+# Keep every escalation these tests trigger inside the run root. `decide` on an unconverged room
+# now routes a needs-human notice to the shared mailbox (ESC-04), which policy.sh resolves to the
+# common git dir by default — i.e. the REAL .git/ship-escalations of whatever checkout the suite
+# runs in. Pointing POLICY_MAILBOX_DIR at the run root makes those writes land in the temp tree the
+# EXIT trap already removes, so a test never pollutes a developer's mailbox. `${:-}` so an explicit
+# outer override still wins.
+export POLICY_MAILBOX_DIR="${POLICY_MAILBOX_DIR:-$COUNCIL_TEST_ROOT/ship-escalations}"
+
 # EVERY room's keeper, not just the last one. A test may build several — t7 builds two — and a
 # single variable here left the earlier keepers running. Each holds one fifo per participant open
 # and loops for as long as its room exists, so they have to be tracked to be stopped.
