@@ -258,6 +258,28 @@ cover looking at the room itself.
 `up` as well when you intend to sit in the room yourself, and that participant gets no
 terminal because it is you.
 
+### Room lifetime: detached (default) or `--hold`
+
+By default `up` **launches the room and returns**. The room is detached: it outlives the shell
+that started it and lives until its directory is removed — an explicit `down`/`--purge`, or the
+directory going away. This is the right mode for a room you want to leave running and revisit
+from another shell, and it is the historical behaviour.
+
+`up --hold` instead **stays in the foreground as the room's owner**, and binds the room's life to
+this shell: when it dies for *any* reason — Ctrl-C, the pane closing, a crash, even SIGKILL — the
+room's keeper closes every participant terminal and exits, so no background console is left
+orphaned. Use it for a short session tied to one terminal, where walking away should tear the
+room down rather than strand agents in it.
+
+The mechanism, in one paragraph, because it is the kind of thing that rots silently: the owner
+holds the write end of a small **canary pipe** and the keeper inherits the read end, so the
+owner's death closes the write end and the keeper's read hits EOF. It is detected by EOF alone,
+never by `$PPID` or `kill -0` — on macOS a dead owner's children reparent to `launchd`, which
+reads as "parent alive" and cannot be reaped after the fact, so death has to be *observed*, not
+polled for. The keeper runs in its own process group, so the very Ctrl-C that kills the owner
+does not also kill the keeper before it can do the reaping. `down` and `--purge` still tear a
+room down exactly as before; the canary is an added trigger, not a replacement.
+
 **One entrypoint, on purpose.** A participant's permission allowlist matches the literal
 start of a command, so eight scripts would need eight grants and the first lap of every
 room would stall on approval prompts. One script is one allowlist entry.

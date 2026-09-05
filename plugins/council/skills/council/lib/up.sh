@@ -52,6 +52,55 @@ _room_dirs_sane() { # <room>
 }
 
 # --- create ---------------------------------------------------------------------
+# A private fifo for the owner canary (see _keeper_ensure). mktemp -u then mkfifo, in the room's
+# own state dir rather than a shared tmp, so it inherits the room's directory and never collides
+# with another room's. The caller opens it and unlinks the name immediately, so nothing survives.
+_canary_fifo() { # <room> -> a freshly created fifo path on stdout, or rc 1
+  local room="$1" f
+  # Same symlinked-state guard the other room-path writers (_write_launcher, _write_protocol)
+  # open with. Belt-and-braces here — this only runs on a room `up` just created, before any
+  # participant exists to plant a link — but it keeps this writer consistent with its siblings
+  # rather than resting on call-ordering.
+  _room_dirs_sane "$room" || return 1
+  f=$(mktemp -u "$room/state/.canary.XXXXXX") || return 1
+  mkfifo "$f" 2>/dev/null || return 1
+  printf '%s' "$f"
+}
+
+# The keeper's body. It ends the LIVE room — its terminals and itself, never the durable record —
+# on EITHER of two triggers:
+#   * the room directory going away: an explicit `down`/`council_down`, exactly as before. In that
+#     path `council_down` has already closed the terminals, so the keeper only has to exit.
+#   * (a `--hold` room only) its OWNER dying, seen as EOF on the canary read end. Here nothing
+#     else closes the terminals — an owner that was Ctrl-C'd, crashed or was OOM/SIGKILLed never
+#     reached `council_down` — so the keeper REAPS every participant terminal itself, then exits.
+#
+# The owner is detected purely by EOF, NEVER by `$PPID`/`kill -0 $PPID`: both read a reparented
+# process (which is exactly what a dead owner leaves behind on macOS, where there are no
+# subreapers) as alive. `read -t` tells the two ends apart without ambiguity: rc > 128 is the
+# timeout, i.e. a writer (the live owner) still holds the pipe; rc 1 is EOF, i.e. every writer is
+# gone. On EOF the read returns at once, so reaping is immediate rather than one poll interval
+# late. rc 0 (a byte arrived) is the owner alive too — nothing writes here today, but a stray
+# write must never be mistaken for death.
+_keeper_loop() { # <room> <canary-read-fd-or-empty> <peer>...
+  local room="$1" cfd="$2"; shift 2
+  local rc p
+  while [ -d "$room" ]; do
+    if [ -n "$cfd" ]; then
+      read -t 5 -u "$cfd" _ 2>/dev/null; rc=$?
+      [ "$rc" -eq 0 ] && continue
+      [ "$rc" -gt 128 ] && continue
+      # EOF: the owner is gone. ct_kill resolves terminal names and the container from $ROOM, and
+      # a keeper forked before council_up assigned it would not inherit the value — set it from
+      # the room we were handed.
+      ROOM="$room"
+      for p in "$@"; do ct_kill "$p" 2>/dev/null || true; done
+      return 0
+    fi
+    sleep 5
+  done
+}
+
 # The keeper holds every bell open read-write for the life of the room. Without it a bell
 # rung at a participant that is not currently in `recv` either blocks its sender or is
 # lost; with it, it is buffered and delivered the instant that participant listens.
@@ -59,18 +108,80 @@ _room_dirs_sane() { # <room>
 # Idempotent, and called from `relaunch` as well as from room creation on purpose: `down`
 # kills the keeper, so a seat started back up in a torn-down room would otherwise look
 # perfectly healthy while every bell rung at it went nowhere.
+#
+# THE OWNER CANARY (only when council_up sets _KEEPER_OWNER_HOLD, i.e. `up --hold`). We build an
+# anonymous pipe whose WRITE end this process — the foreground `up --hold`, the room's owner —
+# keeps, and whose READ end the keeper inherits. The owner's death, for ANY reason, closes the
+# write end and the keeper's read then hits EOF (see _keeper_loop). The fifo is opened `<>` to
+# bootstrap so each open is non-blocking, and cr ends up read-only, cw write-only, so once the
+# owner is the last writer, EOF unambiguously means owner-gone. Nothing here reads $PPID.
 _keeper_ensure() { # <room-dir> <peer>...
   local room="$1"; shift
   local keep="$room/state/keeper.pid" p pid
   pid=$(_keeper_pid "$keep") && kill -0 "$pid" 2>/dev/null && return 0
+  _KEEPER_CANARY_WFD=""   # a global (read by _ct_launch_owned); cleared here so a prior call's fd never leaks in
+  local cr="" cw="" boot=""
+  if [ -n "${_KEEPER_OWNER_HOLD:-}" ]; then
+    local f; f=$(_canary_fifo "$room") || { echo "council: could not set up the room owner canary" >&2; return 1; }
+    # Chain the three opens with && so a FAILED open never falls through to the next. Load-bearing,
+    # not cosmetic: the `<>` bootstrap open exists only to give the read-only `exec {cr}<"$f"` a
+    # writer so it does not block — so if the bootstrap fails (fd exhaustion) and cr still runs, cr
+    # is a read-only open on a WRITER-LESS fifo and blocks FOREVER, wedging `up --hold` before it
+    # launches anything, silently. `exec` returns non-zero on a failed redirection WITHOUT exiting
+    # the shell, so on any failure we close whatever opened, drop the fifo, and refuse — never fork
+    # a keeper with a half-built or absent canary.
+    if exec {boot}<>"$f" && exec {cr}<"$f" && exec {cw}>"$f"; then
+      exec {boot}>&-
+      rm -f "$f"
+      # Hand the write-end fd number to council_up's launch loop (via _ct_launch_owned). A launched
+      # backend daemon — a cold-started tmux server does exactly this — otherwise INHERITS this fd
+      # and holds it open, so the pipe's write side never closes and the keeper never sees the
+      # owner's death. Measured on tmux 3.x: without closing it for the launch, the read never EOFs.
+      _KEEPER_CANARY_WFD="$cw"
+    else
+      echo "council: could not open the room owner canary" >&2
+      [ -n "$boot" ] && exec {boot}>&-
+      [ -n "$cr" ] && exec {cr}<&-
+      [ -n "$cw" ] && exec {cw}>&-
+      rm -f "$f"
+      return 1
+    fi
+  fi
+  # Own process group, so a signal to the OWNER's group — a Ctrl-C on `up --hold`, the SIGHUP of a
+  # closing pane — reaches the owner but not the keeper, which must outlive that signal long
+  # enough to see the EOF and reap. `setsid` would be the obvious tool and macOS does not ship it;
+  # `set -m` puts each backgrounded job in its own group, the same guarantee, and it prints no
+  # job-control notice in a non-interactive shell. Scoped to the fork and restored right after.
+  local had_m=0; case $- in *m*) had_m=1 ;; esac
+  set -m
   # Detach it from the caller's stdio COMPLETELY. A background process that keeps the
   # caller's stdout open holds any pipe reading it open too: `council.sh ... | tail`
   # then never sees EOF and hangs forever, with nothing wrong upstream. Cost one
   # mystifying "the suite hangs" during development.
   ( exec >/dev/null 2>&1 <&-
+    [ -n "$cw" ] && exec {cw}>&-      # the keeper never writes the canary; only the owner keeps that end
     for p in "$@"; do exec {fd}<> "$room/bell/$p.fifo"; done
-    while [ -d "$room" ]; do sleep 5; done ) &
-  echo $! > "$keep"
+    _keeper_loop "$room" "$cr" "$@" ) &
+  pid=$!
+  [ "$had_m" = 1 ] || set +m
+  [ -n "$cw" ] && exec {cr}<&-        # the owner never reads the canary; keep only the write end open here
+  echo "$pid" > "$keep"
+}
+
+# ct_launch for a participant, with the owner canary write end (if any) closed for the launched
+# process. A backend that cold-starts a DAEMON — the tmux server does this on first use — has that
+# daemon inherit every fd open in this shell; a daemon that then holds the canary write end keeps
+# the pipe's write side open forever, so the keeper never sees the owner's death and never reaps.
+# Closing it in a subshell scopes the close to this one launch, leaving the owner's own copy open.
+# Outside `--hold` (_KEEPER_CANARY_WFD unset) this is a plain ct_launch. The subshell is safe:
+# ct_launch's only durable output is the pinned container FILE and the backend session, neither of
+# which is shell state the caller reads back.
+_ct_launch_owned() { # <peer> <cwd> <launcher>
+  if [ -n "${_KEEPER_CANARY_WFD:-}" ]; then
+    ( exec {_KEEPER_CANARY_WFD}>&-; ct_launch "$1" "$2" "$3" )
+  else
+    ct_launch "$1" "$2" "$3"
+  fi
 }
 
 _mkroom() { # <room-dir> <peer>...
@@ -118,13 +229,17 @@ PY
 }
 
 council_up() {
-  local scenario="" agents="" turns="" cwd="" agenda="" me="${COUNCIL_ME:-}"
+  local scenario="" agents="" turns="" cwd="" agenda="" me="${COUNCIL_ME:-}" hold=0
   while [ $# -gt 0 ]; do
     case "$1" in
       --scenario) scenario="$2"; shift 2 ;;
       --agents)   agents="$2"; shift 2 ;;
       --turns)    turns="$2"; shift 2 ;;
       --cwd)      cwd="$2"; shift 2 ;;
+      # Foreground ownership: this shell stays as the room's owner and its death tears the room
+      # down (see the canary in _keeper_ensure). Without it the room is detached and outlives the
+      # caller, bounded only by its directory — the historical, still-default behaviour.
+      --hold)     hold=1; shift ;;
       @*)         agenda=$(cat "${1#@}") || return 1; shift ;;
       *)          agenda="$1"; shift ;;
     esac
@@ -179,8 +294,21 @@ council_up() {
   done
   [ "${#peers[@]}" -ge 2 ] || { echo "council up: a room with one participant is a monologue" >&2; return 2; }
 
-  _mkroom "$room" "${peers[@]}" || return 1
-  ROOM="$room"   # term.sh pins the container inside the room
+  # These precede _mkroom because _mkroom forks the keeper, and a `--hold` keeper needs all three
+  # AT FORK TIME: $ROOM and the ct_* verbs (term.sh) so it can reap terminals on owner-death, and
+  # the _KEEPER_OWNER_HOLD signal to arm the canary at all. term.sh pins the container inside the
+  # room, so $ROOM must be set before it is used; sourcing term.sh here — after all the validation
+  # above, which still returns before this point — rather than just before the launch loop is
+  # otherwise behaviour-preserving (the backend is resolved once and cached).
+  ROOM="$room"
+  . "$SKILL/lib/term.sh"
+  # A global, not a local: it must survive the two hops (council_up -> _mkroom -> _keeper_ensure)
+  # to the keeper fork. Set only for this one call and cleared right after, so nothing else ever
+  # sees it — `relaunch` and the test harness both call _mkroom/_keeper_ensure without it and get
+  # the historical detached keeper.
+  [ "$hold" = 1 ] && _KEEPER_OWNER_HOLD=1
+  if ! _mkroom "$room" "${peers[@]}"; then unset _KEEPER_OWNER_HOLD; return 1; fi
+  unset _KEEPER_OWNER_HOLD
   local peers_json; peers_json=$(for i in "${!peers[@]}"; do
       jq -n --arg n "${peers[$i]}" --arg k "${kinds[$i]}" --arg r "${roles[$i]}" '{name:$n,kind:$k,role:$r}'
     done | jq -s .)
@@ -217,7 +345,7 @@ council_up() {
     _write_protocol "$room" "${peers[$i]}" "${roles[$i]}" "$sf" "${peers[@]}"
   done
 
-  . "$SKILL/lib/term.sh"
+  # term.sh is already sourced above (before _mkroom), so the launch loop just uses ct_*.
   local started=0
   for i in "${!peers[@]}"; do
     # Separate statements on purpose: a `local a=… b=$a` reads $a before it is assigned
@@ -228,7 +356,7 @@ council_up() {
     if [ "$p" = "$me" ]; then continue; fi
     _write_launcher "$room" "$p" "$kind" "$cwd" \
       || { echo "council up: could not write the launcher for $p" >&2; continue; }
-    if ct_launch "$p" "$cwd" "$room/state/launch-$p.sh"; then started=$((started+1))
+    if _ct_launch_owned "$p" "$cwd" "$room/state/launch-$p.sh"; then started=$((started+1))
     else echo "council up: could not launch participant $p" >&2; fi
   done
 
@@ -262,6 +390,20 @@ council_up() {
       "$me" "$rname" "$me"
     printf '        you have no launcher to export COUNCIL_ME, and a read without --me is a\n'
     printf '        supervisor read, which the opening barrier does not withhold from.\n'
+  fi
+
+  # --hold: this shell IS the room's owner (the canary set up in _keeper_ensure). Hold the canary
+  # write end open by blocking here, and do it FORKLESS: `wait` is a builtin, so it spawns no
+  # child that would inherit the write end and keep the room alive past this shell's death — the
+  # exact trap that a `while sleep` loop falls into. When this shell dies for ANY reason (Ctrl-C,
+  # a closed pane, a crash, SIGKILL) the write end closes, the keeper hits EOF and reaps every
+  # terminal; if `wait` ever returns on its own it is because the keeper already exited (an
+  # explicit `down` removed the room), so there is nothing left to hold. Without --hold the
+  # function simply returns here and the detached keeper outlives the caller, as it always has.
+  if [ "$hold" = 1 ]; then
+    printf '\n[hold] this shell owns the room; its death (Ctrl-C, closed pane, crash, kill) tears it down.\n'
+    printf '       run without --hold for a room that outlives this shell (bounded by its directory).\n'
+    wait
   fi
 }
 
