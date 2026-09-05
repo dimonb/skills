@@ -623,6 +623,8 @@ produced one false test result during development. Do not pipe status through a 
 | `lib/up.sh` | room creation, roster, protocols, launchers, teardown |
 | `lib/term.sh` | the terminal a participant lives in (agterm or tmux) — a thin adapter over the shared driver |
 | `lib/agent-driver.sh` | vendored copy of the shared agent-console driver (`shared/driver/agent-driver.sh`); `term.sh` delegates to it |
+| `lib/flow.sh` | vendored copy of the shared flow-guard interpreter (`shared/flow/flow.sh`); `room-graph.sh` evaluates the room's graph through it |
+| `lib/room-graph.sh` | the room's turn cycle as a declared flow graph, and `c_phase` — the one authority for which phase the room is in (opening/exchange/closing/decided), so no reader re-derives the barrier |
 | `lib/claims.jq` | the argument graph and the closure rules |
 | `adapters/*.sh` | how each agent CLI is launched, and what it needs |
 | `protocol/_channel.md` | the channel rules every participant gets |

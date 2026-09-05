@@ -80,7 +80,9 @@ v_recv() { # [--timeout N] [--peek] [--until-floor]
   # nobody is waiting for a turn. A participant that has not posted yet must be released
   # immediately, or it sits in --until-floor waiting for a turn that cannot arrive — which
   # is exactly what a live Codex participant did the first time a roundtable room ran.
-  if [ "$until_floor" = 1 ] && [ "$(c_barrier)" = open ] && [ -z "$(c_posted_round0)" ]; then
+  # Advancement here is the guard's opening decision (c_round_open), not a barrier re-derived
+  # inline — the guard owns "does the opening round still hold" (FLOW-04).
+  if [ "$until_floor" = 1 ] && c_round_open && [ -z "$(c_posted_round0)" ]; then
     c_drain || true
     return 0
   fi
@@ -92,8 +94,9 @@ v_recv() { # [--timeout N] [--peek] [--until-floor]
     if out=$(c_drain); then printf '%s\n' "$out"; got=1; c_bell_drain; fi
     if [ "$until_floor" = 1 ]; then
       # Posted already, round still open: keep waiting — not for a turn, but for the round
-      # to complete, which is what releases everyone else's positions.
-      if [ "$(c_barrier)" != open ] && [ "$(c_floor)" = "$ME" ]; then return 0; fi
+      # to complete, which is what releases everyone else's positions. The round/turn advance
+      # is the guard's call: the opening round is over (`! c_round_open`) and the floor is mine.
+      if ! c_round_open && [ "$(c_floor)" = "$ME" ]; then return 0; fi
     elif [ "$got" = 1 ]; then return 0; fi
     [ "$(c_ms)" -ge "$deadline" ] && break
     c_bell_wait 0.5
@@ -103,7 +106,7 @@ v_recv() { # [--timeout N] [--peek] [--until-floor]
 
 v_floor() {
   local t f last age
-  if [ "$(c_barrier)" = open ]; then
+  if c_round_open; then
     printf 'round=0 (barrier) posted=%s/%s waiting=%s conflicts=%s\n' \
       "$(c_round0 | wc -l | tr -d ' ')" "$(c_npeers)" \
       "$(comm -23 <(c_peers | sort) <(c_round0 | jq -r .from | sort) | paste -sd, -)" \
@@ -333,13 +336,13 @@ v_status() {
   held=$([ "$last" = 0 ] && echo 0 || echo $(( ($(c_ms) - last) / 1000 )))
   conf=$(c_conflicts)
   printf '=== council %s ===\n' "$(basename "$ROOM")"
-  [ "$(c_barrier)" = open ] && floor="— (barrier)"
+  c_round_open && floor="— (barrier)"
   printf 'mode %s · participants %s · turns %s/%s · floor: %s (held %ss) · turn conflicts: %s\n' \
     "$(jq -r .mode "$ROOM/roster.json")" "$(c_peers | paste -sd, -)" "$t" \
     "$(printf '%s' "$j" | jq -r .budget)" "$floor" "$held" "$conf"
   printf 'verdict: %s (nothing new for %s turns, lap %s)\n' "$verd" \
     "$(printf '%s' "$j" | jq -r .since_last_claim)" "$(printf '%s' "$j" | jq -r .lap)"
-  if [ "$(c_barrier)" = open ]; then
+  if c_round_open; then
     printf 'OPEN ROUND: posted %s/%s, waiting for %s — nobody sees their positions yet\n' \
       "$(c_round0 | wc -l | tr -d ' ')" "$(c_npeers)" \
       "$(comm -23 <(c_peers | sort) <(c_round0 | jq -r .from | sort) | paste -sd, -)"
@@ -485,11 +488,13 @@ v_decide() {
   # recorded at `c_all` and in SKILL.md, three attempts at it are recorded there, and two were
   # reverted. Do not quietly make this gate the fourth.
   #
-  # The first two tests fail closed. `!= closed`, never `= open`: a c_barrier that dies
-  # mid-function prints NEITHER word (its own header carries that failure), so `= open` would
-  # read false and let the close through exactly when the room could not be read. That is
-  # reasoned, not measured -- no reachable input on this tree makes c_barrier print nothing, so
-  # no test pins it. `c_posted_round0` that fails prints nothing, so `-z` refuses; it is the
+  # The first two tests fail closed. `! c_round_closed` (round not verifiably closed), never
+  # `c_round_open`: a c_barrier that dies mid-function prints NEITHER word (its own header carries
+  # that failure), so `c_round_open` (true only for the literal `open`) would read false and let
+  # the close through exactly when the room could not be read, while `! c_round_closed` (true for
+  # `open` AND for nothing) refuses it. That is reasoned, not measured -- no reachable input on
+  # this tree makes c_barrier print nothing, so no test pins it. `c_posted_round0` that fails
+  # prints nothing, so `-z` refuses; it is the
   # same reader `c_send` uses to refuse a second position, so the two cannot disagree about
   # whether I have spoken.
   #
@@ -543,7 +548,7 @@ v_decide() {
   # non-empty whenever a document matched and there is no field left to be empty. c_all's own
   # header records the same class -- a peer-chosen lane name reaching a reader raw -- for its
   # error path.
-  if [ "$(c_barrier)" != closed ] && [ -z "$(c_posted_round0)" ] && [ -z "$(c_recorded_status)" ] \
+  if ! c_round_closed && [ -z "$(c_posted_round0)" ] && [ -z "$(c_recorded_status)" ] \
      && [ -n "$(c_round0 | jq -c --arg me "$ME" 'select(.from != $me)' | head -1)" ]; then
     echo "council decide: another seat has stated an opening position and you have not — refusing to close a round you have not taken part in, because the record would hand you every position in it. Post your position first; the round also closes on its own once its deadline passes." >&2
     return 2
@@ -652,3 +657,8 @@ v_decide() {
   c_send --act decide --text "decision written: $status (council.sh decision)" >/dev/null
   printf '%s\n' "$out"
 }
+
+# The room's turn cycle as a declared flow graph, and c_phase / the closure predicates it needs.
+# Sourced last, so c_room_ready can lean on v_verdict (defined above); the opening-gate accessors
+# it shares with the transport live in lib.sh, already in scope. See lib/room-graph.sh.
+. "$(dirname "${BASH_SOURCE[0]}")/room-graph.sh"
