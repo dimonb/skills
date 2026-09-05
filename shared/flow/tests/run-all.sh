@@ -1,17 +1,17 @@
 #!/usr/bin/env bash
-# run-all.sh — the shared-driver test suite. Run by hand:
+# run-all.sh — the shared flow-guard test suite. Run by hand:
 #
-#   bash shared/driver/tests/run-all.sh
+#   bash shared/flow/tests/run-all.sh
 #
 # Wired into the gate two ways (scripts/check.sh check 10, and the Makefile): every test file here
 # must be registered in the `tests` array below or `make check` reds, so a test cannot silently
-# stop running; and `make check` RUNS this suite (it is fast, ~2s), so a driver regression reds a
-# commit. `make test` runs it too, alongside the flow, shipyard and council suites. Every test is a pure
-# read over environment variables and two faked CLIs (agtermctl, tmux) — no live terminal, no network.
+# stop running; and `make check` RUNS this suite (it is fast, pure), so a flow regression reds a
+# commit. `make test` runs it too, alongside the driver, shipyard and council suites. Every test is
+# a pure drive of a declared graph against a faked driver — no live terminal, no agent, no network.
 set -uo pipefail
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
-tests=(t-driver.sh)
+tests=(t-flow.sh)
 
 rc=0
 for t in "${tests[@]}"; do

@@ -2,7 +2,7 @@
 # run-all.sh — the council test suite. Fast ones by default; `--full` adds the load and
 # latency runs, which take minutes and are sensitive to what else is on the machine.
 #
-# `make test` runs this suite's fast subset (no `--full`), alongside the driver and shipyard
+# `make test` runs this suite's fast subset (no `--full`), alongside the driver, flow and shipyard
 # suites. Registration is gated: scripts/check.sh check 10 requires every test file under this
 # directory to appear in a `tests` array below (the default one, or the `--full` one), so none
 # silently stops running.

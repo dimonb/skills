@@ -53,6 +53,12 @@ ok() { # <label> <expected> <actual>
 }
 wait_file() { local f="$1" n="${2:-60}" i; for ((i=0;i<n;i++)); do [ -e "$f" ] && { echo yes; return; }; sleep 0.1; done; echo no; }
 wait_gone() { local p="$1" n="${2:-60}" i; for ((i=0;i<n;i++)); do kill -0 "$p" 2>/dev/null || { echo gone; return; }; sleep 0.1; done; echo alive; }
+# The owner-death reap (owner killed -> canary write end closes -> watcher's read EOFs -> it reaps
+# and exits) is GUARANTEED to happen; the only question is when, and under concurrent load (a full
+# `make test`, CI) the detached watcher can be scheduled late. So the canary-reap waits use a
+# generous bound: it still fails on a genuine never-reap (a leaked watcher runs forever), it just
+# gives scheduling jitter ample headroom instead of a tight 12s window that flaked under load.
+REAP_WAIT=600   # 60s at 0.1s/poll — generous, not a real deadline; a true leak still fails it
 pgid_of() { ps -o pgid= -p "$1" 2>/dev/null | tr -d ' '; }
 
 # A fake `agtermctl` that keeps the watched session PRESENT with a benign, action-free screen, so
@@ -117,7 +123,7 @@ ok "watcher is alive before the kill" yes "$(kill -0 "$wpid_a" 2>/dev/null && ec
 ok "watcher is in its own process group" yes \
    "$([ -n "$(cat "$MARK_A/watcher.pgid" 2>/dev/null)" ] && [ "$(cat "$MARK_A/watcher.pgid")" != "$(cat "$MARK_A/owner.pgid")" ] && echo yes || echo no)"
 kill -9 "$opid_a" 2>/dev/null
-ok "watcher exited after owner SIGKILL" gone "$(wait_gone "$wpid_a" 120)"
+ok "watcher exited after owner SIGKILL" gone "$(wait_gone "$wpid_a" "$REAP_WAIT")"
 ok "no watcher state left behind" "" "$(find "$STATE_A" -mindepth 1 ! -name continuity-generation -print 2>/dev/null)"
 
 # ---------------------------------------------------------------------------------------------
@@ -139,7 +145,7 @@ ok "owner is its own group leader" "$opid_b" "$opgid_b"
 ok "watcher group differs from owner group" yes \
    "$([ -n "$(cat "$MARK_B/watcher.pgid" 2>/dev/null)" ] && [ "$(cat "$MARK_B/watcher.pgid")" != "$opgid_b" ] && echo yes || echo no)"
 kill -TERM -- "-$opgid_b" 2>/dev/null
-ok "watcher exited after owner-group SIGTERM (via EOF, not the group signal)" gone "$(wait_gone "$wpid_b" 120)"
+ok "watcher exited after owner-group SIGTERM (via EOF, not the group signal)" gone "$(wait_gone "$wpid_b" "$REAP_WAIT")"
 
 # ---------------------------------------------------------------------------------------------
 echo "── case C: a launched child must not inherit the canary write end (the #89 footgun) ──"

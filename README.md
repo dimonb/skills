@@ -181,8 +181,8 @@ the same skills is verified, and the symlink is additive.
 ## Working on this repo
 
 ```bash
-make check        # the gate — static checks plus the fast driver suite; green before every commit
-make test         # all three suites' fast subsets (driver, shipyard, council); run by hand
+make check        # the gate — static checks plus the fast driver and flow suites; green before every commit
+make test         # all four suites' fast subsets (driver, flow, shipyard, council); run by hand
 make check-test   # proves each of the gate's assertions actually fails when violated
 ```
 
@@ -202,10 +202,10 @@ and no state exists without a handler; that no non-generic string is present; th
 file carries non-Latin script (untracked ones too, like the leak scan); that no council test
 names the shared temp parent — a grep
 for the shape a test copied from an older checkout carries, not a proof about where its rooms
-are built; and that every test on disk, in each suite (driver, shipyard, council), appears in the
+are built; and that every test on disk, in each suite (driver, flow, shipyard, council), appears in the
 list its `run-all.sh` actually walks, so a test cannot land and then silently stop running. Beyond
-those static checks, `make check` also runs the fast driver suite itself, so a driver-suite
-regression reds a commit; the slower shipyard and council suites run under `make test`, and `make
+those static checks, `make check` also runs the fast driver and flow suites, so a driver- or
+flow-suite regression reds a commit; the slower shipyard and council suites run under `make test`, and `make
 check` gates only their registration (above). CI (`.github/workflows/ci.yml`) then runs all three —
 `make check`, `make check-test` and `make test` — on every push to `main` and every pull request,
 so those suites' runtime errors surface in CI; locally, where `make check` stays fast, they still
