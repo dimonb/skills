@@ -44,9 +44,9 @@ Decision 91-3 (mine): Option A (fix them in-PR), bounded fallback to B — A wor
 | Task | Req | Issue → PR → merge | State |
 |------|-----|--------------------|-------|
 | 04-01 interpreter core + C1 gate generalization | FLOW-01/02 | #95 → #97 → `4ba98ba` | ✅ |
-| 04-02 shipyard as a one-node graph | FLOW-03 | (open) | 🔲 |
-| 04-03 council as a turn-cycle graph | FLOW-04 | (open) | 🔲 |
-| 04-04 multi-agent turn-taking | FLOW-05 | (open) | 🔲 |
+| 04-03 council as a turn-cycle graph (`flow_phase` authority) | FLOW-04 | #98 → #99 → `3e333ea` | ✅ |
+| 04-02 shipyard as a one-node graph (`flow_run`) | FLOW-03 | (decision due) | 🔲 |
+| 04-04 multi-agent turn-taking | FLOW-05 | subsumed by FLOW-04's authority mode | 🟡 |
 
 Ran 03 + 04 in parallel (2-slot cap). Merge order #97 (generalize the gate) → #96 (policy,
 auto-covered). One generalized shared-module drift gate now covers driver + flow + policy.

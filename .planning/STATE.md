@@ -63,9 +63,18 @@
   - Merge order #97 → #96 (verified by a local trial-merge: 0 conflicts, generalized gate covers
     policy). Both children hit a shared account **rate-limit** mid-run (2 parallel Opus) — nudged
     back after reset; lesson: the cap guards memory, not API quota.
-- **REMAINING:** the FLOW **migrations** — FLOW-03 shipyard-as-one-node, FLOW-04 council-as-turn-
-  cycle, FLOW-05 multi-agent (the guard is behaviour-inert until a skill uses it); and DRV-02
-  adapter unification. Scope steer due on doing the migrations now.
+- **FLOW-04 SHIPPED (council on the guard):** #98 → PR **#99** → `3e333ea`. Decision 98-1 (mine):
+  Option C — a session-less `flow_phase` AUTHORITY mode added to the shared guard; council's turn
+  cycle is a declared graph, the barrier stays a pure log function consulted as one authority,
+  the #74 race retired (t18: a wedged seat and a caught-up seat agree). The guard now serves both
+  modes — `flow_run` (drive one agent) and `flow_phase` (authority). **The guard is now USED.**
+- **REMAINING — a decision, not just work:**
+  - **FLOW-03 (shipyard as one-node graph)** — the only migration left. Weaker value (shipyard has
+    no race class; its supervision works) + **dogfooding** (migrates the fleet-runner). Worth it for
+    consistency, or leave shipyard as-is? Steer due.
+  - **FLOW-05** — reframed: council's authority mode already gives multi-agent gated turns;
+    drive-N-puppets is against council's design (not a goal).
+  - DRV-02 adapter unification still open.
 - **GSD record now COMPLETE and current.** Backfilled: `phases/01-stop-the-bleeding/`
   (CONTEXT + 01-01-SUMMARY + 01-VERIFICATION); `phases/02-driver/` per-task SUMMARY for 02-02..05
   + 02-VERIFICATION. Convention (both phase CONTEXTs): the **GitHub issue is the atomic plan**
