@@ -84,8 +84,12 @@ ctx_agent() {
   printf '%s' "${agent:-claude}"
 }
 
+# Mtime in epoch seconds. GNU form FIRST: on GNU coreutils `stat -f` is --file-system (prints fs
+# status to stdout AND exits non-zero), so a BSD-first order returns that garbage on Linux rather
+# than falling through — which read as an empty transcript and a "—" context column. BSD stat
+# rejects `-c` cleanly (stderr only, no stdout), so this order is correct on both.
 ctx_mtime() {
-  stat -f '%m' "$1" 2>/dev/null || stat -c '%Y' "$1" 2>/dev/null
+  stat -c '%Y' "$1" 2>/dev/null || stat -f '%m' "$1" 2>/dev/null
 }
 
 # Codex records the worktree cwd in session_meta. Pick the newest matching rollout;
