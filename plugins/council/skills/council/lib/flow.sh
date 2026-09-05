@@ -10,11 +10,21 @@
 # copy of shared code. The gate — not the filesystem — is what keeps the copies one source of
 # truth. This is the same mechanism the shared driver uses.
 #
-# WHAT THIS IS: a tiny interpreter that drives an agent through a DECLARED GRAPH OF STEPS with
-# MECHANICAL transitions only (FLOW-01, FLOW-02). A flow is data — nodes registered with
-# `flow_node`, run with `flow_run <start>`. The interpreter reads the graph and contains NO
-# skill-specific branch, and NO node transition consults a model: every completion is a fact
-# (a signal token, a file on disk, a poll budget, or a deterministic command's exit status).
+# WHAT THIS IS: a tiny interpreter over a DECLARED GRAPH OF STEPS with MECHANICAL transitions
+# only (FLOW-01, FLOW-02). A flow is data — nodes registered with `flow_node`. The interpreter
+# reads the graph and contains NO skill-specific branch, and NO node transition consults a model:
+# every completion is a fact (a signal token, a file on disk, a poll budget, or a deterministic
+# command's exit status).
+#
+# TWO MODES over the same declared graph, because the two callers need different things of it:
+#   * `flow_run <start>` DRIVES ONE AGENT through the graph — enter a node, poll its predicate,
+#     transition — bound to a session and watching that session's liveness. shipyard's one-node
+#     pipeline is this (FLOW-03).
+#   * `flow_phase <start>` EVALUATES the graph as an AUTHORITY — no session, no agent, no side
+#     effect — and reports which node the graph is currently in. council asks this to decide
+#     "which phase is the room in / does the opening round still hold" in one declared place
+#     instead of each reader re-deriving it (FLOW-04). See flow_phase below.
+# Both read the same nodes and the same mechanical predicate vocabulary; neither consults a model.
 #
 # LAYERING — this sits ON TOP of two seams it does not itself provide:
 #   * the driver (`drv_tell` / `drv_submit` / `drv_signal`, from shared/driver/agent-driver.sh):
@@ -24,8 +34,9 @@
 #     flow.sh ships a DEFAULT-DENY stub (see `policy_dispose` below) used ONLY when the caller has
 #     not already sourced the real policy, so the real table drops in behind the same name with no
 #     change here.
-# Nothing calls this interpreter yet; migrating shipyard (one node) and council (a turn cycle)
-# onto it are separate later changes (FLOW-03/04/05).
+# council evaluates a turn-cycle graph through `flow_phase` (FLOW-04); driving shipyard's one-node
+# pipeline through `flow_run` (FLOW-03) and multi-agent turn-taking (FLOW-05) are separate later
+# changes.
 #
 # Source only, never execute. Sourced into a shell that may run `set -u`, so every optional
 # variable is read as `${VAR:-}`. The baseline interpreter is bash >= 5 (associative arrays); a
@@ -33,7 +44,7 @@
 # exactly that).
 
 # A version marker, bumped when the body changes, so sync + the drift gate stay easy to prove.
-_FLOW_VERSION=1
+_FLOW_VERSION=2
 
 # --- the graph, as data --------------------------------------------------------
 # One associative array per node field, keyed by node name; `_FLOW_NODES` is the registration
@@ -248,4 +259,55 @@ flow_run() {
     esac
   done
   return 0
+}
+
+# flow_phase <start-node> — SESSION-LESS graph evaluation: the AUTHORITY mode (FLOW-04), the
+# complement of flow_run's single-agent drive. Walk the declared graph from <start-node>,
+# evaluating each node's `done_when` as a MECHANICAL predicate with NO session bound and NO poll
+# count (an empty signal, poll 0), following `on_done goto:` transitions, and print the FIRST node
+# whose `done_when` is NOT met — the node the graph currently sits in. A graph whose nodes are all
+# met up to a `close` prints the empty string: the graph is complete. This drives no agent, calls
+# no `drv_*`, sends no `enter`, evaluates no `on_block`, and WRITES NO `emit` artifact — an
+# authority query has no side effect. The caller asks "which declared phase is this graph in" and
+# gates on the answer.
+#
+# Only the session-free predicates carry meaning here — `check` (a computed fact) and `artifact`
+# (a file on disk), plus the trivial `budget 0`. `signal <x>` and `budget <n>` (n>0) describe a
+# LIVE drive — a token from a session, a count of polls elapsed in a node — so with neither a
+# session nor a poll loop they read as "not met", which correctly holds the graph AT such a node
+# (a phase whose completion needs the drive loop is, to an authority read, not yet complete). A
+# node with no `done_when` never self-completes either, so the graph stops there — the same
+# meaning it has in flow_run (that node blocks) rendered as "this is the current phase".
+#
+# Exit status mirrors flow_run's where they overlap: 0 with the current node on stdout, or 0 with
+# empty stdout for a complete graph; 65 the node budget was exceeded (a cycle); 66 a missing or
+# unknown start/next node; 67 a malformed transition action (a bad on_done, or an empty goto).
+# It reuses the same registry (`_flow_known`), predicate evaluator (`_flow_pred_met`) and
+# transition grammar (`goto:`/`close`) as flow_run, so a graph reads identically to both.
+flow_phase() {
+  local node=${1:-} guard=0 act
+  [ -n "$node" ] || { echo "flow_phase: missing start node" >&2; return 66; }
+  while [ -n "$node" ]; do
+    guard=$((guard + 1))
+    [ "$guard" -le "${FLOW_MAX_NODES:-1000}" ] \
+      || { echo "flow_phase: node budget exceeded — a cycle in the graph?" >&2; return 65; }
+    _flow_known "$node" || { echo "flow_phase: unknown node: $node" >&2; return 66; }
+    # The one difference from flow_run: the predicate is read with no session and no poll count,
+    # so `_flow_pred_met` evaluates only the log-facts (`check`/`artifact`). A node not yet
+    # complete IS the current phase; report it and stop.
+    if ! _flow_pred_met "" 0 "${_FLOW_DONE_WHEN[$node]:-}"; then
+      printf '%s' "$node"; return 0
+    fi
+    act=${_FLOW_ON_DONE[$node]:-close}
+    case "$act" in
+      goto:*) node=${act#goto:}
+              # Same rejection flow_run makes: an empty goto target would blank $node and read as
+              # a clean, complete graph; it is a malformed action instead.
+              [ -n "$node" ] \
+                || { echo "flow_phase: empty goto target in action '$act'" >&2; return 67; } ;;
+      close)  printf ''; return 0 ;;
+      *) echo "flow_phase: malformed action for node '$node': $act" >&2; return 67 ;;
+    esac
+  done
+  printf ''; return 0
 }
