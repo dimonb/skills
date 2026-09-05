@@ -206,8 +206,10 @@ are built; and that every test on disk, in each suite (driver, shipyard, council
 list its `run-all.sh` actually walks, so a test cannot land and then silently stop running. Beyond
 those static checks, `make check` also runs the fast driver suite itself, so a driver-suite
 regression reds a commit; the slower shipyard and council suites run under `make test`, and `make
-check` gates only their registration (above) — there is no CI, so their runtime errors surface at
-`make test` time, not at commit time.
+check` gates only their registration (above). CI (`.github/workflows/ci.yml`) then runs all three —
+`make check`, `make check-test` and `make test` — on every push to `main` and every pull request,
+so those suites' runtime errors surface in CI; locally, where `make check` stays fast, they still
+surface at `make test` time rather than at commit time.
 
 `make check-test` exists because a gate that has never failed can be vacuous and look
 identical to one that works. It proves every assertion in the gate — a clean baseline, then each

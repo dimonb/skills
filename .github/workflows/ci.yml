@@ -1,0 +1,48 @@
+name: CI
+
+# Runs this repo's own gate on every push to the default branch and on every pull request, so a
+# suite that ERRORS at runtime — not just one that stops being registered — reds something the
+# change has to pass. Local `make check` stays fast and deliberately does not run the slow suites;
+# this workflow is where their runtime errors get caught (issue #91, decision C of #84).
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+# Least privilege: the gate only reads the checkout and runs tests.
+permissions:
+  contents: read
+
+# A newer run for the same ref supersedes an in-flight one, so a quick second push does not leave
+# two full runs racing.
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  gate:
+    name: make check + check-test + test
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out the repository
+        uses: actions/checkout@v7
+
+      # ubuntu-latest already ships all of these; installing them explicitly documents the suites'
+      # dependency surface and keeps the workflow correct on a leaner runner image.
+      - name: Install suite dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends jq make perl python3
+
+      # The static gate plus the fast driver suite.
+      - name: make check
+        run: make check
+
+      # Proves each gate assertion actually fires; needs a clean tree, which a fresh checkout is.
+      - name: make check-test
+        run: make check-test
+
+      # The three suites' fast subsets (driver, shipyard, council) — where a runtime error surfaces.
+      - name: make test
+        run: make test
