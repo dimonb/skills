@@ -57,6 +57,11 @@ _room_dirs_sane() { # <room>
 # with another room's. The caller opens it and unlinks the name immediately, so nothing survives.
 _canary_fifo() { # <room> -> a freshly created fifo path on stdout, or rc 1
   local room="$1" f
+  # Same symlinked-state guard the other room-path writers (_write_launcher, _write_protocol)
+  # open with. Belt-and-braces here — this only runs on a room `up` just created, before any
+  # participant exists to plant a link — but it keeps this writer consistent with its siblings
+  # rather than resting on call-ordering.
+  _room_dirs_sane "$room" || return 1
   f=$(mktemp -u "$room/state/.canary.XXXXXX") || return 1
   mkfifo "$f" 2>/dev/null || return 1
   printf '%s' "$f"
@@ -119,6 +124,11 @@ _keeper_ensure() { # <room-dir> <peer>...
     local f; f=$(_canary_fifo "$room") || { echo "council: could not set up the room owner canary" >&2; return 1; }
     exec {boot}<>"$f"; exec {cr}<"$f"; exec {cw}>"$f"; exec {boot}>&-
     rm -f "$f"
+    # Hand the write-end fd number to council_up's launch loop (via _ct_launch_owned). A launched
+    # backend daemon — a cold-started tmux server does exactly this — otherwise INHERITS this fd
+    # and holds it open, so the pipe's write side never closes and the keeper never sees the
+    # owner's death. Measured on tmux 3.x: without closing it for the launch, the read never EOFs.
+    _KEEPER_CANARY_WFD="$cw"
   fi
   # Own process group, so a signal to the OWNER's group — a Ctrl-C on `up --hold`, the SIGHUP of a
   # closing pane — reaches the owner but not the keeper, which must outlive that signal long
@@ -139,6 +149,22 @@ _keeper_ensure() { # <room-dir> <peer>...
   [ "$had_m" = 1 ] || set +m
   [ -n "$cw" ] && exec {cr}<&-        # the owner never reads the canary; keep only the write end open here
   echo "$pid" > "$keep"
+}
+
+# ct_launch for a participant, with the owner canary write end (if any) closed for the launched
+# process. A backend that cold-starts a DAEMON — the tmux server does this on first use — has that
+# daemon inherit every fd open in this shell; a daemon that then holds the canary write end keeps
+# the pipe's write side open forever, so the keeper never sees the owner's death and never reaps.
+# Closing it in a subshell scopes the close to this one launch, leaving the owner's own copy open.
+# Outside `--hold` (_KEEPER_CANARY_WFD unset) this is a plain ct_launch. The subshell is safe:
+# ct_launch's only durable output is the pinned container FILE and the backend session, neither of
+# which is shell state the caller reads back.
+_ct_launch_owned() { # <peer> <cwd> <launcher>
+  if [ -n "${_KEEPER_CANARY_WFD:-}" ]; then
+    ( exec {_KEEPER_CANARY_WFD}>&-; ct_launch "$1" "$2" "$3" )
+  else
+    ct_launch "$1" "$2" "$3"
+  fi
 }
 
 _mkroom() { # <room-dir> <peer>...
@@ -313,7 +339,7 @@ council_up() {
     if [ "$p" = "$me" ]; then continue; fi
     _write_launcher "$room" "$p" "$kind" "$cwd" \
       || { echo "council up: could not write the launcher for $p" >&2; continue; }
-    if ct_launch "$p" "$cwd" "$room/state/launch-$p.sh"; then started=$((started+1))
+    if _ct_launch_owned "$p" "$cwd" "$room/state/launch-$p.sh"; then started=$((started+1))
     else echo "council up: could not launch participant $p" >&2; fi
   done
 

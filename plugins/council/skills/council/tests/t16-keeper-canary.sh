@@ -146,6 +146,36 @@ rm -rf "$ROOM_C"                              # the directory-bound death trigge
 ok "keeper exits when the room directory is removed" gone "$(wait_gone "$kpid_c" 90)"
 
 # ---------------------------------------------------------------------------------------------
+echo "── case E: a launched backend daemon does not inherit the canary write end ──"
+# The bug this guards: a backend that cold-starts a DAEMON (the tmux server, on first use) has
+# that daemon inherit every fd open in the owner shell — so if it retained the canary WRITE end
+# the keeper would NEVER see owner death (measured on tmux 3.x: the read never EOFs). council_up
+# launches through _ct_launch_owned, which closes that fd for the launch. Model the daemon with a
+# `sleep` that holds its inherited fds — a faithful stand-in for "a launched process that keeps
+# its fds open" — and ask whether the owner's write end is the ONLY writer left after the launch:
+# if it is, dropping it EOFs the read; if the daemon kept a copy, the read times out. The control
+# (no guard) exhibits the very leak the guard removes, so the check has teeth.
+canary_probe() { # <expose-wfd:1|0> <pidfile> -> prints eof|timeout|data
+  . "$SKILL/lib/up.sh"
+  local expose="$1" pidfile="$2" cr cw boot rc r d f
+  d=$(mktemp -d); f="$d/.canary"; mkfifo "$f"
+  exec {boot}<>"$f"; exec {cr}<"$f"; exec {cw}>"$f"; exec {boot}>&-; rm -f "$f"; rmdir "$d" 2>/dev/null
+  ct_launch() { sleep 30 & echo "$!" >> "$pidfile"; return 0; }   # faked daemonizing backend
+  if [ "$expose" = 1 ]; then _KEEPER_CANARY_WFD="$cw"; else unset _KEEPER_CANARY_WFD; fi
+  _ct_launch_owned peerA /tmp /dev/null
+  exec {cw}>&-                       # owner death: drop the only intended writer
+  if read -t 3 -u "$cr" _ 2>/dev/null; then r=data; else rc=$?; if [ "$rc" -le 128 ]; then r=eof; else r=timeout; fi; fi
+  exec {cr}<&-
+  printf '%s' "$r"
+}
+PIDS_E="$ROOT/E.pids"; : > "$PIDS_E"
+fix_r=$(canary_probe 1 "$PIDS_E")
+ctl_r=$(canary_probe 0 "$PIDS_E")
+for _d in $(cat "$PIDS_E" 2>/dev/null); do kill "$_d" 2>/dev/null; done   # reap the faked daemons
+ok "with the guard, a launched daemon does not hold the canary open (owner death => EOF)" eof "$fix_r"
+ok "control: WITHOUT the guard the daemon does hold it (owner death => timeout)" timeout "$ctl_r"
+
+# ---------------------------------------------------------------------------------------------
 echo "── case D: no owner-liveness path reads \$PPID (acceptance) ──"
 # Strip comments first: the canary comments MENTION $PPID to explain why the mechanism does not
 # use it, and a naive grep would flag exactly the lines that promise its absence. What must be
