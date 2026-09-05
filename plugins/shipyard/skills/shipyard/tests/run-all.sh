@@ -3,11 +3,10 @@
 #
 #   bash plugins/shipyard/skills/shipyard/tests/run-all.sh
 #
-# NOT wired into `make check`. The gate's checks 9 and 10 register the COUNCIL tests specifically
-# (check 9's assertion is a grep for council's own temp-room shape), so generalising them is more
-# than a couple of lines and would mean editing scripts/check.sh in the same breath as it changed
-# under another PR. That gap is written down in dimonb/skills#58 rather than papered over here:
-# these tests are real, they are fast, and nothing yet forces anyone to run them.
+# Registration is gated: scripts/check.sh check 10 requires every test file here to appear in the
+# single-line `tests` array below, so a test cannot silently stop being run. The suite itself
+# runs under `make test` (not `make check` — at ~20s it is too slow for a per-commit gate, so its
+# RUNTIME errors surface there, not at commit time). check 9's temp-room grep stays council-specific.
 #
 # Most tests are pure functions over fixture files and environment variables. The continuity
 # suite also starts one short detached watcher against a fake `agtermctl`, proves idempotency,
@@ -30,8 +29,10 @@
 set -uo pipefail
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
-tests=(t1-totals.sh t2-window.sh t3-probe.sh t4-band.sh t5-agent.sh t6-codex-ctx.sh
-       t7-continuity.sh t8-backend-adapter.sh)
+# One single-line array: the gate (scripts/check.sh check 10) reads registrations from a
+# single-line `tests` array and reds loudly if a test file here is not listed, so a test cannot
+# silently stop running. Splitting this across lines hides the tail from that extraction.
+tests=(t1-totals.sh t2-window.sh t3-probe.sh t4-band.sh t5-agent.sh t6-codex-ctx.sh t7-continuity.sh t8-backend-adapter.sh)
 
 rc=0
 for t in "${tests[@]}"; do

@@ -144,9 +144,18 @@ than creating one. Either way:
 ## How to verify a change for real
 
 ```bash
-make check        # the gate
-make check-test   # proves the gate's assertions actually fail when violated
+make check        # the static gate (fast, ~2s) + the driver suite; run before every commit
+make test         # all three test suites' fast subsets (driver, shipyard, council) — ~2-3 min
+make check-test   # proves the gate's assertions actually fail when violated (needs a clean tree)
 ```
+
+`make check` stays fast because it does not run the shipyard or council suites — those are too
+slow for a per-commit gate. What it DOES enforce for all three suites, statically, is
+**registration**: a test file that stops being listed in its `run-all.sh` reds `make check`
+(`scripts/check.sh` check 10), so a suite cannot silently stop running. It also runs the driver
+suite (fast), so a driver regression reds a commit. The honest limit, with no CI: the shipyard
+and council suites' **runtime** errors are caught by `make test`, run by hand like
+`make check-test`, not by `make check`.
 
 Then install it the way a user would, from this clone, in whichever agents the change affects
 (exact commands are in the README):

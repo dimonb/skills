@@ -113,7 +113,7 @@ message dies with the context that held it.
 | `shipyard-launch.sh` | start a child: slot, protocol, launcher, container |
 | `shipyard-report.sh` | the status table, stall watchdog, sidebar glyphs |
 | `shipyard-ctx.sh` | the ctx column: reads a child's transcript, infers its window, bands it |
-| `tests/run-all.sh` | the shipyard script suite — run by hand, not part of `make check` |
+| `tests/run-all.sh` | the shipyard script suite — runs under `make test`; its registration is gated by `make check` |
 | `shipyard-escalations.sh` | the escalation view (`--new` for a fast monitor) |
 | `shipyard-ask.sh` | child side: raise a question / decision / notice |
 | `shipyard-answer.sh` | parent side: answer one |
