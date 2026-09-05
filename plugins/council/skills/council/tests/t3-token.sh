@@ -38,12 +38,21 @@ peer() {
 }
 for p in a b; do peer "$p" & done
 peer c 0 & CPID=$!
-# let a few clean laps happen, then wedge c
-sleep 4
+# Let a couple of clean laps happen, THEN wedge c — gated on the TURN COUNT, never a wall clock.
+# A fixed `sleep 4` here raced the room on a fast machine: all TURNS finished before the wedge, so
+# no skip was ever needed and the room's skip path went untested (the run read turns=24 skips=0).
+# Gating on turns keeps the "a few clean laps first" intent while guaranteeing turns still remain
+# for the wedge to force a skip, on any hardware.
+turns_now() { bash "$CLI" floor | sed 's/.*turns=\([0-9]*\).*/\1/'; }
+wedge_t0=$(date +%s)
+while [ "$(turns_now)" -lt 6 ]; do
+  [ $(( $(date +%s) - wedge_t0 )) -gt 30 ] && { echo "FAIL room never reached the pre-wedge laps"; break; }
+  sleep 0.1
+done
 kill -STOP $CPID 2>/dev/null
-echo "-- peer c wedged (SIGSTOP) --"
+echo "-- peer c wedged (SIGSTOP) after $(turns_now) turns --"
 t0=$(date +%s)
-while [ "$(bash "$CLI" floor | sed 's/.*turns=\([0-9]*\).*/\1/')" -lt "$TURNS" ]; do
+while [ "$(turns_now)" -lt "$TURNS" ]; do
   [ $(( $(date +%s) - t0 )) -gt 40 ] && { echo "FAIL room froze with a wedged peer"; break; }
   sleep 1
 done
