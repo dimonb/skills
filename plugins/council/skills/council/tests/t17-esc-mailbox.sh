@@ -50,6 +50,15 @@ else
   echo "FAIL an unresolved close wrote no mailbox entry (looked for $ENTRY)"; ls -la "$MB" 2>&1 || true; fail=1
 fi
 
+# The escalation is idempotent: re-forcing an already-unresolved room rewrites the record but must
+# NOT accrue a second notice.
+COUNCIL_ME=a bash "$CLI" decide --force >/dev/null || { echo "FAIL second --force did not re-close"; fail=1; }
+if [ -e "$MB/council-t17u-2.json" ]; then
+  echo "FAIL a repeated force-decide accrued a second notice (council-t17u-2.json)"; fail=1
+else
+  echo "repeated force-decide wrote no second notice (idempotent)"
+fi
+
 # --- B. a decided room routes nothing --------------------------------------------------------
 RD="$COUNCIL_TEST_ROOT/t17d"; rm -rf "$RD"
 mkroom "$RD" a b c
