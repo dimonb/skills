@@ -181,7 +181,8 @@ the same skills is verified, and the symlink is additive.
 ## Working on this repo
 
 ```bash
-make check        # the gate — must be green before every commit
+make check        # the gate — static checks plus the fast driver suite; green before every commit
+make test         # all three suites' fast subsets (driver, shipyard, council); run by hand
 make check-test   # proves each of the gate's assertions actually fails when violated
 ```
 
@@ -201,13 +202,18 @@ and no state exists without a handler; that no non-generic string is present; th
 file carries non-Latin script (untracked ones too, like the leak scan); that no council test
 names the shared temp parent — a grep
 for the shape a test copied from an older checkout carries, not a proof about where its rooms
-are built; and that every council test on disk appears in the list `run-all.sh` actually
-walks, so a test cannot land and then silently stop running.
+are built; and that every test on disk, in each suite (driver, shipyard, council), appears in the
+list its `run-all.sh` actually walks, so a test cannot land and then silently stop running. Beyond
+those static checks, `make check` also runs the fast driver suite itself, so a driver-suite
+regression reds a commit; the slower shipyard and council suites run under `make test`, and `make
+check` gates only their registration (above) — there is no CI, so their runtime errors surface at
+`make test` time, not at commit time.
 
 `make check-test` exists because a gate that has never failed can be vacuous and look
-identical to one that works. It proves 68 assertions — a clean baseline, 59 injected
-violations one at a time, each probe aiming to fire only the assertion it names, and 8 cases
-that require the gate to stay **green**. Every failure path in `check.sh` now has one, including
+identical to one that works. It proves every assertion in the gate — a clean baseline, then each
+assertion's violation injected one at a time (each probe aiming to fire only the assertion it
+names), plus the cases that require the gate to stay **green**; it prints the running total as
+`assertions proven: N`. Every failure path in `check.sh` now has one, including
 every arm that fires when a matcher errors, or finds nothing to inspect, instead of finding a
 violation — an unprobed arm of that kind reports success having inspected nothing, which is
 indistinguishable from a clean run.

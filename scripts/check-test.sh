@@ -422,10 +422,18 @@ cp "$SCRATCH/check9.bak" scripts/check.sh
 # keeps the listing non-empty, so the zero-count arm cannot explain the failure and only the
 # listing arm can. It is also the one case the counter can never see: paths emitted, then a
 # non-zero exit — which no real `git ls-files` produces, but the arm keys on the status alone.
-# Kill condition: revert check 9 to `done < <(git ls-files …)` and this must report NOT CAUGHT.
+#
+# The injection is in the SHARED list_suite_tests, so ONE broken listing feeds BOTH check 9
+# (council) AND check 10's per-suite loop. That means this one fixture proves two arms — and each
+# needs its OWN $2 pin, or it slides onto the other: with no pin, deleting check 9's arm still reds
+# via check 10's `could not list tests under`, and deleting check 10's arm still reds via check 9's
+# `could not list council tests`. Two pinned assertions over the one injection close both.
 cp scripts/check.sh "$SCRATCH/check9-list.bak"
 perl -pi -e 's{"\$dir/\*\.sh"\)}{"\$dir/*.sh"; exit 128)}' scripts/check.sh
-expect_fail "test listing fails LOUDLY when git ls-files errors (not open)"
+expect_fail "check 9 listing fails LOUDLY when git ls-files errors (not open)" \
+  "could not list council tests"
+expect_fail "check 10 listing fails LOUDLY when git ls-files errors (not open)" \
+  "could not list tests under"
 cp "$SCRATCH/check9-list.bak" scripts/check.sh
 
 # 14b — the listing succeeds and matches nothing, which is what a moved or renamed tests
@@ -434,6 +442,18 @@ cp scripts/check.sh "$SCRATCH/check9-empty.bak"
 perl -pi -e 's{^council_dir=plugins/council/skills/council/tests$}{council_dir=plugins/council/skills/council/tests-moved-away}' scripts/check.sh
 expect_fail "council-test scan fails LOUDLY when it inspects no file at all"
 cp "$SCRATCH/check9-empty.bak" scripts/check.sh
+
+# 14c — check 10's empty-suite arm (`no test on disk under $suite_dir`), which was a no-op `:` skip
+# in the council-only version and is now an active fail. Point a NON-council dir in check 10's loop
+# at a real directory that holds no *.sh, so list_suite_tests returns empty with rc 0 — a
+# non-council trigger, so check 9 (council-only) cannot fire and claim the catch. The $2 pin is
+# load-bearing: delete this arm and the loop falls through to the missing-runner arm (that dir has
+# no run-all.sh), which reds on a different message, so the pin reports WRONG ARM, not caught.
+cp scripts/check.sh "$SCRATCH/check10-empty.bak"
+perl -pi -e 's{^  shared/driver/tests \\$}{  plugins/ship/skills/ship/references \\}' scripts/check.sh
+expect_fail "check 10 empty-suite arm fires for a non-council suite with no tests" \
+  "no test on disk under"
+cp "$SCRATCH/check10-empty.bak" scripts/check.sh
 
 # 15 — a council test on disk that the runner never runs. Untracked, which is the state it is in
 # during the `make check` just before `git add`, and deliberately free of the pre-run-root shape
@@ -700,6 +720,30 @@ else
   pass=$((pass+1))
 fi
 git checkout -- shared/driver/tests/t-driver.sh
+
+# 31 — the mirror of 30 for the STATIC gate: `make check` must also invoke scripts/check.sh, not
+# only the driver suite. When this suite switched its ~60 probes from `make check` to
+# `bash scripts/check.sh` (so it tests the static gate directly and does not pay the driver suite's
+# runtime), it lost the coverage every one of those probes used to give for free — that make check
+# runs check.sh at all. Inject a check.sh-caught violation into a script the driver suite does NOT
+# run, and require `make check` to red. If the Makefile's `@bash scripts/check.sh` line were ever
+# dropped while the driver line stayed (a Makefile merge resolution — the exact shape check 10's
+# own comment cites), make check would run only the driver suite (green) and this reports NOT
+# CAUGHT. Uses `make check`, not `bash scripts/check.sh`, on purpose; $2 pins it to check 1's arm.
+printf '\nif true; then\n' >> plugins/shipyard/skills/shipyard/shipyard-lib.sh
+if make check >"$SCRATCH/out" 2>&1; then
+  echo "NOT CAUGHT: make check does not run scripts/check.sh (a check.sh violation did not red it)"
+  nocatch=$((nocatch+1))
+elif ! grep -qF -- "syntax:" "$SCRATCH/out"; then
+  echo "WRONG ARM:  make check runs scripts/check.sh"
+  echo "            expected: syntax:"
+  echo "            got:      $(grep -m1 '^FAIL' "$SCRATCH/out" | cut -c1-70)"
+  nocatch=$((nocatch+1))
+else
+  echo "caught:     make check runs scripts/check.sh (a check.sh violation reds make check)"
+  pass=$((pass+1))
+fi
+git checkout -- plugins/shipyard/skills/shipyard/shipyard-lib.sh
 
 echo
 echo "assertions proven: $pass   not proven: $nocatch"
