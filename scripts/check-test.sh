@@ -776,13 +776,13 @@ fi
 git checkout -- shared/flow/tests/t-flow.sh
 
 # 31 — the mirror of 30 for the STATIC gate: `make check` must also invoke scripts/check.sh, not
-# only the driver suite. When this suite switched its ~60 probes from `make check` to
-# `bash scripts/check.sh` (so it tests the static gate directly and does not pay the driver suite's
+# only the fast test suites. When this suite switched its ~60 probes from `make check` to
+# `bash scripts/check.sh` (so it tests the static gate directly and does not pay those suites'
 # runtime), it lost the coverage every one of those probes used to give for free — that make check
-# runs check.sh at all. Inject a check.sh-caught violation into a script the driver suite does NOT
+# runs check.sh at all. Inject a check.sh-caught violation into a script the fast suites do NOT
 # run, and require `make check` to red. If the Makefile's `@bash scripts/check.sh` line were ever
-# dropped while the driver line stayed (a Makefile merge resolution — the exact shape check 10's
-# own comment cites), make check would run only the driver suite (green) and this reports NOT
+# dropped while the suite lines stayed (a Makefile merge resolution — the exact shape check 10's
+# own comment cites), make check would run only the fast suites (green) and this reports NOT
 # CAUGHT. Uses `make check`, not `bash scripts/check.sh`, on purpose; $2 pins it to check 1's arm.
 printf '\nif true; then\n' >> plugins/shipyard/skills/shipyard/shipyard-lib.sh
 if make check >"$SCRATCH/out" 2>&1; then
