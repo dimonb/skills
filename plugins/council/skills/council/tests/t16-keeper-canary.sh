@@ -181,9 +181,10 @@ ok "control: WITHOUT the guard the daemon does hold it (owner death => timeout)"
 
 # ---------------------------------------------------------------------------------------------
 echo "── case E: the real \`council.sh up --hold\` CLI path reaps the keeper on owner death ──"
-# Cases A-D arm _KEEPER_OWNER_HOLD directly and call _mkroom/_keeper_ensure, so the CLI itself —
-# the `--hold` flag parsing, the `[ \"\$hold\" = 1 ] && _KEEPER_OWNER_HOLD=1` wiring, and the final
-# `wait` — is never exercised. Drive it for real: a throwaway `git init` repo isolates room_base,
+# Cases A-D exercise the mechanism at a lower level — arming _KEEPER_OWNER_HOLD by hand (A, B),
+# deliberately leaving it off (C), or driving _ct_launch_owned in isolation (D) — never through the
+# CLI. So the `--hold` flag parsing, the `[ \"\$hold\" = 1 ] && _KEEPER_OWNER_HOLD=1` wiring, and the
+# final `wait` go untested. Drive it for real: a throwaway `git init` repo isolates room_base,
 # and COUNCIL_BACKEND=none-for-tests launches no terminal (t13's pattern). `up --hold` blocks on
 # `wait`, so background it, then kill it (the owner) and assert its keeper reaps and exits — proving
 # the flag actually reaches the canary, not just that the mechanism works when armed by hand.
