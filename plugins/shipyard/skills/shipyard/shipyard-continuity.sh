@@ -313,10 +313,45 @@ shipyard_continuity_control_check() {
   [ "$verb" = stop ]
 }
 
+# The inter-poll wait, doubling as owner-death detection ON THE OWNER-HOLD PATH ONLY. With no
+# canary fd (the historical detached watcher, and every agterm-session watcher) it is a plain
+# sleep and nothing changes. With one, a `read -t` on the canary read end tells the owner's two
+# states apart WITHOUT `$PPID`/`kill -0` (both read a reparented process as alive): rc > 128 is the
+# timeout — a writer (the live owner) still holds the pipe; rc 0 is a stray byte, owner alive too
+# (nothing writes here today, but a write must never read as death); any other rc is EOF — every
+# writer is gone, the owner has died, and the read returns AT ONCE so the reap is immediate rather
+# than a poll interval late. Returns 0 to keep looping, 1 when the owner is gone.
+shipyard_continuity_owner_gone() {
+  local cfd="$1" interval="$2" rc
+  if [ -z "$cfd" ]; then sleep "$interval"; return 0; fi
+  read -r -t "$interval" -u "$cfd" _ 2>/dev/null; rc=$?
+  [ "$rc" -eq 0 ] && return 0
+  [ "$rc" -gt 128 ] && return 0
+  return 1
+}
+
+# Owner death: reap this watcher's own process group before it exits. The owner-hold launch put
+# the watcher in its OWN group (`set -m`), so `-$$` is the watcher and any descendant it spawned,
+# never the owner or the caller. TERM the group with the leader's own TERM disposition dropped, so
+# this leader survives the signal and falls through to its EXIT-trap state cleanup while any
+# straggler is reaped. Escalation to KILL on the group is the external teardown's job
+# (shipyard_continuity_terminate_pid), which can KILL without needing to survive.
+shipyard_continuity_reap_group() {
+  local pgid
+  pgid=$(ps -o pgid= -p "$$" 2>/dev/null | tr -d ' ')
+  case "$pgid" in ''|*[!0-9]*) return 0 ;; esac
+  trap '' TERM
+  kill -TERM "-$pgid" 2>/dev/null || true
+}
+
 shipyard_continuity_watch() {
   local sid="$1" socket="$2" pane="$3" window="$4" pidfile="$5" heartbeat="$6"
   local control="$7" ack="$8" token="$9" lock="${10}" lock_token="${11}" logfile="${12}"
   local screen now action submit_rc exists_rc cleanup interval="${_SHIPYARD_CONTINUITY_POLL_SECS:-5}"
+  # The owner-hold path (opt-in; see shipyard_continuity_start_owner_hold_locked) hands the read end
+  # of an owner canary down here as an inherited fd number. Empty on every other path.
+  local cfd="${_SHIPYARD_CONTINUITY_CANARY_RFD:-}"
+  case "$cfd" in ''|*[!0-9]*) cfd="" ;; esac
   printf -v cleanup 'shipyard_continuity_remove_owned_state %q %q "" "" %q' \
     "$pidfile" "$heartbeat" "$token"
   trap "$cleanup" EXIT
@@ -337,7 +372,7 @@ shipyard_continuity_watch() {
       exists_rc=0
       shipyard_continuity_session_exists "$sid" "$socket" "$window" || exists_rc=$?
       [ "$exists_rc" -eq 1 ] && return 0
-      sleep "$interval"
+      shipyard_continuity_owner_gone "$cfd" "$interval" || break
       continue
     fi
     now=$(date +%s)
@@ -350,7 +385,7 @@ shipyard_continuity_watch() {
       if [ "$submit_rc" -eq 0 ] || [ "$submit_rc" -eq 3 ]; then
         shipyard_continuity_succeeded "$action" "$now"
       fi
-      sleep "$interval"
+      shipyard_continuity_owner_gone "$cfd" "$interval" || break
       continue
     fi
     shipyard_continuity_decide "$screen" "$now"
@@ -367,8 +402,16 @@ shipyard_continuity_watch() {
           printf '[%s] resumed parent Codex goal\n' "$(date '+%H:%M:%S')"
         fi ;;
     esac
-    sleep "$interval"
+    shipyard_continuity_owner_gone "$cfd" "$interval" || break
   done
+  # Reached only by `break`, i.e. the owner canary hit EOF (owner-hold path only). Reap this
+  # watcher's own process group, then clear our FULL owned state: this ungraceful path has no
+  # stop_all behind it to remove the control, ack and log the way a clean teardown would, and the
+  # EXIT trap clears only the pid and heartbeat.
+  shipyard_continuity_reap_group
+  shipyard_continuity_remove_owned_state "$pidfile" "$heartbeat" "$control" "$ack" "$token"
+  rm -f "$logfile"
+  return 0
 }
 
 # Run the watcher as the foreground process of a dedicated agterm session. Codex
@@ -422,15 +465,22 @@ shipyard_continuity_remove_owned_state() {
   done
 }
 
+# Escalate TERM -> KILL on a watcher pid. A non-empty second argument marks the pid as its own
+# process-group leader (the owner-hold launch below puts it there with `set -m`), so the same
+# escalation is applied to the whole group (`-$pid`) — reaping any descendant the watcher spawned,
+# not just the leader. Callers with a plain, group-less pid omit it and get the historical
+# single-pid behaviour unchanged.
 shipyard_continuity_terminate_pid() {
-  local pid="$1" n=0
+  local pid="$1" group="${2:-}" n=0
   kill "$pid" 2>/dev/null || true
+  [ -z "$group" ] || kill -TERM "-$pid" 2>/dev/null || true
   while kill -0 "$pid" 2>/dev/null && [ "$n" -lt 20 ]; do
     sleep 0.05
     n=$((n + 1))
   done
   if kill -0 "$pid" 2>/dev/null; then
     kill -KILL "$pid" 2>/dev/null || true
+    [ -z "$group" ] || kill -KILL "-$pid" 2>/dev/null || true
     n=0
     while kill -0 "$pid" 2>/dev/null && [ "$n" -lt 20 ]; do
       sleep 0.05
@@ -780,21 +830,116 @@ shipyard_continuity_start_agterm_session_locked() {
   return 1
 }
 
+# A private fifo for the owner canary. `mktemp -u` then `mkfifo`, in the continuity state dir (a
+# directory we own), so it never collides with another parent's canary; the caller opens it and
+# unlinks the name at once, so nothing survives on disk. A dotfile name so it matches none of the
+# `continuity-*` state-file globs that stop_all and last-slot cleanup sweep.
+shipyard_continuity_canary_fifo() {
+  local dir="$1" f
+  [ -d "$dir" ] || return 1
+  f=$(mktemp -u "$dir/.continuity-canary.XXXXXX") || return 1
+  mkfifo "$f" 2>/dev/null || return 1
+  printf '%s' "$f"
+}
+
+# OWNER-HOLD launch (opt-in). Bind a DETACHED watcher's life to whoever calls this, via a canary
+# pipe: the caller keeps the WRITE end, the watcher inherits the READ end (its fd number handed
+# over in _SHIPYARD_CONTINUITY_CANARY_RFD) and reaps itself on EOF — the caller's death for ANY
+# reason (clean exit, Ctrl-C, crash, OOM, SIGKILL), seen WITHOUT `$PPID`/`kill -0`. This is the
+# shipyard-side mirror of council #89's keeper canary.
+#
+# It MUST run in the caller's own shell — never a subshell or command substitution — because it
+# opens the write end with `exec` (which has to persist in the caller after this returns) and
+# backgrounds the watcher (so `$!` is the caller's). Sets SHIPYARD_CONTINUITY_LAUNCHED_PID and
+# SHIPYARD_CONTINUITY_CANARY_WFD (the write-end fd number, so a failed start can close it). Returns
+# 1 on any failure, having closed every fd it opened.
+#
+# ONLY a caller that STAYS ALIVE for the watcher's intended life may arm this. shipyard's own
+# launchers are transient tool calls and never do (see SKILL.md): a launcher-held write end would
+# EOF the instant the launcher returned and reap the watcher immediately. The production owner-death
+# guarantee is the agterm-session path, not this one; this hardens the detached path for a caller
+# that can hold the write end (a future long-lived supervisor, or a test).
+shipyard_continuity_start_owner_hold_locked() {
+  local pidfile="$1" heartbeat="$2" control="$3" ack="$4" logfile="$5"
+  local token="$6" lock="$7" lock_token="$8"
+  local dir="${pidfile%/*}" fifo boot="" cr="" cw="" bash_bin="${BASH:-bash}"
+  SHIPYARD_CONTINUITY_LAUNCHED_PID=""
+  SHIPYARD_CONTINUITY_CANARY_WFD=""
+  fifo=$(shipyard_continuity_canary_fifo "$dir") || return 1
+  # Chain the three opens with && so a FAILED open never falls through: the `<>` bootstrap gives the
+  # read-only `<` open a writer so it does not block; if the bootstrap fails and cr still ran, cr
+  # would block FOREVER on a writer-less fifo. cr ends read-only, cw write-only, so once the caller
+  # is the last writer, EOF unambiguously means the caller is gone.
+  if exec {boot}<>"$fifo" && exec {cr}<"$fifo" && exec {cw}>"$fifo"; then
+    exec {boot}>&-
+    rm -f "$fifo"
+  else
+    [ -z "$boot" ] || exec {boot}>&- 2>/dev/null || true
+    [ -z "$cr" ] || exec {cr}<&- 2>/dev/null || true
+    [ -z "$cw" ] || exec {cw}>&- 2>/dev/null || true
+    rm -f "$fifo"
+    return 1
+  fi
+  # Own process group so a signal to the CALLER's group — a Ctrl-C, a closing pane's SIGHUP —
+  # reaches the caller but NOT the watcher, which must outlive it long enough to see EOF and reap.
+  # `setsid` is the obvious tool and macOS ships none; `set -m` puts each backgrounded job in its
+  # own group, the same guarantee, and prints no job-control notice in a non-interactive shell.
+  # Scoped to the fork. No `nohup` here on purpose: nohup is exactly what would orphan a watcher
+  # that is meant to die with its owner (issue goal 3).
+  local had_m=0; case $- in *m*) had_m=1 ;; esac
+  set -m
+  # The watcher must inherit the READ end but NOT the WRITE end: a watcher holding the write end is
+  # itself a writer, so EOF would never fire — the exact fd-inheritance footgun #89 hit. Closed for
+  # the launch here. `$BASH` (not PATH `bash`) so the watcher runs the same bash the armed caller
+  # already proved supports these features.
+  ( exec {cw}>&-
+    export _SHIPYARD_CONTINUITY_CANARY_RFD="$cr"
+    exec "$bash_bin" "$SHIPYARD_CONTINUITY_SCRIPT" watch "$AGTERM_SESSION_ID" \
+      "$AGTERM_SOCKET" "${AGTERM_PANE:-primary}" "$AGTERM_WINDOW_ID" \
+      "$pidfile" "$heartbeat" "$control" "$ack" "$token" "$lock" "$lock_token" "$logfile" \
+      >>"$logfile" 2>&1 </dev/null ) &
+  SHIPYARD_CONTINUITY_LAUNCHED_PID=$!
+  [ "$had_m" = 1 ] || set +m
+  exec {cr}<&-   # the caller never reads the canary; keep only the write end open here
+  SHIPYARD_CONTINUITY_CANARY_WFD="$cw"
+}
+
+# Close the caller's canary write end. Called only when an owner-hold start FAILED after opening it,
+# so the caller does not leak a write end to a watcher that is already gone. A no-op (early return)
+# when nothing is armed — so it never reaches the {var} close on a non-armed, possibly bash-3.2 path.
+shipyard_continuity_close_canary_wfd() {
+  case "${SHIPYARD_CONTINUITY_CANARY_WFD:-}" in
+    ''|*[!0-9]*) return 0 ;;
+  esac
+  exec {SHIPYARD_CONTINUITY_CANARY_WFD}>&- 2>/dev/null || true
+  SHIPYARD_CONTINUITY_CANARY_WFD=""
+}
+
 shipyard_continuity_start_nohup_locked() {
   local pidfile="$1" heartbeat="$2" control="$3" ack="$4" logfile="$5"
-  local token="$6" lock="$7" lock_token="$8" pid n=0
-  nohup bash "$SHIPYARD_CONTINUITY_SCRIPT" watch "$AGTERM_SESSION_ID" \
-    "$AGTERM_SOCKET" "${AGTERM_PANE:-primary}" "$AGTERM_WINDOW_ID" \
-    "$pidfile" "$heartbeat" "$control" "$ack" "$token" "$lock" "$lock_token" "$logfile" \
-    >>"$logfile" 2>&1 </dev/null &
-  pid=$!
+  local token="$6" lock="$7" lock_token="$8" pid n=0 group=""
+  if [ -n "${_SHIPYARD_CONTINUITY_OWNER_HOLD:-}" ]; then
+    shipyard_continuity_start_owner_hold_locked \
+      "$pidfile" "$heartbeat" "$control" "$ack" "$logfile" "$token" "$lock" "$lock_token" \
+      || { rm -f "$logfile"; return 1; }
+    pid="$SHIPYARD_CONTINUITY_LAUNCHED_PID"
+    group=1
+  else
+    nohup bash "$SHIPYARD_CONTINUITY_SCRIPT" watch "$AGTERM_SESSION_ID" \
+      "$AGTERM_SOCKET" "${AGTERM_PANE:-primary}" "$AGTERM_WINDOW_ID" \
+      "$pidfile" "$heartbeat" "$control" "$ack" "$token" "$lock" "$lock_token" "$logfile" \
+      >>"$logfile" 2>&1 </dev/null &
+    pid=$!
+  fi
   sleep "${_SHIPYARD_CONTINUITY_PUBLISH_DELAY:-0}"
   shipyard_continuity_write_record "$pidfile" "$pid" "$token" \
-    || { shipyard_continuity_terminate_pid "$pid" || true; rm -f "$logfile"; return 1; }
+    || { shipyard_continuity_terminate_pid "$pid" "$group" || true
+         shipyard_continuity_close_canary_wfd; rm -f "$logfile"; return 1; }
   while ! shipyard_continuity_pid_is_healthy "$pid" "$token" "$heartbeat"; do
     if ! kill -0 "$pid" 2>/dev/null || [ "$n" -ge 20 ]; then
-      shipyard_continuity_terminate_pid "$pid" || true
+      shipyard_continuity_terminate_pid "$pid" "$group" || true
       shipyard_continuity_remove_owned_state "$pidfile" "$heartbeat" "$control" "$ack" "$token"
+      shipyard_continuity_close_canary_wfd
       rm -f "$logfile"
       return 1
     fi
