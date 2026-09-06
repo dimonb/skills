@@ -86,9 +86,24 @@ re-verified before merge.
 **Open follow-ups (optional, none blocking):**
 - `flow_run` has no production caller — both skills turned out monitor/authority, not driven. Remove
   it (YAGNI) or justify it as a general primitive.
-- DRV-02 adapter unification.
-- Two stale worktrees from the pre-cap incident still on disk: `ship-3` (feat/ci-gate), `ship-41`
-  (fix/council-suite-cleanup-enforced).
+- **DRV-02 adapter unification — IN FLIGHT as issue #104** (slot `ship-104`).
+
+**Stale-worktree cleanup — DONE, with a salvage.** `ship-3` was empty (its branch `feat/ci-gate`
+long since superseded by the merged CI work) and was removed. `ship-41` was NOT dead: it held an
+unpushed commit plus five files of uncommitted work. That WIP was committed verbatim and the branch
+pushed to `origin/fix/council-suite-cleanup-enforced` before the worktree was removed, so nothing was
+lost. Only `main` remains as a worktree. Two independent valuable pieces were identified there,
+both verified still absent from `main`, and each filed as its own issue rather than cherry-picked
+(the tree has moved under them — #89 rewrote the keeper loop):
+- **#102 (bug, IN FLIGHT, slot `ship-102`)** — a keeper whose room was rebuilt at the same path never
+  steps down: it watches only `[ -d "$room" ]`, so the old keeper survives a `down`+`up` cycle as a
+  leaked process holding open fifos. Fix: watch the pid file and step down only when it names
+  ANOTHER positive pid — missing/empty/malformed is deliberately NOT a stop reason (t9g writes `0`).
+- **#103 (enhancement, queued)** — the test-harness cleanup discipline: EXIT-trap-only reasoning with
+  its honest limits (no SIGKILL, no untrapped-SIGPROF), the measured argument against INT/TERM traps
+  (20s vs 0s to die when wedged on a child, and no cleanup at all once the runner's `timeout -k 10`
+  escalates), plus `t12-cleanup.sh`. `t12` is free on `main`; the branch's `t15-keeper.sh` collides
+  with main's `t15-term-adapter.sh` and must be renamed.
 
 - **Repo law reminder:** every change keeps `make check` green; issue → branch → PR → human merges.
   `.planning/` is TRACKED (since `3853950`) and is the project-planning record, never a per-change

@@ -51,10 +51,17 @@ Decision 91-3 (mine): Option A (fix them in-PR), bounded fallback to B — A wor
 Ran 03 + 04 in parallel (2-slot cap). Merge order #97 (generalize the gate) → #96 (policy,
 auto-covered). One generalized shared-module drift gate now covers driver + flow + policy.
 
-Open follow-ups (all optional, none blocking): **DRV-02** adapter unification; **`flow_run` has no
-production caller** now that both skills use `flow_phase` — remove it (YAGNI) or justify it as a
-general primitive; two **stale worktrees** from the pre-cap incident (`ship-3`, `ship-41`) still on
-disk. CI, DRV-03 dispositions and shipyard-side LIFE-03 all shipped.
+Open follow-ups: **DRV-02** adapter unification — now in flight as issue **#104**; **`flow_run` has
+no production caller** now that both skills use `flow_phase` — remove it (YAGNI) or justify it as a
+general primitive. CI, DRV-03 dispositions and shipyard-side LIFE-03 all shipped.
+
+**Post-phase cleanup (the two stale worktrees) — done, and it paid.** `ship-3` was empty and went;
+`ship-41` held unpushed and uncommitted work, which was committed and pushed to
+`origin/fix/council-suite-cleanup-enforced` before removal. Two valuable pieces were salvaged from
+it, both confirmed still missing from `main` and filed as fresh issues (not cherry-picks — the
+keeper loop was rewritten by #89): **#102** a live council bug (a keeper whose room is rebuilt at
+the same path never steps down, leaking a process with open fifos) and **#103** the test-harness
+EXIT-trap cleanup discipline plus `t12-cleanup.sh`.
 
 ## Phases
 
