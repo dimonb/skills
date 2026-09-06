@@ -15,8 +15,9 @@
 #   agterm — a native macOS terminal driven over a control socket by `agtermctl`;
 #   tmux   — the portable fallback.
 # The `drv_*` functions are what every caller uses; nothing here talks about a specific agent
-# kind (claude/codex/…). The per-kind adapters that turn a goal into a launcher, and the
-# migration of each plugin's call sites onto these functions, are separate later changes.
+# kind (claude/codex/…). That half is its sibling module, shared/adapters/agent-adapters.sh,
+# which turns a goal into a launcher for one kind and knows nothing about terminals; both
+# plugins' call sites are migrated onto both modules.
 #
 # Source only, never execute. Sourced into a shell that may run `set -u`, so every optional
 # variable is read as `${VAR:-}`. The baseline interpreter is bash >= 5; a caller started by an

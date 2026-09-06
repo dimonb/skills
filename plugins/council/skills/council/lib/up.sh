@@ -272,7 +272,7 @@ council_up() {
     esac
   done
   [ -n "$scenario" ] || { echo "council up: needs --scenario (available: $(ls "$SKILL/scenarios" | sed 's/\.md$//' | paste -sd, -))" >&2; return 2; }
-  [ -n "$agents" ]   || { echo "council up: needs --agents, for example claude,codex,agy" >&2; return 2; }
+  [ -n "$agents" ]   || { echo "council up: needs --agents, for example $(adp_kinds | paste -sd, -)" >&2; return 2; }
   local sf="$SKILL/scenarios/$scenario.md"
   [ -f "$sf" ] || { echo "council up: no such scenario '$scenario'" >&2; return 2; }
   eval "$(_scenario_meta "$sf")"
@@ -506,6 +506,13 @@ _write_launcher() { # <room> <peer> <kind> <cwd>
   # rather than fall through to a launcher with an empty prompt.
   ( proto="$room/protocol-$peer.md"
     mode=$(adp_protocol_mode "$kind") || exit 1
+    # UNSET the knobs council does not set, before setting the ones it does. `adp_cmd` reads its
+    # inputs from the environment, so without this an exported ADP_* in whatever shell ran
+    # `council.sh` is rendered into the launcher: measured, `ADP_NAME=x` puts `-w x -n x
+    # --remote-control x` on a claude seat and `ADP_CWD=/elsewhere` gives a codex seat a `-C`
+    # that overrides the launcher's own `cd`. The old positional adapter_cmd could not be
+    # reached that way, so the subshell must start from a known state rather than inherit one.
+    unset ADP_NAME ADP_EFFORT ADP_CWD
     ADP_APPROVAL=sandboxed
     ADP_DIRS=$(printf '%s\n%s' "$room" "$SKILL")
     ADP_PROTOCOL="$proto"

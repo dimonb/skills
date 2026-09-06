@@ -122,13 +122,30 @@ for v in ADP_PROMPT ADP_PROTOCOL ADP_DIRS ADP_CWD ADP_NAME ADP_EFFORT ADP_APPROV
 done
 ok "no ADP_* variable survives _write_launcher" "" "$leaked"
 
+printf '\n── and nothing leaks IN from the environment either ──\n'
+# The other direction, which matters more: `adp_cmd` reads its inputs from the environment, so an
+# exported ADP_* in whatever shell ran the supervisor would be rendered into a real launcher. The
+# pre-change adapters took positional arguments and were immune by construction, so this is the
+# one place the unification could have widened an agent's reach. Render every pair again with all
+# seven knobs exported to sentinels and require the SAME frozen argv.
+export ADP_PROMPT=INJECTED-PROMPT ADP_PROTOCOL=/INJECTED/PROTO ADP_DIRS=/INJECTED/DIR \
+       ADP_CWD=/INJECTED/CWD ADP_NAME=INJECTED-NAME ADP_EFFORT=INJECTED-EFFORT ADP_APPROVAL=full
+for kind in claude codex agy; do
+  ok "council/$kind ignores an inherited ADP_*" \
+    "$(cat "$FIX/council-$kind.argv")" "$(council_argv "$kind")"
+done
+unset ADP_PROMPT ADP_PROTOCOL ADP_DIRS ADP_CWD ADP_NAME ADP_EFFORT ADP_APPROVAL
+
 printf '\n── council: an unknown kind is refused, and nothing is written ──\n'
 rm -f "$ROOM/state/launch-bob.sh"
 rc=0; _write_launcher "$ROOM" bob nonesuch "$WORKTREE" >/dev/null 2>&1 || rc=$?
 ok "_write_launcher refuses a kind the module does not know" 1 "$rc"
 ok "and leaves no launcher behind" no \
   "$([ -e "$ROOM/state/launch-bob.sh" ] && echo yes || echo no)"
-ok "and leaves no temp file behind" "" "$(ls "$ROOM/state" | grep '^\.launch-bob' || true)"
+# `ls -A`, NOT `ls`: the temp file is `.launch-<peer>.$$`, and plain `ls` never lists a dotfile,
+# so the same grep over `ls` output matched nothing whatever the directory held — the assertion
+# printed ok on precisely the state it exists to reject.
+ok "and leaves no temp file behind" "" "$(ls -A "$ROOM/state" | grep '^\.launch-bob' || true)"
 
 printf '\n── council: adding a kind touches no caller (DRV-02 acceptance) ──\n'
 # The proof that council enumerates no kinds of its own: teach the module a fourth kind by
@@ -161,6 +178,18 @@ ok "shipyard/claude launches the same agent process" \
 ok "shipyard/codex launches the same agent process" \
   "$(cat "$FIX/shipyard-codex.argv")" \
   "$(shipyard_agent_exec codex ship-42 "$WORKTREE" "$PROTO" '$ship #42' | argv_of)"
+
+# The inbound direction again, for shipyard. `ADP_DIRS` is the sharp one: a leaked value becomes
+# an extra `--add-dir` on a child that already runs with approvals off.
+export ADP_PROMPT=INJECTED-PROMPT ADP_PROTOCOL=/INJECTED/PROTO ADP_DIRS=/INJECTED/DIR \
+       ADP_CWD=/INJECTED/CWD ADP_NAME=INJECTED-NAME ADP_EFFORT=INJECTED-EFFORT ADP_APPROVAL=sandboxed
+ok "shipyard/claude ignores an inherited ADP_*" \
+  "$(cat "$FIX/shipyard-claude.argv")" \
+  "$(shipyard_agent_exec claude ship-42 "$WORKTREE" "$PROTO" '/ship #42' | argv_of)"
+ok "shipyard/codex ignores an inherited ADP_*" \
+  "$(cat "$FIX/shipyard-codex.argv")" \
+  "$(shipyard_agent_exec codex ship-42 "$WORKTREE" "$PROTO" '$ship #42' | argv_of)"
+unset ADP_PROMPT ADP_PROTOCOL ADP_DIRS ADP_CWD ADP_NAME ADP_EFFORT ADP_APPROVAL
 
 printf '\n── shipyard: the admission set is ITS OWN, not the module one ──\n'
 # The module knows `agy` because council runs it. shipyard cannot supervise it, so it must not

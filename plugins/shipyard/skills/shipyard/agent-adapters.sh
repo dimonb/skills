@@ -15,9 +15,12 @@
 # It is the sibling of shared/driver/agent-driver.sh, which drives the terminal a launched agent
 # lives in and deliberately knows nothing about agent kinds; this file is the half that does.
 #
-# Adding an agent kind is ONE edit HERE and touches no caller: a `case` label in each of the
-# functions below. Nothing in shipyard or council enumerates kinds by hand — both ask `adp_known`
-# and `adp_kinds`.
+# Adding an agent kind is ONE edit HERE — a `case` label in each of the functions below — and it
+# touches no caller THAT ADMITS EVERY KIND. council is such a caller: it enumerates no kinds of
+# its own, asking `adp_known` what is launchable and `adp_protocol_mode` how to word the greeting,
+# so a kind added here works there with no edit. shipyard is NOT: it keeps a deliberately narrower
+# admission set of its own (`shipyard_agent_kinds`) and widening that is a shipyard decision, made
+# there. Neither statement is a promise that a new kind is launchable everywhere.
 #
 # WHAT THIS IS NOT: it does not decide WHICH kind a caller may launch (shipyard admits only
 # claude and codex; council admits every kind here), it does not carry either skill's launcher
@@ -25,9 +28,14 @@
 # wiring), and it does not write or run the launcher. It renders one `exec` line.
 #
 # Source only, never execute. Sourced into a shell that may run `set -u`, so every optional
-# variable is read as `${VAR:-}`. The baseline interpreter is bash >= 5, matching the shared
-# driver (a caller on an older bash re-execs into a modern one before sourcing, as council.sh
-# does).
+# variable is read as `${VAR:-}`.
+#
+# THE INTERPRETER FLOOR IS BASH 3.2, which is lower than the shared driver's and is deliberate:
+# this file is sourced IN-PROCESS into `shipyard-report.sh`, which must stay bash-3.2-clean (it
+# spawns the flow guard as a subprocess for exactly that reason) and re-execs into nothing. So a
+# bash-4+ construct here — an associative array, `${var^^}`, `mapfile` — would break status
+# reporting on a stock macOS shell, where /bin/bash is 3.2. council re-execs into bash >= 5 before
+# sourcing anything, so it constrains nothing; shipyard is the binding caller.
 
 # A version marker, bumped when the body changes, so sync + the drift gate stay easy to prove.
 _ADP_VERSION=1
@@ -134,6 +142,10 @@ adp_cmd() {
       printf '  %s\n' "$(_adp_shq "${ADP_PROMPT:-}")"
       ;;
 
+    # Verified on codex-cli 0.149.0: `-s workspace-write` plus `--add-dir` lets it write into a
+    # directory outside its cwd, and its shell tool tolerates a block of at least 200s, so a
+    # blocking read with a ~180s timeout is safe. `-a` (ask-for-approval) exists only on the
+    # interactive command, not on `codex exec`.
     codex)
       printf 'exec codex'
       case "$(_adp_approval)" in
@@ -170,6 +182,12 @@ adp_cmd() {
         printf '  -i %s\n' "$(_adp_shq "${ADP_PROMPT:-}")"
       fi
       ;;
+    # `adp_known` gates entry, so this arm is reachable only if the two kind sets drift — which
+    # is exactly what "add a case label in each of the functions below" invites. Every other
+    # entry point here already refuses an unhandled kind; without this one, a half-added kind
+    # would render NOTHING at rc 0, and both callers would write a launcher with no exec line,
+    # chmod it, start it, watch it exit 0, and report a successful launch.
+    *) return 1 ;;
   esac
 }
 

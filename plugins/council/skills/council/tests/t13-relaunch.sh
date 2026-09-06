@@ -27,8 +27,17 @@ fi
 ROOT="$COUNCIL_TEST_ROOT/t13"
 REPO="$ROOT/repo"; mkdir -p "$REPO"
 fail=0
+# The plant-inside probe below is the ONE thing this suite writes outside its own root: it must
+# land where an agent kind WOULD have been looked up, which is inside the real skill directory.
+# So the name is per-run (two concurrent suites must not delete each other's plant, which would
+# leave the assertion passing with nothing planted) and both paths are reaped by the EXIT trap
+# (an interrupted run must not leave an untracked script inside the packaged plugin — `git
+# checkout --` cannot remove one, and `make check-test` then refuses to run at all).
+PLANT_KIND="plausible$$"
 cleanup() {
   [ -n "${ROOM:-}" ] && kill_keeper "$ROOM/state/keeper.pid" -9
+  rm -f "$SKILL/adapters/$PLANT_KIND.sh" "$SKILL/lib/$PLANT_KIND.sh"
+  rmdir "$SKILL/adapters" 2>/dev/null
   rm -rf "$ROOT"
   # Only reap the root if we made it. A root handed down by a runner is that runner's to
   # remove, and taking it here would delete the other tests' rooms with it.
@@ -200,12 +209,17 @@ else
   fi
 fi
 
-# --- the four paths regeneration opened, and closed ------------------------------
-# `roster.json` lives in the room, so a participant can write it — and relaunch reads which
-# adapter to SOURCE, which scenario to RENDER and which names to interpolate into a sed
-# program out of it. Each of these ran for real before the values were checked. None of this
-# is containment (a participant is unconfined either way — see SKILL.md); it removes the path
-# a supervisor triggers by following the documented recovery.
+# --- the five paths regeneration opened, and closed ------------------------------
+# `roster.json` lives in the room, so a participant can write it — and relaunch reads which agent
+# KIND plays the seat, which scenario to RENDER and which names to interpolate into a sed program
+# out of it. Each of these ran for real before the values were checked. None of this is
+# containment (a participant is unconfined either way — see SKILL.md); it removes the path a
+# supervisor triggers by following the documented recovery.
+#
+# The kind used to select a FILE TO SOURCE, which is what the first two probes below are about:
+# one for the traversal form, one for the plant-a-bare-named-file-inside form. It no longer does
+# — `adp_known` matches it against `case` labels in the shared adapter module — and the second
+# probe exists to red if a path is ever rebuilt from it again.
 tamper() { jq "$1" "$ROOM/roster.json" > "$ROOM/rt" && mv "$ROOM/rt" "$ROOM/roster.json"; }
 restore_roster() { cp "$ROOT/roster.keep" "$ROOM/roster.json"; }
 cp "$ROOM/roster.json" "$ROOT/roster.keep"
@@ -229,15 +243,20 @@ restore_roster
 # so a future change that rebuilds a path from a kind reds this instead of silently reopening it.
 rm -f "$ROOT/PWNED"
 mkdir -p "$SKILL/adapters"
-for planted in "$SKILL/adapters/plausible.sh" "$SKILL/lib/plausible.sh"; do
+for planted in "$SKILL/adapters/$PLANT_KIND.sh" "$SKILL/lib/$PLANT_KIND.sh"; do
   printf '#!/usr/bin/env bash\ntouch %s\nadapter_cmd() { printf "exec true\\n"; }\n' \
     "$ROOT/PWNED" > "$planted"
 done
-tamper '(.peers[] | select(.name=="claude") | .kind) = "plausible"'
+# Assert the plants are actually there: if a concurrent run reaped them, the refusal below would
+# still be rc 2 and the PWNED check would still pass, and the probe would have tested nothing.
+for planted in "$SKILL/adapters/$PLANT_KIND.sh" "$SKILL/lib/$PLANT_KIND.sh"; do
+  [ -f "$planted" ] || { echo "FAIL the plant was not written: $planted"; fail=1; }
+done
+tamper "$(printf '(.peers[] | select(.name=="claude") | .kind) = "%s"' "$PLANT_KIND")"
 want 2 "a roster naming a planted bare-named adapter kind" bash "$CLI" relaunch claude \
   && says 'no adapter' "the refusal does not say the kind is unknown"
 [ -f "$ROOT/PWNED" ] && { echo "FAIL a planted bare-named adapter was SOURCED"; fail=1; }
-rm -f "$SKILL/adapters/plausible.sh" "$SKILL/lib/plausible.sh"
+rm -f "$SKILL/adapters/$PLANT_KIND.sh" "$SKILL/lib/$PLANT_KIND.sh"
 rmdir "$SKILL/adapters" 2>/dev/null
 restore_roster
 

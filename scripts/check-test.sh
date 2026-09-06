@@ -23,11 +23,12 @@
 # Run: make check-test
 #
 # This suite invokes `bash scripts/check.sh` directly, NOT `make check`. The two diverged when
-# `make check` began also running the driver and flow suites (see the Makefile): check-test proves
+# `make check` began also running the driver, flow and adapter suites (see the Makefile):
+# check-test proves
 # check.sh's STATIC assertions fire, so it must not itself be gated on a test suite passing, nor pay
 # those suites' runtime on every one of its ~60 probes. The deliberate exceptions all use `make
 # check` on purpose: the final "green after restore" check, and the probes that prove `make check`
-# actually runs the driver and flow suites.
+# actually runs the driver, flow and adapter suites (30, 30b, 30c).
 set -uo pipefail
 cd "$(dirname "$0")/.."
 

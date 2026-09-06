@@ -659,6 +659,10 @@ keeps what is council's: the roster, the protocol file, the launcher's `COUNCIL_
 preamble, and the sentence each participant is greeted with. **There is no longer a per-kind file
 in this skill.** Council enumerates no kinds of its own: it admits whatever `adp_known` accepts
 and picks its greeting from `adp_protocol_mode`, so a kind added to the shared module works here
-with no edit — which is also what retired the plant-a-file path above. Council launches every
-seat `sandboxed`, never with approvals off wholesale; `shipyard` is the caller that uses `full`,
-and both are pinned by `shared/adapters/tests/t-callers.sh`.
+with no edit — which is also what retired the plant-a-file path above. Council launches every seat
+at the module's `sandboxed` approval level, never `full`; `shipyard` is the caller that uses
+`full`, and both are pinned by `shared/adapters/tests/t-callers.sh`. **Read that as a knob, not as
+containment**: it changes only `codex` (`-s workspace-write -a never` rather than
+`--approve-for-me`), while `claude` still gets `--permission-mode auto` and `agy`
+`--dangerously-skip-permissions` at either level — as the trust table above records, and as "The
+room is not a trust boundary" says outright.

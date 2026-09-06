@@ -12,7 +12,8 @@
 # 7. no non-generic strings (structural patterns only; no dependency on any untracked file)
 # 8. no non-Latin script in any file, untracked included (the checkable half of "English")
 # 9. no council test names the shared temp parent (the pre-run-root shape); see §9 for its limits
-# 10. every test on disk is registered in its suite's run-all.sh (driver, flow, shipyard, council),
+# 10. every test on disk is registered in its suite's run-all.sh (driver, flow, adapters, shipyard,
+#     council — NOT shared/policy/tests, which this loop does not visit),
 #     so none silently stops running
 # 11. every vendored copy of a shared module is byte-identical to its module's one canonical source
 set -uo pipefail
@@ -455,7 +456,11 @@ else
 fi
 
 # ------------------ 10. every test on disk is registered in its suite's run-all.sh
-# Generalised from council-only to every suite the repo ships (driver, flow, shipyard, council). The
+# Generalised from council-only to the suites listed below (driver, flow, adapters, shipyard,
+# council). That is NOT every suite the repo ships: `shared/policy/tests` is in neither this list
+# nor either Makefile target, so it is the one suite whose registration is gated by nothing —
+# stated here rather than left implied, because a green gate otherwise reads as full coverage.
+# The
 # runner walks a hand-maintained list. Nothing connected that list to the files on disk, so a
 # test could land, pass review, and then simply never run again — coverage lost with no symptom
 # anywhere, which is strictly worse than a red suite. It has already come close: during a run of

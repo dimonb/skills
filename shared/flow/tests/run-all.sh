@@ -6,7 +6,7 @@
 # Wired into the gate two ways (scripts/check.sh check 10, and the Makefile): every test file here
 # must be registered in the `tests` array below or `make check` reds, so a test cannot silently
 # stop running; and `make check` RUNS this suite (it is fast, pure), so a flow regression reds a
-# commit. `make test` runs it too, alongside the driver, shipyard and council suites. Every test is
+# commit. `make test` runs it too, alongside the driver, adapter, shipyard and council suites. Every test is
 # a pure drive of a declared graph against a faked driver — no live terminal, no agent, no network.
 set -uo pipefail
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"

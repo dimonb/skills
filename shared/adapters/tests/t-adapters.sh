@@ -54,6 +54,13 @@ ok "adp_known refuses an empty kind"        1 "$(adp_known ''; echo $?)"
 ok "adp_known refuses a path-shaped kind"   1 "$(adp_known ../../pwn; echo $?)"
 ok "adp_cmd refuses an unknown kind"        1 "$(ADP_PROMPT=x adp_cmd nonesuch >/dev/null 2>&1; echo $?)"
 ok "adp_cmd prints nothing for an unknown kind" "" "$(ADP_PROMPT=x adp_cmd nonesuch 2>/dev/null)"
+# adp_cmd's own `*)` arm, reachable only if the kind sets DRIFT — the failure mode the module's
+# "add a case label in each function" instruction invites. Teach adp_known a kind adp_cmd does not
+# handle and require a refusal, not an empty render at rc 0: a caller would otherwise write a
+# launcher with no exec line, chmod it, start it, and report a successful launch.
+drift=$( adp_known() { case "${1:-}" in halfadded) return 0 ;; *) return 1 ;; esac; }
+         ADP_PROMPT=x adp_cmd halfadded; printf 'rc=%s' "$?" )
+ok "adp_cmd refuses a kind adp_known accepts but it does not handle" "rc=1" "$drift"
 ok "adp_protocol_mode refuses an unknown kind" 1 "$(adp_protocol_mode nonesuch >/dev/null 2>&1; echo $?)"
 ok "adp_notes refuses an unknown kind"      1 "$(adp_notes nonesuch peer >/dev/null 2>&1; echo $?)"
 
@@ -92,13 +99,15 @@ ok "an omitted approval defaults to the CONFINED value" \
   'exec codex -s workspace-write -a never \' "$( ( ADP_PROMPT=goal; adp_cmd codex ) | head -1 )"
 ok "an unrecognised approval defaults to the confined value" \
   'exec codex -s workspace-write -a never \' "$(codex_flags nonsense)"
-# claude has one unattended mode and agy one flag; both approval levels map onto them.
-ok "claude spells both levels the same" \
-  "$( ( ADP_APPROVAL=sandboxed ADP_PROMPT=g; adp_cmd claude ) | head -1 )" \
-  "$( ( ADP_APPROVAL=full ADP_PROMPT=g; adp_cmd claude ) | head -1 )"
-ok "agy spells both levels the same" \
-  "$( ( ADP_APPROVAL=sandboxed ADP_PROMPT=g; adp_cmd agy ) | head -1 )" \
-  "$( ( ADP_APPROVAL=full ADP_PROMPT=g; adp_cmd agy ) | head -1 )"
+# claude has one unattended mode and agy one flag; both approval levels map onto them. Pinned
+# against LITERALS, not against each other: comparing the two renders would agree just as happily
+# if both produced nothing.
+for lvl in sandboxed full; do
+  ok "claude at '$lvl' renders its one unattended mode" \
+    'exec claude --permission-mode auto \' "$( ( ADP_APPROVAL=$lvl ADP_PROMPT=g; adp_cmd claude ) | head -1 )"
+  ok "agy at '$lvl' renders its one unattended flag" \
+    'exec agy --dangerously-skip-permissions \' "$( ( ADP_APPROVAL=$lvl ADP_PROMPT=g; adp_cmd agy ) | head -1 )"
+done
 
 # --- 5. emit-iff-set: a knob only one caller uses imposes nothing on the other -------------
 printf '\n── emit-iff-set ──\n'

@@ -14,10 +14,18 @@
 # THE ADMISSION SET IS SHIPYARD'S OWN, and deliberately narrower than the module's. The module
 # knows more kinds than shipyard can drive (it also serves council, which runs `agy`), and a
 # child that cannot be supervised by this skill must not become launchable just because the
-# shared module learned how to start it. Widening this is a shipyard decision, made here.
+# shared module learned how to start it. Widening it is a shipyard decision, made in this file —
+# in BOTH places: this list, and the `case` in `shipyard_agent` that reads the SHIPYARD_AGENT
+# knob. That `case` cannot be built from the list (it is shell syntax, not data), so the two are
+# kept adjacent and the refusal message below is derived from the list so at least the operator-
+# facing half cannot drift.
 shipyard_agent_kinds() { printf '%s\n' claude codex; }
+# `-F`: a LITERAL match. Without it the pattern is a basic regular expression, and this function
+# is the one that keeps a kind shipyard cannot supervise out — `shipyard_agent_admits '.*'`
+# returning true is the opposite of what the rest of this change is built on (a kind is matched
+# against literals, never interpreted).
 shipyard_agent_admits() {
-  [ -n "${1:-}" ] && shipyard_agent_kinds | grep -qx -- "$1"
+  [ -n "${1:-}" ] && shipyard_agent_kinds | grep -qxF -- "$1"
 }
 
 shipyard_agent() {
@@ -44,7 +52,7 @@ shipyard_agent_check() {
   fi
   case "$agent" in
     invalid)
-      echo "error: SHIPYARD_AGENT must be codex, claude or auto (got: ${SHIPYARD_AGENT:-})" >&2
+      echo "error: SHIPYARD_AGENT must be $(shipyard_agent_kinds | paste -sd, - | sed 's/,/, /g') or auto (got: ${SHIPYARD_AGENT:-})" >&2
       return 1
       ;;
     *)
@@ -98,6 +106,11 @@ shipyard_agent_exec() {
   shipyard_agent_admits "$agent" || return 1
   mode=$(adp_protocol_mode "$agent") || return 1
   (
+    # UNSET first, for the same reason council does: `adp_cmd` reads the environment, so an
+    # exported ADP_* would otherwise reach the child. Measured: `ADP_DIRS=/x` hands a child that
+    # already runs with approvals off an extra `--add-dir /x`. Everything this function chooses
+    # is assigned below; nothing is inherited.
+    unset ADP_DIRS ADP_PROTOCOL ADP_CWD ADP_NAME ADP_EFFORT
     ADP_APPROVAL=full
     ADP_PROMPT="$prompt"
     case "$mode" in
