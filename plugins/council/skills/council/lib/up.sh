@@ -67,8 +67,9 @@ _canary_fifo() { # <room> -> a freshly created fifo path on stdout, or rc 1
   printf '%s' "$f"
 }
 
-# The keeper's body. It ends the LIVE room — its terminals and itself, never the durable record —
-# on ANY of three triggers:
+# The keeper's body. It exits on ANY of three triggers — but only the first two end the LIVE room
+# (its terminals and itself, never the durable record); on the third the room carries on without
+# this keeper, under the one that superseded it:
 #   * the room directory going away: an explicit `down`/`council_down`, exactly as before. In that
 #     path `council_down` has already closed the terminals, so the keeper only has to exit.
 #   * (a `--hold` room only) its OWNER dying, seen as EOF on the canary read end. Here nothing
@@ -119,9 +120,15 @@ _keeper_loop() { # <room> <pid-file> <canary-read-fd-or-empty> <peer>...
       read -t 5 -u "$cfd" _ 2>/dev/null; rc=$?
       [ "$rc" -eq 0 ] && continue
       [ "$rc" -gt 128 ] && continue
-      # EOF: the owner is gone. ct_kill resolves terminal names and the container from $ROOM, and
-      # a keeper forked before council_up assigned it would not inherit the value — set it from
-      # the room we were handed.
+      # EOF: the owner is gone. Ask once more whether we are still this room's keeper, because the
+      # answer decides who these terminals belong to. The guard at the top of the body cannot cover
+      # this: the read above blocks for up to five seconds, and a keeper superseded DURING that
+      # block arrives here with the reap already armed — it would then close the terminals of the
+      # room that superseded it, which is the one outcome the step-down exists to avoid. Cheap, and
+      # it changes nothing for a room nobody superseded: the file names us, so the reap proceeds.
+      if named=$(_keeper_pid "$keep") && [ "$named" != "$BASHPID" ]; then return 0; fi
+      # ct_kill resolves terminal names and the container from $ROOM, and a keeper forked before
+      # council_up assigned it would not inherit the value — set it from the room we were handed.
       ROOM="$room"
       for p in "$@"; do ct_kill "$p" 2>/dev/null || true; done
       return 0
@@ -186,11 +193,12 @@ _keeper_ensure() { # <room-dir> <peer>...
   # first read a MISSING file, which by the rule above is not a reason to stop. Ordered after the
   # canary setup so a refused canary leaves the file untouched.
   #
-  # No test can fail on its absence, and t19 case E2 says so where it pins the outcome: the parent
-  # has three statements and no fork left to run here, the newborn has every bell fifo to open and
-  # a command substitution to fork before its first read, so the parent wins essentially always and
-  # the losing schedule cannot be provoked. This line is carried by the argument above — one `rm`
-  # against a room left with no keeper at all, which loses every bell rung at it in silence.
+  # The window is narrow — after the fork the parent has only `pid=$!`, `set +m` and one `exec`
+  # left before the redirection below truncates the file, while the newborn must open every bell
+  # fifo and fork a command substitution before its first read — so an ordinary run will not show
+  # it. It is still reachable, and t19 case H provokes it deterministically — it holds the parent
+  # inside that window and then asserts the room still has a keeper. Without this line that case
+  # leaves the room with NONE, which loses every bell rung at it in silence.
   rm -f "$keep"
   # Own process group, so a signal to the OWNER's group — a Ctrl-C on `up --hold`, the SIGHUP of a
   # closing pane — reaches the owner but not the keeper, which must outlive that signal long
