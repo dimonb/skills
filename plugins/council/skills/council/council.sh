@@ -13,7 +13,8 @@
 #   * a prefix grant only matches if the agent runs the command as written. `agy` prepends
 #     the environment inline (`COUNCIL_ROOM=… COUNCIL_ME=… bash …`) even though its launcher
 #     already exported both, so a grant on `bash <skill>/council.sh` never matches. A seat this
-#     skill launches does not need one — see adapters/agy.sh for what it carries instead;
+#     skill launches does not need one — see the `agy` notes in lib/agent-adapters.sh for what
+#     it carries instead;
 #   * a command grant says nothing about FILE reads. A path the participant DERIVES is a
 #     separate permission question for some agents, which is why `protocol`, `agenda` and
 #     `decision` are verbs here rather than paths in the protocol.

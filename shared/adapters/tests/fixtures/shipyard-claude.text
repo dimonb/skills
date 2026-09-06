@@ -1,0 +1,3 @@
+exec claude -w 'ship-42' --effort 'max' -n 'ship-42' --permission-mode auto --remote-control 'ship-42' \
+  --append-system-prompt "$(cat '@FX@/pro to.md')" \
+  '/ship #42'

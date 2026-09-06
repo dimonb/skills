@@ -117,7 +117,8 @@ message dies with the context that held it.
 
 | file | role |
 |---|---|
-| `shipyard-agent.sh` | select and launch the child runtime that matches the parent |
+| `shipyard-agent.sh` | select and launch the child runtime that matches the parent — which kinds shipyard admits, and what it hands the shared adapters |
+| `agent-adapters.sh` | vendored copy of the shared per-agent-kind adapters (`shared/adapters/agent-adapters.sh`), shared with `council` |
 | `shipyard-backend.sh` | the agterm/tmux abstraction — every terminal operation goes through it |
 | `shipyard-lib.sh` | mailbox paths, slot resolution, payload input, the child env preamble |
 | `shipyard-continuity.sh` | automatic capacity retry and paused-goal continuity for a Codex parent in agterm |

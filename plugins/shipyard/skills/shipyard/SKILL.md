@@ -782,7 +782,8 @@ collide with it.
 
 | file | role |
 |------|------|
-| `shipyard-agent.sh` | agent-runtime adapter: parent detection, skill syntax, environment and launcher |
+| `shipyard-agent.sh` | agent-runtime adapter over the shared per-kind module: WHICH kinds shipyard admits, its environment propagation and scrub list, the codex worktree, and the child's bootstrap sentence |
+| `agent-adapters.sh` | vendored copy of the shared per-agent-kind adapters (`shared/adapters/agent-adapters.sh`): how a kind is started, how a skill is referenced in it, which kind is running the parent |
 | `shipyard-backend.sh` | the agterm/tmux abstraction — every terminal operation goes through it |
 | `shipyard-lib.sh` | mailbox paths, slot resolution, payload input, the child env preamble |
 | `shipyard-continuity.sh` | capacity retry and paused-goal continuity for a Codex parent in agterm |

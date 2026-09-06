@@ -1,0 +1,27 @@
+<<CMD>>
+agy
+<<END>>
+<<ARG>>
+--dangerously-skip-permissions
+<<END>>
+<<ARG>>
+--add-dir
+<<END>>
+<<ARG>>
+@FX@/ro om
+<<END>>
+<<ARG>>
+--add-dir
+<<END>>
+<<ARG>>
+@FX@/sk'ill
+<<END>>
+<<ARG>>
+-i
+<<END>>
+<<ARG>>
+Follow this protocol literally. Begin.
+
+PROTOCOL LINE ONE $notavar `notacmd`
+PROTOCOL LINE TWO
+<<END>>

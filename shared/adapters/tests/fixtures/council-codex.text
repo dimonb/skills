@@ -1,0 +1,2 @@
+exec codex -s workspace-write -a never --add-dir '@FX@/ro om' --add-dir '@FX@/sk'\''ill' \
+  'Read @FX@/pro to.md and follow it literally. Begin.'

@@ -1,15 +1,42 @@
 #!/usr/bin/env bash
 # up.sh — creating, listing, driving and tearing down a room.
 
+# How each agent KIND is started lives in the shared adapter module (shared/adapters/
+# agent-adapters.sh, vendored beside this file as agent-adapters.sh and kept byte-identical by
+# scripts/sync-driver.sh + the repo gate's check 11), the same arrangement term.sh has with the
+# shared driver. council keeps what is council's — the roster, the protocol, the launcher file
+# and the sentence each participant is greeted with — and asks the module for the rest.
+# shellcheck source=agent-adapters.sh
+. "$(dirname "${BASH_SOURCE[0]}")/agent-adapters.sh"
+
 # A participant name, an adapter kind, a scenario, a role. Bare word only.
 #
-# These reach a file that gets SOURCED, a file that gets rendered, a path that gets written,
-# and a `#`-delimited sed program. `up` checks a name before it ever enters a room, and
-# `relaunch` checks again on the way out, because between those two the roster is a file every
-# participant can write. Under LC_ALL=C this rejects `..`, `/`, `#`, `&`, backslash, newline,
-# quotes and everything else outside the set; a leading `-` is accepted and is harmless here,
-# since every sink is either path-prefixed or a quoted operand.
+# These reach a file that gets rendered, a path that gets written, and a `#`-delimited sed
+# program. `up` checks a name before it ever enters a room, and `relaunch` checks again on the
+# way out, because between those two the roster is a file every participant can write. Under
+# LC_ALL=C this rejects `..`, `/`, `#`, `&`, backslash, newline, quotes and everything else
+# outside the set; a leading `-` is accepted and is harmless here, since every sink is either
+# path-prefixed or a quoted operand.
+#
+# An agent KIND no longer reaches a file at all — `adp_known` matches it against `case` labels
+# in the shared module — so for a kind this is now a second line of defence over a value that
+# also lands in messages, not the check that keeps a roster from choosing what gets sourced.
 _plain_name() { case "$1" in ''|*[!A-Za-z0-9_-]*) return 1 ;; *) return 0 ;; esac; }
+
+# The sentence a participant is launched with. It depends on HOW that kind receives its
+# protocol, which the shared module answers — so a kind added there gets the right greeting
+# with no edit here:
+#   system-prompt  the protocol already IS the system prompt; just point the agent at the room.
+#   reference      nothing carries the protocol, so this sentence must name its path.
+#   inline         the protocol's text is fused onto this sentence by the module.
+_council_prompt() { # <mode> <protocol-path>
+  case "$1" in
+    system-prompt) printf 'You are a participant in a council room. Read the agenda and join the loop.' ;;
+    reference)     printf 'Read %s and follow it literally. Begin.' "$2" ;;
+    inline)        printf 'Follow this protocol literally. Begin.' ;;
+    *)             return 1 ;;
+  esac
+}
 
 # The keeper's pid, or nothing. Both callers hand the result to `kill`, and `kill` reads a
 # `0` as EVERY PROCESS IN THE SENDER'S PROCESS GROUP -- which is the supervisor's own session,
@@ -287,7 +314,7 @@ council_up() {
     _plain_name "$kind" || { echo "council up: '$kind' is not a usable agent kind (from --agents)" >&2; return 2; }
     local u="$name" k=2
     while printf '%s\n' ${peers+"${peers[@]}"} | grep -qx "$u"; do u="$name-$k"; k=$((k+1)); done
-    [ -f "$SKILL/adapters/$kind.sh" ] || { echo "council up: no adapter for '$kind' (available: $(ls "$SKILL/adapters" | sed 's/\.sh$//' | paste -sd, -))" >&2; return 2; }
+    adp_known "$kind" || { echo "council up: no adapter for '$kind' (available: $(adp_kinds | paste -sd, -))" >&2; return 2; }
     peers+=("$u"); kinds+=("$kind")
     roles+=("$(printf '%s\n' $SC_ROLES | sed -n "$((i+1))p")"); [ -n "${roles[$i]}" ] || roles[$i]=any
     i=$((i+1))
@@ -375,7 +402,7 @@ council_up() {
   for i in "${!kinds[@]}"; do
     case " $shown " in *" ${kinds[$i]} "*) continue ;; esac
     shown="$shown ${kinds[$i]}"
-    ( . "$SKILL/adapters/${kinds[$i]}.sh"; adapter_notes "${peers[$i]}" )
+    adp_notes "${kinds[$i]}" "${peers[$i]}"
   done
   printf '\nwatch:  council.sh status --room %s\nspeak:  council.sh say <peer> "..." --room %s\n' "$rname" "$rname"
   # THE SEAT YOU TOOK YOURSELF NEEDS `--me` ON READS, NOT JUST ON `send`, and it is the one
@@ -472,11 +499,21 @@ _write_launcher() { # <room> <peer> <kind> <cwd>
   # link between the unlink and the open. `mv -f` REPLACES a symlink at the destination
   # instead of following it, and it is atomic, so there is no window to win.
   local tmp="$room/state/.launch-$peer.$$"
-  ( . "$SKILL/adapters/$kind.sh"
+  # A SUBSHELL, so the ADP_* knobs this sets never leak into the caller and reach the next
+  # seat's launcher. council grants the room and this skill's own directory, keeps the sandbox
+  # on (`sandboxed`), and lets the module spell all three per kind.
+  # `exit`, not `return`: these run in the subshell, and a failed lookup must abort the write
+  # rather than fall through to a launcher with an empty prompt.
+  ( proto="$room/protocol-$peer.md"
+    mode=$(adp_protocol_mode "$kind") || exit 1
+    ADP_APPROVAL=sandboxed
+    ADP_DIRS=$(printf '%s\n%s' "$room" "$SKILL")
+    ADP_PROTOCOL="$proto"
+    ADP_PROMPT=$(_council_prompt "$mode" "$proto") || exit 1
     { printf '#!/usr/bin/env bash\n'
       printf 'export COUNCIL_ROOM=%q COUNCIL_ME=%q\n' "$room" "$peer"
       printf 'cd %q || exit 1\n' "$cwd"
-      adapter_cmd "$room" "$room/protocol-$peer.md" "$SKILL"
+      adp_cmd "$kind"
     } > "$tmp" ) || { rm -f "$tmp"; return 1; }
   chmod +x "$tmp" && mv -f "$tmp" "$room/state/launch-$peer.sh" || { rm -f "$tmp"; return 1; }
 }
@@ -515,7 +552,7 @@ _write_protocol() { # <room> <peer> <role> <scenario-file> <peer>...
 # ct_launch wraps it the same way the first launch did.
 #
 # And the launcher and protocol are REGENERATED rather than re-run. Every participant is
-# handed the room as a writable root (`--add-dir <room>`, all three adapters), so those two
+# handed the room as a writable root (`--add-dir <room>`, every kind), so those two
 # files are writable by the other agents in the room — and a scenario deliberately makes
 # them adversarial. Re-executing a stored launcher would run whatever a participant put
 # there, in a login shell, unsandboxed, in the human's own process tree. Regenerating also
@@ -605,20 +642,24 @@ council_relaunch() {
   scenario=$(jq -r '.scenario // empty' "$ROOM/roster.json")
   [ -n "$kind" ] && [ -n "$scenario" ] \
     || { echo "council relaunch: this room does not record which agent plays '$peer' — it cannot be regenerated" >&2; return 2; }
-  # A bare name only. `..` in either of these reaches out of the skill and picks a file the
-  # participant planted; both are then sourced or rendered by the supervisor.
+  # A bare name only. `..` in the scenario reaches out of the skill and picks a file the
+  # participant planted, which the supervisor then renders from.
   #
-  # This closes the traversal, and not the class: `--add-dir <skill>` makes adapters/ itself
-  # writable, so a participant can plant a bare-named file INSIDE it and have `.kind` point
-  # here. Measured, and left standing on purpose — it belongs to that grant, not to this verb.
+  # THE AGENT KIND NO LONGER REACHES A FILE AT ALL. It used to name `adapters/<kind>.sh`, which
+  # the supervisor SOURCED — and `--add-dir <skill>` makes this skill's own directory writable,
+  # so `_plain_name` closed the traversal form while leaving the plant-a-bare-named-file-INSIDE
+  # form standing (measured). A kind is now matched by `adp_known` against `case` labels in the
+  # shared adapter module and is never turned back into a path, so there is nothing to plant.
+  # `_plain_name` stays as a second line of defence over a roster value that also lands in
+  # messages, not as the check that decides what gets sourced.
   _plain_name "$kind" \
-    || { echo "council relaunch: roster names an implausible agent kind for '$peer' — refusing to source it" >&2; return 2; }
+    || { echo "council relaunch: roster names an implausible agent kind for '$peer'" >&2; return 2; }
   _plain_name "$scenario" \
     || { echo "council relaunch: roster names an implausible scenario — refusing to render from it" >&2; return 2; }
   [ -n "$role" ] && [ "$role" != null ] || role=any
   _plain_name "$role" \
     || { echo "council relaunch: roster names an implausible role for '$peer'" >&2; return 2; }
-  [ -f "$SKILL/adapters/$kind.sh" ] \
+  adp_known "$kind" \
     || { echo "council relaunch: this skill has no adapter for '$kind' any more" >&2; return 2; }
   local sf="$SKILL/scenarios/$scenario.md"
   [ -f "$sf" ] \

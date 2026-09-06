@@ -219,6 +219,28 @@ want 2 "a roster naming a traversing adapter kind" bash "$CLI" relaunch claude \
 [ -f "$ROOT/PWNED" ] && { echo "FAIL a roster-supplied adapter path was SOURCED"; fail=1; }
 restore_roster
 
+# THE PLANT-INSIDE FORM, which the traversal check above never closed. `--add-dir <skill>` makes
+# this skill's own directory writable, so a participant used to be able to drop a BARE-NAMED file
+# where the kind was looked up and point the roster at it: `_plain_name` passes a bare word, and
+# the supervisor sourced it on the next relaunch. Measured, and documented as left standing.
+#
+# It is retired: an agent kind is matched by `adp_known` against `case` labels in the shared
+# adapter module and is never turned back into a path. Both plausible directories are planted in,
+# so a future change that rebuilds a path from a kind reds this instead of silently reopening it.
+rm -f "$ROOT/PWNED"
+mkdir -p "$SKILL/adapters"
+for planted in "$SKILL/adapters/plausible.sh" "$SKILL/lib/plausible.sh"; do
+  printf '#!/usr/bin/env bash\ntouch %s\nadapter_cmd() { printf "exec true\\n"; }\n' \
+    "$ROOT/PWNED" > "$planted"
+done
+tamper '(.peers[] | select(.name=="claude") | .kind) = "plausible"'
+want 2 "a roster naming a planted bare-named adapter kind" bash "$CLI" relaunch claude \
+  && says 'no adapter' "the refusal does not say the kind is unknown"
+[ -f "$ROOT/PWNED" ] && { echo "FAIL a planted bare-named adapter was SOURCED"; fail=1; }
+rm -f "$SKILL/adapters/plausible.sh" "$SKILL/lib/plausible.sh"
+rmdir "$SKILL/adapters" 2>/dev/null
+restore_roster
+
 tamper '(.peers[] | select(.name=="claude") | .role) = "../../pwn"'
 want 2 "a roster naming a traversing role" bash "$CLI" relaunch claude
 restore_roster

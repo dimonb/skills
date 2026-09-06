@@ -484,6 +484,7 @@ fi
 for suite_dir in \
   shared/driver/tests \
   shared/flow/tests \
+  shared/adapters/tests \
   plugins/shipyard/skills/shipyard/tests \
   plugins/council/skills/council/tests; do
   runner=$suite_dir/run-all.sh

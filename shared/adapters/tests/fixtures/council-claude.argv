@@ -1,0 +1,31 @@
+<<CMD>>
+claude
+<<END>>
+<<ARG>>
+--permission-mode
+<<END>>
+<<ARG>>
+auto
+<<END>>
+<<ARG>>
+--add-dir
+<<END>>
+<<ARG>>
+@FX@/ro om
+<<END>>
+<<ARG>>
+--add-dir
+<<END>>
+<<ARG>>
+@FX@/sk'ill
+<<END>>
+<<ARG>>
+--append-system-prompt
+<<END>>
+<<ARG>>
+PROTOCOL LINE ONE $notavar `notacmd`
+PROTOCOL LINE TWO
+<<END>>
+<<ARG>>
+You are a participant in a council room. Read the agenda and join the loop.
+<<END>>
