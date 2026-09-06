@@ -34,6 +34,13 @@
 - **02-05 SHIPPED:** PR **#85 merged** (`c984d97`) — make check runs the driver suite + a
   registration check generalized to all 3 suites, stays fast (~3.7s); new `make test`;
   check-test 79/0. **PHASE 2 COMPLETE (all 5 tasks in prod: #77/#79/#81/#83/#85).**
+  **STALE FIGURE — annotated at #104, not rewritten.** The ~3.7s above was true when written: the
+  gate then ran ONE suite. The flow suite landed after it (2.4s) and check.sh itself grew to ~3.5s,
+  so `make check` measures **~6.0-6.5s idle** (three warm runs on the main worktree) and 7.6-8.7s
+  on a loaded machine. I keyed a speed rule for #104 to the 3.7s number and the child caught it by
+  measuring instead of trusting it. **Lesson: a wall-clock figure in a prose log is a fact with an
+  expiry date nothing enforces — never key a rule off a remembered one.** The rule is: measure
+  before and after, report both WITH the load conditions, justify the delta.
 - **LOAD SHIPPED:** PR **#87 merged** (`dd996eb`) — `shipyard-admission.sh` gate before launch:
   refuses when live slots at cap (`SHIPYARD_MAX_SLOTS`, default 2) or under macOS memory pressure
   (floor 10%), before any worktree/terminal. t9-admission (42 checks). Verified live: dry launch
