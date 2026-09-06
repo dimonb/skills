@@ -311,7 +311,10 @@ canary_eof() { # <mark-dir> <pid-file-content: "self"|a pid> <n> -> prints reape
     _keeper_loop "$room" "$room/state/keeper.pid" "$cr" a b
     printf 'yes' > "$mark/returned" ) >/dev/null 2>&1 &
   local lp=$! ret
-  track "$lp"
+  # Deliberately NOT `track "$lp"`. `canary_eof` is only ever called inside `$( )`, so the append
+  # would land in the command substitution's own copy of KEEPERS and never reach the EXIT trap —
+  # a registration that reads as a safety net while being none, which is worse than no net. What
+  # actually reaps this child is the bounded wait and the `kill` below, on both paths.
   wait_file "$mark/running" 60 >/dev/null
   [ "$who" = self ] || printf '%s' "$who" > "$room/state/keeper.pid"   # superseded mid-read
   exec {cw}>&-                                            # the owner dies: EOF on the read
