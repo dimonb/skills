@@ -244,6 +244,16 @@ for slot in "${SLOTS[@]}"; do
   else
     state="no MR yet"
   fi
+
+  # The slot's supervision phase and glyph verdict, from the DECLARED graph (shipyard-slot-graph.sh)
+  # evaluated by the shared flow guard — the single authority for "which phase is this slot in / is
+  # it terminal" (FLOW-03), replacing the scattered forge-state/stage tests that used to decide the
+  # verdict and the in-flight count here. A subprocess, because this script must stay bash-3.2-clean
+  # (t7) while the guard needs bash >= 5; it is spawned only here, for a LIVE slot, never on the
+  # no-terminal path that exits above. The facts it reads are the ones already resolved just above,
+  # so it adds no forge call.
+  read -r phase verdict <<<"$(bash "$DIR/shipyard-slot-graph.sh" slot "$iid" "$state" "$stage" "$addr")"
+  [ -n "$verdict" ] || verdict=active   # an unreadable graph is never shown as falsely completed
   # `?` counts as IN FLIGHT, never as finished. The window is alive and the pane is
   # moving; an unresolvable state means the lookup failed, not that the work ended.
   # Treating it as terminal is what stopped a monitor 60 seconds into a fresh run.
@@ -257,7 +267,12 @@ for slot in "${SLOTS[@]}"; do
   # honest end signal. (A dead terminal never reaches here — it `continue`s above —
   # so this counts live sessions only, and the monitor still exits once every
   # terminal is gone.)
-  inflight=$((inflight+1))
+  #
+  # The graph expresses exactly this rule: a live slot is at launched|in-review|concluded, never the
+  # empty `torn-down` phase (an absent terminal `continue`d above), so this counts every live
+  # terminal as before — now derived from the graph's phase. An empty/unreadable phase is counted in
+  # flight, never dropped, so the guard can inform the loop but can never end it early.
+  [ "$phase" = torn-down ] || inflight=$((inflight+1))
 
   read -r ctx_pct ctx <<<"$(ctx_probe "$slot" "$b")"
   band=$(ctx_band "$ctx_pct")
@@ -296,12 +311,13 @@ for slot in "${SLOTS[@]}"; do
   fi
 
   # Paint the same verdict on the sidebar glyph (agterm only; a no-op on tmux), so the
-  # board is readable without reading the table: blocked = it is waiting on YOU.
-  if   [ "$pend" != 0 ];      then shipyard_note "$slot" blocked --blink
-  elif [ "$stalled_now" = 1 ]; then shipyard_note "$slot" blocked
-  elif [ "$state" = merged ] || [ "$state" = closed ] || [ "$stage" = ready-to-merge ]; then
-                                   shipyard_note "$slot" completed
-  else                             shipyard_note "$slot" active
+  # board is readable without reading the table: blocked = it is waiting on YOU. The
+  # completed-vs-active verdict is the declared graph's (via shipyard-slot-graph.sh) — the
+  # single authority for a slot's phase (FLOW-03) — while the escalation and stall overlays
+  # below still take precedence over it, exactly as before.
+  if   [ "$pend" != 0 ];       then shipyard_note "$slot" blocked --blink
+  elif [ "$stalled_now" = 1 ];  then shipyard_note "$slot" blocked
+  else                              shipyard_note "$slot" "$verdict"
   fi
 
   ROWS+=("| $slot | $mr_label | $addr | $run | $state / $stage | $esc | $ctx | ${line} |")
