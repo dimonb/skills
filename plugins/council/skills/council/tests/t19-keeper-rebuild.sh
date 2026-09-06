@@ -150,9 +150,11 @@ echo "── case C: a missing, empty, '0' or malformed pid file does NOT stop a
 #
 # Be exact about what the fifth room controls for, because these are assert-ALIVE rows and every
 # one of them also passes with the step-down deleted outright: it is cases A, B, D and E1 that
-# prove the check is live, not this case. What `self` catches is a check that reads the WRONG
-# NAME — `$$` in place of `$BASHPID` names the forking shell, not the keeper, so every keeper
-# would see a stranger's pid and step down, and this row is the only one that reds on it.
+# prove the check is live, not this case. What `self` NAMES is a check that reads the wrong
+# process — `$$` in place of `$BASHPID` is the forking shell, not the keeper. It is not the only
+# row that would catch that: at birth every room's pid file names its own keeper, so such a slip
+# kills every keeper immediately and reds most of this file, case C's other four rows included.
+# `self` is where the mistake is written down, not a unique detector of it.
 declare -A C_ROOMS=()
 c_shapes=(missing empty zero malformed self)
 for s in "${c_shapes[@]}"; do
@@ -306,14 +308,25 @@ canary_eof() { # <mark-dir> <pid-file-content: "self"|a pid> <n> -> prints reape
     ct_kill() { : > "$mark/reaped-$1"; }
     printf '%s' "$BASHPID" > "$room/state/keeper.pid"     # at entry the room is ours
     printf 'in\n' > "$mark/running"
-    _keeper_loop "$room" "$room/state/keeper.pid" "$cr" a b ) >/dev/null 2>&1 &
-  local lp=$!
+    _keeper_loop "$room" "$room/state/keeper.pid" "$cr" a b
+    printf 'yes' > "$mark/returned" ) >/dev/null 2>&1 &
+  local lp=$! ret
+  track "$lp"
   wait_file "$mark/running" 60 >/dev/null
   [ "$who" = self ] || printf '%s' "$who" > "$room/state/keeper.pid"   # superseded mid-read
   exec {cw}>&-                                            # the owner dies: EOF on the read
-  wait "$lp" 2>/dev/null
+  # Bounded, and on a MARKER rather than a bare `wait` — E1 sixty lines up takes the same care and
+  # for the same reason: a loop that stops returning would otherwise hang the run to run-all.sh's
+  # ceiling instead of reddening. E1's remedy does not transfer verbatim, though. Signalling first
+  # would race G2's reap and destroy the control, so the marker is written AFTER `_keeper_loop`
+  # returns — by then any ct_kill has already run and the counts below are complete. The child is
+  # only signalled once that marker (or the ceiling) says the loop is done with it.
+  ret=$(wait_file "$mark/returned" 150)
+  kill "$lp" 2>/dev/null; wait "$lp" 2>/dev/null
   exec {cr}<&-
   rm -rf "$room"
+  # A loop that never came back is neither outcome, and says so rather than borrowing one.
+  [ "$ret" = yes ] || { echo "loop-never-returned"; return; }
   if [ -e "$mark/reaped-a" ] || [ -e "$mark/reaped-b" ]; then echo reaped; else echo clean; fi
 }
 ok "superseded mid-read, the EOF reaps nothing" clean "$(canary_eof "$ROOT/G1" 999999 1)"
