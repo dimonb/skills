@@ -253,7 +253,11 @@ for slot in "${SLOTS[@]}"; do
   # no-terminal path that exits above. The facts it reads are the ones already resolved just above,
   # so it adds no forge call.
   read -r phase verdict <<<"$(bash "$DIR/shipyard-slot-graph.sh" slot "$iid" "$state" "$stage" "$addr")"
-  [ -n "$verdict" ] || verdict=active   # an unreadable graph is never shown as falsely completed
+  # Fail-safe if the graph could not answer: it fails loudly with EMPTY stdout (a missing bash 5, or
+  # an unloadable flow.sh — it never emits a misleading phase), so an empty verdict defaults to
+  # `active` (never falsely `completed`) and the empty phase is not `torn-down`, so the slot is still
+  # counted in flight below (never dropped).
+  [ -n "$verdict" ] || verdict=active
   # `?` counts as IN FLIGHT, never as finished. The window is alive and the pane is
   # moving; an unresolvable state means the lookup failed, not that the work ended.
   # Treating it as terminal is what stopped a monitor 60 seconds into a fresh run.

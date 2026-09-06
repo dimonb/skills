@@ -85,10 +85,17 @@ fi
 # Each is a boolean over the resolved per-slot facts in SYG_* — no forge call, no agent, no model.
 _syg_pr_known() { [ -n "${SYG_IID:-}" ]; }
 
-# EXACTLY shipyard-report.sh's historical `completed` condition, so the verdict is unchanged:
-# the forge says merged/closed, or ship has reached its hand-off stage. `needs-human` and `done`
-# are deliberately NOT here — the old code treated them as `active` (a needs-human slot still wants
+# This predicate matches shipyard-report.sh's historical `completed` condition exactly: the forge
+# says merged/closed, or ship has reached its hand-off stage. `needs-human` and `done` are
+# deliberately NOT here — the old code treated them as `active` (a needs-human slot still wants
 # attention, and its escalation overlay shows that), and behaviour is preserved.
+#
+# One deliberate refinement of the FULL glyph path (not this predicate alone): `concluded` sits
+# behind the `launched` node, so the `completed` verdict now also requires a known PR/MR number. The
+# old glyph had no such precondition, but the divergence is unreachable by construction — ship
+# records the PR number when it opens the PR, well before `stage=ready-to-merge`, and slot_stage and
+# slot_iid read the same state file — so a `ready-to-merge` slot always has a known iid. If it ever
+# occurred it is glyph-only (`active` vs `completed`), never affecting the in-flight count.
 _syg_concluded() {
   case "${SYG_MR_STATE:-}" in merged|closed) return 0 ;; esac
   [ "${SYG_STAGE:-}" = ready-to-merge ]
@@ -132,8 +139,22 @@ if [ "${BASH_SOURCE[0]}" = "${0}" ]; then
   case "${1:-}" in
     slot)
       # <iid> <mr_state> <stage> <addr> -> "<phase> <verdict>". flow_phase's empty (fully done)
-      # phase is rendered as the literal `torn-down` so report.sh can test it as a word; an empty
-      # print (which cannot happen for a live slot) would otherwise read as a dropped slot.
+      # phase is rendered as the literal `torn-down` so report.sh can test it as a word.
+      #
+      # Guard that the interpreter actually loaded first: the empty -> `torn-down` mapping below
+      # assumes flow_phase RAN and reported a complete graph. If flow.sh failed to source (a
+      # corrupted or partial install — check 11 gates this in-repo, but a shipped copy could still be
+      # incomplete), flow_phase is undefined, shipyard_slot_phase yields empty, and we would
+      # otherwise emit a MISLEADING `torn-down` for a slot the interpreter never evaluated — which
+      # report.sh would read as a dropped, completed slot (the catastrophic early-termination class
+      # this supervision code exists to prevent). Fail loudly with EMPTY stdout instead, so
+      # report.sh's fail-safe (verdict=active, still counted in flight) applies. The realistic
+      # no-bash-5 failure already exits at the re-exec guard above with empty stdout; this covers
+      # loaded-bash-5-but-no-flow.sh.
+      command -v flow_phase >/dev/null 2>&1 || {
+        echo "shipyard-slot-graph: flow.sh did not load (flow_phase undefined)" >&2
+        exit 70
+      }
       p=$(shipyard_slot_phase "${2:-}" "${3:-}" "${4:-}" "${5:-}")
       [ -n "$p" ] || p=torn-down
       printf '%s %s\n' "$p" "$(shipyard_slot_verdict "$p")"
