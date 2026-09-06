@@ -284,10 +284,19 @@ so do not plan on driving it from here.
 * `MR state / stage` — forge state plus ship's own pipeline stage;
 * `esc` — open escalations for that slot, and the full escalation block is appended
   under the table;
-* on agterm, it also repaints each child's sidebar glyph;
+* on agterm, it also repaints each child's sidebar glyph (its completed/active verdict comes
+  from the declared slot graph — see below);
 * whole report in one block → Monitor batches it into one notification;
 * exit 0 = nothing in flight **and** no open escalation → stop the loop; exit 1 = work
   is still open.
+
+Each slot's **supervision phase** — `launched → in-review → concluded → done` — is a declared graph
+(`shipyard-slot-graph.sh`) that the shared flow guard (`flow.sh`, vendored from `shared/flow/flow.sh`)
+evaluates in its session-less `flow_phase` authority mode, exactly as council reads its room phase
+(FLOW-03). That one authority decides the completed/active glyph and whether a live slot still counts
+as in flight; the escalation and stall overlays above still take precedence over it. shipyard
+MONITORS an autonomous child, so it reads the graph as an authority — it never drives the child
+through it.
 
 Arm the status monitor (`Monitor`, `persistent: true`), substituting the slots:
 
