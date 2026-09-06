@@ -12,12 +12,10 @@ FULL=0; [ "${1:-}" = "--full" ] && FULL=1
 mkdir -p "${TMPDIR:-/tmp}/council-test" || exit 1
 COUNCIL_TEST_ROOT=$(mktemp -d "${TMPDIR:-/tmp}/council-test/run.XXXXXXXX") || exit 1
 export COUNCIL_TEST_ROOT
-# Remove the root on every exit path except SIGKILL, which nothing can catch. Bash runs an EXIT
-# trap when the shell dies on an untrapped fatal signal too, so this covers a killed run; INT and
-# TERM are deliberately NOT trapped, because a trapped signal is deferred until the current
-# foreground command returns and would make a kill wait for the test in progress. Room keepers
-# poll `while [ -d "$room" ]`, so this is what reaps the ones a killed test could not stop
-# itself, and nothing else ever will: no later run reuses this root's name.
+# One EXIT trap, and no INT/TERM trap, for the reasons given above the trap in _helpers.sh; the
+# limits of what an EXIT trap covers are stated there too. Room keepers poll `while [ -d "$room" ]`,
+# so this is what reaps the ones a killed test could not stop itself, and nothing else ever will:
+# no later run reuses this root's name.
 trap 'rm -rf "$COUNCIL_TEST_ROOT"' EXIT
 
 # A ceiling, not a deadline. A slow test under load finishes far inside it; a wedged one is
@@ -53,7 +51,7 @@ fi
 # while the current test keeps going — but only until this same ceiling group-kills it. Turning it
 # on means processes that outlive everyone, which is the failure the ceiling exists to prevent.
 
-tests=(t4-conflict.sh t7-roundtable.sh t8-graph.sh t11-decision.sh t14-verbs.sh t5-converge.sh t6-stuck.sh t9-lap.sh t9b-untrusted.sh t9c-room-inputs.sh t9d-lane-provenance.sh t9e-author-identity.sh t9f-decided-needs-record.sh t9g-degrades-loudly.sh t9h-roster-order.sh t3-token.sh t13-relaunch.sh t15-keeper.sh)
+tests=(t4-conflict.sh t7-roundtable.sh t8-graph.sh t11-decision.sh t14-verbs.sh t5-converge.sh t6-stuck.sh t9-lap.sh t9b-untrusted.sh t9c-room-inputs.sh t9d-lane-provenance.sh t9e-author-identity.sh t9f-decided-needs-record.sh t9g-degrades-loudly.sh t9h-roster-order.sh t3-token.sh t13-relaunch.sh t15-keeper.sh t12-cleanup.sh)
 [ "$FULL" = 1 ] && tests+=(t1-order.sh t2-latency.sh t2b-wake.sh t2c-bell.sh)
 rc=0
 for t in "${tests[@]}"; do

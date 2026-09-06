@@ -61,26 +61,34 @@ _room_dirs_sane() { # <room>
 # perfectly healthy while every bell rung at it went nowhere.
 _keeper_ensure() { # <room-dir> <peer>...
   local room="$1"; shift
-  local keep="$room/state/keeper.pid" p pid
+  local keep="$room/state/keeper.pid" p pid named
   pid=$(_keeper_pid "$keep") && kill -0 "$pid" 2>/dev/null && return 0
   # Detach it from the caller's stdio COMPLETELY. A background process that keeps the
   # caller's stdout open holds any pipe reading it open too: `council.sh ... | tail`
   # then never sees EOF and hangs forever, with nothing wrong upstream. Cost one
   # mystifying "the suite hangs" during development.
-  # The loop watches the PID FILE as well as the directory. `[ -d "$room" ]` alone cannot tell
-  # a room from a room rebuilt at the same path: `rm -rf` then `_mkroom` again wipes the pid file
-  # and starts a second keeper, but the first one sees its directory back within five seconds
-  # and keeps polling — one more forever-process per rebuild, each forking `sleep` every five
-  # seconds. Several dozen of them from throwaway probe scripts once put a machine at a load
-  # in the hundreds with memory and disk idle. So a keeper whose room no longer names it steps
-  # down: the file it reads is written by the shell that forked it (below), so by the time the
-  # first check runs the name is there, and a rebuilt room either carries a newer pid or, for the
-  # instant before its own keeper writes one, none at all — both mean this one is done.
+  #
+  # The loop watches the pid file as well as the directory. `[ -d "$room" ]` alone cannot tell
+  # a room from a room rebuilt at the same path: `rm -rf` then `_mkroom` again wipes this file
+  # and starts a second keeper, and the first one, back from its sleep to find its directory
+  # there again, kept polling — one forever-process per rebuild, and the suite's own tests
+  # rebuild rooms this way between cases. Measured on this tree before the check below: both
+  # keepers alive seven seconds after a rebuild, and only removing the directory ended them.
+  # The cost is not CPU (forty-one of them polling for a hundred seconds moved the load average
+  # by nothing measurable) but a process and its open fifos that nothing will ever reap.
+  #
+  # It steps down ONLY when the file names another keeper: a different positive pid. A file
+  # that is missing, empty or malformed says nothing about another keeper and is not a reason
+  # to stop — t9g writes `0` into it on purpose, and the instant between a rebuild's `mkdir` and
+  # the write below is the same shape. Reading either as "stop" would make a healthy keeper
+  # exit, and a room without one loses every bell rung at it (the header above), which is worse
+  # than the leak this closes. The rebuilt room's keeper has its pid written straight after the
+  # fork, so the old one sees it on its next poll, five seconds at most. t15 pins both edges.
   ( exec >/dev/null 2>&1 <&-
     for p in "$@"; do exec {fd}<> "$room/bell/$p.fifo"; done
     while [ -d "$room" ]; do
       sleep 5
-      [ "$(_keeper_pid "$keep" 2>/dev/null)" = "$BASHPID" ] || exit 0
+      named=$(_keeper_pid "$keep") && [ "$named" != "$BASHPID" ] && exit 0
     done ) &
   echo $! > "$keep"
 }

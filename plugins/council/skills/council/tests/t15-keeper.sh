@@ -1,10 +1,15 @@
 #!/usr/bin/env bash
-# t15 — a keeper does not outlive its room.
-#   * a room rebuilt at the SAME path (rm -rf, then _mkroom again — what every throwaway probe
-#     script does) gets a fresh keeper, and the previous one steps down within one poll period;
+# t15 — a keeper does not outlive its room, and does not desert it either.
+#   * a room rebuilt at the SAME path (rm -rf, then _mkroom again — what a throwaway probe script
+#     does, and what this suite's own tests do between cases) gets a fresh keeper, and the
+#     previous one steps down within one poll period;
+#   * a pid file that names no other keeper — `0`, or gone — is not a reason to stop: the keeper
+#     is still there a poll period later, because a room without one loses its bells;
 #   * a room removed for good takes its keeper with it within one poll period.
-# Before the pid-file check in _keeper_ensure, the first case left one extra forever-process
-# per rebuild: `[ -d "$room" ]` was true again before the old keeper ever looked.
+# Before the pid-file check in _keeper_ensure the first case left one extra forever-process per
+# rebuild: `[ -d "$room" ]` was true again before the old keeper ever looked. The second case pins
+# the other edge of that check — a version that stepped down on ANY value but its own pid passed
+# the first case and failed this one.
 set -uo pipefail
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 . "$DIR/_helpers.sh"
@@ -24,6 +29,15 @@ new=$(cat "$R/state/keeper.pid")
 [ "$new" != "$old" ] || { echo "FAIL rebuild did not start a new keeper (still $old)"; fail=1; }
 gone "$old" || { echo "FAIL old keeper $old survived the rebuild"; fail=1; }
 kill -0 "$new" 2>/dev/null || { echo "FAIL new keeper $new died"; fail=1; }
+
+echo "a pid file that names no other keeper: the keeper stays"
+printf '0' > "$R/state/keeper.pid"
+sleep 7                                     # past one poll, so the keeper has read it
+kill -0 "$new" 2>/dev/null || { echo "FAIL keeper $new stepped down over a '0' pid file"; fail=1; }
+rm -f "$R/state/keeper.pid"
+sleep 7
+kill -0 "$new" 2>/dev/null || { echo "FAIL keeper $new stepped down over a missing pid file"; fail=1; }
+printf '%s' "$new" > "$R/state/keeper.pid"  # put it back: the suite's cleanup reaps by this file
 
 echo "removal: the keeper goes with the room"
 rm -rf "$R"

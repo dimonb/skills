@@ -49,13 +49,19 @@ kill_keeper() { # <pid-file> [signal]
 # one root per run means no later run reuses this path, so a root left behind here is a directory
 # and a live process that survive until the machine reboots.
 #
-# An EXIT trap alone is the right and only handler. Bash runs it when the shell dies on an
-# untrapped fatal signal as well as on a normal exit, so a killed test cleans up too; SIGKILL is
-# the one exception and nothing can catch that. Do NOT add INT/TERM traps: a TRAPPED signal is
-# deferred until the current foreground command returns, so `trap 'exit 143' TERM` turns a prompt
-# kill into one that waits for whatever the test is wedged on — which for a test blocked on a
-# fifo is forever. Measured on bash 5.3: 60s to die with that trap, 0s without it, and the
-# cleanup ran either way.
+# An EXIT trap alone is the right and only handler. Bash runs it on a normal exit and when the
+# shell dies on a fatal signal it handles — TERM, INT and HUP among them — so a killed test cleans
+# up too. Where it does NOT run, stated as limits rather than as coverage: SIGKILL, which nothing
+# can catch, and a fatal signal bash leaves at its default action — an untrapped SIGPROF ends the
+# shell with no trap run (measured on bash 5.3; neither is a kill this suite can realistically
+# see). Do NOT add INT/TERM traps: a TRAPPED signal is deferred until the current foreground
+# command returns, so `trap 'exit 143' TERM` turns a prompt kill into one that waits for whatever
+# child process the test is wedged on. Measured on bash 5.3, waiting on a `sleep 20`: 20s to die
+# with that trap, 0s without it — and the cleanup ran both times only because that child returned.
+# Wedged on a child the TERM does not end, the trapped test is still waiting when the runner's
+# `timeout -k 10` sends KILL, and then no cleanup runs at all; the untrapped one died on the TERM
+# ten seconds earlier and cleaned up (measured, both shapes). t12 holds the untrapped shape: a
+# plain kill ends a test that is waiting on a child at once, and its cleanup runs.
 _council_test_cleanup() {
   local rc=$?
   local k p i
