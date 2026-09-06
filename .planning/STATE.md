@@ -68,29 +68,24 @@
   cycle is a declared graph, the barrier stays a pure log function consulted as one authority,
   the #74 race retired (t18: a wedged seat and a caught-up seat agree). The guard now serves both
   modes — `flow_run` (drive one agent) and `flow_phase` (authority). **The guard is now USED.**
-- **REMAINING — a decision, not just work:**
-  - **FLOW-03 (shipyard as one-node graph)** — the only migration left. Weaker value (shipyard has
-    no race class; its supervision works) + **dogfooding** (migrates the fleet-runner). Worth it for
-    consistency, or leave shipyard as-is? Steer due.
-  - **FLOW-05** — reframed: council's authority mode already gives multi-agent gated turns;
-    drive-N-puppets is against council's design (not a goal).
-  - DRV-02 adapter unification still open.
-- **GSD record now COMPLETE and current.** Backfilled: `phases/01-stop-the-bleeding/`
-  (CONTEXT + 01-01-SUMMARY + 01-VERIFICATION); `phases/02-driver/` per-task SUMMARY for 02-02..05
-  + 02-VERIFICATION. Convention (both phase CONTEXTs): the **GitHub issue is the atomic plan**
-  (AGENTS.md forbids a spec-artifact stage), a per-task SUMMARY records what shipped, VERIFICATION
-  maps requirements → PRs. Loop per task: issue (plan) → ship execute+review → I verify → merge →
-  SUMMARY. STATE is the live session-memory.
-- **Deferred follow-up:** CI (GitHub Actions) — flagged during #84, its own decision for the
-  soon-public repo; not yet raised to the user as an issue.
-- **Remaining after Phase 1:** Phase 3 (ESC policy), Phase 4 (FLOW guard).
-- **Lesson:** keep `.planning/` Latin-only — the gate's check 8 scans untracked files for non-Latin
-  script; a quoted Russian phrase in STATE.md reddened local make check (fixed).
-- **Pattern in use:** ship child (Opus) drives each issue → PR → its review battery →
-  ready-to-merge; I verify (make check on head + child's report) and squash-merge per the
-  ship-to-prod go-ahead; decisions I can own (internal design) I answer, relaying only
-  user-impacting ones.
-- **Autonomous decisions on record:** canonical in `shared/driver/`; bash baseline ≥5 re-exec;
-  tests wired into the gate as behaviour lands; driver is a behaviour-preserving superset.
+- **FLOW-03 SHIPPED (shipyard on the guard):** #100 → PR **#101** → `e05b410`. Decision 100-1 (mine):
+  Option B — `flow_phase` authority, not `flow_run` (rejected: parks idle children, blocks a
+  non-blocking snapshot, wrong completion axis). report derives phase+glyph+terminal from the
+  declared graph; dogfood check passed (the live monitors still work on the migrated shipyard).
+
+## PROJECT COMPLETE
+
+All four phases in prod. Both skills run on the shared **driver + policy + guard**; one generalized
+drift gate covers all three shared modules; CI runs the whole gate on every push/PR; the crash and
+the orphaned-supervisor class are fixed. 13 feature PRs, each ship-reviewed and independently
+re-verified before merge.
+
+**Open follow-ups (optional, none blocking):**
+- `flow_run` has no production caller — both skills turned out monitor/authority, not driven. Remove
+  it (YAGNI) or justify it as a general primitive.
+- DRV-02 adapter unification.
+- Two stale worktrees from the pre-cap incident still on disk: `ship-3` (feat/ci-gate), `ship-41`
+  (fix/council-suite-cleanup-enforced).
+
 - **Repo law reminder:** every change keeps `make check` green; issue → branch → PR → human
   merges; no spec-artifact stage — this `.planning/` is planning only, untracked.

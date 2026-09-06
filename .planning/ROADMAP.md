@@ -4,7 +4,7 @@
 > (they stand alone and remove the real pain), then extraction runs from lowest-risk
 > de-duplication (driver) to the highest-cost generalisation (the flow guard).
 >
-> Status: **in progress** · 4 phases · 22 requirements mapped · all P0 covered.
+> Status: **COMPLETE** · all 4 phases in prod · 22 requirements mapped · all P0 met.
 > `GATE-01…04` apply to **every** phase and are not repeated per row.
 >
 > **Execution order note:** Phase **2** ran first (its sharing mechanism was the one unknown that
@@ -40,21 +40,21 @@ Decision 91-3 (mine): Option A (fix them in-PR), bounded fallback to B — A wor
 |------|-----|--------------------|-------|
 | 03-01 policy module | ESC-01/02/03/04 | #94 → #96 → `f47f15a` | ✅ |
 
-**Phase 4 — FLOW guard — CORE COMPLETE (in prod); migrations open**
+**Phase 4 — FLOW guard — COMPLETE (in prod)**
 | Task | Req | Issue → PR → merge | State |
 |------|-----|--------------------|-------|
 | 04-01 interpreter core + C1 gate generalization | FLOW-01/02 | #95 → #97 → `4ba98ba` | ✅ |
 | 04-03 council as a turn-cycle graph (`flow_phase` authority) | FLOW-04 | #98 → #99 → `3e333ea` | ✅ |
-| 04-02 shipyard as a one-node graph (`flow_run`) | FLOW-03 | (decision due) | 🔲 |
+| 04-02 shipyard's supervision on the guard (`flow_phase`) | FLOW-03 | #100 → #101 → `e05b410` | ✅ |
 | 04-04 multi-agent turn-taking | FLOW-05 | subsumed by FLOW-04's authority mode | 🟡 |
 
 Ran 03 + 04 in parallel (2-slot cap). Merge order #97 (generalize the gate) → #96 (policy,
 auto-covered). One generalized shared-module drift gate now covers driver + flow + policy.
 
-**Phase 3 (ESC policy) and Phase 4 (FLOW guard)** — not started; a scope steer is due after Phase 1.
-
-Deferred follow-ups tracked: CI (GitHub Actions, from #84), DRV-02 adapter unification, DRV-03 full
-AgentSignal dispositions (→ Phase 3), shipyard-side LIFE-03.
+Open follow-ups (all optional, none blocking): **DRV-02** adapter unification; **`flow_run` has no
+production caller** now that both skills use `flow_phase` — remove it (YAGNI) or justify it as a
+general primitive; two **stale worktrees** from the pre-cap incident (`ship-3`, `ship-41`) still on
+disk. CI, DRV-03 dispositions and shipyard-side LIFE-03 all shipped.
 
 ## Phases
 

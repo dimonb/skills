@@ -1,12 +1,12 @@
 # VERIFICATION — Phase 4: FLOW guard
 
-**Core COMPLETE** (issue #95 → PR #97 → `4ba98ba`). Migrations (FLOW-03/04/05) are open, tracked.
+**PHASE COMPLETE.** Core #95→#97→`4ba98ba`; council #98→#99→`3e333ea`; shipyard #100→#101→`e05b410`.
 
 | Req | Statement | Covered by | Status |
 |-----|-----------|------------|--------|
 | FLOW-01 | Declared step-graph the interpreter reads (no skill branch) | `flow.sh` `flow_node`/`flow_run`; node fields enter/done_when/on_done/on_block; t-flow | ✅ |
 | FLOW-02 | Mechanical transitions only (no model in the loop) | fixed `done_when` vocabulary {signal,artifact,budget,check}; `check` is deterministic; STRUCTURAL, tested | ✅ |
-| FLOW-03 | shipyard as a one-node graph (drive one agent via `flow_run`) | — | 🔲 open — a decision (see below) |
+| FLOW-03 | shipyard's supervision on the guard | #100 → #101 → `e05b410` — via `flow_phase` (Option B; `flow_run` rejected as a mechanical mismatch); report derives phase+glyph+terminal from the declared graph; t11 | ✅ shipped |
 | FLOW-04 | council as a turn-cycle graph | #98 → #99 → `3e333ea` (via the `flow_phase` authority mode; t18 pins the race retired) | ✅ shipped |
 | FLOW-05 | Multi-agent turn-taking | reframed — see below | 🟡 largely subsumed |
 
