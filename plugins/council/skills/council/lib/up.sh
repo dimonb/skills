@@ -68,12 +68,14 @@ _canary_fifo() { # <room> -> a freshly created fifo path on stdout, or rc 1
 }
 
 # The keeper's body. It ends the LIVE room — its terminals and itself, never the durable record —
-# on EITHER of two triggers:
+# on ANY of three triggers:
 #   * the room directory going away: an explicit `down`/`council_down`, exactly as before. In that
 #     path `council_down` has already closed the terminals, so the keeper only has to exit.
 #   * (a `--hold` room only) its OWNER dying, seen as EOF on the canary read end. Here nothing
 #     else closes the terminals — an owner that was Ctrl-C'd, crashed or was OOM/SIGKILLed never
 #     reached `council_down` — so the keeper REAPS every participant terminal itself, then exits.
+#   * the pid file naming ANOTHER keeper: the room was rebuilt at this same path and the rebuild's
+#     own keeper has claimed it. This one steps down — and REAPS NOTHING, see below.
 #
 # The owner is detected purely by EOF, NEVER by `$PPID`/`kill -0 $PPID`: both read a reparented
 # process (which is exactly what a dead owner leaves behind on macOS, where there are no
@@ -82,10 +84,37 @@ _canary_fifo() { # <room> -> a freshly created fifo path on stdout, or rc 1
 # gone. On EOF the read returns at once, so reaping is immediate rather than one poll interval
 # late. rc 0 (a byte arrived) is the owner alive too — nothing writes here today, but a stray
 # write must never be mistaken for death.
-_keeper_loop() { # <room> <canary-read-fd-or-empty> <peer>...
-  local room="$1" cfd="$2"; shift 2
-  local rc p
+#
+# THE REBUILD TRIGGER. `[ -d "$room" ]` alone cannot tell a room from a room rebuilt at the same
+# path: `rm -rf` then `_mkroom` wipes the pid file and forks a SECOND keeper, and the first, back
+# from its sleep to find its directory there again, kept polling forever. The suite's own tests
+# rebuild rooms this way between cases. Measured before this check: both keepers alive seven
+# seconds after a rebuild, and only removing the directory ended them. The cost is not CPU — forty-one
+# of them polling for a hundred seconds moved the load average by nothing measurable — but a
+# process and its open bell fifos that nothing will ever reap.
+#
+# It steps down ONLY when the file names another keeper: a DIFFERENT POSITIVE PID. A file that is
+# missing, empty or malformed says nothing about another keeper and is NOT a reason to stop — t9g
+# writes `0` into it on purpose, and the instant between a rebuild's `mkdir` and its keeper's pid
+# being written has the same shape. Reading either as "stop" would make a healthy keeper exit, and
+# a room without a keeper silently loses every bell rung at it (the header of `_keeper_ensure`),
+# which is worse than the leak this closes. `_keeper_pid` is the one reader that decides what
+# counts as a pid, so the negative cases arrive here as its rc 1 and cannot be confused with a
+# name.
+#
+# Stepping down REAPS NOTHING, and that is the whole difference between this trigger and the
+# canary above. The room at this path now belongs to the keeper that superseded us; `ct_kill`
+# resolves its terminals from $ROOM, so reaping here would close the NEW room's terminals —
+# turning a leaked process into a room torn down under its owner.
+#
+# The check goes at the TOP of the loop body, before the canary read, and not at the bottom: both
+# `continue`s below jump straight back to the `while` test, so a check placed after them would
+# never run at all in a `--hold` room — exactly the rooms whose owner is holding a terminal open.
+_keeper_loop() { # <room> <pid-file> <canary-read-fd-or-empty> <peer>...
+  local room="$1" keep="$2" cfd="$3"; shift 3
+  local rc p named
   while [ -d "$room" ]; do
+    if named=$(_keeper_pid "$keep") && [ "$named" != "$BASHPID" ]; then return 0; fi
     if [ -n "$cfd" ]; then
       read -t 5 -u "$cfd" _ 2>/dev/null; rc=$?
       [ "$rc" -eq 0 ] && continue
@@ -147,6 +176,22 @@ _keeper_ensure() { # <room-dir> <peer>...
       return 1
     fi
   fi
+  # Drop the claim we just decided is not live, BEFORE forking. The keeper checks this file on its
+  # very first pass, and until the `echo` below lands the file still holds whatever was there — so
+  # on the `relaunch`-after-`down` path (a dead keeper's pid still on disk, which is precisely the
+  # path this function's header exists to serve) the newborn keeper would read its predecessor's
+  # pid, see a name that is not its own, and step down within milliseconds of being forked. The
+  # room would then be left with a pid file naming a dead process and no keeper at all — the exact
+  # silent bell loss the step-down check must never cause. Clearing it first makes the newborn's
+  # first read a MISSING file, which by the rule above is not a reason to stop. Ordered after the
+  # canary setup so a refused canary leaves the file untouched.
+  #
+  # No test can fail on its absence, and t19 case E2 says so where it pins the outcome: the parent
+  # has three statements and no fork left to run here, the newborn has every bell fifo to open and
+  # a command substitution to fork before its first read, so the parent wins essentially always and
+  # the losing schedule cannot be provoked. This line is carried by the argument above — one `rm`
+  # against a room left with no keeper at all, which loses every bell rung at it in silence.
+  rm -f "$keep"
   # Own process group, so a signal to the OWNER's group — a Ctrl-C on `up --hold`, the SIGHUP of a
   # closing pane — reaches the owner but not the keeper, which must outlive that signal long
   # enough to see the EOF and reap. `setsid` would be the obvious tool and macOS does not ship it;
@@ -161,7 +206,7 @@ _keeper_ensure() { # <room-dir> <peer>...
   ( exec >/dev/null 2>&1 <&-
     [ -n "$cw" ] && exec {cw}>&-      # the keeper never writes the canary; only the owner keeps that end
     for p in "$@"; do exec {fd}<> "$room/bell/$p.fifo"; done
-    _keeper_loop "$room" "$cr" "$@" ) &
+    _keeper_loop "$room" "$keep" "$cr" "$@" ) &
   pid=$!
   [ "$had_m" = 1 ] || set +m
   [ -n "$cw" ] && exec {cr}<&-        # the owner never reads the canary; keep only the write end open here
