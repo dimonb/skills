@@ -14,8 +14,11 @@
   unblocked.**
 - **02-01 SHIPPED TO PROD:** PR **#77 merged** to `main` (squash `6685ecd`) via shipyard/Opus.
   ship's impl-review found + fixed 2 real blockers (a rule-zero `.planning` leak in the driver
-  comment; under-probed check 11 arms). Model default switched to `claude-opus-4-8` (Fable was
-  over-thinking and stalling; note: lost the `[1m]` 1M-context — Opus is 200k, autocompact covers it).
+  comment; under-probed check 11 arms). Model default switched off Fable (it was over-thinking and
+  stalling) to Opus; now `opus[1m]` (Opus 5, 1M). CORRECTION to an earlier note here: the switch did
+  NOT cost the 1M window, and the recurring "ctx 92-99%" alarms were shipyard's ctx column inferring
+  a 200k window for a young 1M session — the 92%->20% jumps were that inference resolving past 200k,
+  not autocompact. `SHIPYARD_CTX_WINDOW=1000000` makes the column read true from the first turn.
 - **02-02 SHIPPED:** PR **#79 merged** (squash `911d3db`) — real drv_* body (superset of both
   backends) + `shared/driver/tests/`. 0 blockers on review. On the #78 decision I confirmed the
   API myself (delegated): the child caught a spec error — both backends append `-ai` identically
@@ -87,5 +90,6 @@ re-verified before merge.
 - Two stale worktrees from the pre-cap incident still on disk: `ship-3` (feat/ci-gate), `ship-41`
   (fix/council-suite-cleanup-enforced).
 
-- **Repo law reminder:** every change keeps `make check` green; issue → branch → PR → human
-  merges; no spec-artifact stage — this `.planning/` is planning only, untracked.
+- **Repo law reminder:** every change keeps `make check` green; issue → branch → PR → human merges.
+  `.planning/` is TRACKED (since `3853950`) and is the project-planning record, never a per-change
+  spec gate — AGENTS.md "Planning with GSD, and no per-change spec artifact".
