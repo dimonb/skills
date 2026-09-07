@@ -285,11 +285,18 @@ adp_notes codex peer >/dev/null || exit 1
 echo FLOOR-OK
 PROBE
   # The WHOLE combined output, not `| tail -1`. `echo FLOOR-OK` always prints last, so tailing
-  # threw away every 3.2 diagnostic above it — and since `adp_cmd` also had its stdout dropped,
-  # a bash-4 construct that is not a function's last command left rc 0 and this printed `ok`.
-  # Measured on `mapfile` and `${var^^}`, two of the three constructs the module's header names:
-  # the render silently lost every --add-dir and the probe passed. Comparing the whole output
-  # reds both, because the diagnostic is now part of what is compared.
+  # threw away every 3.2 diagnostic above it, and a bash-4 construct that is not a function's last
+  # command left rc 0 — so this printed `ok`. Measured on `mapfile` and `${var^^}`, two of the
+  # three constructs the module's header names: the render silently lost every --add-dir and the
+  # probe passed. Comparing the whole output reds both.
+  #
+  # WHAT THIS STILL DOES NOT HOLD, said here so a green line is not read as more than it is: the
+  # renders themselves are dropped (`adp_cmd … >/dev/null`), so the floor is held by DIAGNOSTIC
+  # only. A construct that is silent on stderr and merely renders differently under 3.2 — a
+  # `{1..6..2}` sequence, a `$'\uXXXX'` escape — passes here, and the goldens above cannot catch
+  # it either, because they are taken under this bash-5 shell. And on a Linux runner `/bin/bash`
+  # IS bash 5, so there this section proves only that the module loads and runs cleanly under a
+  # modern shell; the version it prints in the heading is what tells you which of the two you got.
   ok "the module sources and renders under /bin/bash" FLOOR-OK \
     "$(/bin/bash "$floor_probe" 2>&1)"
 else

@@ -31,10 +31,17 @@
 # inherits the un-scrubbed per-session variables, the parent's IPC socket and token among them.
 # A kind added without this arm does not announce itself.
 #
-# Two more places branch on a kind but are not admission: `shipyard_agent_prepare_worktree`
-# below (and its caller's rollback bookkeeping) pre-creates a worktree for codex only, so a new
-# kind that needs one — any kind whose protocol mode is `reference`, which is `-C <dir>` shaped —
-# must be added there too or it execs into a directory that does not exist.
+# Other places branch on a kind without being admission, and this is NOT a closed list — treat it
+# as where to start looking, not as a checklist to tick off:
+#   * `shipyard_agent_prepare_worktree` below, and its caller's rollback bookkeeping, pre-create a
+#     worktree for codex only. A kind that needs one — any kind whose protocol mode is
+#     `reference`, i.e. `-C <dir>` shaped — execs into a directory that does not exist without it.
+#   * `ctx_probe` in `shipyard-ctx.sh` reads a child's context window per kind, and `ctx_agent`
+#     there DEFAULTS an unrecognised kind to claude. So a new kind's ctx column is computed by
+#     hunting for a claude transcript it will never have, and the column and its stall alarm go
+#     quietly wrong for that slot.
+# Both fail the same way as the arm above: silently. That is the reason to go looking rather than
+# to trust a count in a comment — including this one.
 shipyard_agent_kinds() { printf '%s\n' claude codex; }
 # `-F`: a LITERAL match. Without it the pattern is a basic regular expression, and this function
 # is the one that keeps a kind shipyard cannot supervise out — `shipyard_agent_admits '.*'`
