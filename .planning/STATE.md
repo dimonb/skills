@@ -1,5 +1,28 @@
 # STATE — session memory
 
+## ⏸ PAUSED (2026-09-07, by the owner) — how to resume
+
+All work stopped on request. **Nothing was torn down**: both slots keep their terminal and their
+worktree, so each resumes with its own history intact. Both monitors were stopped.
+
+Verified at the pause: both worktrees clean, both branches pushed, nothing living only on disk.
+
+| slot | branch | head | PR | stage | the next action it would have taken |
+|---|---|---|---|---|---|
+| `ship-111` | `fix/gate-policy-tests-registration` | `30609b5` | **#115** | impl-review | finish the review round on the rebased head (rebase onto `40f4320` done, six suites, check 12 implemented with `$GATED_SUITES`) |
+| `ship-51` | `fix/shipyard-tell-delivery-confirmation` | `08ad8f8` | **#116** | impl-review | act on directive 51-1's AMENDMENT: move the turn-state predicate into `shared/adapters/`, kind-less, marker literal in exactly ONE place |
+
+To resume: re-arm both monitors (`shipyard-report.sh --only-changed 111 51` and
+`shipyard-escalations.sh --new`, with `SHIPYARD_CTX_WINDOW=1000000`) and nudge each slot with
+`shipyard-tell.sh`. Do **not** use `shipyard-down.sh` on either — that removes the worktree, and
+teardown's only legitimate trigger is a merge or a close.
+
+Queued behind them, in this order (serialised by the FILE each touches):
+**#112** (`tell.sh`, same slot as #51) → **#54** (`down.sh`) → **#22** → **#61** (both
+`report.sh`, and both must wait for #116 which also touches it). **#117** (council `say` uses the
+now-shared predicate) follows #116.
+
+
 - **Mode:** brownfield onboarding (GSD Core methodology, applied by hand — no GSD CLI installed).
 - **Project:** shared agent-harness core for shipyard and council (`PROJECT.md`).
 - **Where we are:** setup artifacts drafted — `PROJECT.md`, `REQUIREMENTS.md`, `ROADMAP.md`.
