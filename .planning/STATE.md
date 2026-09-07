@@ -150,15 +150,29 @@ Order is set by which FILE each touches, so two slots never collide the way #97/
 
 | order | issue | file | status |
 |---|---|---|---|
-| 1 | **#51 + #112** (one PR — same seam) | `shipyard-tell.sh` | IN FLIGHT, slot `ship-51` |
-| 2 | **#54** | `shipyard-down.sh` | queued |
-| 3 | **#22** | `shipyard-report.sh` | queued (sequential with #61 — same file) |
-| 4 | **#61** | `shipyard-report.sh` | queued |
+| 1 | **#51** | `shipyard-tell.sh` | IN FLIGHT, slot `ship-51` |
+| 2 | **#112** | `shipyard-tell.sh` | sequential after #51, same slot |
+| 3 | **#54** | `shipyard-down.sh` | queued |
+| 4 | **#22** | `shipyard-report.sh` | queued (sequential with #61 — same file) |
+| 5 | **#61** | `shipyard-report.sh` | queued |
 
-- **#51 + #112** — `tell` decides `delivered` from a before/after screen DIFF, which typing always
-  changes, so an unsubmitted directive reports as delivered; and it types with no emptiness check,
-  so a directive concatenates onto a pending draft. One state read of the prompt fixes both, and
-  two PRs would collide in one file, so #51's scope was widened to close #112. **Hit while
+**CORRECTED at 51-2, by the child.** This table first had #51 and #112 as ONE PR, justified as
+"two PRs would collide in one file". That is an argument against running them in PARALLEL, not
+against sequencing them — and rows 4 and 5 of this very table sequence two PRs on one file, so I
+was applying two different rules inside one table. **Sequencing is the rule; same-file work is
+serialised, not merged.** The substantive reason is stronger anyway: they are DIFFERENT reads.
+#51 reads turn STATE (is a turn running); #112 needs prompt CONTENT (is the box empty), whose only
+proven method is a mutating probe — an open design question that would have parked a settled fix
+behind an unsettled argument.
+
+- **#51 / #112** — `tell` decides `delivered` from a before/after screen DIFF, which typing always
+  changes, so an unsubmitted directive reports as delivered (#51); and it types with no emptiness
+  check, so a directive concatenates onto a pending draft (#112). Decisions 51-1/51-2: the
+  turn-state read lives in `shipyard-lib.sh`, NOT the shared driver — a client's footer string
+  (`esc to interrupt`) is not backend knowledge, and the driver abstracts agterm-vs-tmux; and it
+  must REDUCE the marker's spellings, deleting `shipyard-compact.sh`'s two inline greps, or the
+  change has made things worse. `unconfirmed` gets a non-zero exit, because a verdict that exits 0
+  is exactly a note nobody has to notice — the same defect class as the false `delivered`. **Hit while
   diagnosing a real stall**, where a captured pane showed placeholder ghost text that is
   indistinguishable from a draft — a bare Return did nothing (correctly: the box was empty) and it
   read as a wedged terminal. A single probe character proved the box empty.
