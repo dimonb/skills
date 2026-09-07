@@ -89,8 +89,9 @@ terminal for a question it asked.
 
 **A way to speak first.** The mailbox is child-initiated, so it cannot carry a reply to a
 `notice` or anything the child never asked about. For that there is a directive channel that
-types into the child's terminal, records what was sent, and reports whether it was delivered
-or queued.
+types into the child's terminal, records what was sent, and then confirms delivery by polling
+the child's own turn state — so a directive left sitting unsent in the input box comes back
+`unconfirmed` and non-zero rather than reported as delivered.
 
 **A diagnosis order for a child that looks stuck.** Several different failures wear one face:
 a child at its context ceiling, one compacted and never resumed, one that left its own next
@@ -121,6 +122,7 @@ message dies with the context that held it.
 | `agent-adapters.sh` | vendored copy of the shared per-agent-kind adapters (`shared/adapters/agent-adapters.sh`), shared with `council` |
 | `shipyard-backend.sh` | the agterm/tmux abstraction — every terminal operation goes through it |
 | `shipyard-lib.sh` | mailbox paths, slot resolution, payload input, the child env preamble |
+| `shipyard-turn.sh` | is the child mid-turn, and did what we typed start one — the only place the client's turn marker is spelled |
 | `shipyard-continuity.sh` | automatic capacity retry and paused-goal continuity for a Codex parent in agterm |
 | `shipyard-launch.sh` | start a child: slot, protocol, launcher, container |
 | `shipyard-admission.sh` | the pre-launch admission gate: concurrency cap + macOS memory-pressure |

@@ -72,8 +72,18 @@ if [ "$KIND" = "notice" ] || [ "$ST" = "done" ]; then
       notice) echo "note: $ID is a notice (fire-and-forget) — the child never polls it; delivering through its window instead" >&2 ;;
       *)      echo "note: $ID is already consumed ('$ST') — the child is no longer polling it; delivering through its window instead" >&2 ;;
     esac
-    if bash "$DIR/shipyard-tell.sh" "$ID" "$ANS"; then exit 0; fi
-    echo "warning: could not reach the child — recording the answer on $ID anyway (it may never be read)" >&2
+    # Exit 6 is shipyard-tell.sh's UNCONFIRMED: it typed and submitted, but saw no turn start, so
+    # the text may be sitting unsent in the child's input box. That is not "could not reach the
+    # child" — it is "may not have been read yet", and it is the case where also writing the
+    # answer onto the record is worth the belt: if the directive never started a turn, the record
+    # is the only copy left. Anything else non-zero really is a failure to reach it.
+    bash "$DIR/shipyard-tell.sh" "$ID" "$ANS"; TELL_RC=$?
+    [ "$TELL_RC" = 0 ] && exit 0
+    if [ "$TELL_RC" = 6 ]; then
+      echo "warning: the directive was sent but NOT confirmed (see above) — also recording the answer on $ID" >&2
+    else
+      echo "warning: could not reach the child — recording the answer on $ID anyway (it may never be read)" >&2
+    fi
   fi
 elif [ "$ST" = "answered" ]; then
   echo "warning: $ID is already 'answered' — overwriting the answer" >&2

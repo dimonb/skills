@@ -19,6 +19,8 @@
 - `shipyard-launch.sh` — start a child ship in its own terminal + worktree; write protocol+launcher.
 - `shipyard-continuity.sh` — Codex-parent **supervisor/watcher** lifecycle (`watch`/`watch-foreground`).
 - `shipyard-lib.sh` — shared helpers; defines the **mailbox** (`:20-32`).
+- `shipyard-turn.sh` — pure turn-state read of a captured screen + the delivery verdict fold; the
+  one place the client's turn-in-flight marker is spelled.
 - `shipyard-agent.sh` — child-agent (codex|claude) exec abstraction.
 - `shipyard-report.sh` — one markdown status table for a set of children (forge calls live here).
 - `shipyard-escalations.sh` — parent: surface child escalations from the mailbox.
@@ -27,7 +29,9 @@
 - `shipyard-compact.sh` — compact a child and resume.
 - `shipyard-ctx.sh` — child context-window usage.
 - `shipyard-down.sh` — tear a slot down (terminal + worktree) then lifecycle cleanup.
-- `tests/` — `run-all.sh`, `_helpers.sh`, 7 `t*.sh`.
+- `tests/` — `run-all.sh`, `_helpers.sh`, and the `t*.sh` files it registers (that registration is
+  what `make check`'s check 10 gates; a count written here instead would go stale unnoticed, and
+  had).
 
 ## Map to the three layers being extracted
 

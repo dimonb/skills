@@ -470,11 +470,32 @@ bash <SKILL>/shipyard-tell.sh <slot | escalation-id> "<the directive>"
 ```
 
 It records the directive in the mailbox (`directive-<slot>-<n>.json` + `.txt`), flattens
-it to one line (a literal newline would submit early), sends it, and reports
-`delivered` / `queued` / `unconfirmed` from a before/after screen diff. A long directive
+it to one line (a literal newline would submit early), sends it, and then **confirms delivery
+from the child's TURN STATE, polled** — never from a before/after screen diff. A long directive
 is written to the `.txt` and the child is told to read that file. An escalation id is
 accepted and resolves to its slot, so you can answer the notice you were just shown with
 the id you were shown. Exit 3 = no live terminal for that slot (the child is gone).
+
+| verdict | what was observed | exit |
+|---|---|---|
+| `delivered` | the turn marker was absent and then appeared — our submit started a turn | 0 |
+| `queued` | the client showed its queued-message hint: it is mid-turn and will take it next | 0 |
+| `unconfirmed` | neither, within the wait — **the text may be sitting unsent in the input box** | **6** |
+
+`unconfirmed` is worth an operator's eyes and nothing else is: it does NOT prove the directive
+went nowhere (a turn that began and ended between two samples looks the same, so does a screen
+that could not be read), but it is the only state in which the text may still be in the box.
+**Look before re-sending** — a second send types another copy onto the first; the warning prints
+the peek command and the one-liner that submits what is already there. The bias is deliberate:
+re-sending on a false `unconfirmed` is cheap and visible, believing a false `delivered` is
+neither. `SHIPYARD_TELL_CONFIRM_SECS` (default 10) and `SHIPYARD_TELL_CONFIRM_INTERVAL`
+(default 0.5) set the window and the sampling rate.
+
+Why not a screen diff: **typing changes the screen whether or not the Return took**, so the diff
+was non-empty either way and an unsubmitted directive reported `delivered` — twice in one night,
+on two different slots, each time leaving a child that read as a healthy `⏸ idle/wait` with
+`esc —`. `shipyard-compact.sh` `exec`s this script for its resume, so that exit 6 is also the
+compaction's: the compaction worked and the brief may be unsent.
 
 `shipyard-answer.sh` knows this: on a `notice` or a `done` record it does **not** pretend to
 have answered — it hands the text to `shipyard-tell.sh` and says so. `--no-tell` forces the old
@@ -518,21 +539,26 @@ step often shows there is nothing to rescue in the first place.
 bash <SKILL>/shipyard-tell.sh <slot> "<what it should do next>"
 ```
 
-It types, submits, and reports `delivered` / `queued` / `unconfirmed` from a before/after
-diff — which is precisely what hand-driving is trying to establish by eye. Measured: three
-hand-driven attempts (typing, sending newlines, `--select`) all failed and each produced a
-wrong conclusion; `shipyard-tell.sh` then worked **first try**. Reach for the raw terminal
-only after this has failed, and read the three facts at the end of this section before you do.
+It types, submits, and then polls the child's turn state to report `delivered` / `queued` /
+`unconfirmed` (Step 4 has the table and the exit codes) — which is precisely what hand-driving
+is trying to establish by eye, and it is now a state read rather than a screen diff, so
+`unconfirmed` means something. Measured: three hand-driven attempts (typing, sending newlines,
+`--select`) all failed and each produced a wrong conclusion; `shipyard-tell.sh` then worked
+**first try**. Reach for the raw terminal only after this has failed, and read the three facts
+at the end of this section before you do.
 
 **One caveat, and it bites on exactly the case above.** `shipyard-tell.sh` does not clear the
 input box — it types over whatever is there, because it is also meant to reach a child that is
 mid-turn, where the Escape that would clear the box is *interrupt*. So against a child that
 left its own instruction unsubmitted, the directive is APPENDED to that text and the whole line
 is submitted together: `[supervisor directive]` is then no longer a prefix, and the child's
-protocol confers authority only on a message that leads with it. The before/after diff still
-reports `delivered`, because the screen did change. So look at the input line in step 1 while
-you are there, and if it has a leftover draft, expect the child to treat your nudge as ordinary
-input rather than as the human speaking.
+protocol confers authority only on a message that leads with it. **The verdict cannot warn you
+about this**, and no verdict could: that concatenated line really is submitted and really does
+start a turn, so `delivered` is the honest answer to the question the confirmation asks. It is a
+different defect from the one the state read closed — the message arrives, garbled — and it is
+tracked separately. So look at the input line in step 1 while you are there, and if it has a
+leftover draft, expect the child to treat your nudge as ordinary input rather than as the human
+speaking.
 
 **3. ONLY THEN COMPACT** — `shipyard-compact.sh <slot>`, and only when `ctx` is `⚠️`/`🛑`
 or the nudge came back `unconfirmed`. Compaction is not the default remedy (below).
@@ -714,7 +740,9 @@ If you drive the terminal by hand instead, three facts that each cost a wrong di
   ceiling refuses both. `shipyard_submit <slot> alt` sends the second form. Try one, look, try
   the other.
 * **Confirm by the FOOTER flipping to `esc to interrupt`**, never by the box looking
-  empty — a capture can hand back a stale frame.
+  empty — a capture can hand back a stale frame. This is the read `shipyard-tell.sh` and
+  `shipyard-compact.sh` already make for you (`shipyard-turn.sh` is the one place that marker
+  is spelled), so by the time you are driving the pane by hand you are reproducing it by eye.
 
 ## Step 6. Teardown, after a merge
 
@@ -786,6 +814,7 @@ collide with it.
 | `agent-adapters.sh` | vendored copy of the shared per-agent-kind adapters (`shared/adapters/agent-adapters.sh`): how a kind is started, how a skill is referenced in it, which kind is running the parent |
 | `shipyard-backend.sh` | the agterm/tmux abstraction — every terminal operation goes through it |
 | `shipyard-lib.sh` | mailbox paths, slot resolution, payload input, the child env preamble |
+| `shipyard-turn.sh` | is the child mid-turn, and did what we typed start one — the ONE place the client's turn marker is spelled |
 | `shipyard-continuity.sh` | capacity retry and paused-goal continuity for a Codex parent in agterm |
 | `shipyard-ctx.sh` | the ctx column: reads a child's transcript, infers its window, bands it |
 | `tests/run-all.sh` | the shipyard script suite — run by hand: `bash <SKILL>/tests/run-all.sh` |

@@ -40,7 +40,7 @@ pane() { shipyard_capture "$SLOT"; }
 submit() {
   shipyard_submit "$SLOT"
   sleep 3
-  if [ "$(pane | grep -c 'esc to interrupt')" = "0" ]; then
+  if ! shipyard_turn_running "$(pane)"; then
     shipyard_submit "$SLOT" alt
     sleep 3
   fi
@@ -48,9 +48,9 @@ submit() {
 
 # NEVER drive the pane mid-turn. The first thing we send is Escape, and Escape is
 # INTERRUPT while a turn is running — it would kill the work in flight, which is the
-# opposite of the point. Wait for the footer to stop offering "esc to interrupt".
+# opposite of the point. Wait for the turn marker to leave the footer (shipyard-turn.sh spells it).
 waited=0
-while [ "$(pane | grep -c 'esc to interrupt')" != "0" ]; do
+while shipyard_turn_running "$(pane)"; do
   if [ "$waited" -eq 0 ]; then echo "ship-$SLOT is mid-turn — waiting for it to finish before compacting…"; fi
   sleep 10; waited=$((waited+10))
   if [ "$waited" -ge "$TIMEOUT" ]; then
@@ -71,7 +71,7 @@ waited=0
 while [ "$waited" -lt "$TIMEOUT" ]; do
   p=$(pane)
   if printf '%s' "$p" | grep -q 'Compacted'; then
-    if [ "$(printf '%s' "$p" | grep -c 'esc to interrupt')" = "0" ]; then
+    if ! shipyard_turn_running "$p"; then
       echo "compacted after ${waited}s"
       break
     fi
@@ -100,6 +100,11 @@ fi
 [ "$NO_RESUME" = 1 ] && { echo "not resuming (--no-resume) — the child is IDLE and will stay that way until told otherwise"; exit 0; }
 
 # --- the half that is always forgotten ----------------------------------------
+# Every arm below `exec`s, so shipyard-tell.sh's status BECOMES this script's — including its
+# exit 6, UNCONFIRMED: the compaction itself succeeded and the resume was typed and submitted, but
+# no turn was seen to start, so the child may be sitting there with the brief unsent in its box.
+# That is exactly the state a compaction is supposed to end, so surfacing it beats reporting
+# success. tell.sh prints what to look at; 6 does not collide with 2/3/4/5 above.
 if [ -n "$RESUME_FILE" ]; then
   exec bash "$DIR/shipyard-tell.sh" "$SLOT" "@$RESUME_FILE"
 elif [ -n "$RESUME_TEXT" ]; then

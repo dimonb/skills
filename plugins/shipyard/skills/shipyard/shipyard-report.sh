@@ -175,8 +175,12 @@ slot_pending() {
   printf '%s' "$n"
 }
 
+# The turn marker is interpolated rather than written out: shipyard-turn.sh is the one place it is
+# spelled, so a client renaming it does not leave this column quietly printing a footer line as if
+# it were the child's last word. Only that alternative is a variable — every other one keeps its
+# original quoting byte for byte.
 status_line() {
-  grep -vE '^[[:space:]]*$|──|❯|tokens$|esc to interrupt|shift\+tab|current: [0-9]|scroll with|tmux detected|Tip:' \
+  grep -vE '^[[:space:]]*$|──|❯|tokens$|'"$SHIPYARD_TURN_MARKER"'|shift\+tab|current: [0-9]|scroll with|tmux detected|Tip:' \
     | grep -iE '✻|✽|·|agents done|Cogitated|Waddling|Whirlpool|ship|propose|spec|apply|archive|merg|approv|pipeline|await|waiting|escalat|ready|pushed|done' \
     | tail -1 | sed -E 's/^[[:space:]]*//; s/[[:space:]]+$//'
 }
@@ -370,8 +374,8 @@ fi
       echo "  1. GIT FIRST: \`git -C $ROOT/.claude/worktrees/ship-$sl log --oneline -5\` and \`git status\`."
       echo "     Git says what the child PRODUCED; the pane says only what it INTENDED, and the commonest"
       echo "     stall silhouette is a child that left its own next instruction unsubmitted in the input box."
-      echo "  2. THEN NUDGE IT: \`bash $DIR/shipyard-tell.sh $sl \"<what to do next>\"\`. It types, submits, and"
-      echo "     reports delivered/queued/unconfirmed from a before/after diff. Do not hand-drive the pane."
+      echo "  2. THEN NUDGE IT: \`bash $DIR/shipyard-tell.sh $sl \"<what to do next>\"\`. It types, submits, polls"
+      echo "     the child's turn state and reports delivered/queued, or unconfirmed and exit 6. Do not hand-drive."
       echo "  3. ONLY THEN COMPACT: \`bash $DIR/shipyard-compact.sh $sl\` (compacts AND resumes) — and only if"
       echo "     ctx is ⚠️/🛑 or the nudge went unconfirmed. The client's own autocompact usually gets there first."
       echo "     A ❓ ctx is NOT a compaction trigger and NOT a clearance: it means the figure could not be"

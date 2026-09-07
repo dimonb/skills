@@ -23,14 +23,20 @@
 # An escalation id (`57-3`) is accepted as a convenience and resolves to its slot,
 # so you can reply to a notice with the id you were shown.
 #
-# Exit: 0 delivered (queued or accepted), 3 no live terminal for that slot,
-#       2 usage error, 1 mailbox/backend failure.
+# Exit: 0 delivered or queued (the child took it), 6 UNCONFIRMED — it was typed and submitted
+#       but no turn was seen to start, so it may be sitting unsent in the input box and wants
+#       your eyes, 3 no live terminal for that slot, 2 usage error, 1 mailbox/backend failure.
+#       6 rather than 0 on purpose: an `unconfirmed` that exits 0 is a note nobody has to
+#       notice, which is the same defect class as the false `delivered` it replaced.
 set -o pipefail
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=shipyard-lib.sh
 . "$DIR/shipyard-lib.sh"
 
-usage() { sed -n '3,30p' "$0" | sed 's/^# \{0,1\}//'; }
+# The header, to the first line that is not a comment. Line-numbered ranges go stale the moment
+# anyone adds a paragraph above them, and this one already had: it over-ran by three lines and
+# `--help` printed `set -o pipefail` back at the operator.
+usage() { awk 'NR < 3 { next } /^#/ { sub(/^# ?/, ""); print; next } { exit }' "$0"; }
 
 # How long a one-line directive may get before we send a pointer to the full text
 # instead of the text itself (a very long send-keys line is fragile to read back).
@@ -103,28 +109,52 @@ else
   LINE="$PREFIX $ONELINE"
 fi
 
-BEFORE=$(shipyard_capture "$SLOT")
+# --- delivery: a STATE read, sampled, never a before/after screen diff --------
+# The diff this replaced could not answer the question. Typing changes the screen whether or not
+# the Return took, so it was non-empty either way and an unsubmitted directive reported
+# `delivered`. shipyard_delivery_verdict (shipyard-turn.sh) holds the rule and the definition of
+# each verdict, including what `unconfirmed` does and does not rule out; this loop only samples.
+#
+# It POLLS rather than sleeping once because the sampling rate is the only thing that sets how
+# often a real delivery still reads `unconfirmed`: the residual case is a turn that starts AND
+# finishes between two samples, and one `sleep 3` misses a two-second turn completely.
+#
+# Re-folding the whole series on every sample is deliberate — the rule stays in exactly one place
+# and the loop stays a sampler. At a sample every half second inside a ten-second window that is
+# at most a few hundred string comparisons.
+CONFIRM_SECS=${SHIPYARD_TELL_CONFIRM_SECS:-10}
+CONFIRM_INTERVAL=${SHIPYARD_TELL_CONFIRM_INTERVAL:-0.5}
+
+# The pre-send sample. It is what lets a turn seen LATER count as one our submit started.
+STATES=("$(shipyard_turn_state "$(shipyard_capture "$SLOT")")")
 shipyard_type "$SLOT" "$LINE" || { echo "error: typing into $WHERE failed" >&2; exit 1; }
 sleep 1
 shipyard_submit "$SLOT" || { echo "error: submitting to $WHERE failed" >&2; exit 1; }
-sleep 3
-AFTER=$(shipyard_capture "$SLOT")
 
-# Delivery check. Claude Code either starts working on it, or shows the queued-message
-# hint when it is mid-turn. An unchanged pane means the keys went nowhere.
-DELIVERY=delivered
-if printf '%s' "$AFTER" | grep -q 'queued message'; then
-  DELIVERY=queued
-elif [ "$BEFORE" = "$AFTER" ]; then
-  DELIVERY=unconfirmed
-fi
+DEADLINE=$(( $(date +%s) + CONFIRM_SECS ))
+DELIVERY=unconfirmed
+while :; do
+  STATES+=("$(shipyard_turn_state "$(shipyard_capture "$SLOT")")")
+  DELIVERY=$(shipyard_delivery_verdict "${STATES[@]}")
+  [ "$DELIVERY" = unconfirmed ] || break
+  [ "$(date +%s)" -lt "$DEADLINE" ] || break
+  sleep "$CONFIRM_INTERVAL"
+done
 shipyard_json_set "$MB/$ID.json" --arg d "$DELIVERY" '.delivery=$d'
 
 case "$DELIVERY" in
   queued)      echo "told ship-$SLOT ($WHERE) — $ID queued; the child is mid-turn and will take it next" ;;
   delivered)   echo "told ship-$SLOT ($WHERE) — $ID delivered" ;;
-  unconfirmed) echo "warning: told ship-$SLOT ($WHERE) — $ID sent but the screen did not change." >&2
-               echo "         look inside: $(shipyard_peek_hint "$SLOT")" >&2 ;;
+  unconfirmed) echo "warning: told ship-$SLOT ($WHERE) — $ID was typed and submitted, but no turn" >&2
+               echo "         started within ${CONFIRM_SECS}s and the child never said it had queued it." >&2
+               echo "         THE TEXT MAY BE SITTING UNSENT IN THE INPUT BOX. Look before re-sending —" >&2
+               echo "         a second send types another copy onto the first:" >&2
+               echo "           $(shipyard_peek_hint "$SLOT")" >&2
+               echo "         if your directive is in the box, submit what is already there:" >&2
+               echo "           bash -c '. $DIR/shipyard-lib.sh; shipyard_submit $SLOT'" >&2
+               echo "         it can also mean a turn that began and ended between two samples, or a" >&2
+               echo "         screen that could not be read — neither is proof it went nowhere." >&2 ;;
 esac
 [ -n "$SRC" ] && echo "(in reply to $SRC — that record is not polled by the child, hence this channel)"
+[ "$DELIVERY" = unconfirmed ] && exit 6
 exit 0
