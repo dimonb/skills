@@ -85,15 +85,40 @@
 
 ## PROJECT COMPLETE
 
-All four phases in prod. Both skills run on the shared **driver + policy + guard**; one generalized
-drift gate covers all three shared modules; CI runs the whole gate on every push/PR; the crash and
-the orphaned-supervisor class are fixed. 13 feature PRs, each ship-reviewed and independently
-re-verified before merge.
+All four phases in prod, and with #106 **all 22 requirements are delivered**. Both skills run on the
+shared **driver + adapters + policy + guard**; one generalized drift gate covers all four shared
+modules; CI runs the whole gate on every push/PR; the crash and the orphaned-supervisor class are
+fixed. 16 feature PRs, each ship-reviewed and independently re-verified before merge.
 
-**Open follow-ups (optional, none blocking):**
-- `flow_run` has no production caller — both skills turned out monitor/authority, not driven. Remove
-  it (YAGNI) or justify it as a general primitive.
-- **DRV-02 adapter unification — IN FLIGHT as issue #104** (slot `ship-104`, PR **#106**, round 3).
+### DRV-02 — the last requirement
+
+- **DRV-02 SHIPPED — PR #106 merged (squash `40f4320`). THE LAST OPEN REQUIREMENT: all 22 are now
+  met and the GSD plan is fully delivered.** One shared `shared/adapters/agent-adapters.sh`, both
+  callers on it, no gate edit needed (check 11 already iterated every `shared/<mod>/`). 3 review
+  rounds + a scoped confirming round, 15 axes.
+  - **Merged with a body supplied at merge time, not by rewriting history.** `cec678e`'s message
+    described a fail-open as fail-closed, and with `squash_merge_commit_message=COMMIT_MESSAGES`
+    that would have landed on `main` verbatim. The reword was blocked by the permission classifier
+    in the child AND in the parent, so decision 104-8 used the option neither of us had listed:
+    `gh pr merge --squash --body-file`, which overrides the setting. Verified after merge that the
+    false clause is absent from `40f4320`'s body. This deliberately reverses the 102-5 instruction
+    ("do not rely on the merger supplying a body by hand") — that was about fragility when the
+    merger might forget, which does not hold when the merger is in the loop with the text in hand.
+  - **The finding worth keeping, and the child found it itself:** three of the four post-round-1
+    blockers were ONE defect — enumerable, completeness-shaped claims written into comments ("the
+    two other places that branch on a kind"), where each correction bred the next. A count in a
+    comment is wrong the moment anyone adds to the thing it counts. The last commit removes the
+    SHAPE (an explicitly open list that says not to trust a count in a comment, including itself)
+    instead of correcting another instance. Related: after round 1, **no round found a defect in
+    the shipped module's behaviour** — the code settled first and the prose took three more rounds.
+  - Decision 104-9: handed off without a further round, on a stated distinction rather than a
+    waiver — the earlier delta contained a fix to a probe that could not fail (an assertion that
+    might not assert is what an author cannot verify by reading), while the final delta only
+    REMOVES claims, which has no completeness to be short of. I read both hunks myself.
+  - Emergent, filed not folded: **#113** (latent fail-open — `shipyard_env_preamble`'s rc is
+    swallowed by its caller, so a kind with no env-pass arm launches a child with nothing
+    propagated and nothing scrubbed; latent only because both admitted kinds have arms, and this
+    very change makes adding a kind easy) and **#114** (two pre-existing load-only test flakes).
   Decisions taken under delegation: 104-1 one canonical `shared/adapters/agent-adapters.sh` with
   per-kind `case` branches and `ADP_*` knobs (Options 2 and 3 rejected — the gate and
   `sync-driver.sh` both require EXACTLY ONE `*.sh` per module, so a file-per-kind module is
@@ -106,14 +131,65 @@ re-verified before merge.
   the renderers changed (a test that regenerates both sides proves nothing). Retiring the dynamic
   `source adapters/$kind.sh` also closes the plant-a-plausibly-named-file hole council had
   documented as measured-and-left-standing.
-- **#111 IN FLIGHT (slot `ship-111`)** — `shared/policy/tests` runs in NO automated invocation:
+## After the plan: the fleet-ergonomics track
+
+The GSD plan is delivered, so the work now is a different thing and is tracked as such: **what makes
+the fleet painful to RUN.** It is not a new phase of the plan — no requirement IDs — it is the
+backlog, prioritised by first-hand evidence from supervising this project's own slots. Everything on
+it below I hit myself while shipping #105/#106, which is why it is this list and not the other 25
+open issues.
+
+Order is set by which FILE each touches, so two slots never collide the way #97/#96 once did and
+#106/#115 just would have (measured: five conflicting files):
+
+| order | issue | file | status |
+|---|---|---|---|
+| 1 | **#51 + #112** (one PR — same seam) | `shipyard-tell.sh` | IN FLIGHT, slot `ship-51` |
+| 2 | **#54** | `shipyard-down.sh` | queued |
+| 3 | **#22** | `shipyard-report.sh` | queued (sequential with #61 — same file) |
+| 4 | **#61** | `shipyard-report.sh` | queued |
+
+- **#51 + #112** — `tell` decides `delivered` from a before/after screen DIFF, which typing always
+  changes, so an unsubmitted directive reports as delivered; and it types with no emptiness check,
+  so a directive concatenates onto a pending draft. One state read of the prompt fixes both, and
+  two PRs would collide in one file, so #51's scope was widened to close #112. **Hit while
+  diagnosing a real stall**, where a captured pane showed placeholder ghost text that is
+  indistinguishable from a draft — a bare Return did nothing (correctly: the box was empty) and it
+  read as a wedged terminal. A single probe character proved the box empty.
+- **#54** — `down` refuses a fully merged slot because it asks about ANCESTRY, not content: the
+  squash-merge deletes the remote branch, `@{upstream}` dangles, and every commit reads as unpushed.
+  **Hit twice today**, on both #105 and #106; both times `--force` was the only way through, which
+  means the gate guarding genuinely unpushed work had to be switched off to tear down a slot whose
+  work was already in `main`. Fresh reproduction added to the issue.
+- **#22** — the stall watchdog fires on a rate-limited session and prescribes COMPACTION, i.e.
+  discarding live context to cure something that only needed waiting. **Hit on both slots at once**
+  (a session limit at 17:01 with an 20:10 reset), and again when the machine SLEPT mid-turn. The
+  banner in the pane names when the window ran out, not the current state, so it reads as live.
+- **#61** — `report` exits 0 (the monitor's "all finished, stop watching" signal) when it cannot
+  reach the backend, so a socket blip permanently stops the monitor. Not hit this run, but it is the
+  same class as the sleep: an environment hiccup read as a terminal state.
+
+**Not on the list, deliberately:** ~25 other open issues, mostly council's robustness against
+malformed values and its test hygiene. None blocks running the fleet. The structural one is **#40**
+(a participant is not confined, so the room cannot be a trust boundary), which is a threat-model
+conversation rather than a bug fix.
+
+## Open follow-ups from the plan
+
+- `flow_run` has no production caller — both skills turned out monitor/authority, not driven. Remove
+  it (YAGNI) or justify it as a general primitive.
+- **#111 IN FLIGHT (slot `ship-111`, PR #115)** — `shared/policy/tests` runs in NO automated invocation:
   absent from check 10's list, from both Makefile targets and from CI (verified independently; it
   still passes by hand at 92 checks). #97's generalization landed by halves — check 11 (drift) does
   iterate every `shared/<mod>/`, check 10 (run + registration) kept a hand-maintained list. Found
-  by the #104 child while reviewing its own change.
-- **#112 filed (beside #51)** — `shipyard-tell.sh` types with no emptiness check, so a directive
-  concatenates onto a child's unsubmitted draft; #51 is the same seam's false `delivered`. Both
-  want the state read of the prompt that #51 prescribes.
+  by the #104 child while reviewing its own change. Decision 111-1: **A + C** — patch the list AND
+  add a new check that every test runner on disk is invoked by a Makefile target. C is the missing
+  assertion, because check 10 gates whether a TEST is registered inside a runner while nothing gated
+  whether the RUNNER is ever run. Deriving the list from disk (B) was rejected: it replaces a
+  declaration with disk, so a suite deleted or renamed wholesale stops being noticed — the same
+  silent-coverage shape. Scoped to `plugins/` and `shared/` so an untracked local skill under the
+  project skill dirs cannot red the gate (AGENTS.md's carve-out).
+- **#113 / #114** — filed out of #106's review, above.
 
 **Stale-worktree cleanup — DONE, with a salvage.** `ship-3` was empty (its branch `feat/ci-gate`
 long since superseded by the merged CI work) and was removed. `ship-41` was NOT dead: it held an
