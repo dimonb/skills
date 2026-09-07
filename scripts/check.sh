@@ -460,8 +460,8 @@ fi
 # council). That is NOT every suite the repo ships: `shared/policy/tests` is in neither this list
 # nor either Makefile target, so it is the one suite whose registration is gated by nothing —
 # stated here rather than left implied, because a green gate otherwise reads as full coverage.
-# The
-# runner walks a hand-maintained list. Nothing connected that list to the files on disk, so a
+#
+# The runner walks a hand-maintained list. Nothing connected that list to the files on disk, so a
 # test could land, pass review, and then simply never run again — coverage lost with no symptom
 # anywhere, which is strictly worse than a red suite. It has already come close: during a run of
 # several parallel changes the registration line was the one place they all collided, and a

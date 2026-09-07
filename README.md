@@ -203,11 +203,11 @@ file carries non-Latin script (untracked ones too, like the leak scan); that no 
 names the shared temp parent — a grep
 for the shape a test copied from an older checkout carries, not a proof about where its rooms
 are built; and that every test on disk, in each suite it visits (driver, flow, adapters, shipyard,
-council — `shared/policy/tests` is not among them), appears in the
-list its `run-all.sh` actually walks, so a test cannot land and then silently stop running. Beyond
-those static checks, `make check` also runs the fast driver, flow and adapter suites, so a
-regression in any of the three reds a commit; the slower shipyard and council suites run under `make test`, and `make
-check` gates only their registration (above). CI (`.github/workflows/ci.yml`) then runs all three —
+council — `shared/policy/tests` is not among them), appears in the list its `run-all.sh` actually
+walks, so a test cannot land and then silently stop running. Beyond those static checks, `make
+check` also runs the fast driver, flow and adapter suites, so a regression in any of the three
+reds a commit; the slower shipyard and council suites run under `make test`, and `make check`
+gates only their registration (above). CI (`.github/workflows/ci.yml`) then runs all three —
 `make check`, `make check-test` and `make test` — on every push to `main` and every pull request,
 so those suites' runtime errors surface in CI; locally, where `make check` stays fast, they still
 surface at `make test` time rather than at commit time.

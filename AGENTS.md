@@ -181,8 +181,7 @@ neither Makefile target nor check 10's list, so it runs in no automated invocati
 registration is gated by nothing — the one suite that genuinely can stop running silently.
 Wiring it in is a change of its own; until then this is where that gap is written down.
 
-CI
-(`.github/workflows/ci.yml`) then runs
+CI (`.github/workflows/ci.yml`) then runs
 `make check`, `make check-test` and `make test` on every push to `main` and every pull request, so
 the shipyard and council suites' **runtime** errors — not only their registration — red a check the
 change must pass. Locally those still surface at `make test`, run by hand like `make check-test`,

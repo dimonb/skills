@@ -6,9 +6,12 @@
 # Everything here is a pure string read plus, for the argv assertions, three faked CLIs on PATH.
 # No live agent, no terminal, no network.
 #
-# The module's baseline interpreter is bash >= 5 (the shared driver's), so re-exec into one if a
-# stock bash 3.2 started us — otherwise a bash-5-only construct surfaces as a confusing syntax
-# error rather than a clear version message.
+# THE MODULE'S floor is bash 3.2, lower than this FILE's. They are different constraints and the
+# distinction matters: the module is sourced in-process into shipyard-report.sh, which re-execs
+# into nothing, so a bash-4+ construct in it breaks status reporting on a stock macOS shell. This
+# test file is its own program and uses bash-5 conveniences freely, so it re-execs into a modern
+# bash the way its sibling suites do. Section 9 is what actually holds the module's floor: it runs
+# the module under /bin/bash rather than under this shell.
 if [ "${BASH_VERSINFO[0]:-0}" -lt 5 ] && [ -z "${TADP_BASH_REEXEC:-}" ]; then
   for _c in /opt/homebrew/bin/bash /usr/local/bin/bash /usr/bin/bash bash; do
     _p=$(command -v "$_c" 2>/dev/null) || continue
@@ -257,6 +260,35 @@ noenv() { ( unset CODEX_SESSION_ID CODEX_THREAD_ID CLAUDECODE CLAUDE_CODE_SESSIO
             PATH="$1"; adp_parent_kind ); }
 ok "no marker, only claude installed -> claude" claude "$(noenv "$TMP/onlyclaude")"
 ok "no marker, only codex installed -> codex"   codex  "$(noenv "$TMP/onlycodex")"
+
+# --- 9. the module's declared interpreter floor, held by running rather than by assertion ------
+# The module says its floor is bash 3.2 because shipyard-report.sh sources it in-process and
+# re-execs into nothing. A floor stated in a comment and checked by no test is a floor that stops
+# holding the moment someone reaches for an associative array, so this runs the module under
+# /bin/bash — which on macOS, the platform the constraint exists for, IS 3.2 — and renders every
+# kind. On a Linux runner /bin/bash is modern and this degrades to a smoke test; it says so rather
+# than reporting a coverage it does not have.
+printf '\n── interpreter floor (/bin/bash: %s) ──\n' \
+  "$(/bin/bash -c 'echo ${BASH_VERSINFO[0]}.${BASH_VERSINFO[1]}' 2>/dev/null || echo absent)"
+if [ -x /bin/bash ]; then
+  floor_probe="$TMP/floor.sh"
+  cat >"$floor_probe" <<PROBE
+set -u
+. "$MOD"
+for k in \$(adp_kinds); do
+  ADP_PROMPT=goal ADP_PROTOCOL=/p ADP_DIRS=/d ADP_NAME=n ADP_EFFORT=max ADP_CWD=/c \\
+    adp_cmd "\$k" >/dev/null || { echo "adp_cmd \$k failed"; exit 1; }
+  adp_protocol_mode "\$k" >/dev/null || { echo "adp_protocol_mode \$k failed"; exit 1; }
+done
+adp_known claude && adp_skill_ref claude ship >/dev/null && adp_parent_kind >/dev/null || exit 1
+adp_notes codex peer >/dev/null || exit 1
+echo FLOOR-OK
+PROBE
+  ok "the module sources and renders under /bin/bash" FLOOR-OK \
+    "$(/bin/bash "$floor_probe" 2>&1 | tail -1)"
+else
+  ok "/bin/bash exists to probe the floor with" yes no
+fi
 
 printf '\n'
 if [ "$FAILURES" -eq 0 ]; then echo "t-adapters PASS ($CHECKS checks)"; else echo "t-adapters FAIL ($FAILURES/$CHECKS)"; exit 1; fi

@@ -128,6 +128,11 @@ printf '\n── and nothing leaks IN from the environment either ──\n'
 # pre-change adapters took positional arguments and were immune by construction, so this is the
 # one place the unification could have widened an agent's reach. Render every pair again with all
 # seven knobs exported to sentinels and require the SAME frozen argv.
+#
+# The claude and codex legs (and both shipyard ones) are the load-bearing half: each reds if its
+# caller's `unset` line goes. The agy leg cannot — agy's branch reads only knobs council assigns
+# outright — so it is a uniformity guard against a future agy branch reading one, not proof about
+# today's. Said here so a green line is not read as coverage it does not have.
 export ADP_PROMPT=INJECTED-PROMPT ADP_PROTOCOL=/INJECTED/PROTO ADP_DIRS=/INJECTED/DIR \
        ADP_CWD=/INJECTED/CWD ADP_NAME=INJECTED-NAME ADP_EFFORT=INJECTED-EFFORT ADP_APPROVAL=full
 for kind in claude codex agy; do
@@ -146,6 +151,20 @@ ok "and leaves no launcher behind" no \
 # so the same grep over `ls` output matched nothing whatever the directory held — the assertion
 # printed ok on precisely the state it exists to reject.
 ok "and leaves no temp file behind" "" "$(ls -A "$ROOM/state" | grep '^\.launch-bob' || true)"
+# ...and the same on the OTHER failure path. An unknown kind aborts before the redirect creates
+# the temp file, so the check above never exercises `_write_launcher`'s `rm -f "$tmp"` cleanups —
+# it would stay green with both of them deleted. This one fails a KNOWN kind, after the file
+# exists, by making the render itself fail: that is the path the cleanups are written for, and a
+# leaked temp file lands in a directory every participant in the room can read.
+rm -f "$ROOM/state/launch-dora.sh"
+rc=0
+( adp_cmd() { return 1; }
+  _write_launcher "$ROOM" dora claude "$WORKTREE" ) >/dev/null 2>&1 || rc=$?
+ok "_write_launcher refuses when the render fails" 1 "$rc"
+ok "and cleans up the temp file it had already created" "" \
+  "$(ls -A "$ROOM/state" | grep '^\.launch-dora' || true)"
+ok "and leaves no launcher for that seat" no \
+  "$([ -e "$ROOM/state/launch-dora.sh" ] && echo yes || echo no)"
 
 printf '\n── council: adding a kind touches no caller (DRV-02 acceptance) ──\n'
 # The proof that council enumerates no kinds of its own: teach the module a fourth kind by

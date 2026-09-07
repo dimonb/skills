@@ -14,11 +14,15 @@
 # THE ADMISSION SET IS SHIPYARD'S OWN, and deliberately narrower than the module's. The module
 # knows more kinds than shipyard can drive (it also serves council, which runs `agy`), and a
 # child that cannot be supervised by this skill must not become launchable just because the
-# shared module learned how to start it. Widening it is a shipyard decision, made in this file —
-# in BOTH places: this list, and the `case` in `shipyard_agent` that reads the SHIPYARD_AGENT
-# knob. That `case` cannot be built from the list (it is shell syntax, not data), so the two are
-# kept adjacent and the refusal message below is derived from the list so at least the operator-
-# facing half cannot drift.
+# shared module learned how to start it.
+#
+# Widening it is a shipyard decision, made in this file, and it takes THREE edits — counted here
+# because the last one is silent: this list; the `case` in `shipyard_agent` that reads the
+# SHIPYARD_AGENT knob; and `shipyard_agent_env_pass_default`, which returns 1 for a kind it does
+# not know and so makes `shipyard_env_preamble` fail the launch rather than say why. Neither
+# `case` can be built from the list — they are shell syntax, not data — so they are kept in this
+# one file. Both operator-facing refusals below ARE derived from the list, so the half a person
+# reads cannot drift even when the three cases do.
 shipyard_agent_kinds() { printf '%s\n' claude codex; }
 # `-F`: a LITERAL match. Without it the pattern is a basic regular expression, and this function
 # is the one that keeps a kind shipyard cannot supervise out — `shipyard_agent_admits '.*'`
@@ -56,7 +60,7 @@ shipyard_agent_check() {
       return 1
       ;;
     *)
-      echo "error: neither codex nor claude is available for the child session" >&2
+      echo "error: no child agent available for the session (need one of: $(shipyard_agent_kinds | paste -sd, - | sed 's/,/, /g'))" >&2
       return 1
       ;;
   esac
