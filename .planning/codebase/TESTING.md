@@ -8,15 +8,28 @@
 - `run-all.sh`, `_helpers.sh`, and **7** `t*.sh` (t1-totals, t2-window, t3-probe, t4-band, t5-agent, t6-codex-ctx, t7-continuity) — `run-all.sh:33-34`.
 - Runner: plain loop (`run-all.sh:36-40`).
 
-## ⚠️ The gate does NOT run these tests
-- shipyard's runner says so explicitly: the gate's checks 9/10 are council-specific and
-  generalising them is tracked in an issue; "nothing yet forces anyone to run them"
-  (`shipyard/tests/run-all.sh:6-10`).
-- **Consequence for this project:** "green tests" (GATE-01, MIG-03 acceptance) means the
-  relevant `tests/run-all.sh` is **invoked explicitly** in each phase — `make check` alone will
-  not exercise the new driver/guard/policy. A phase that adds behaviour should also either wire
-  its tests into the gate or state the manual run in its SUMMARY. Prefer wiring in
-  (`AGENTS.md:172-173`: extend the gate rather than add a caveat).
+## The gate DOES run these tests — and gates three ways that a suite could stop running
+
+Superseded. This section used to read "The gate does NOT run these tests", and its sanctioned
+alternative — a phase "should also either wire its tests into the gate **or state the manual run
+in its SUMMARY**" — is the loophole that produced #111: `shared/policy/tests` took the second
+option and ran in no automated invocation at all from the day it landed. The option was not an
+oversight; it was offered here. It is withdrawn: **wiring in is the only acceptable outcome**, and
+the gate now enforces it rather than asking.
+
+Current state, in `scripts/check.sh`:
+
+- `$GATED_SUITES` names the six gated suites once. Check 10 walks it and requires every test file
+  on disk to be registered in its runner's `tests` array.
+- Check 12 asserts the two converse directions against the runners it finds on disk: each must be
+  named by a `Makefile` recipe (so a suite cannot run nowhere), and each must appear in
+  `$GATED_SUITES` (so a suite cannot be `make`-wired yet never registration-checked).
+- `make check` RUNS driver, flow, adapters and policy; `make test` adds shipyard and council; CI
+  runs `make check`, `make check-test` and `make test`.
+
+**Consequence for this project:** "green tests" no longer means a manual per-phase run. Adding a
+suite means two edits — `$GATED_SUITES` and a `Makefile` recipe — and the gate reds until both are
+done. Checks 9's temp-path scan remains council-specific by design.
 
 ## Practice to match
 - New behaviour lands with a `t*.sh` beside the existing ones; a new gate rule gets a probe in

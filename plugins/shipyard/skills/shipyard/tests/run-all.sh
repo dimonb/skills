@@ -3,10 +3,12 @@
 #
 #   bash plugins/shipyard/skills/shipyard/tests/run-all.sh
 #
-# Registration is gated: scripts/check.sh check 10 requires every test file here to appear in the
-# single-line `tests` array below, so a test cannot silently stop being run. The suite itself
-# runs under `make test` (not `make check` — at ~20s it is too slow for a per-commit gate, so its
-# RUNTIME errors surface there, not at commit time). check 9's temp-room grep stays council-specific.
+# Two things are gated, both in scripts/check.sh. Check 10 requires every test file here to appear
+# in the single-line `tests` array below, so a test cannot silently stop being run; check 12
+# requires this suite to be named in $GATED_SUITES and its runner to be named by a Makefile recipe,
+# so the suite as a whole cannot stop running either. The suite itself runs under `make test` (not
+# `make check` — at ~20s it is too slow for a per-commit gate, so its RUNTIME errors surface there,
+# not at commit time). check 9's temp-room grep stays council-specific.
 #
 # Most tests are pure functions over fixture files and environment variables. The continuity
 # suite also starts one short detached watcher against a fake `agtermctl`, proves idempotency,

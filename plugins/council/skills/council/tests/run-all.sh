@@ -2,10 +2,12 @@
 # run-all.sh — the council test suite. Fast ones by default; `--full` adds the load and
 # latency runs, which take minutes and are sensitive to what else is on the machine.
 #
-# `make test` runs this suite's fast subset (no `--full`), alongside the driver, flow, adapter and shipyard
-# suites. Registration is gated: scripts/check.sh check 10 requires every test file under this
-# directory to appear in a `tests` array below (the default one, or the `--full` one), so none
-# silently stops running.
+# `make test` runs this suite's fast subset (no `--full`), alongside the driver, flow, adapter,
+# policy and shipyard suites. Two things are gated, both in scripts/check.sh: check 10 requires
+# every test file under this directory to appear in a `tests` array below (the default one, or the
+# `--full` one), so none silently stops running; and check 12 requires this suite to be named in
+# $GATED_SUITES and its runner to be named by a Makefile recipe, so the suite as a whole cannot
+# stop running either.
 set -uo pipefail
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 FULL=0; [ "${1:-}" = "--full" ] && FULL=1

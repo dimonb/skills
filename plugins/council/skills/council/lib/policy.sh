@@ -1,13 +1,10 @@
 # policy.sh — the ONE escalation-disposition policy, shared by shipyard and council.
 #
 # SOURCE OF TRUTH: shared/policy/policy.sh. Do NOT edit the vendored copies listed in
-# shared/policy/targets.txt — edit here, re-vendor the copies, and commit the canonical AND the
-# copies together. Today those copies are kept byte-identical BY HAND: shared/driver/ has drift
-# enforced (scripts/check.sh check 11 fails on a drifted driver copy; scripts/sync-driver.sh
-# writes them), but that check and sync are driver-specific and do NOT yet see shared/policy/.
-# They are being generalized to iterate every shared/<mod>/, which will then enforce this module
-# too with no per-module gate code; until that lands, re-vendoring here by hand is what keeps the
-# copies honest — the same "one source, enforced" model as shared/driver/, one step behind it.
+# shared/policy/targets.txt — edit here, then run `scripts/sync-driver.sh` (which vendors EVERY
+# shared/<mod>/ module, this one included, not the driver alone), and commit the canonical AND the
+# copies together. The repo gate (scripts/check.sh, check 11) fails if any copy drifts from this
+# file.
 #
 # Why a vendored copy and not a symlink or an import: a Codex plugin is installed as a
 # self-contained directory and cannot depend on another plugin, so each plugin carries its own

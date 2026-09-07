@@ -3,11 +3,13 @@
 #
 #   bash shared/flow/tests/run-all.sh
 #
-# Wired into the gate two ways (scripts/check.sh check 10, and the Makefile): every test file here
-# must be registered in the `tests` array below or `make check` reds, so a test cannot silently
-# stop running; and `make check` RUNS this suite (it is fast, pure), so a flow regression reds a
-# commit. `make test` runs it too, alongside the driver, adapter, shipyard and council suites. Every test is
-# a pure drive of a declared graph against a faked driver — no live terminal, no agent, no network.
+# Wired into the gate three ways (scripts/check.sh checks 10 and 12, and the Makefile): this
+# suite must be named in check.sh's $GATED_SUITES and its runner must be named by a Makefile
+# recipe, or check 12 reds; every test file here must be registered in the `tests` array below
+# or check 10 reds, so a test cannot silently stop running; and `make check` RUNS this suite
+# (it is fast, pure), so a flow regression reds a commit. `make test` runs it too, alongside the
+# driver, adapter, policy, shipyard and council suites. Every test is a pure drive of a declared
+# graph against a faked driver — no live terminal, no agent, no network.
 set -uo pipefail
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 

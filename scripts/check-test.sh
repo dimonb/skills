@@ -23,19 +23,23 @@
 # Run: make check-test
 #
 # This suite invokes `bash scripts/check.sh` directly, NOT `make check`. The two diverged when
-# `make check` began also running the driver, flow and adapter suites (see the Makefile):
+# `make check` began also running the driver, flow, adapter and policy suites (see the Makefile):
 # check-test proves check.sh's STATIC assertions fire, so it must not itself be gated on a test
-# suite passing, nor pay
-# those suites' runtime on every one of its ~60 probes. The deliberate exceptions all use `make
-# check` on purpose: the final "green after restore" check, and the probes that prove `make check`
-# actually runs the driver, flow and adapter suites (30, 30b, 30c).
+# suite passing, nor pay those suites' runtime on every one of its ~60 probes. The deliberate
+# exceptions all use `make check` on purpose: the final "green after restore" check, and the probes
+# that prove `make check` actually runs those four suites (30, 30b, 30c, 30d).
 set -uo pipefail
 cd "$(dirname "$0")/.."
 
 CORE=plugins/ship/skills/ship/SKILL.md
 TESTS_DIR=plugins/council/skills/council/tests
 RUNNER=$TESTS_DIR/run-all.sh
-GUARDED='.claude .agents plugins scripts .claude-plugin shared'
+# The Makefile is guarded like the rest: check 12's probes mutate it (they delete a suite's
+# invocation, and one removes the file), so the dirty-tree guard must refuse to run over
+# uncommitted Makefile work and the restore must bring it back. Every one of those probes reverts
+# with `git checkout --`, so an interrupt between the mutation and the revert is recovered by the
+# trap rather than leaving the repo without a working `make check`.
+GUARDED='.claude .agents plugins scripts .claude-plugin shared Makefile'
 
 # The guard comes FIRST and the trap is installed only after it passes. Installing the trap
 # earlier makes the guard's own early exit run the restore, which would discard exactly the
@@ -75,7 +79,7 @@ restore() {
     "$TESTS_DIR/t99-probe.sh" "$TESTS_DIR/t98-unregistered.sh" "$TESTS_DIR/nested" \
     shared/driver/tests/_probe-unreg.sh plugins/shipyard/skills/shipyard/tests/_probe-unreg.sh \
     shared/flow/tests/_probe-unreg.sh shared/flow/extra.sh \
-    shared/adapters/tests/_probe-unreg.sh \
+    shared/adapters/tests/_probe-unreg.sh shared/policy/tests/_probe-unreg.sh \
     2>/dev/null || true
   rmdir docs 2>/dev/null || true
 }
@@ -97,6 +101,15 @@ pass=0; nocatch=0
 # of them names and this suite still reports it caught, so those five arms have no kill test. They
 # are pre-existing and tracked in the follow-up issue rather than pinned here; do not read the
 # absence of a $2 as evidence that a probe does not need one.
+#
+# Separately, TWO arms have no probe at all, and this is the authoritative list of them:
+#   * check 9's  `could not scan council test for a fixed temp path`
+#   * check 12's `could not scan the Makefile for a test runner invocation`
+# Both are per-item "this matcher errored" arms whose only trigger is an unreadable file, which is
+# a no-op when the gate runs as root, so they cannot be probed portably. Their siblings that error
+# on a LISTING rather than a per-item read are probed (14a, 21, 32f), because a listing's exit
+# status can be forced directly. Recorded here because a green run would otherwise be read as
+# covering them.
 expect_fail() {
   if bash scripts/check.sh >"$SCRATCH/out" 2>&1; then
     echo "NOT CAUGHT: $1"; nocatch=$((nocatch+1))
@@ -447,13 +460,20 @@ expect_fail "council-test scan fails LOUDLY when it inspects no file at all"
 cp "$SCRATCH/check9-empty.bak" scripts/check.sh
 
 # 14c — check 10's empty-suite arm (`no test on disk under $suite_dir`), which was a no-op `:` skip
-# in the council-only version and is now an active fail. Point a NON-council dir in check 10's loop
-# at a real directory that holds no *.sh, so list_suite_tests returns empty with rc 0 — a
-# non-council trigger, so check 9 (council-only) cannot fire and claim the catch. The $2 pin is
-# load-bearing: delete this arm and the loop falls through to the missing-runner arm (that dir has
-# no run-all.sh), which reds on a different message, so the pin reports WRONG ARM, not caught.
+# in the council-only version and is now an active fail. Point check 10 at a real directory that
+# holds no *.sh, so list_suite_tests returns empty with rc 0 — and at a NON-council one, so check 9
+# (council-only) cannot fire and claim the catch. The $2 pin is load-bearing: delete this arm and
+# the loop falls through to the missing-runner arm (that dir has no run-all.sh), which reds on a
+# different message, so the pin reports WRONG ARM, not caught.
+#
+# The bogus entry is APPENDED to $GATED_SUITES rather than replacing a real one, and that matters
+# now that check 12 reads the same list: replacing `shared/driver/tests` would ALSO strip a real
+# suite from the declaration, so check 12's declaration arm would red too and the probe would fire
+# two checks at once — which proves neither. Appending leaves all six real suites declared, so only
+# check 10 reacts. `\x27` is a literal single quote, so the whole perl program stays inside shell
+# single quotes.
 cp scripts/check.sh "$SCRATCH/check10-empty.bak"
-perl -pi -e 's{^  shared/driver/tests \\$}{  plugins/ship/skills/ship/references \\}' scripts/check.sh
+perl -pi -e 's{^GATED_SUITES=\x27shared/driver/tests$}{GATED_SUITES=\x27plugins/ship/skills/ship/references\nshared/driver/tests}' scripts/check.sh
 expect_fail "check 10 empty-suite arm fires for a non-council suite with no tests" \
   "no test on disk under"
 cp "$SCRATCH/check10-empty.bak" scripts/check.sh
@@ -484,8 +504,8 @@ expect_fail "shipyard test on disk but not registered in run-all.sh" \
   "test on disk but not registered in"
 rm -f plugins/shipyard/skills/shipyard/tests/_probe-unreg.sh
 
-# 15d — ...and for the FLOW suite. Together with 15, 15b, 15c and 15e this proves the check 10 loop
-# actually visits all five suites, not just whichever one happens to be first. Without this probe,
+# 15d — ...and for the FLOW suite. With 15, 15b, 15c, 15e and 15f this proves the check 10 loop
+# actually visits every suite, not just whichever one happens to be first. Without this probe,
 # dropping shared/flow/tests from check 10's loop would go uncaught (the sibling probes still pass).
 # The fixture path is already in the restore trap's cleanup list.
 printf '#!/usr/bin/env bash\ntrue\n' > shared/flow/tests/_probe-unreg.sh
@@ -500,6 +520,15 @@ printf '#!/usr/bin/env bash\ntrue\n' > shared/adapters/tests/_probe-unreg.sh
 expect_fail "adapters test on disk but not registered in run-all.sh" \
   "test on disk but not registered in"
 rm -f shared/adapters/tests/_probe-unreg.sh
+
+# 15f — ...and for the POLICY suite, which is the one that had no gated registration at all: it ran
+# in no automated invocation from the day it landed, so nothing would have noticed a test dropped
+# from its `tests` array either. With 15 through 15e this pins every entry in $GATED_SUITES — so
+# dropping any one of the six from the declaration is caught by the probe that names it.
+printf '#!/usr/bin/env bash\ntrue\n' > shared/policy/tests/_probe-unreg.sh
+expect_fail "policy test on disk but not registered in run-all.sh" \
+  "test on disk but not registered in"
+rm -f shared/policy/tests/_probe-unreg.sh
 
 # 16 — and check 10 must say it cannot find the list, rather than comparing the files on disk
 # against an empty set. BOTH assignments are renamed: renaming only `tests=(` leaves the `--full`
@@ -555,9 +584,25 @@ expect_pass "untracked local skill with no frontmatter"
 # 19d — and check 1: a script bash cannot parse, which blocked every commit just as loudly.
 printf 'if true; then\n' > .claude/skills/_probe-local/helper.sh
 expect_pass "untracked local skill carrying an unparseable script"
+
+# 19d2 — the same false positive for check 12, which is why that check is scoped to plugins/ and
+# shared/ rather than scanning every `*/tests/run-all.sh` on disk. A local skill somebody keeps
+# under a project skills directory may perfectly well carry its own test suite; the repo's Makefile
+# has no business running it, and reddening the gate over one would block every commit here for
+# work that is deliberately none of the gate's concern. Scoped out, so it must stay green.
+#
+# The $3 pin is weaker than it looks, said plainly rather than left to be read as coverage: a
+# check 12 that DID scan this path would red, so `expect_pass` catches that on its own, and all $3
+# adds is rejecting a check that names the path without failing on it. What it cannot see is the
+# other way this probe could go vacuously green — check 12 scanning nothing at all — because that
+# is indistinguishable here from the carve-out working. Probe 32c is what covers that direction.
+mkdir -p .claude/skills/_probe-local/tests
+printf '#!/usr/bin/env bash\ntrue\n' > .claude/skills/_probe-local/tests/run-all.sh
+expect_pass "untracked local skill carrying its own test runner" "" \
+  ".claude/skills/_probe-local/tests/run-all.sh"
 rm -rf .claude/skills/_probe-local
 
-# 19e — the counter-tests that keep 19b-d from being a hole. The SAME two violations under
+# 19e — the counter-tests that keep 19b-d2 from being a hole. The SAME two violations under
 # plugins/, where untracked content is still read in full, because that is what the repo ships and
 # a packaged skill's SKILL.md is untracked in the moment between writing it and `git add`.
 mkdir -p plugins/ship/skills/_probe-pkg
@@ -799,6 +844,20 @@ else
 fi
 git checkout -- shared/adapters/tests/t-adapters.sh
 
+# 30d — ...and `make check` RUNS the policy suite, which is the whole point of #111: that suite ran
+# in no automated invocation at all. Check 12 asserts a Makefile RECIPE names the runner; this
+# asserts the naming actually causes it to run, which a recipe in a target nothing invokes would
+# not. Same technique as 30, 30b and 30c.
+printf '#!/usr/bin/env bash\nexit 1\n' > shared/policy/tests/t-policy.sh
+if make check >"$SCRATCH/out" 2>&1; then
+  echo "NOT CAUGHT: make check does not run the policy suite (a policy failure did not red it)"
+  nocatch=$((nocatch+1))
+else
+  echo "caught:     make check runs the policy suite   ->  a failing policy test reds make check"
+  pass=$((pass+1))
+fi
+git checkout -- shared/policy/tests/t-policy.sh
+
 # 31 — the mirror of 30 for the STATIC gate: `make check` must also invoke scripts/check.sh, not
 # only the fast test suites. When this suite switched its ~60 probes from `make check` to
 # `bash scripts/check.sh` (so it tests the static gate directly and does not pay those suites'
@@ -822,6 +881,92 @@ else
   pass=$((pass+1))
 fi
 git checkout -- plugins/shipyard/skills/shipyard/shipyard-lib.sh
+
+# 32 — check 12's invocation arm: a suite runner that no Makefile recipe names. This is the
+# failure the check was added for, and the state the repo was actually in — reproduced by deleting
+# the policy suite's invocation from BOTH targets, which is also what a Makefile merge resolution
+# that drops a line leaves behind. Both lines must go: one target is enough to satisfy check 12
+# (32b proves that), so deleting only `check`'s would leave the gate correctly green and this probe
+# would report NOT CAUGHT over an assertion that is working. `@` is escaped in the pattern because
+# perl would otherwise interpolate `@bash` as an array.
+perl -ni -e 'print unless m{^\t\@bash shared/policy/tests/run-all\.sh$}' Makefile
+expect_fail "check 12: a suite runner invoked by no Makefile target" \
+  "test suite runner is invoked by no Makefile target"
+git checkout -- Makefile
+
+# 32a — the same arm, for the ADAPTERS suite, so the runner loop is proven to visit more than
+# whichever entry comes first. Without this, check 12 could stop examining every runner but one and
+# 32 would still report caught.
+perl -ni -e 'print unless m{^\t\@bash shared/adapters/tests/run-all\.sh$}' Makefile
+expect_fail "check 12: the invocation arm fires for a second suite too (adapters)" \
+  "test suite runner is invoked by no Makefile target"
+git checkout -- Makefile
+
+# 32b — the mirror, and the requirement it protects: EITHER target counts. The fast/slow split is
+# deliberate — `make check` stays committable and the slow suites live in `make test` — so a check
+# that demanded both would fight the Makefile's own design and red for council and shipyard, which
+# `make check` correctly does not run. Remove the policy suite from `check` only, leave it in
+# `test`, and the gate must stay green.
+perl -ni -e 'if (!$done && m{^\t\@bash shared/policy/tests/run-all\.sh$}) { $done = 1; next } print' Makefile
+expect_pass "check 12: a runner in only one Makefile target still counts as invoked"
+git checkout -- Makefile
+
+# 32c — the invocation arm must reject a COMMENTED-OUT recipe line, which is the whole reason the
+# match is scoped to recipe lines rather than grepping the file. The first implementation used an
+# unanchored `grep -F` over the whole Makefile, and this exact mutation left it GREEN over a suite
+# that ran nowhere — the defect the check exists to catch, inside the check itself. Deleting the
+# `^\t` scoping reintroduces it and this probe reds.
+perl -pi -e 's{^\t\@bash shared/policy/tests/run-all\.sh$}{# was: \@bash shared/policy/tests/run-all.sh}' Makefile
+expect_fail "check 12: a commented-out recipe line is not an invocation" \
+  "test suite runner is invoked by no Makefile target"
+git checkout -- Makefile
+
+# 32d — check 12's DECLARATION arm: a suite on disk that $GATED_SUITES does not name. Check 10 only
+# visits what that list names, so without this arm a suite could be Makefile-wired (invocation arm
+# green) and never registration-checked — which is the other half of how shared/policy/tests
+# shipped. Removing the adapters entry is the honest reproduction: it is a real suite, on disk, with
+# its Makefile recipe intact, so ONLY the declaration arm can red.
+cp scripts/check.sh "$SCRATCH/check12-decl.bak"
+perl -ni -e 'print unless m{^shared/adapters/tests$}' scripts/check.sh
+expect_fail "check 12: a suite on disk that \$GATED_SUITES does not declare" \
+  "not in \$GATED_SUITES"
+cp "$SCRATCH/check12-decl.bak" scripts/check.sh
+
+# 32e — check 12's empty-listing arm: the runner scan succeeds and matches nothing, which is what
+# both shipped trees being moved or renamed looks like. Zero iterations, no error anywhere, and the
+# assertion silently gone — the same shape as 14b for check 9. `git ls-files` exits 0 over a
+# pathspec that matches nothing, so without this arm the check would abstain and print OK.
+# The pattern tracks check 12's `:(glob)` pathspecs; if those are ever reworded this substitution
+# stops matching, the mutation silently no-ops, and the probe reports NOT CAUGHT rather than
+# passing vacuously — which is the right way round, and is how this probe was caught needing an
+# update when the pathspecs gained their glob magic.
+cp scripts/check.sh "$SCRATCH/check12-empty.bak"
+perl -pi -e 's{plugins/\*\*/tests/run-all\.sh}{plugins-none-xyz/**/tests/run-all.sh}; s{shared/\*\*/tests/run-all\.sh}{shared-none-xyz/**/tests/run-all.sh}' scripts/check.sh
+expect_fail "check 12 reds when the runner scan matches nothing at all" \
+  "found no test runner under plugins/ or shared/"
+cp "$SCRATCH/check12-empty.bak" scripts/check.sh
+
+# 32f — check 12's errored-listing arm, in the shape probes 14a and 21 use: force a non-zero status
+# out of the `git ls-files` substitution while leaving its OUTPUT non-empty, so the empty-listing
+# arm above cannot fire instead and claim the catch. Without this the arm has no kill test: a
+# broken pathspec is not an error, so nothing else would ever exercise it, and deleting the `fail`
+# would leave `make check-test` reporting every assertion proven.
+cp scripts/check.sh "$SCRATCH/check12-rc.bak"
+perl -pi -e 'if (m{:\(glob\)}) { s{ \| sort -u\)$}{ | sort -u; exit 128)} }' scripts/check.sh
+expect_fail "check 12 reds when the runner listing itself errors" \
+  "could not list the test runners on disk"
+cp "$SCRATCH/check12-rc.bak" scripts/check.sh
+
+# 32g — and check 12's missing-Makefile arm, so "there is nothing to compare against" is never
+# read as OK. The $2 pin is load-bearing here: delete the `[ ! -f Makefile ]` arm and the per-runner
+# grep exits 2, so the `*)` arm reds on a different message and an unpinned probe would report
+# `caught` over a deleted assertion. Restored with `git checkout --`, so an interrupt here is
+# recovered by the trap rather than leaving the repo without a Makefile (which is why it joined
+# $GUARDED).
+rm -f Makefile
+expect_fail "check 12 reds when the Makefile is missing" \
+  "Makefile is missing"
+git checkout -- Makefile
 
 echo
 echo "assertions proven: $pass   not proven: $nocatch"

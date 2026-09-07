@@ -31,9 +31,12 @@ exactly that) and approved by the user. Decisions taken:
 4. **The vendoring + drift gate is generalized to any shared module.** `check 11` and
    `scripts/sync-driver.sh` iterate every `shared/<mod>/` (canonical = the lone `*.sh`, each
    `targets.txt` lists its copies); a malformed module — no canonical, several, or no target list —
-   reds closed. Chosen over mirroring `check 11` into a driver-specific `check 12`: the repo already
-   generalized `check 10` for the same "a copied check rots" reason, and the imminent Phase-3 policy
-   module is then covered with NO further gate change. `sync-driver.sh` keeps its path (name now
+   reds closed. Chosen over mirroring `check 11` into a driver-specific clone of itself: the repo
+   already generalized `check 10` for the same "a copied check rots" reason, and the imminent
+   Phase-3 policy module is then covered with NO further gate change. (This decision predates the
+   real `check 12`, which #111 later added for something unrelated — that a suite runner is
+   invoked at all; the rejected alternative here was never numbered.) `sync-driver.sh` keeps its
+   path (name now
    historical) so every existing reference stays correct; the driver and both skills are otherwise
    untouched.
 

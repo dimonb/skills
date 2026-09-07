@@ -165,23 +165,36 @@ than creating one. Either way:
 ## How to verify a change for real
 
 ```bash
-make check        # the static gate (~3-4s) + the driver, flow and adapter suites; run before every commit
-make test         # five suites' fast subsets (driver, flow, adapters, shipyard, council) — ~2-3 min
+make check        # the static gate (~3-4s) + the four fast suites; run before every commit
+make test         # all six suites' fast subsets — ~2-3 min
 make check-test   # proves the gate's assertions actually fail when violated (needs a clean tree)
 ```
 
 `make check` stays fast because it does not run the shipyard or council suites — those are too
-slow for a per-commit gate. What it DOES enforce for those five suites, statically, is
-**registration**: a test file that stops being listed in its `run-all.sh` reds `make check`
-(`scripts/check.sh` check 10), so a suite cannot silently stop running. It also runs the driver,
-flow and adapter suites (all fast), so a regression in any of the three reds a commit.
+slow for a per-commit gate. What it DOES enforce for all **six** suites, statically, are the
+**three ways a suite can silently stop running** — separate failure classes, separate checks:
 
-**Five is not all of them, and the gate cannot say so itself.** `shared/policy/tests` is in
-neither Makefile target nor check 10's list, so it runs in no automated invocation and its
-registration is gated by nothing — the one suite that genuinely can stop running silently.
-Wiring it in is a change of its own; until then this is where that gap is written down.
+* **Registration** — a test file that stops being listed in its `run-all.sh` reds `make check`
+  (`scripts/check.sh` check 10).
+* **Invocation** — a suite whose `run-all.sh` is named by no `Makefile` recipe reds too
+  (check 12). Either target counts, so the fast/slow split stands.
+* **Declaration** — a suite on disk that is missing from `check.sh`'s `$GATED_SUITES` reds as well
+  (check 12 again), because check 10 only visits what that list names. Without this one, a suite
+  could be Makefile-wired and never registration-checked.
 
-CI (`.github/workflows/ci.yml`) then runs
+The three are one list cross-checked both ways: `$GATED_SUITES` is a hand-maintained declaration,
+and check 12 asserts every runner on disk appears in it while check 10 walks it against disk.
+Deriving the list from disk instead would make disk the authority, so a suite deleted or renamed
+wholesale would silently leave the list — the same coverage loss these checks exist to catch.
+
+**Adding a suite therefore means two edits, and the gate reds until both are done**: add it to
+`$GATED_SUITES` and invoke its runner from a `Makefile` recipe. That is deliberate. All three
+classes are live history rather than theory: `shared/policy/tests` was missing from the list AND
+from both targets from the day it landed, so it ran in no automated invocation at all — green when
+run by hand, gated by nothing, for as long as it existed (#111).
+
+`make check` also runs the driver, flow, adapter and policy suites (all fast and pure), so a
+regression in any of the four reds a commit. CI (`.github/workflows/ci.yml`) then runs
 `make check`, `make check-test` and `make test` on every push to `main` and every pull request, so
 the shipyard and council suites' **runtime** errors — not only their registration — red a check the
 change must pass. Locally those still surface at `make test`, run by hand like `make check-test`,
