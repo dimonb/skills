@@ -93,7 +93,27 @@ re-verified before merge.
 **Open follow-ups (optional, none blocking):**
 - `flow_run` has no production caller — both skills turned out monitor/authority, not driven. Remove
   it (YAGNI) or justify it as a general primitive.
-- **DRV-02 adapter unification — IN FLIGHT as issue #104** (slot `ship-104`).
+- **DRV-02 adapter unification — IN FLIGHT as issue #104** (slot `ship-104`, PR **#106**, round 3).
+  Decisions taken under delegation: 104-1 one canonical `shared/adapters/agent-adapters.sh` with
+  per-kind `case` branches and `ADP_*` knobs (Options 2 and 3 rejected — the gate and
+  `sync-driver.sh` both require EXACTLY ONE `*.sh` per module, so a file-per-kind module is
+  impossible by contract, not by taste); the protocol mode is DERIVED per kind and exposed as a
+  read-only query, never an input knob; `ADP_APPROVAL=sandboxed|full` with council pinned
+  `sandboxed` and shipyard `full`, because this is the one place a behaviour-preserving refactor
+  could silently move a security posture. 104-2 (the child's correction, accepted): "byte-identical
+  rendering" was MY over-specification and is unsatisfiable once one module owns one quoting
+  function — the real criterion is SAME ARGV, proven against fixtures captured from `main` BEFORE
+  the renderers changed (a test that regenerates both sides proves nothing). Retiring the dynamic
+  `source adapters/$kind.sh` also closes the plant-a-plausibly-named-file hole council had
+  documented as measured-and-left-standing.
+- **#111 IN FLIGHT (slot `ship-111`)** — `shared/policy/tests` runs in NO automated invocation:
+  absent from check 10's list, from both Makefile targets and from CI (verified independently; it
+  still passes by hand at 92 checks). #97's generalization landed by halves — check 11 (drift) does
+  iterate every `shared/<mod>/`, check 10 (run + registration) kept a hand-maintained list. Found
+  by the #104 child while reviewing its own change.
+- **#112 filed (beside #51)** — `shipyard-tell.sh` types with no emptiness check, so a directive
+  concatenates onto a child's unsubmitted draft; #51 is the same seam's false `delivered`. Both
+  want the state read of the prompt that #51 prescribes.
 
 **Stale-worktree cleanup — DONE, with a salvage.** `ship-3` was empty (its branch `feat/ci-gate`
 long since superseded by the merged CI work) and was removed. `ship-41` was NOT dead: it held an
@@ -102,15 +122,27 @@ pushed to `origin/fix/council-suite-cleanup-enforced` before the worktree was re
 lost. Only `main` remains as a worktree. Two independent valuable pieces were identified there,
 both verified still absent from `main`, and each filed as its own issue rather than cherry-picked
 (the tree has moved under them — #89 rewrote the keeper loop):
-- **#102 (bug, IN FLIGHT, slot `ship-102`)** — a keeper whose room was rebuilt at the same path never
+- **#102 SHIPPED:** PR **#105** merged (squash `b02ba4f`). 3 review rounds + a verification pass,
+  0 blocking findings open; `t19` at 43 checks with every mutation row measured against the merged
+  tree. Three message-only history rewrites, each one an application of the rule set at 102-5
+  (review branch, sole author, tree byte-identical, `--force-with-lease`), never a fresh decision.
+  Two lessons worth keeping: a claim repeated in three places is ONE claim with three copies, and
+  the first amend fixing only the flagged copy is what let the stale figures survive two rounds;
+  and mutation testing via `git checkout origin/main -- <file>` leaves the pre-fix file STAGED, so
+  an `--amend` there silently commits a revert of the fix (caught, not suffered). Four pre-existing
+  defects found by its siblings sweep went to #107/#108/#109/#110, none folded into the diff.
+- **#102 (as filed)** — a keeper whose room was rebuilt at the same path never
   steps down: it watches only `[ -d "$room" ]`, so the old keeper survives a `down`+`up` cycle as a
   leaked process holding open fifos. Fix: watch the pid file and step down only when it names
   ANOTHER positive pid — missing/empty/malformed is deliberately NOT a stop reason (t9g writes `0`).
-- **#103 (enhancement, queued)** — the test-harness cleanup discipline: EXIT-trap-only reasoning with
-  its honest limits (no SIGKILL, no untrapped-SIGPROF), the measured argument against INT/TERM traps
-  (20s vs 0s to die when wedged on a child, and no cleanup at all once the runner's `timeout -k 10`
-  escalates), plus `t12-cleanup.sh`. `t12` is free on `main`; the branch's `t15-keeper.sh` collides
-  with main's `t15-term-adapter.sh` and must be renamed.
+- **#103 CLOSED as a duplicate of #41.** I filed it from the salvaged branch without checking the
+  backlog, and #41 predates it, is richer, and even reserves the same `t12-*` number. What the
+  salvage adds is now recorded on #41: the work is already IMPLEMENTED on that branch (a working
+  `t12-cleanup.sh`, so this is porting, not writing), and #41's deferred-signal figure of "60s vs
+  0s" is really **20s vs 0s** — the delay is the length of the foreground command, not a constant.
+  **Process lesson: search the backlog before filing.** Two of the three issues I opened from the
+  salvage duplicated existing ones (#103→#41), and a third had a pre-existing twin (#112 beside
+  #51). A fleet supervisor filing from a child's findings sees the finding, not the backlog.
 
 - **Repo law reminder:** every change keeps `make check` green; issue → branch → PR → human merges.
   `.planning/` is TRACKED (since `3853950`) and is the project-planning record, never a per-change
