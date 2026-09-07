@@ -1,26 +1,32 @@
 # STATE — session memory
 
-## ⏸ PAUSED (2026-09-07, by the owner) — how to resume
+## ▶ RESUMED (2026-09-07) — ONE LANE, and the finish line is narrow
 
-All work stopped on request. **Nothing was torn down**: both slots keep their terminal and their
-worktree, so each resumes with its own history intact. Both monitors were stopped.
+The pause is over. The owner's instruction narrows the work twice: **one slot runs at a time**, and
+the objective is only **what actually blocks using the fleet** — not the backlog. Both slots kept
+their terminal and worktree through the pause, so each resumes with its own history; nothing was
+handed off through a file.
 
-Verified at the pause: both worktrees clean, both branches pushed, nothing living only on disk.
+**One lane is not just an instruction, it is also the budget.** The first resumed slot's own banner
+read *79% of the weekly limit, resets Sep 11* — four days out. Two slots burn that twice as fast
+for no gain here, since the queue below is serialised by file anyway.
 
-| slot | branch | head | PR | stage | the next action it would have taken |
-|---|---|---|---|---|---|
-| `ship-111` | `fix/gate-policy-tests-registration` | `30609b5` | **#115** | impl-review | finish the review round on the rebased head (rebase onto `40f4320` done, six suites, check 12 implemented with `$GATED_SUITES`) |
-| `ship-51` | `fix/shipyard-tell-delivery-confirmation` | `08ad8f8` | **#116** | impl-review | act on directive 51-1's AMENDMENT: move the turn-state predicate into `shared/adapters/`, kind-less, marker literal in exactly ONE place |
+The finish line, in order. Everything after #61 is explicitly NOT part of it:
 
-To resume: re-arm both monitors (`shipyard-report.sh --only-changed 111 51` and
-`shipyard-escalations.sh --new`, with `SHIPYARD_CTX_WINDOW=1000000`) and nudge each slot with
-`shipyard-tell.sh`. Do **not** use `shipyard-down.sh` on either — that removes the worktree, and
-teardown's only legitimate trigger is a merge or a close.
+| # | what | why it blocks USE | lane |
+|---|---|---|---|
+| **#115** | `shared/policy/tests` runs somewhere + check 12 | gate hygiene, and it was ~done | `ship-111`, running |
+| **#116** | `tell` confirms from turn state, not a screen diff | a directive reports `delivered` while unsent | `ship-51`, idle |
+| **#112** | `tell` types over an unsubmitted draft | same channel, corrupts the directive | after #116, same file |
+| **#54** | `down` refuses a squash-merged slot | every teardown needs `--force` by hand | then |
+| **#22** | the stall watchdog prescribes compaction to a rate-limited child | actively destroys live context | then |
+| **#61** | `report` exits 0 on an unreachable backend | a socket blip stops the monitor for good | last, same file as #22 |
 
-Queued behind them, in this order (serialised by the FILE each touches):
-**#112** (`tell.sh`, same slot as #51) → **#54** (`down.sh`) → **#22** → **#61** (both
-`report.sh`, and both must wait for #116 which also touches it). **#117** (council `say` uses the
-now-shared predicate) follows #116.
+**#117** (council `say`, the same defect as #51) rides the shared predicate #116 introduces, so it
+is cheap afterwards — but it is council's bug, not the fleet's, and it is below the line.
+
+Standing rules for this lane: `shipyard-down.sh` only after a merge or a close (it removes the
+worktree); monitors carry `SHIPYARD_CTX_WINDOW=1000000` or the ctx column lies about a 1M session.
 
 
 - **Mode:** brownfield onboarding (GSD Core methodology, applied by hand — no GSD CLI installed).
@@ -191,10 +197,24 @@ behind an unsettled argument.
 - **#51 / #112** — `tell` decides `delivered` from a before/after screen DIFF, which typing always
   changes, so an unsubmitted directive reports as delivered (#51); and it types with no emptiness
   check, so a directive concatenates onto a pending draft (#112). Decisions 51-1/51-2: the
-  turn-state read lives in `shipyard-lib.sh`, NOT the shared driver — a client's footer string
+  turn-state read does NOT belong in the shared **driver** — a client's footer string
   (`esc to interrupt`) is not backend knowledge, and the driver abstracts agterm-vs-tmux; and it
-  must REDUCE the marker's spellings, deleting `shipyard-compact.sh`'s two inline greps, or the
-  change has made things worse. `unconfirmed` gets a non-zero exit, because a verdict that exits 0
+  must REDUCE the marker's spellings, or the change has made things worse.
+
+  **Two claims in the two lines above were wrong, and the child caught both** (same class as
+  `3e97e22`). (a) The read was recorded as living in `shipyard-lib.sh`; it lived in a new
+  `shipyard-turn.sh` that the lib sources — the lib is its *caller*, not its home, and naming the
+  wrong file is how a later reader "fixes" the wrong one. (b) The marker's inline greps were
+  recorded as **two** in `shipyard-compact.sh`; there are **three** there, and a fourth in
+  `shipyard-report.sh`. I counted from memory of the diff instead of grepping the tree.
+
+  **AMENDED at 51-1 (authoritative).** The predicate moves into `shared/adapters/` after all,
+  because the premise of the original decision was false: I justified keeping it skill-local as
+  "both consumers are shipyard's", and council is a real third one — `council_say`
+  (`up.sh:526`) confirms only that `ct_type` injected keystrokes, never that a turn started, which
+  is #51 verbatim. Filed as **#117**. What the objection actually landed on was kind-THREADING
+  plumbing, not the shared home, so the function goes in kind-less and the seam where a per-kind
+  marker would arrive is documented instead of parameterised. `unconfirmed` gets a non-zero exit, because a verdict that exits 0
   is exactly a note nobody has to notice — the same defect class as the false `delivered`. **Hit while
   diagnosing a real stall**, where a captured pane showed placeholder ghost text that is
   indistinguishable from a draft — a bare Return did nothing (correctly: the box was empty) and it
