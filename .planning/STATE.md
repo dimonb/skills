@@ -1,32 +1,88 @@
 # STATE — session memory
 
-## ▶ RESUMED (2026-09-07) — ONE LANE, and the finish line is narrow
+## ⏸ PAUSED AGAIN (2026-09-07, ~15:05) — one lane, one change shipped, nothing mid-flight
 
-The pause is over. The owner's instruction narrows the work twice: **one slot runs at a time**, and
-the objective is only **what actually blocks using the fleet** — not the backlog. Both slots kept
-their terminal and worktree through the pause, so each resumes with its own history; nothing was
-handed off through a file.
+Paused on request a second time, three hours into the one-lane resume. **This is a clean stop, not
+a stall:** the lane's change had already merged, and the next slot had not started, so nothing was
+interrupted mid-work and nothing needs recovering.
 
-**One lane is not just an instruction, it is also the budget.** The first resumed slot's own banner
-read *79% of the weekly limit, resets Sep 11* — four days out. Two slots burn that twice as fast
-for no gain here, since the queue below is serialised by file anyway.
+### The instruction this resume ran under, and it still stands
 
-The finish line, in order. Everything after #61 is explicitly NOT part of it:
+Two narrowings, both from the owner: **one slot at a time**, and the objective is only **what
+actually blocks using the fleet** — not the backlog.
 
-| # | what | why it blocks USE | lane |
+**One lane is also the budget, not only a preference.** The resumed slot's own banner read *79% of
+the weekly limit, resets Sep 11*. Two slots burn that twice as fast for no gain here, because the
+queue below is serialised by the file each change touches anyway.
+
+### Shipped this lane
+
+**#115 → PR #115 merged (`67972b5`).** `shared/policy/tests` had run in no automated invocation
+since the day it landed; it now runs under `make check` (1.1s, pure) and `make test`, and the
+*class* is closed rather than the instance — check 10's suite list became `$GATED_SUITES`, read by
+both consumers, and a new **check 12** asserts the reverse direction against disk: every runner
+under `plugins/` or `shared/` must be named by a Makefile recipe AND declared in that list.
+Verified before merging: `make test` rc=0 in 438s on macOS with all six suites executing,
+`make check-test` 98 proven / 0 not proven, CI green on all three targets.
+
+One thing worth knowing because both sides touched one file: the branch predated the AGENTS.md
+"shared engine" section, and the squash **kept both** — main's `AGENTS.md` carries the section and
+the new check-12 text, and `check.sh` carries `$GATED_SUITES`. Checked after merging, not assumed.
+
+### The finish line — what is left, in order
+
+Everything after #61 is explicitly NOT part of it:
+
+| # | what | why it blocks USE | where |
 |---|---|---|---|
-| **#115** | `shared/policy/tests` runs somewhere + check 12 | gate hygiene, and it was ~done | `ship-111`, running |
-| **#116** | `tell` confirms from turn state, not a screen diff | a directive reports `delivered` while unsent | `ship-51`, idle |
+| ~~#115~~ | ~~policy suite gated + check 12~~ | — | **merged `67972b5`** |
+| **#116** | `tell` confirms from turn state, not a screen diff | a directive reports `delivered` while it sits unsent | `ship-51`, idle, PR open |
 | **#112** | `tell` types over an unsubmitted draft | same channel, corrupts the directive | after #116, same file |
 | **#54** | `down` refuses a squash-merged slot | every teardown needs `--force` by hand | then |
-| **#22** | the stall watchdog prescribes compaction to a rate-limited child | actively destroys live context | then |
+| **#22** | the stall watchdog prescribes compaction to a rate-limited child | actively destroys live context to cure waiting | then |
 | **#61** | `report` exits 0 on an unreachable backend | a socket blip stops the monitor for good | last, same file as #22 |
 
 **#117** (council `say`, the same defect as #51) rides the shared predicate #116 introduces, so it
-is cheap afterwards — but it is council's bug, not the fleet's, and it is below the line.
+is cheap afterwards — but it is council's bug, not the fleet's, and it sits below the line.
 
-Standing rules for this lane: `shipyard-down.sh` only after a merge or a close (it removes the
-worktree); monitors carry `SHIPYARD_CTX_WINDOW=1000000` or the ctx column lies about a 1M session.
+### State at this pause, verified rather than assumed
+
+| slot | branch | head | PR | worktree | what it is waiting on |
+|---|---|---|---|---|---|
+| `ship-111` | `fix/gate-policy-tests-registration` | `30609b5` | **#115 MERGED** | clean, pushed | nothing — it is **done**; only its teardown is outstanding |
+| `ship-51` | `fix/shipyard-tell-delivery-confirmation` | `08ad8f8` | **#116** open | clean, pushed (0 ahead of origin) | the directive that starts its one fix pass |
+
+Both monitors stopped. Neither child was sent a pause directive: 111 had already handed off and 51
+had never started, so a `tell` would have been noise — and on this very code a `tell` is a small
+risk of its own until #116 lands.
+
+**`ship-111` was deliberately NOT torn down.** Its merge is the legitimate trigger and the teardown
+is the correct next step, but removing a worktree is the one irreversible move available here, and
+"pause" is not the moment for it. It is clean, pushed and merged, so it costs nothing to leave.
+Expect `shipyard-down.sh` to refuse it — that is **#54**, the squash-merge ancestry bug, reproducing
+for the third time — and prove containment with `git diff` against `main` before reaching for
+`--force`. Note that a plain `git diff origin/main..30609b5` is NOT that proof any more: `main` has
+moved ahead of the branch, so the diff shows main's own newer commits and looks alarming while
+nothing is missing.
+
+### To resume
+
+`ship-51` is the whole lane. Its round-1 review is COMPLETE (9 axes + 5 skeptics) and its full
+ledger survives the pause in `.git/ship-escalations/pause-51-round1-findings.md`. The one thing
+that blocked it — an open design question about B1's fix shape — **is answered** in
+`.git/ship-escalations/decision-51-3.md`, which also dispositions every finding of the round and
+fences the scope. So the resume is one `shipyard-tell.sh 51` pointing at that file, then the
+monitors.
+
+Standing rules: `shipyard-down.sh` only after a merge or a close (it removes the worktree);
+monitors carry `SHIPYARD_CTX_WINDOW=1000000` or the ctx column lies about a 1M-window session.
+
+**A drafting rule this lane adopted and the next one should keep:** never write the client's footer
+marker or its queued hint literally into a directive, an escalation or a comment. A child working
+on shipyard displays what you send it, and the displayed literal then satisfies the very predicate
+#116 is fixing — sweep-siblings' third trigger, which poisons the slot until the text scrolls off.
+Name such a string by role and put it in a file the reader opens. `decision-51-3.md` is written
+that way on purpose.
 
 
 - **Mode:** brownfield onboarding (GSD Core methodology, applied by hand — no GSD CLI installed).
