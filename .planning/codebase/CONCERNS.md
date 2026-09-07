@@ -45,7 +45,15 @@ decision, recorded in the Phase-2 CONTEXT.
 shipyard has a human mailbox; council has none (self-reports in-room). Unifying the policy means
 **adding** a mailbox path to council for needs-human signals, not just wiring an existing one.
 
-## C7 · Tests are outside the gate — affects GATE-01 / MIG-03
-Neither skill's `tests/run-all.sh` is run by `make check` (shipyard says so at
-`tests/run-all.sh:6-10`). "Green tests" must mean the runner is invoked per phase; prefer wiring
-the tests into the gate (`AGENTS.md:172-173`) over a caveat.
+## C7 · Tests are outside the gate — CLOSED by #111
+Was: neither skill's `tests/run-all.sh` is run by `make check`, so "green tests" had to mean the
+runner was invoked per phase. That framing left a loophole — "or state the manual run in its
+SUMMARY" — and `shared/policy/tests` took it and ran in no automated invocation at all from the
+day it landed.
+
+Now: `scripts/check.sh` names the six gated suites once in `$GATED_SUITES`; check 10 gates each
+suite's test registration, and check 12 gates that every runner on disk is named by a `Makefile`
+recipe AND appears in `$GATED_SUITES`. `make check` runs the four fast suites, `make test` adds
+shipyard and council. Adding a suite requires both edits and the gate reds until both are done, so
+"green tests" no longer depends on anyone remembering. The two skill suites are still `make test`
+only — deliberately, on runtime — but their invocation is now gated rather than conventional.

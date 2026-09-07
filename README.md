@@ -181,8 +181,8 @@ the same skills is verified, and the symlink is additive.
 ## Working on this repo
 
 ```bash
-make check        # the gate — static checks plus the fast driver, flow and adapter suites; green before every commit
-make test         # five suites' fast subsets (driver, flow, adapters, shipyard, council); run by hand
+make check        # the gate — static checks plus the four fast suites; green before every commit
+make test         # all six suites' fast subsets; run by hand
 make check-test   # proves each of the gate's assertions actually fails when violated
 ```
 
@@ -202,12 +202,20 @@ and no state exists without a handler; that no non-generic string is present; th
 file carries non-Latin script (untracked ones too, like the leak scan); that no council test
 names the shared temp parent — a grep
 for the shape a test copied from an older checkout carries, not a proof about where its rooms
-are built; and that every test on disk, in each suite it visits (driver, flow, adapters, shipyard,
-council — `shared/policy/tests` is not among them), appears in the list its `run-all.sh` actually
-walks, so a test cannot land and then silently stop running. Beyond those static checks, `make
-check` also runs the fast driver, flow and adapter suites, so a regression in any of the three
-reds a commit; the slower shipyard and council suites run under `make test`, and `make check`
-gates only their registration (above). CI (`.github/workflows/ci.yml`) then runs all three —
+are built; and that no test suite can silently stop running, which takes three assertions rather
+than one. `check.sh` names the six gated suites once, in `$GATED_SUITES`; check 10 walks that list
+and requires every test on disk to appear in the list its `run-all.sh` actually walks, so a test
+cannot land and then stop running; and check 12 asserts the two converse directions against the
+runners it finds on disk — that each is named by a `Makefile` recipe, so a whole suite cannot run
+nowhere, and that each appears in `$GATED_SUITES`, so a suite cannot be wired into `make` and yet
+never registration-checked. The declaration is hand-maintained on purpose: derive it from disk and
+a suite deleted or renamed wholesale simply leaves the list, silently. All three classes are
+history, not theory — `shared/policy/tests` was missing from the list and from both targets from
+the day it landed, so it ran in no automated invocation at all while looking entirely healthy.
+Beyond those static checks, `make check` also runs the fast driver, flow, adapter and policy
+suites, so a regression in any of the four reds a commit; the slower shipyard and council suites
+run under `make test`, and `make check` gates only their registration, invocation and declaration
+(above). CI (`.github/workflows/ci.yml`) then runs all three —
 `make check`, `make check-test` and `make test` — on every push to `main` and every pull request,
 so those suites' runtime errors surface in CI; locally, where `make check` stays fast, they still
 surface at `make test` time rather than at commit time.
@@ -216,10 +224,10 @@ surface at `make test` time rather than at commit time.
 identical to one that works. It proves every assertion in the gate — a clean baseline, then each
 assertion's violation injected one at a time (each probe aiming to fire only the assertion it
 names), plus the cases that require the gate to stay **green**; it prints the running total as
-`assertions proven: N`. Every failure path in `check.sh` now has one, including
-every arm that fires when a matcher errors, or finds nothing to inspect, instead of finding a
+`assertions proven: N`. Nearly every failure path in `check.sh` has one, including almost all of
+the arms that fire when a matcher errors, or finds nothing to inspect, instead of finding a
 violation — an unprobed arm of that kind reports success having inspected nothing, which is
-indistinguishable from a clean run.
+indistinguishable from a clean run. The exceptions are named below rather than left to be found.
 
 The green cases are the same defect seen from the other side. A check that reds on state the repo
 does not own blocks every commit until that state is moved, and nothing about a red gate says
@@ -242,6 +250,14 @@ reds — on a neighbouring assertion — so `make check-test` reports it caught 
 that no longer exists. Every one is pre-existing and each needs its own pin, so they are tracked
 as an issue rather than fixed alongside an unrelated change. The list `check-test.sh` keeps above
 `expect_fail` is the authoritative one; this paragraph is a summary of it and nothing more.
+
+Two arms have no probe at all, for a different reason — they are the per-item "this matcher
+errored" arms, reachable only by making a file unreadable, which is a no-op when the gate runs as
+root and so cannot be probed portably: `could not scan council test for a fixed temp path`
+(check 9) and `could not scan the Makefile for a test runner invocation` (check 12). Their
+siblings that error on a *listing* rather than a per-item read are probed, because a listing's
+status can be forced directly. Stated here because a green `make check-test` would otherwise be
+read as covering them.
 
 Writing and re-running it has found six real bugs
 so far, including a broken symlink that slipped past an `[ -e ]` test, a leak check that never

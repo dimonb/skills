@@ -12,10 +12,11 @@
 # 7. no non-generic strings (structural patterns only; no dependency on any untracked file)
 # 8. no non-Latin script in any file, untracked included (the checkable half of "English")
 # 9. no council test names the shared temp parent (the pre-run-root shape); see §9 for its limits
-# 10. every test on disk is registered in its suite's run-all.sh (driver, flow, adapters, shipyard,
-#     council — NOT shared/policy/tests, which this loop does not visit),
-#     so none silently stops running
+# 10. every test on disk is registered in its suite's run-all.sh, for every suite $GATED_SUITES
+#     declares, so no test silently stops running
 # 11. every vendored copy of a shared module is byte-identical to its module's one canonical source
+# 12. every test runner on disk under plugins/ or shared/ is invoked by a Makefile recipe AND
+#     declared in $GATED_SUITES, so no whole suite runs nowhere or escapes check 10
 set -uo pipefail
 cd "$(dirname "$0")/.."
 ROOT_P=$(pwd -P)          # physical repo root; see the symlink containment check below
@@ -26,6 +27,26 @@ fail() { echo "FAIL $*"; rc=1; }
 # and 2, check 5's listing, its note, its outside-plugins exemption and both of its `for d` loops.
 # Two places spelling the same pair differently is how one of them stops being maintained.
 SKILL_LINK_DIRS='.claude/skills .agents/skills'
+
+# Every test suite the repo gates, named ONCE and read by BOTH consumers: check 10 walks it to
+# assert each suite's tests are registered, and check 12 asserts the reverse — that every runner
+# found on disk appears here. Two copies of this list would let the two checks disagree about what
+# a suite is, which is precisely the seam a suite slips through.
+#
+# It stays a hand-maintained DECLARATION on purpose. Deriving it from disk was considered and
+# rejected: disk would then be the authority, so a suite directory deleted or renamed wholesale
+# would simply stop being in the list, silently, and that is the same coverage loss the two checks
+# exist to catch. A declaration cross-checked against disk catches BOTH directions — a suite gone
+# from disk reds check 10, a suite missing from this list reds check 12.
+#
+# Adding a suite therefore means adding it here AND invoking its runner from a Makefile target.
+# Neither is optional and neither is silent; check 12 reds until both are done.
+GATED_SUITES='shared/driver/tests
+shared/flow/tests
+shared/adapters/tests
+shared/policy/tests
+plugins/shipyard/skills/shipyard/tests
+plugins/council/skills/council/tests'
 
 # `-c core.quotePath=false` belongs on EVERY listing whose paths reach `under_skill_dirs` or the
 # `ls-files -s` parse, not just check 5's. By default git C-quotes a path holding a byte >= 0x80,
@@ -456,16 +477,19 @@ else
 fi
 
 # ------------------ 10. every test on disk is registered in its suite's run-all.sh
-# Generalised from council-only to the suites listed below (driver, flow, adapters, shipyard,
-# council). That is NOT every suite the repo ships: `shared/policy/tests` is in neither this list
-# nor either Makefile target, so it is the one suite whose registration is gated by nothing —
-# stated here rather than left implied, because a green gate otherwise reads as full coverage.
-#
-# The runner walks a hand-maintained list. Nothing connected that list to the files on disk, so a
-# test could land, pass review, and then simply never run again — coverage lost with no symptom
-# anywhere, which is strictly worse than a red suite. It has already come close: during a run of
-# several parallel changes the registration line was the one place they all collided, and a
+# Generalised from council-only to every suite the repo ships, named once in $GATED_SUITES above.
+# The list is a hand-maintained DECLARATION, deliberately: derive it from disk instead and a suite
+# directory deleted or renamed wholesale stops being noticed, which is the same silent
+# coverage-loss this check exists to prevent. What connects it to disk is check 12, which asserts
+# in the other direction — every runner ON DISK must appear in this list — so a suite cannot be
+# added and left unregistered either. Before that existed, a test could land, pass review, and
+# then simply never run again, with no symptom anywhere; and `shared/policy/tests` sat in exactly
+# that state from the day it landed. It has also come close by accident: during a run of several
+# parallel changes the registration line was the one place they all collided, and a
 # resolution that dropped a name would have looked exactly like a clean one.
+#
+# This check is about a test file's registration INSIDE a runner. Whether that runner is ever
+# INVOKED is a separate question, and its own failure class — check 12 owns it.
 #
 # What this catches and what it does not. The extraction reads the space-separated words out of
 # every single-line `tests=(…)` / `tests+=(…)` assignment in the runner (council splits its list
@@ -486,12 +510,7 @@ fi
 # a system-level failure, not a code path). Check 9 owns the council temp-path scan, so a council
 # listing error is reported once there; here a genuinely emptied council dir reds this arm too,
 # which is louder than the old dedicated skip but never silent.
-for suite_dir in \
-  shared/driver/tests \
-  shared/flow/tests \
-  shared/adapters/tests \
-  plugins/shipyard/skills/shipyard/tests \
-  plugins/council/skills/council/tests; do
+for suite_dir in $GATED_SUITES; do
   runner=$suite_dir/run-all.sh
   suite_tests=$(list_suite_tests "$suite_dir"); suite_rc=$?
   if [ "$suite_rc" -ne 0 ]; then
@@ -568,6 +587,122 @@ for moddir in shared/*/; do
 done
 # And no shared module at all means the whole check compared nothing.
 [ "$shared_mods" -gt 0 ] || fail "no shared/<mod>/ module found under shared/"
+
+# ------------------ 12. every runner on disk is invoked by a Makefile target AND declared gated
+# Check 10 asserts that a test FILE is registered inside its suite's runner. Two things it does
+# NOT assert, each its own failure class, each of which has actually happened here:
+#
+#   * that the runner is ever INVOKED. A suite can land, be internally consistent, pass check 10,
+#     and run in no automated invocation at all. `shared/policy/tests` sat in exactly that state
+#     from the day it landed — green when run by hand, never run by `make check`, `make test` or
+#     CI, with nothing anywhere saying so.
+#   * that the suite is in check 10's list AT ALL. That list is a hand-maintained declaration, so
+#     a suite added to disk and left out of it is simply never registration-checked. That is the
+#     other half of the same incident: policy was missing from the list too.
+#
+# So this check reads the runners on disk and asserts BOTH directions against them. Together with
+# check 10 walking $GATED_SUITES, the declaration and the disk are cross-checked each way: a suite
+# gone from disk reds check 10, a suite missing from the declaration reds here, and a suite nobody
+# invokes reds here. A suite nothing invokes is coverage the repo believes it has.
+#
+# Either Makefile target counts. The fast/slow split is deliberate — `make check` stays
+# committable and the slow suites live in `make test` — so requiring both would fight it, and
+# would red for council and shipyard, which `make check` correctly does not run.
+#
+# Scope: the pathspecs cover the two trees the repo actually ships, `plugins/` and `shared/`, and
+# nothing else. The alternative was to scan every `*/tests/run-all.sh` on disk and then exempt the
+# untracked entries under the project skill directories, the way checks 1, 2 and 5 do. Scoping by
+# shipped path is the better fit for THIS check: the question is whether the repo's own Makefile
+# runs the repo's own suites, and a local skill somebody keeps under `.claude/skills/` is not the
+# Makefile's business whether it is tracked or not. Scanning it could only ever produce a false red
+# for work that is deliberately none of the gate's concern.
+#
+# What the invocation test actually matches, stated because a green gate otherwise reads as more
+# coverage than it is: a RECIPE line naming the runner — a line beginning with a tab, with the path
+# delimited by whitespace or end-of-line. Restricting it to recipe lines is what makes it an
+# invocation test rather than a mention test: an unanchored whole-file `grep -F` was tried first
+# and a `#`-commented-out `@bash …run-all.sh` line satisfied it, leaving the check green over a
+# suite that ran nowhere — the exact defect it exists to catch. The word-boundary requirement is
+# the other half: without it a longer path that CONTAINS a shorter one (a vendored copy under
+# `plugins/<p>/skills/<s>/shared/<mod>/tests/`) would satisfy the shorter one's assertion too.
+# Matching recipe lines rather than named targets keeps it target-agnostic: a later `make
+# test-slow` needs no edit here. The residual limit is that a recipe line in a target nothing ever
+# invokes still counts; probes 30/30b/30c/30d close that for the four suites `make check` runs, by
+# requiring a failing test in each to red `make check` itself.
+#
+# `$GIT_Q` and the explicit `:(glob)` magic are both load-bearing. Without `core.quotePath=false`
+# a path holding a byte >= 0x80 comes back C-quoted and no `-F` match can succeed, reddening the
+# gate over a path that, as printed, does not exist. And `:(glob)` pins the wildcard semantics:
+# with default pathspecs, `GIT_GLOB_PATHSPECS=1` in the environment makes `*` stop crossing `/`,
+# which silently drops the two deeply nested plugins/ runners while leaving four behind — enough
+# that the compared-nothing arm below never fires and the check quietly stops asserting anything
+# about shipyard and council. With `:(glob)` and `**` the semantics are the same either way, and
+# `GIT_LITERAL_PATHSPECS=1` fails closed through that arm instead.
+#
+# Fails CLOSED: an errored listing, an empty one (both trees moved or renamed), a missing Makefile,
+# and a grep that could not run each red, so "compared nothing" is never read as OK. The reverse
+# direction — a target naming a runner that is gone — is deliberately not asserted, for check 10's
+# reason: `make` already reds on it at runtime, `bash` exiting 127 on the missing path.
+#
+# `sort -u` is not cosmetic. `--cached` lists every STAGE of an unmerged path, so during a
+# conflicted merge or rebase one runner comes back three times; `scanned` would then overcount and
+# the same runner would be re-tested twice for nothing. An unresolved index is a normal state for a
+# gate that runs before a commit, and this was observed for real while rebasing this very check.
+# `$?` after the pipeline is safe because `pipefail` is set at the top of this file — a failing
+# `git ls-files` still propagates. (The caveat about pipefail in check 10 is about process
+# substitution, `<(…)`, which a plain pipe is not.)
+runners=$(git $GIT_Q ls-files --cached --others --exclude-standard \
+  ':(glob)plugins/**/tests/run-all.sh' ':(glob)shared/**/tests/run-all.sh' | sort -u)
+runners_rc=$?
+if [ "$runners_rc" -ne 0 ]; then
+  fail "could not list the test runners on disk (git ls-files rc=$runners_rc)"
+elif [ ! -f Makefile ]; then
+  fail "Makefile is missing — cannot check that the test suites are invoked"
+else
+  # Recipe lines only, captured ONCE: every consumer below tests the same text, and a second grep
+  # of the Makefile would be a second place for the "which lines count" rule to drift.
+  recipes=$(grep '^	' Makefile)
+  recipes_rc=$?
+  # grep exits 1 on no match and >1 on an error. A Makefile with no recipe line at all is a real
+  # state (every target empty), and it means nothing is invoked — so it must not be read as an
+  # error, and must not be read as OK either: the per-runner arm below then reds for every runner.
+  if [ "$recipes_rc" -gt 1 ]; then
+    fail "could not read the Makefile's recipe lines (grep rc=$recipes_rc)"
+  else
+    scanned=0
+    while IFS= read -r runner; do
+      # A here-string over an empty listing still yields one empty line.
+      [ -n "$runner" ] || continue
+      scanned=$((scanned + 1))
+
+      # 12a — is it invoked? `.` is the only regex metacharacter a git path can carry here, so
+      # escaping it is enough to make the rest a literal match inside an ERE.
+      esc=${runner//./\\.}
+      printf '%s\n' "$recipes" | grep -qE "(^|[[:space:]])$esc([[:space:]]|\$)"
+      case $? in
+        0) ;;
+        1) fail "test suite runner is invoked by no Makefile target (it never runs): $runner" ;;
+        *) fail "could not scan the Makefile for a test runner invocation: $runner" ;;
+      esac
+
+      # 12b — is its suite declared in check 10's list? Without this, a suite can be Makefile-wired
+      # (green above) and never registration-checked, because check 10 only visits what
+      # $GATED_SUITES names. Compare whole entries, not substrings.
+      suite=${runner%/run-all.sh}
+      declared=no
+      while IFS= read -r gated; do
+        [ -n "$gated" ] || continue
+        [ "$gated" = "$suite" ] && { declared=yes; break; }
+      done <<< "$GATED_SUITES"
+      [ "$declared" = yes ] || fail \
+        "test suite is on disk but not in \$GATED_SUITES, so check 10 never registration-checks it: $suite"
+    done <<< "$runners"
+    # `scanned`, not `invoked`: this counts what was INSPECTED, and it is the compared-nothing
+    # guard, not a claim that anything is invoked. Check 9's identical guard uses the same name.
+    [ "$scanned" -gt 0 ] \
+      || fail "found no test runner under plugins/ or shared/ (moved? renamed?)"
+  fi
+fi
 
 [ $rc -eq 0 ] && echo "check: OK"
 exit $rc

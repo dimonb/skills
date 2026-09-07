@@ -1,22 +1,18 @@
 #!/usr/bin/env bash
-# run-all.sh — the shared escalation-policy test suite. Run by hand:
+# run-all.sh — the shared escalation-policy test suite. Runs under `make check` and `make test`,
+# and by hand:
 #
 #   bash shared/policy/tests/run-all.sh
 #
 # Every test is a pure read over the module's functions plus, for the mailbox, a throwaway
-# `git init` repo — no live agent, no network, no touching the real mailbox.
+# `git init` repo — no live agent, no network, no touching the real mailbox. Fast and pure, which
+# is why it gates every commit rather than living in `make test` alone.
 #
-# THIS SUITE IS GATED BY NOTHING, and that is worth knowing before you rely on it. The
-# generalization this header used to promise landed only by halves: check 11 (the drift gate over
-# vendored copies) really does iterate every shared/<mod>/ and covers shared/policy/, but the part
-# that RUNS a suite and checks its registration — scripts/check.sh check 10, and the Makefile —
-# took a hand-maintained list of five suite directories, and this one is not on it. So nothing
-# runs these tests in `make check`, `make test` or CI, and a test dropped from the `tests` array
-# below reds nothing. It is the one suite in the repo that can silently stop running.
-#
-# Wiring it in is a change of its own (check 10's loop, both Makefile targets, and a probe in
-# scripts/check-test.sh, which every gated suite has). AGENTS.md states the same gap where the
-# verification commands are documented.
+# Both ways this suite could silently stop running are now gated, and it is worth knowing which
+# check owns which: a test file under this directory that is missing from the `tests` array below
+# reds `scripts/check.sh` check 10, and this runner disappearing from the Makefile — or this suite
+# disappearing from check.sh's $GATED_SUITES, which is what makes check 10 visit it at all — reds
+# check 12. It was gated by neither from the day it landed until #111.
 set -uo pipefail
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
