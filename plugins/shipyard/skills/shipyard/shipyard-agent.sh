@@ -16,13 +16,25 @@
 # child that cannot be supervised by this skill must not become launchable just because the
 # shared module learned how to start it.
 #
-# Widening it is a shipyard decision, made in this file, and it takes THREE edits — counted here
-# because the last one is silent: this list; the `case` in `shipyard_agent` that reads the
-# SHIPYARD_AGENT knob; and `shipyard_agent_env_pass_default`, which returns 1 for a kind it does
-# not know and so makes `shipyard_env_preamble` fail the launch rather than say why. Neither
-# `case` can be built from the list — they are shell syntax, not data — so they are kept in this
-# one file. Both operator-facing refusals below ARE derived from the list, so the half a person
-# reads cannot drift even when the three cases do.
+# Widening it is a shipyard decision, and the admission-critical edits are three, all here: this
+# list; the `case` in `shipyard_agent` that reads the SHIPYARD_AGENT knob; and
+# `shipyard_agent_env_pass_default`. Neither `case` can be built from the list — they are shell
+# syntax, not data — so they are kept in this one file. Both operator-facing refusals below ARE
+# derived from the list, so the half a person reads cannot drift even when the cases do.
+#
+# THE THIRD ONE FAILS OPEN, which is why it is counted rather than left to be discovered.
+# `shipyard_agent_env_pass_default` returns 1 for a kind it does not know; `shipyard_env_preamble`
+# then returns 1 having emitted NO exports and NO unsets; and its only caller
+# (`shipyard-launch.sh`, inside `{ … } >"$LAUNCHER"`) does not check that status, and no script
+# here runs `set -e`. So the launch SUCCEEDS and the child is misconfigured rather than refused:
+# it falls back to the profile-default config dir — possibly with no `/ship` at all — and
+# inherits the un-scrubbed per-session variables, the parent's IPC socket and token among them.
+# A kind added without this arm does not announce itself.
+#
+# Two more places branch on a kind but are not admission: `shipyard_agent_prepare_worktree`
+# below (and its caller's rollback bookkeeping) pre-creates a worktree for codex only, so a new
+# kind that needs one — any kind whose protocol mode is `reference`, which is `-C <dir>` shaped —
+# must be added there too or it execs into a directory that does not exist.
 shipyard_agent_kinds() { printf '%s\n' claude codex; }
 # `-F`: a LITERAL match. Without it the pattern is a basic regular expression, and this function
 # is the one that keeps a kind shipyard cannot supervise out — `shipyard_agent_admits '.*'`

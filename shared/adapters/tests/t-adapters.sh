@@ -284,8 +284,14 @@ adp_known claude && adp_skill_ref claude ship >/dev/null && adp_parent_kind >/de
 adp_notes codex peer >/dev/null || exit 1
 echo FLOOR-OK
 PROBE
+  # The WHOLE combined output, not `| tail -1`. `echo FLOOR-OK` always prints last, so tailing
+  # threw away every 3.2 diagnostic above it — and since `adp_cmd` also had its stdout dropped,
+  # a bash-4 construct that is not a function's last command left rc 0 and this printed `ok`.
+  # Measured on `mapfile` and `${var^^}`, two of the three constructs the module's header names:
+  # the render silently lost every --add-dir and the probe passed. Comparing the whole output
+  # reds both, because the diagnostic is now part of what is compared.
   ok "the module sources and renders under /bin/bash" FLOOR-OK \
-    "$(/bin/bash "$floor_probe" 2>&1 | tail -1)"
+    "$(/bin/bash "$floor_probe" 2>&1)"
 else
   ok "/bin/bash exists to probe the floor with" yes no
 fi
