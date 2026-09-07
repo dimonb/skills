@@ -129,6 +129,38 @@ through the `sh` → `shipyard` rename **on purpose**: they are the protocol bet
 and a `/ship` child, not this skill's own surface, and renaming either would orphan the
 mailbox of a run already in flight.
 
+## The shared engine, and how thin the skills stay
+
+`shipyard` and `council` sit on a **shared engine**: one canonical module per concern under
+`shared/<mod>/`, vendored into both plugins and held byte-identical by the gate (`shared/driver`
+the terminal backend, `shared/adapters` per-agent-kind launch and client knowledge,
+`shared/policy` escalation disposition, `shared/flow` the step graph). The vendoring exists
+because a Codex plugin cannot depend on another plugin, so a symlink cannot cross that boundary;
+`scripts/sync-driver.sh` writes the copies and the drift check reds if any diverges.
+
+**The rule: what BOTH skills need goes into the shared engine, so each skill stays as thin as it
+can be.** A skill should hold its own operator surface and its own policy, and as little else as
+possible. Two implementations of one question is the defect the engine exists to remove — that is
+what DRV-01/02 were for, and it is the standing test for any new code that answers a question the
+other skill also asks.
+
+Three failure modes this has actually produced, kept because each cost a decision:
+
+* **"Only one skill needs it" is a claim about the other skill, so go and check it.** A turn-state
+  read was placed in `shipyard`'s own lib on the stated grounds that both consumers were
+  shipyard's. They were not — `council say` had the same gap, unlooked-for. Grep the other skill
+  before asserting it does not care.
+* **The right shared module is the one that owns the KIND of knowledge, not the nearest one.** A
+  client's footer string belongs with per-agent-kind knowledge, not in the module that abstracts
+  agterm-vs-tmux; the terminal backend does not know what a client renders.
+* **Sharing must not be bought with plumbing.** Do not thread a parameter through every caller to
+  earn a shared home when it changes nothing today. Prefer the thinner surface and document the
+  seam where the constant lives, so the parameter arrives on the day it means something. "Shared"
+  and "lightweight" are the same instruction, not a trade.
+
+A module reached by only one skill is not wrong — `ship`'s own machinery is nobody else's — but
+it stops being defensible the moment the other skill grows the same need.
+
 ## How work happens here
 
 One change is one issue, one branch, one pull request:
