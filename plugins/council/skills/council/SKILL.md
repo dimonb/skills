@@ -328,24 +328,26 @@ without a lock.
 `relaunch` rewrites `state/launch-<peer>.sh` and `protocol-<peer>.md` from the roster and
 this skill before starting anything. Two reasons.
 
-Every participant is handed the room as a **writable root** (`--add-dir <room>`, in all
-three adapters) — and a scenario deliberately makes those agents adversarial to each other.
+Every participant is handed the room as a **writable root** (`--add-dir <room>`, for every
+agent kind) — and a scenario deliberately makes those agents adversarial to each other.
 Both of those files live in the room. Re-executing a stored launcher would run whatever
 another participant had put there, in a login shell, in your own process tree — and the
 protocol file is what the agent is launched on: `claude` takes it as its system prompt,
 `codex` and `agy` are told to read it and follow it literally.
 
 The values regeneration reads out of `roster.json` — which agent plays the seat, the
-scenario, the role, the participant names — are checked to be bare names before use. They
-select a file to source and a file to render, and `roster.json` is in the room too.
+scenario, the role, the participant names — are checked to be bare names before use. The
+scenario and the names still select a file to render and text to interpolate, and
+`roster.json` is in the room too. The **agent kind no longer selects a file at all**: it is
+matched against `case` labels in the shared adapter module (below).
 
 ### The room is not a trust boundary
 
 **Do not read any of the above as containment, because it is not.** Measured, all three
-adapters, writing to a path outside the repo entirely — outside the working directory and
+agent kinds, writing to a path outside the repo entirely — outside the working directory and
 outside every `--add-dir`:
 
-| adapter | wrote where it was told |
+| agent kind | wrote where it was told |
 |---|---|
 | `claude --permission-mode auto` | yes |
 | `codex -s workspace-write -a never` | yes |
@@ -357,10 +359,19 @@ unattended. So a participant is an agent running **as you**, and everything you 
 can reach: the roster, another seat's launcher, `council.sh` itself, your home directory.
 
 That makes regeneration and the checks above **blast-radius reduction, not a boundary**. They
-remove the traversal and sed-injection forms. They do **not** close the supervisor-triggered
-path in general: `--add-dir <skill>` makes this skill's own `adapters/` directory writable, so
-a participant can drop a plausibly-named file there and have the roster point a seat at it,
-and an ordinary `council.sh relaunch <peer>` will source it. That is measured, not theorised.
+remove the traversal and sed-injection forms.
+
+One supervisor-triggered path that used to survive them is now **retired**. `--add-dir <skill>`
+makes this skill's own directory writable, and the agent kind used to name a file there
+(`adapters/<kind>.sh`) that `relaunch` **sourced** — so a participant could drop a
+plausibly-named file in and have the roster point a seat at it, and an ordinary
+`council.sh relaunch <peer>` would run it. That was measured, not theorised. A kind is now
+matched by `adp_known` against `case` labels in the shared adapter module and is never turned
+back into a path, so there is nothing to plant; `t13-relaunch.sh` plants a bare-named file in
+both plausible directories and asserts the refusal names the kind and the plant never runs.
+
+The class is narrower, not closed: `--add-dir <skill>` is still a writable grant over this
+skill, and the scenario and role still select files here by name (bare-name-checked).
 
 **Deriving a message's author from its lane is not containment either.** It makes `.from`
 honest about *which lane wrote this*, which is what the room's mechanical rules need. It says
@@ -626,7 +637,7 @@ produced one false test result during development. Do not pipe status through a 
 | `lib/flow.sh` | vendored copy of the shared flow-guard interpreter (`shared/flow/flow.sh`); `room-graph.sh` evaluates the room's graph through it |
 | `lib/room-graph.sh` | the room's turn cycle as a declared flow graph; `c_phase` reads it through the shared guard (opening/exchange/closing/decided) and `status` shows the phase, while the transport's opening gate is the one shared `c_round_open`/`c_round_closed` accessor (`lib.sh`) every reader consults instead of re-deriving the barrier |
 | `lib/claims.jq` | the argument graph and the closure rules |
-| `adapters/*.sh` | how each agent CLI is launched, and what it needs |
+| `lib/agent-adapters.sh` | vendored copy of the shared per-agent-kind adapters (`shared/adapters/agent-adapters.sh`); `up.sh` renders every launcher through it |
 | `protocol/_channel.md` | the channel rules every participant gets |
 | `scenarios/*.md` | roles per scenario |
 | `tests/run-all.sh` | the suite (`--full` adds load and latency runs) |
@@ -639,3 +650,19 @@ knobs onto the driver's `DRV_*` variables and delegates each `ct_*` verb to the 
 to keep in step. The driver is vendored rather than imported because a Codex plugin cannot
 depend on another plugin, so a cross-plugin source would work in one agent and silently break
 in the other.
+
+`lib/up.sh` stands in the same relation to the shared **adapter** module
+(`shared/adapters/agent-adapters.sh`, vendored as `lib/agent-adapters.sh`, same sync and same
+gate). How a kind is started — its binary, its unattended-approval flags, how it is granted a
+directory and how it receives its protocol — lives there and is shared with `shipyard`; council
+keeps what is council's: the roster, the protocol file, the launcher's `COUNCIL_ROOM`/`COUNCIL_ME`
+preamble, and the sentence each participant is greeted with. **There is no longer a per-kind file
+in this skill.** Council enumerates no kinds of its own: it admits whatever `adp_known` accepts
+and picks its greeting from `adp_protocol_mode`, so a kind added to the shared module works here
+with no edit — which is also what retired the plant-a-file path above. Council launches every seat
+at the module's `sandboxed` approval level, never `full`; `shipyard` is the caller that uses
+`full`, and both are pinned by `shared/adapters/tests/t-callers.sh`. **Read that as a knob, not as
+containment**: it changes only `codex` (`-s workspace-write -a never` rather than
+`--approve-for-me`), while `claude` still gets `--permission-mode auto` and `agy`
+`--dangerously-skip-permissions` at either level — as the trust table above records, and as "The
+room is not a trust boundary" says outright.

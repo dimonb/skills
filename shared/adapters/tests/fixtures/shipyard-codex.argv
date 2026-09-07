@@ -1,0 +1,15 @@
+<<CMD>>
+codex
+<<END>>
+<<ARG>>
+--approve-for-me
+<<END>>
+<<ARG>>
+-C
+<<END>>
+<<ARG>>
+@FX@/work tree
+<<END>>
+<<ARG>>
+Read and follow the supervisor protocol at @FX@/pro to.md. Then invoke $ship #42 and stay inside that workflow until its stopping condition.
+<<END>>

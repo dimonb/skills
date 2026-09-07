@@ -1,0 +1,10 @@
+agy (alice): launched with --dangerously-skip-permissions, so it does not prompt.
+          That flag is why the seat runs unattended: without it a path the
+          participant discovers for itself raises a file-access prompt while it
+          holds the floor, and the menu offers no "always" option. It applies to
+          launched sessions only, never to an interactive agy.
+          A room itself no longer needs it — the protocol arrives as an argument
+          and the agenda and record are verbs — but files a participant opens
+          OUTSIDE the room still do.
+          The first launch in a directory agy has not seen also asks you to trust
+          it; the flag does not answer that one for you.

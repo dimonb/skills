@@ -1,0 +1,43 @@
+<<CMD>>
+claude
+<<END>>
+<<ARG>>
+-w
+<<END>>
+<<ARG>>
+ship-42
+<<END>>
+<<ARG>>
+--effort
+<<END>>
+<<ARG>>
+max
+<<END>>
+<<ARG>>
+-n
+<<END>>
+<<ARG>>
+ship-42
+<<END>>
+<<ARG>>
+--permission-mode
+<<END>>
+<<ARG>>
+auto
+<<END>>
+<<ARG>>
+--remote-control
+<<END>>
+<<ARG>>
+ship-42
+<<END>>
+<<ARG>>
+--append-system-prompt
+<<END>>
+<<ARG>>
+PROTOCOL LINE ONE $notavar `notacmd`
+PROTOCOL LINE TWO
+<<END>>
+<<ARG>>
+/ship #42
+<<END>>

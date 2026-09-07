@@ -1,0 +1,30 @@
+<<CMD>>
+codex
+<<END>>
+<<ARG>>
+-s
+<<END>>
+<<ARG>>
+workspace-write
+<<END>>
+<<ARG>>
+-a
+<<END>>
+<<ARG>>
+never
+<<END>>
+<<ARG>>
+--add-dir
+<<END>>
+<<ARG>>
+@FX@/ro om
+<<END>>
+<<ARG>>
+--add-dir
+<<END>>
+<<ARG>>
+@FX@/sk'ill
+<<END>>
+<<ARG>>
+Read @FX@/ro om/protocol-alice.md and follow it literally. Begin.
+<<END>>

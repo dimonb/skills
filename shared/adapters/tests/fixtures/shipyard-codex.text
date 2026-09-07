@@ -1,0 +1,2 @@
+exec codex --approve-for-me -C '@FX@/work tree' \
+  'Read and follow the supervisor protocol at @FX@/pro to.md. Then invoke $ship #42 and stay inside that workflow until its stopping condition.'

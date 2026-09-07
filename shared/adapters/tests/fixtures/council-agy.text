@@ -1,0 +1,4 @@
+exec agy --dangerously-skip-permissions --add-dir '@FX@/ro om' --add-dir '@FX@/sk'\''ill' \
+  -i 'Follow this protocol literally. Begin.
+
+'"$(cat '@FX@/pro to.md')"

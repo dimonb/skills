@@ -23,11 +23,12 @@
 # Run: make check-test
 #
 # This suite invokes `bash scripts/check.sh` directly, NOT `make check`. The two diverged when
-# `make check` began also running the driver and flow suites (see the Makefile): check-test proves
-# check.sh's STATIC assertions fire, so it must not itself be gated on a test suite passing, nor pay
+# `make check` began also running the driver, flow and adapter suites (see the Makefile):
+# check-test proves check.sh's STATIC assertions fire, so it must not itself be gated on a test
+# suite passing, nor pay
 # those suites' runtime on every one of its ~60 probes. The deliberate exceptions all use `make
 # check` on purpose: the final "green after restore" check, and the probes that prove `make check`
-# actually runs the driver and flow suites.
+# actually runs the driver, flow and adapter suites (30, 30b, 30c).
 set -uo pipefail
 cd "$(dirname "$0")/.."
 
@@ -74,6 +75,7 @@ restore() {
     "$TESTS_DIR/t99-probe.sh" "$TESTS_DIR/t98-unregistered.sh" "$TESTS_DIR/nested" \
     shared/driver/tests/_probe-unreg.sh plugins/shipyard/skills/shipyard/tests/_probe-unreg.sh \
     shared/flow/tests/_probe-unreg.sh shared/flow/extra.sh \
+    shared/adapters/tests/_probe-unreg.sh \
     2>/dev/null || true
   rmdir docs 2>/dev/null || true
 }
@@ -482,14 +484,22 @@ expect_fail "shipyard test on disk but not registered in run-all.sh" \
   "test on disk but not registered in"
 rm -f plugins/shipyard/skills/shipyard/tests/_probe-unreg.sh
 
-# 15d — ...and for the FLOW suite. Together with 15, 15b and 15c this proves the check 10 loop
-# actually visits all four suites, not just whichever one happens to be first. Without this probe,
+# 15d — ...and for the FLOW suite. Together with 15, 15b, 15c and 15e this proves the check 10 loop
+# actually visits all five suites, not just whichever one happens to be first. Without this probe,
 # dropping shared/flow/tests from check 10's loop would go uncaught (the sibling probes still pass).
 # The fixture path is already in the restore trap's cleanup list.
 printf '#!/usr/bin/env bash\ntrue\n' > shared/flow/tests/_probe-unreg.sh
 expect_fail "flow test on disk but not registered in run-all.sh" \
   "test on disk but not registered in"
 rm -f shared/flow/tests/_probe-unreg.sh
+
+# 15e — ...and for the ADAPTERS suite, the fifth entry in check 10's loop. Same reason as 15d: the
+# sibling probes all still pass with shared/adapters/tests dropped from the list, so without this
+# one the suite could stop being gated for registration and nothing would say so.
+printf '#!/usr/bin/env bash\ntrue\n' > shared/adapters/tests/_probe-unreg.sh
+expect_fail "adapters test on disk but not registered in run-all.sh" \
+  "test on disk but not registered in"
+rm -f shared/adapters/tests/_probe-unreg.sh
 
 # 16 — and check 10 must say it cannot find the list, rather than comparing the files on disk
 # against an empty set. BOTH assignments are renamed: renaming only `tests=(` leaves the `--full`
@@ -774,6 +784,20 @@ else
   pass=$((pass+1))
 fi
 git checkout -- shared/flow/tests/t-flow.sh
+
+# 30c — ...and `make check` RUNS the adapter suite, so a regression in the module both skills'
+# launches now go through reds every commit. Same technique as 30 and 30b. This is the probe that
+# would catch the Makefile line being dropped while check 10 still asserts the suite's
+# registration — which would leave the suite listed, looking gated, and never run at commit time.
+printf '#!/usr/bin/env bash\nexit 1\n' > shared/adapters/tests/t-adapters.sh
+if make check >"$SCRATCH/out" 2>&1; then
+  echo "NOT CAUGHT: make check does not run the adapter suite (an adapter failure did not red it)"
+  nocatch=$((nocatch+1))
+else
+  echo "caught:     make check runs the adapter suite   ->  a failing adapter test reds make check"
+  pass=$((pass+1))
+fi
+git checkout -- shared/adapters/tests/t-adapters.sh
 
 # 31 — the mirror of 30 for the STATIC gate: `make check` must also invoke scripts/check.sh, not
 # only the fast test suites. When this suite switched its ~60 probes from `make check` to

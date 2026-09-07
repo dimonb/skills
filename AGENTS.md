@@ -165,17 +165,23 @@ than creating one. Either way:
 ## How to verify a change for real
 
 ```bash
-make check        # the static gate (fast, ~2s) + the driver and flow suites; run before every commit
-make test         # all four test suites' fast subsets (driver, flow, shipyard, council) — ~2-3 min
+make check        # the static gate (~3-4s) + the driver, flow and adapter suites; run before every commit
+make test         # five suites' fast subsets (driver, flow, adapters, shipyard, council) — ~2-3 min
 make check-test   # proves the gate's assertions actually fail when violated (needs a clean tree)
 ```
 
 `make check` stays fast because it does not run the shipyard or council suites — those are too
-slow for a per-commit gate. What it DOES enforce for all four suites, statically, is
+slow for a per-commit gate. What it DOES enforce for those five suites, statically, is
 **registration**: a test file that stops being listed in its `run-all.sh` reds `make check`
-(`scripts/check.sh` check 10), so a suite cannot silently stop running. It also runs the driver
-and flow suites (fast), so a driver- or flow-suite regression reds a commit. CI
-(`.github/workflows/ci.yml`) then runs
+(`scripts/check.sh` check 10), so a suite cannot silently stop running. It also runs the driver,
+flow and adapter suites (all fast), so a regression in any of the three reds a commit.
+
+**Five is not all of them, and the gate cannot say so itself.** `shared/policy/tests` is in
+neither Makefile target nor check 10's list, so it runs in no automated invocation and its
+registration is gated by nothing — the one suite that genuinely can stop running silently.
+Wiring it in is a change of its own; until then this is where that gap is written down.
+
+CI (`.github/workflows/ci.yml`) then runs
 `make check`, `make check-test` and `make test` on every push to `main` and every pull request, so
 the shipyard and council suites' **runtime** errors — not only their registration — red a check the
 change must pass. Locally those still surface at `make test`, run by hand like `make check-test`,
