@@ -30,8 +30,10 @@
 | 01-03 watcher reaping (shipyard) | LIFE-03 | #90 → #93 → `ea6ed4c` | ✅ |
 
 **Follow-up SHIPPED (ran parallel to 01-03):** CI (GitHub Actions) — issue #91 → PR **#92** →
-`090ab52`. `.github/workflows/ci.yml` runs make check + check-test + test on push/PR (green Linux +
-macOS). Getting the suites onto Linux caught + fixed **2 latent portability bugs** (shipyard
+`090ab52`. `.github/workflows/ci.yml` runs make check + check-test + test on push/PR — **on Linux
+only.** (This line said "green Linux + macOS"; corrected at #111. One `runs-on: ubuntu-latest` job,
+and no macOS runner ever existed in that file's history. macOS is covered only by a human running
+`make test`.) Getting the suites onto Linux caught + fixed **2 latent portability bugs** (shipyard
 `ctx_mtime` BSD `stat -f`; council `t3-token` wall-clock wedge race → now turn-count deterministic).
 Decision 91-3 (mine): Option A (fix them in-PR), bounded fallback to B — A worked, no rabbit hole.
 

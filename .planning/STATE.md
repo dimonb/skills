@@ -57,7 +57,13 @@
   production owner-death guarantee (honest docs). **Phase 1 done: LOAD #87 + LIFE council #89 +
   LIFE shipyard #93.**
 - **CI SHIPPED:** PR **#92 merged** (`090ab52`) — `.github/workflows/ci.yml` runs the whole gate on
-  push/PR (Linux + macOS). Caught + fixed 2 latent portability bugs (`ctx_mtime` `stat -f`,
+  push/PR. **CORRECTION (made at #111): this entry said "Linux + macOS" and that was never true** —
+  `ci.yml` has a single `runs-on: ubuntu-latest` job and `git log -p --all` over that file contains
+  zero occurrences of `macos`. I wrote the claim without deriving it. It is load-bearing in the
+  worst way: a reader would reasonably conclude that the BSD-vs-GNU portability these suites care
+  about is covered by CI, and it is not — the only macOS coverage is a human running `make test`
+  locally. Whether to ADD a macOS job is a separate and real question given this repo's `stat -f`
+  and `timeout(1)` history. Caught + fixed 2 latent portability bugs (`ctx_mtime` `stat -f`,
   `t3-token` wall-clock race → turn-count). Decision 91-3 (mine): Option A, bounded — worked.
 - **GSD adopted + tracked:** `.planning/` is now committed (`3853950`); AGENTS.md rewritten to
   reconcile GSD with the no-per-change-spec rule (plan-phase output = the issue) and `.planning/`

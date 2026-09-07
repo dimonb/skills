@@ -25,4 +25,18 @@ Measured: driver ~1.7s, shipyard ~20s, council-fast ~117s, and **no CI**. Chose 
   79/0, self-restored clean.
 
 ## Result
-No suite is silently ungated. **Phase 2 COMPLETE — all 5 tasks in prod (#77/#79/#81/#83/#85).**
+**Phase 2 COMPLETE — all 5 tasks in prod (#77/#79/#81/#83/#85).**
+
+**CORRECTION (made at #111).** This section claimed "No suite is silently ungated." That was true
+of the suites that existed when it was written, and false from #96 onward: the policy module
+shipped its suite into no Makefile target and into no entry of check 10's list, so it ran in NO
+automated invocation for four phases and a test dropped from it would have reddened nothing. Found
+by the #104 child while reviewing its own change; closed by #111.
+
+Two things this got wrong, both worth keeping:
+* The claim was about a **state**, not an invariant, and nothing made it stay true. What #111 adds
+  is the missing invariant — check 12 asserts every runner on disk is BOTH invoked by a Makefile
+  target and present in check 10's list, so a future suite cannot be wired in half way.
+* Its root cause was sanctioned, not accidental: `.planning/codebase/TESTING.md` offered a phase
+  the choice to "wire its tests into the gate **or** state the manual run in its SUMMARY". The
+  second branch is how a suite comes to run nowhere.
