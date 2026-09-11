@@ -38,7 +38,7 @@
 # sourcing anything, so it constrains nothing; shipyard is the binding caller.
 
 # A version marker, bumped when the body changes, so sync + the drift gate stay easy to prove.
-_ADP_VERSION=1
+_ADP_VERSION=2
 
 # --- the kinds -----------------------------------------------------------------
 # One per line, sorted, so a caller can `paste -sd, -` them into a message.
@@ -476,4 +476,159 @@ adp_delivery_verdict() {
     esac
   done
   printf 'unconfirmed'
+}
+
+# --- WHY a child is not moving: the waits and faults a client ANNOUNCES ---------
+# Both skills ask this question, and both get it wrong the same way. shipyard's stall watchdog
+# measures MOTIONLESSNESS and concludes death, so a child that CANNOT move (a usage limit) and a
+# child nobody ASKED to move both read as wedged — and the remedy it prints ends in compaction,
+# discarding live context to cure a condition the child does not have. Measured three times on one
+# fleet: a rate-limited pair, a finished change correctly waiting for a human, and a 90-hour
+# operator pause that produced a 5420-minute alarm. council's room STALL alarm has the same blind
+# spot from the other end — a participant blocked on a capacity limit is indistinguishable from one
+# that is thinking, and the alarm guesses "it may be sitting on a permission prompt".
+#
+# What a client RENDERS is per-KIND knowledge, which is why the shapes live here beside the turn
+# marker rather than in either skill. What to DO about the answer is deliberately NOT here: this
+# returns a class from the driver's AgentSignal vocabulary (DRV-03), so a caller hands it straight
+# to `policy_dispose` in shared/policy and gets the one disposition both skills share.
+#
+# IN PARTICULAR, NOTHING HERE READS A TIME OUT OF A BANNER. shared/policy's ESC-03 already records
+# why — a capacity banner states when the window RAN OUT, not when it resumes, so a timestamp
+# lifted from one is in the past — and re-deriving that judgement here would be a second place for
+# the same question, which is the defect the shared engine exists to remove. The class is the whole
+# answer; the resume time is the supervisor's to re-probe.
+#
+# THE RULE IS REPO LAW, and AGENTS.md ("Reading a child's screen: anchor on chrome, never on
+# anything it can type") is where it is stated, with its two corollaries — derive the anchor from a
+# committed capture, and remember that too tight is not the safe direction either. Not restated
+# here; what follows is only how this particular anchor obeys it.
+#
+# This function cost two of the three instances behind that law. Its first version accepted any
+# column-one line, so a child writing "the watchdog fires on a usage limit" classified ITSELF as
+# rate-limited; its second accepted the service bullet, which is where one client renders its own
+# prose and every one of its tool calls. (#116 was the third, from the other direction.)
+#
+# One glyph passes the chrome test today. Both admitted kinds put their own words behind a DIFFERENT
+# column-one glyph — one an assistant bullet, one a service bullet — so neither can reach column
+# one behind the warning glyph, and indentation covers tool output and every wrapped continuation.
+# That is why the allow-list below has exactly one entry and why the service bullet was REMOVED
+# from it rather than narrowed: a bullet line is authored content, and no amount of phrase-pinning
+# makes authored content trustworthy.
+#
+# BIASED TIGHT, which is what made all three of those survivable in the other direction. A shape
+# this MISSES falls through to the caller's existing stall path, i.e. to today's behaviour; a shape
+# it matches too LOOSELY silences a real alarm on a possibly-dead child. The residual must always
+# be a miss, never a false clearance — the opposite bias from the turn read, and for the same
+# underlying reason: bias towards the failure an operator can still see.
+#
+# WHAT IS DELIBERATELY NOT HERE, and why the list is this short:
+#   * The other kind's `You have N usage limit resets left` line. It is CHROME, not a stop — this
+#     repo's own `shipyard_continuity_is_service_line` lists it beside `Working` and `Ran ` among
+#     the lines that prove nothing about the turn. An earlier version of this file read it as a
+#     capacity wait, which would have made a Codex child unalarmable while it was merely idle.
+#   * A transport fault ("went to sleep mid-response"). No capture shows which glyph, if any, a
+#     client puts it behind, and an exemption that cannot be evidenced is worth less than not
+#     having it: such a child falls through to the stall path, whose remedy order opens with the
+#     nudge it actually needs. Take a capture, then widen — never widen from reasoning, which is
+#     precisely how the two defects above were introduced.
+#
+# RESIDUAL the gate cannot check, stated here because it lives here: the WORDS below are verbatim
+# from the supervising operator's reports of what the report's own `last line` column carried, and
+# the warning-glyph placement is corroborated by `shipyard_continuity_capacity_state`, which
+# matches one such banner as a whole line off a real capture. There is still no committed pane
+# fixture containing one, so a client that changes the glyph makes this silently stop firing — in
+# the safe direction. Add a fixture when a capture is taken.
+
+# The warning glyph a client puts in column one ahead of a status banner it authored itself
+# ("⚠ Usage limit reached …", "⚠ Selected model is at capacity …"). A constant, not an inline
+# literal, because it is the one thing here a client could rename.
+ADP_BANNER_GLYPH='⚠'
+
+# Column-one glyphs that prove the client rendered something AFTER a banner. Both are captured:
+# the assistant glyph in fixtures/pane-claude-running.txt, the service bullet in
+# fixtures/pane-codex-running.txt. They are exactly the two shapes excluded from the banner
+# allow-list above — the child's own output — which is the point: a banner is stale once the child
+# has spoken again.
+ADP_PROGRESS_GLYPHS='⏺ •'
+
+_ADP_WAIT_CLASS=''
+
+# _adp_wait_line_class <banner body> — 0 when the body announces a capacity wait, with the
+# AgentSignal class in $_ADP_WAIT_CLASS. Set rather than printed, the same way the line helpers
+# above do it, so the per-line walk forks nothing.
+#
+# Each phrase is the SHORTEST leading substring common to every observed variant — the discipline
+# the queued hints above state — so a client varying the rest of the sentence cannot break the
+# match.
+#
+# THE BRACKET CLASS NOW OUTLIVES ITS EVIDENCE, which is worth saying rather than leaving to be
+# re-derived. It is there because a lowercase form was recorded — but that form was
+# "You have N usage limit resets left", which this file no longer treats as a wait at all: it is
+# chrome, and it is excluded by the GLYPH, not by the phrase. So the only surviving positive is
+# capitalised. The class is kept because a client may capitalise a banner differently tomorrow and
+# the cost of the class is nothing, but do NOT read it as evidence that a lowercase banner exists —
+# that is precisely the inference that made the retired line look like a positive.
+_adp_wait_line_class() {
+  case "${1:-}" in
+    *[Uu]'sage limit'*)   _ADP_WAIT_CLASS=rate_limited; return 0 ;;
+    *[Ss]'ession limit'*) _ADP_WAIT_CLASS=rate_limited; return 0 ;;
+    *'at capacity'*)      _ADP_WAIT_CLASS=overloaded;   return 0 ;;
+  esac
+  _ADP_WAIT_CLASS=''
+  return 1
+}
+
+# _adp_progress_line <line> — 0 when the line shows the client rendered something of its own,
+# i.e. the child spoke after whatever came before it.
+_adp_progress_line() {
+  local line="${1:-}" g
+  # `local IFS=' '` for the same reason _adp_box_content gives: this module is sourced into other
+  # people's shells, and splitting on a caller's IFS would silently match nothing.
+  local IFS=' '
+  for g in $ADP_PROGRESS_GLYPHS; do
+    case "$line" in "$g"*) return 0 ;; esac
+  done
+  return 1
+}
+
+# adp_wait_class <screen> — the AgentSignal class the child's client announces, or nothing.
+# Prints "<class><TAB><the line that said so>" and returns 0; prints nothing and returns 1 when no
+# LIVE banner is on screen.
+#
+# LIVE, not merely present, and that is the second half of the anchor. "The last banner wins" is
+# not enough: a child that hit a limit, resumed when the window reset, worked, and then genuinely
+# wedged still has the banner inside the visible capture — and being motionless NOW does not make
+# a banner from an hour ago current. Reporting that child as "waiting, nothing to do" is the
+# 8.5-hour silent stall the watchdog exists to catch, with a reassurance attached.
+#
+# So a banner is cleared the moment the client renders anything of its own after it. That rule is
+# MIRRORED, not shared, from `shipyard_continuity_capacity_state`, which counts banners since the
+# last non-service line for the Codex parent path and states the same principle: once real
+# assistant output follows the latest banner, every visible capacity event is historical. Sharing
+# the code was considered and rejected — that function is fused to an episode counter with a
+# different contract, a different return and a Codex-only vocabulary, so calling it would mean
+# reshaping it around a second caller. The rule is one sentence; the implementations are two, and
+# that is a seam worth naming rather than hiding.
+#
+# Clearing on ANY progress glyph is looser than that function, which ignores its own service lines.
+# Looser here means MORE clearing, hence more misses, hence today's behaviour — the safe direction.
+adp_wait_class() {
+  local screen=${1:-} line body hit_cls='' hit_line=''
+  [ -n "$screen" ] || return 1
+  while IFS= read -r line || [ -n "$line" ]; do
+    # The allow-list, matched from the START of the line, so column one is a property of the match
+    # rather than a separate test: an indented line, a composer line, a wrapped continuation and
+    # anything the child authored all match nothing here.
+    case "$line" in
+      "$ADP_BANNER_GLYPH"*)
+        body=${line#"$ADP_BANNER_GLYPH"}
+        if _adp_wait_line_class "$body"; then hit_cls=$_ADP_WAIT_CLASS; hit_line=$line; fi ;;
+      *)
+        # Not a banner. If the client spoke, whatever banner stood before it is history.
+        if _adp_progress_line "$line"; then hit_cls=''; hit_line=''; fi ;;
+    esac
+  done <<<"$screen"
+  [ -n "$hit_cls" ] || return 1
+  printf '%s\t%s' "$hit_cls" "$hit_line"
 }

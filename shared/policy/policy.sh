@@ -31,12 +31,21 @@
 # deny extends past the safe-set to the whole table: an unknown signal is a human's call).
 #
 # Source only, never execute. Sourced into a shell that may run `set -u`, so every optional
-# variable is read as `${VAR:-}` and multi-statement `local` avoids a read-before-assign. The
-# baseline interpreter is bash >= 5 (a caller on an older bash re-execs into a modern one before
-# sourcing, as council.sh does), matching the shared driver.
+# variable is read as `${VAR:-}` and multi-statement `local` avoids a read-before-assign.
+#
+# THE INTERPRETER FLOOR IS BASH 3.2, lowered from bash >= 5 when shipyard's status reporter became
+# this module's first production caller, and for exactly the reason agent-adapters.sh states for
+# its own floor: `shipyard-report.sh` sources this IN-PROCESS (through shipyard-lib.sh) to ask
+# whether a motionless child is parked on a self-healing wait, it must stay bash-3.2-clean because
+# stock macOS ships bash 3.2 as /bin/bash, and it re-execs into nothing. So a bash-4+ construct
+# here — an associative array, `${var^^}`, `mapfile` — would break status reporting on a stock
+# macOS shell. The body needed no change to meet the lower floor; the declaration was simply
+# stricter than the code. council re-execs into bash >= 5 before sourcing anything, so it
+# constrains nothing; shipyard is the binding caller. `t-policy.sh` asserts the floor by running
+# the table under /bin/bash, and says there what that assertion is worth where /bin/bash is newer.
 
 # A version marker, bumped when the body changes, so sync + the drift gate stay easy to prove.
-_POLICY_VERSION=1
+_POLICY_VERSION=2
 
 # --- ESC-01 · the disposition table -------------------------------------------------------------
 # policy_dispose <class> [payload] [resume_at] -> one disposition token on stdout, exit 0.

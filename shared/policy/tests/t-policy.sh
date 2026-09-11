@@ -10,8 +10,12 @@
 # (path resolution to the common git dir, and an entry whose JSON shape is byte-for-byte the one
 # shipyard's viewer already reads).
 #
-# Baseline bash >= 5 like the driver: re-exec into one if a stock bash 3.2 started us, so a
-# future bash-5-only construct fails as a clear version message rather than a confusing syntax error.
+# THIS HARNESS runs under bash >= 5 for its own convenience — re-exec into one if a stock bash 3.2
+# started us, so a bash-5-only construct in the TEST fails as a clear version message rather than a
+# confusing syntax error. That says nothing about the MODULE, whose floor is bash 3.2 (it is sourced
+# in-process by shipyard's status reporter, which runs on stock macOS /bin/bash). The floor block at
+# the end of this file is what actually holds that, by running the module under /bin/bash rather
+# than under whatever interpreter this harness picked.
 if [ "${BASH_VERSINFO[0]:-0}" -lt 5 ] && [ -z "${POLICY_TEST_BASH_REEXEC:-}" ]; then
   for _c in /opt/homebrew/bin/bash /usr/local/bin/bash /usr/bin/bash bash; do
     _p=$(command -v "$_c" 2>/dev/null) || continue
@@ -207,6 +211,34 @@ ok "a decision with no context is rejected" 2 "$(esc_rc decision room-abc 'appro
 fd=$(cd "$REPO" && policy_escalate decision room-abc "approve X?" "option A vs B; I recommend A")
 ok "a decision with context is written" decision "$(jq -r '.kind' "$fd")"
 ok "the decision's context is carried"  "option A vs B; I recommend A" "$(jq -r '.context' "$fd")"
+
+# --- the declared interpreter floor ----------------------------------------------------------
+# The module's floor is bash 3.2, lowered from bash >= 5 when shipyard's status reporter became its
+# first production caller: `shipyard-report.sh` sources this IN-PROCESS and must stay bash-3.2-clean,
+# because stock macOS ships bash 3.2 as /bin/bash and that script re-execs into nothing. A bash-4+
+# construct added here later — an associative array, `${var^^}`, `mapfile` — would break status
+# reporting on the platform the fleet runs on, and it would do it at the least convenient moment:
+# while a supervisor is reading the report to find out what is wrong.
+#
+# WORTH LESS THAN IT LOOKS WHERE /bin/bash IS NEWER. On Linux CI /bin/bash is 5.x, so both checks
+# pass vacuously there and prove only that the file parses at all. They bite on macOS, which is the
+# platform whose 3.2 the floor is about, and the version is printed so a reader can see which of the
+# two runs they are looking at. Stated rather than papered over, because the alternative is a green
+# check being read as coverage it does not have.
+sysbash_ver=$(/bin/bash -c 'echo "${BASH_VERSINFO[0]}.${BASH_VERSINFO[1]}"' 2>/dev/null)
+printf '  note /bin/bash is %s — the floor assertions below are only meaningful at 3.x\n' \
+  "${sysbash_ver:-unknown}"
+ok "the module parses under /bin/bash" 0 \
+  "$(/bin/bash -n "$POLICY" >/dev/null 2>&1; echo $?)"
+# Run the table, the safe-set and the resume guard there too: parsing is not executing, and the
+# constructs that break on 3.2 (a `${var^^}`, an `mapfile`) fail at runtime, not at parse time.
+ok "the disposition table answers under /bin/bash" 'park|reprobe|escalate|access|compact' \
+  "$(/bin/bash -c ". '$POLICY'
+     printf '%s|' \"\$(policy_dispose rate_limited)\"
+     printf '%s|' \"\$(policy_dispose access_request 'rm -rf /')\"
+     printf '%s'  \"\$(policy_dispose context_full)\"")"
+ok "the resume guard answers under /bin/bash" 'reprobe' \
+  "$(/bin/bash -c ". '$POLICY'; _policy_resume_at 500 1000")"
 
 # --- done ------------------------------------------------------------------------------------
 printf '\n'
