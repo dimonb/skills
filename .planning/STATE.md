@@ -74,10 +74,13 @@ Ubuntu 22.04 meant every unmerged slot.
 
 ### Two findings filed from supervision, not from a diff
 
-* **#124 — `ship` never writes its state file, so the status table is blind.** `ship` §4 specifies
-  `.pipeline-state/<KEY>.json` and §2 says to write it before anything else. It exists in **no**
-  live worktree: three children launched today wrote none, while one launched days earlier did. The
-  cost is direct — `shipyard-report.sh` reads the PR number from there and correctly refuses to
+* **#124 — `ship` writes its state file late and unevenly, so the status table is blind for most
+  of a run.** `ship` §4 specifies `.pipeline-state/<KEY>.json` and §2 says to write it "ONCE per
+  run, before anything else". **I first filed this as "never written" and had to correct it**: one
+  child wrote the file, but only once its PR already existed, while another still had none with an
+  open PR and two completed review rounds behind it. The claim was built partly on the report's own
+  column rather than on looking, which is inference dressed as observation — the correction is on
+  the issue. The cost is unchanged — `shipyard-report.sh` reads the PR number from there and correctly refuses to
   assume a numeric slot is a PR (on GitHub the slot is an *issue* number; the old assumption once
   made the monitor declare a run finished a minute after it started), so with no state file the
   column reads `no MR yet` over an open, reviewed, mergeable PR, and the stage column reads `—`.
