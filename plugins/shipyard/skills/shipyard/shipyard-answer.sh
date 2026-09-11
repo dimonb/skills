@@ -64,8 +64,17 @@ ST=$(jq -r '.status // "pending"' "$F" 2>/dev/null)
 
 # Nobody is polling this record — writing an answer onto it would be a silent
 # no-op. Deliver through the child's window instead (see the header).
+#
+# WINDOW carries the outcome to the closing message at the bottom, which must not re-derive it.
+# It used to: the closing line tested `$KIND`/`$ST` a second time and so claimed the answer "was
+# delivered through its window" on EVERY path that reached it — including `--no-tell`, where
+# nothing was sent, and a dead terminal, where stderr had just said the child could not be
+# reached. The success path exits before the closing line, so the one outcome it asserted was the
+# one outcome it could never be. One variable, set where the outcome is actually known.
+WINDOW=none
 if [ "$KIND" = "notice" ] || [ "$ST" = "done" ]; then
   if [ "$NO_TELL" = 1 ]; then
+    WINDOW=skipped
     echo "warning: $ID is a '$KIND' in status '$ST' — the child does not poll it, so this answer will not be read (--no-tell)" >&2
   else
     case "$KIND" in
@@ -80,8 +89,10 @@ if [ "$KIND" = "notice" ] || [ "$ST" = "done" ]; then
     bash "$DIR/shipyard-tell.sh" "$ID" "$ANS"; TELL_RC=$?
     [ "$TELL_RC" = 0 ] && exit 0
     if [ "$TELL_RC" = 6 ]; then
+      WINDOW=unconfirmed
       echo "warning: the directive was sent but NOT confirmed (see above) — also recording the answer on $ID" >&2
     else
+      WINDOW=failed
       echo "warning: could not reach the child — recording the answer on $ID anyway (it may never be read)" >&2
     fi
   fi
@@ -99,9 +110,17 @@ SLOT=$(jq -r '.slot // "?"' "$F")
 # record it does not, which is the whole reason the branch above delivers through the window — so
 # claiming a pickup here would contradict the warning printed moments earlier. Keep the record
 # write (it is the only surviving copy if the directive never started a turn) and say what is true.
-if [ "$KIND" = "notice" ] || [ "$ST" = "done" ]; then
-  echo "recorded the answer on $ID (slot $SLOT) — the child does NOT poll this record; it was"
-  echo "delivered through its window instead, and this copy is the audit trail"
-else
-  echo "answered $ID (slot $SLOT) — the child session will pick it up within ~5s"
-fi
+case "$WINDOW" in
+  unconfirmed)
+    echo "recorded the answer on $ID (slot $SLOT) — the child does NOT poll this record, and the"
+    echo "directive it was delivered as is UNCONFIRMED (see above), so check the child's box" ;;
+  failed)
+    echo "recorded the answer on $ID (slot $SLOT) — the child does NOT poll this record and could"
+    echo "not be reached, so nobody is going to read this. It is an audit copy only." ;;
+  skipped)
+    echo "recorded the answer on $ID (slot $SLOT) — nothing was delivered (--no-tell), and the"
+    echo "child does not poll this record, so it is an audit copy only" ;;
+  *)
+    # WINDOW=none: a record the child really does poll, so the pickup claim is true here only.
+    echo "answered $ID (slot $SLOT) — the child session will pick it up within ~5s" ;;
+esac

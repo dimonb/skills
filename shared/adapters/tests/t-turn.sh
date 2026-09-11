@@ -29,14 +29,17 @@
 # control socket and no repo: it sources the module and calls it.
 #
 # WHAT IS NOT COVERED, so a green run is never read as more than it is:
-#   * No end-to-end run of the CALLERS. The scripts that use these functions source a lib that
-#     prepends the system PATH, so a faked backend CLI cannot stay authoritative; driving a whole
-#     script needs the exported-shell-function rig the shipyard continuity suite uses, and that is
-#     a change of its own. So the mapping from the `unconfirmed` verdict to its caller's exit code
-#     is asserted by nothing here.
-#   * No fixture for a queued render on the second kind's composer. That kind renders its queued
-#     hint as a service line, which IS covered; whether it ever uses the composer for it was not
-#     observed and nothing here claims it.
+#   * No end-to-end run of the CALLERS — and the gap is wider than one mapping: NO test in this
+#     repo references `shipyard-tell.sh`, `shipyard-answer.sh`, `shipyard-compact.sh` or
+#     `shipyard-report.sh`, so everything those scripts do with these functions is asserted by
+#     nothing. That includes the `unconfirmed` -> exit 6 mapping, the knob validation, the sampled
+#     census, the empty-verdict arm, the reply path's closing message, and the three-state mid-turn
+#     guard. Those scripts source a lib that prepends the system PATH, so a faked backend CLI
+#     cannot stay authoritative; driving a whole one needs the exported-shell-function rig the
+#     shipyard continuity suite already uses — feasible, deliberately deferred, and tracked.
+#   * Whether either kind ever renders its queued hint somewhere OTHER than the place captured
+#     here. Both observed placements are covered by a fixture and an assertion; a third placement,
+#     if one exists, would read as not-queued and fall to the alarm path.
 #   * These are captures of the clients as they render today. Nothing here proves a future build
 #     renders the same shapes — that is what pinning them in one place buys.
 set -uo pipefail
@@ -71,9 +74,16 @@ ok "first kind, mid-turn, reads running"      running "$(state_of claude-running
 ok "first kind, idle at the composer"         idle    "$(state_of claude-idle)"
 ok "second kind, mid-turn, reads running"     running "$(state_of codex-running)"
 ok "second kind, idle at the composer"        idle    "$(state_of codex-idle)"
-# The client says it took the message for the next turn. On this kind the hint is the composer
-# PLACEHOLDER, so it renders only while the box is empty.
+# The client says it took the message for the next turn. The two kinds render that in DIFFERENT
+# places, which is why the queued arm has two anchors — on the first kind the hint is the composer
+# PLACEHOLDER (so it renders only while the box is empty), on the second it is a column-one
+# service line. Both were captured; an analogy from one to the other would have been wrong.
 ok "first kind, queued mid-turn"              queued  "$(state_of claude-queued)"
+ok "second kind, queued mid-turn"             queued  "$(state_of codex-queued)"
+# That second fixture is also why `queued` outranks `running`: its service line carries BOTH
+# markers at once, so both predicates are true and queued is the more specific answer.
+ok "…and its service line carries both markers" yes \
+   "$(if adp_turn_running "$(pane codex-queued)"; then printf 'yes'; else printf 'no'; fi)"
 
 # --- 2. the adversarial fixtures — all must read as NOT running ------------------------------
 printf '\n── our own text, and file content, are not evidence ──\n'
@@ -87,7 +97,12 @@ ok "predicate: running on the first kind's footer"      yes "$(running_of claude
 ok "predicate: running on the second kind's service line" yes "$(running_of codex-running)"
 ok "predicate: not running on a typed draft"            no  "$(running_of claude-draft)"
 ok "predicate: not running on transcript content"       no  "$(running_of claude-content)"
-ok "predicate: not running on an empty capture"         no  "$(running_of claude-idle)"
+ok "predicate: not running on a real idle screen"       no  "$(running_of claude-idle)"
+# The predicate ITSELF on an unreadable capture, which is not the same assertion as the state
+# read's `unknown` below: `shipyard-compact.sh`'s alt-submit branch calls the PREDICATE, and it
+# must treat an unreadable pane as "no turn running" the way the inline grep it replaced did.
+ok "predicate: not running on an empty capture"         no \
+   "$(if adp_turn_running ""; then printf 'yes'; else printf 'no'; fi)"
 
 # --- 3. unreadable is NOT idle ----------------------------------------------------------------
 # An empty capture is what a FAILED read returns as well as what a blank screen returns. Calling
@@ -116,6 +131,13 @@ ok "a later idle does supply the baseline"         delivered   "$(adp_delivery_v
 # earlier send: it persists while its queue is non-empty, so the first post-send sample would
 # otherwise re-supply it and decide — which was a live false positive.
 ok "a stale queued hint cannot confirm"            unconfirmed "$(adp_delivery_verdict queued queued)"
+# The baseline must be WITHHELD by absence, not granted by it. An unreadable pre-send frame is
+# what every backend failure looks like, so if it counted as "no hint was there" the first stale
+# hint would decide — the same false positive as the screen diff, through a different door.
+ok "an unreadable pre-state cannot confirm queued" unconfirmed "$(adp_delivery_verdict unknown queued)"
+ok "…nor can a run of them"                        unconfirmed "$(adp_delivery_verdict unknown unknown queued)"
+# …but a positive observation that there was no hint does clear it.
+ok "a running pre-state clears the queued baseline" queued     "$(adp_delivery_verdict running queued)"
 ok "…however many samples it persists for"         unconfirmed "$(adp_delivery_verdict queued queued queued)"
 ok "…but a hint that APPEARS after one does"       queued      "$(adp_delivery_verdict queued running queued)"
 # Reachable, and pinned because it proves the pre-send slot is read for the baseline only.
@@ -140,11 +162,37 @@ done < "$REPO/shared/adapters/targets.txt"
 # would be worse than the duplication, since it would tie the terminal-backend suite to the
 # per-agent-kind module for no gain. Documentation prose is exempt for the same kind of reason: it
 # legitimately tells an operator what to look for on a screen.
-# `--include` must precede `--`, or `--` ends option parsing and it is read as a FILE to search.
-actual=$(cd "$REPO" && grep -rlF --include='*.sh' -- "$ADP_TURN_MARKER" . 2>/dev/null \
-  | sed 's#^\./##' | grep -v '/tests/' | sort)
+# LIST THROUGH GIT, never a raw filesystem walk. This repo keeps its own sibling worktrees under a
+# gitignored `.claude/worktrees/` — that is where the fleet launcher puts children — and each of
+# them contains a full copy of the tree, canonical module and vendored copies included. A `grep -r`
+# from the repo root therefore finds them and reds this assertion in the main checkout whenever any
+# child is live, which would make the gate unpassable exactly while work is in flight. Every other
+# repo-wide scan in the gate goes through `git grep --untracked` or `git ls-files` for this reason.
+# `--cached --others --exclude-standard` keeps the reach over brand-new, not-yet-added production
+# shell; the trailing /dev/null stops grep reading stdin if the listing is ever empty.
+#
+# A raw walk was ALSO implementation-dependent, which is worse than either outcome: measured here,
+# `grep` resolved to a drop-in replacement whose recursive mode skips hidden directories by
+# default, so the walk quietly did not reach the sibling worktrees at all — while GNU and BSD grep
+# both descend and would have failed. An assertion whose verdict depends on which grep is
+# installed is not an assertion. Listing through git removes the question.
+actual=$(cd "$REPO" && git ls-files -z --cached --others --exclude-standard -- '*.sh' \
+  | xargs -0 grep -lF -- "$ADP_TURN_MARKER" /dev/null 2>/dev/null \
+  | grep -v '/tests/' | sort -u)
 ok "the turn marker is spelled only in the canonical module and its vendored copies" \
    "$(printf '%s\n' "$expected" | sort | tr '\n' ' ')" "$(printf '%s\n' "$actual" | tr '\n' ' ')"
+# The file SET alone would not notice the literal being hardcoded a second time INSIDE the
+# canonical module — an inline grep in some new predicate, right next to the constant that exists
+# to prevent it. Counting occurrences is the assertion that actually proves the deduplication this
+# whole move was justified by: the literal used to be spelled four times.
+# `-o` with `-r` prefixes each match with its file, which is what lets the SAME `/tests/`
+# exemption the file-set check uses apply here too — without it this counts other suites' screen
+# fixtures and fails for a reason that has nothing to do with duplication.
+ok "…and each of them spells it exactly once" \
+   "$(printf '%s\n' "$expected" | grep -c .)" \
+   "$(cd "$REPO" && git ls-files -z --cached --others --exclude-standard -- '*.sh' \
+      | xargs -0 grep -oF -- "$ADP_TURN_MARKER" /dev/null 2>/dev/null \
+      | grep -v '/tests/' | grep -c .)"
 
 # The value pin, and the one place this file spells the markers out on purpose: they are observed
 # client UI, and a typo silently switches every check above off, because they all build their

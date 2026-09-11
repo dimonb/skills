@@ -36,7 +36,7 @@ DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # The header, to the first line that is not a comment. Line-numbered ranges go stale the moment
 # anyone adds a paragraph above them, and this one already had: it over-ran by three lines and
 # `--help` printed `set -o pipefail` back at the operator.
-usage() { awk 'NR < 3 { next } /^#/ { sub(/^# ?/, ""); print; next } { exit }' "$0"; }
+usage() { awk 'NR < 3 { next } /^#/ { sub(/^# ?/, ""); print; next } /^$/ { print; next } { exit }' "$0"; }
 
 # How long a one-line directive may get before we send a pointer to the full text
 # instead of the text itself (a very long send-keys line is fragile to read back).
@@ -129,10 +129,14 @@ fi
 # carries this lesson for the admission gate's knobs; the interval is deliberately fractional, so
 # it gets its own pattern check rather than that helper.
 CONFIRM_SECS=$(_shipyard_admission_uint "${SHIPYARD_TELL_CONFIRM_SECS:-}" 10)
+# The interval must contain at least one digit and be a plain decimal: a bare `.` makes `sleep`
+# error every iteration and `0` makes it a no-op, and either turns the bounded poll into a spin
+# that re-captures as fast as it can fork. (No `''` arm — the default has already substituted.)
 case "${SHIPYARD_TELL_CONFIRM_INTERVAL:-0.5}" in
-  *[!0-9.]*|''|*.*.*) echo "warning: SHIPYARD_TELL_CONFIRM_INTERVAL is not a number — using 0.5" >&2
-                      CONFIRM_INTERVAL=0.5 ;;
-  *)                  CONFIRM_INTERVAL=${SHIPYARD_TELL_CONFIRM_INTERVAL:-0.5} ;;
+  *[!0-9.]*|*.*.*|.|0|0.|0.0|.0)
+    echo "warning: SHIPYARD_TELL_CONFIRM_INTERVAL is not a positive number — using 0.5" >&2
+    CONFIRM_INTERVAL=0.5 ;;
+  *) CONFIRM_INTERVAL=${SHIPYARD_TELL_CONFIRM_INTERVAL:-0.5} ;;
 esac
 
 # The pre-send sample. It is what lets a turn seen LATER count as one our submit started, and what

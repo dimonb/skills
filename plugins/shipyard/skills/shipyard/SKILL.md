@@ -841,10 +841,9 @@ collide with it.
 | file | role |
 |------|------|
 | `shipyard-agent.sh` | agent-runtime adapter over the shared per-kind module: WHICH kinds shipyard admits, its environment propagation and scrub list, the codex worktree, and the child's bootstrap sentence |
-| `agent-adapters.sh` | vendored copy of the shared per-agent-kind adapters (`shared/adapters/agent-adapters.sh`): how a kind is started, how a skill is referenced in it, which kind is running the parent |
+| `agent-adapters.sh` | vendored copy of the shared per-agent-kind adapters (`shared/adapters/agent-adapters.sh`): how a kind is started, how a skill is referenced in it, which kind is running the parent, plus `adp_turn_state`/`adp_delivery_verdict` — the ONE place a client's turn marker is spelled |
 | `shipyard-backend.sh` | the agterm/tmux abstraction — every terminal operation goes through it |
 | `shipyard-lib.sh` | mailbox paths, slot resolution, payload input, the child env preamble |
-| `agent-adapters.sh` | vendored copy of the shared per-agent-kind adapters — launch knowledge, plus `adp_turn_state`/`adp_delivery_verdict`, the ONE place a client's turn marker is spelled |
 | `shipyard-continuity.sh` | capacity retry and paused-goal continuity for a Codex parent in agterm |
 | `shipyard-ctx.sh` | the ctx column: reads a child's transcript, infers its window, bands it |
 | `tests/run-all.sh` | the shipyard script suite — run by hand: `bash <SKILL>/tests/run-all.sh` |

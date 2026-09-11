@@ -25,7 +25,7 @@ while [ $# -gt 0 ]; do
     # The header, to the first line that is not a comment. A line-numbered range goes stale the
     # moment anyone adds a paragraph above it, and this one already had: it over-ran by one line
     # and printed a shell option back at the operator.
-    -h|--help)     awk 'NR < 2 { next } /^#/ { sub(/^# ?/, ""); print; next } { exit }' "$0"; exit 0 ;;
+    -h|--help)     awk 'NR < 2 { next } /^#/ { sub(/^# ?/, ""); print; next } /^$/ { print; next } { exit }' "$0"; exit 0 ;;
     *)             [ -z "$SLOT" ] && SLOT="$1"; shift ;;
   esac
 done

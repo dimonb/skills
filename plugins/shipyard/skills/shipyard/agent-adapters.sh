@@ -307,52 +307,67 @@ ADP_NBSP=$'\xc2\xa0'
 ADP_QUEUED_BOX_HINT='Press up'
 ADP_QUEUED_BLOCK_HINT='Messages to be submitted'
 
-# Set by _adp_box_content instead of returned, so the hot predicates fork nothing: these run once
+# Set by BOTH line helpers instead of returned, so the hot predicates fork nothing: these run once
 # per line per poll sample, and a command substitution there costs a process each time.
-_ADP_BOX_CONTENT=''
+#
+# The name is deliberately LINE-neutral rather than box-specific, because the service-line helper
+# writes it too. A box-flavoured name here would make the running predicate's service arm read as
+# if it inspected the composer — which is the exact misreading the anchor comment above spends its
+# length preventing, and the one that would invite someone to "simplify" the read back into the
+# forgery this closed.
+_ADP_LINE_CONTENT=''
 
 # _adp_box_content <line> — 0 when the line is the composer's, with its content (after the glyph
-# and one separator) in $_ADP_BOX_CONTENT. 1 when the line is not a box line.
+# and one separator) in $_ADP_LINE_CONTENT. 1 when the line is not a box line.
 _adp_box_content() {
-  local line="$1" g rest
+  local line="${1:-}" g rest
+  # `local IFS=' '` because the loop below splits an unquoted expansion, which otherwise splits on
+  # the CALLER's IFS — and this module is sourced into other people's shells. Measured: under
+  # `IFS=,` the expansion yields one word, no line matches, and the queued read answers `running`
+  # instead of `queued`. A silent wrong answer, not an error.
+  local IFS=' '
   for g in $ADP_BOX_GLYPHS; do
     case "$line" in
       "$g"*)
         rest=${line#"$g"}
         rest=${rest# }
         rest=${rest#"$ADP_NBSP"}
-        _ADP_BOX_CONTENT=$rest
+        _ADP_LINE_CONTENT=$rest
         return 0 ;;
     esac
   done
-  _ADP_BOX_CONTENT=''
+  _ADP_LINE_CONTENT=''
   return 1
 }
 
 # _adp_service_content <line> — 0 when the line is a column-one service line, content in
-# $_ADP_BOX_CONTENT.
+# $_ADP_LINE_CONTENT.
 _adp_service_content() {
-  local line="$1" rest
+  local line="${1:-}" rest
   case "$line" in
     "$ADP_SERVICE_BULLET"*)
       rest=${line#"$ADP_SERVICE_BULLET"}
       rest=${rest# }
-      _ADP_BOX_CONTENT=$rest
+      # Same two-separator strip as the composer helper. Every captured service line uses a plain
+      # space, but leaving the arms asymmetric means an NBSP here would silently stop the
+      # queued-block prefix matching — and that failure alarms on a healthy child.
+      rest=${rest#"$ADP_NBSP"}
+      _ADP_LINE_CONTENT=$rest
       return 0 ;;
   esac
-  _ADP_BOX_CONTENT=''
+  _ADP_LINE_CONTENT=''
   return 1
 }
 
 # adp_turn_running <screen> — 0 while a turn is in flight, by the footer or service-line anchor.
 adp_turn_running() {
-  local line last=''
+  local screen=${1:-} line last=''
   while IFS= read -r line || [ -n "$line" ]; do
     if _adp_service_content "$line"; then
-      case "$_ADP_BOX_CONTENT" in *"$ADP_TURN_MARKER"*) return 0 ;; esac
+      case "$_ADP_LINE_CONTENT" in *"$ADP_TURN_MARKER"*) return 0 ;; esac
     fi
     case "$line" in *[![:space:]]*) last=$line ;; esac
-  done <<<"$1"
+  done <<<"$screen"
   case "$last" in *"$ADP_TURN_MARKER"*) return 0 ;; esac
   return 1
 }
@@ -379,15 +394,15 @@ adp_turn_running() {
 # capture during this work showed the client rendering suggestion text nobody typed. That question
 # is tracked separately and nothing here answers it.
 adp_turn_queued() {
-  local line
+  local screen=${1:-} line
   while IFS= read -r line || [ -n "$line" ]; do
     if _adp_box_content "$line"; then
-      case "$_ADP_BOX_CONTENT" in "$ADP_QUEUED_BOX_HINT"*) return 0 ;; esac
+      case "$_ADP_LINE_CONTENT" in "$ADP_QUEUED_BOX_HINT"*) return 0 ;; esac
     fi
     if _adp_service_content "$line"; then
-      case "$_ADP_BOX_CONTENT" in "$ADP_QUEUED_BLOCK_HINT"*) return 0 ;; esac
+      case "$_ADP_LINE_CONTENT" in "$ADP_QUEUED_BLOCK_HINT"*) return 0 ;; esac
     fi
-  done <<<"$1"
+  done <<<"$screen"
   return 1
 }
 
@@ -401,7 +416,7 @@ adp_turn_queued() {
 # `queued` outranks `running` because one kind carries both markers on the same service line, and
 # queued is the more specific answer.
 adp_turn_state() {
-  if [ -z "$1" ]; then printf 'unknown'
+  if [ -z "${1:-}" ]; then printf 'unknown'
   elif adp_turn_queued "$1"; then printf 'queued'
   elif adp_turn_running "$1"; then printf 'running'
   else printf 'idle'
@@ -439,10 +454,18 @@ adp_turn_state() {
 # visible, believing a false confirmation is neither — and dense sampling by the caller is what
 # keeps the false case rare. A fourth verdict naming the residual would be fuzzier than these three.
 adp_delivery_verdict() {
-  local state seen_idle=0 pre_queued=0
+  # `pre_queued` starts at 1, i.e. ASSUME a hint may already be there. It is cleared only by a
+  # POSITIVE observation that there is none. Starting it at 0 made absence of a baseline grant the
+  # baseline: an unreadable pre-send frame — which `drv_read` returns for every backend failure,
+  # indistinguishable from a blank screen — let the first stale hint decide, so
+  # `unknown queued` confirmed a send that never took. That is the same false positive as the
+  # screen diff, through a different door. `seen_idle` needs no such treatment: it already
+  # requires a positive observation to become 1.
+  local state seen_idle=0 pre_queued=1
   case "${1:-}" in
-    idle)   seen_idle=1 ;;
-    queued) pre_queued=1 ;;
+    idle)   seen_idle=1; pre_queued=0 ;;
+    running)             pre_queued=0 ;;
+    queued)              pre_queued=1 ;;
   esac
   shift 2>/dev/null || true
   for state in "$@"; do

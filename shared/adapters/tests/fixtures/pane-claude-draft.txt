@@ -1,6 +1,6 @@
 
  ▐▛███▛█   Claude Code v2.1.268
-▝▜██████▀  Opus 5 (1M context) · Claude Team
+▝▜██████▀  example-model - Example Plan
   ▝▝ ▝▝    ~/src/example/.claude/worktrees/ship-NN
 
 
