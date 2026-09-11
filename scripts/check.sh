@@ -355,6 +355,30 @@ fi
 # pattern with grep and shipping it to git grep is precisely how this bites.
 deny='/Users/[a-zA-Z0-9._-]+|/home/[a-zA-Z0-9._-]+|[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}'
 deny="$deny"'|\.local/bin/|\.config/(gh|glab)-[a-zA-Z0-9._-]+'
+# The same two path roots in their SEPARATOR-ENCODED form. Agent runtimes name per-project state
+# directories by flattening an absolute path — every `/` becomes `-` — so `/Users/<name>/<proj>`
+# is also disclosed as `-Users-<name>-<proj>`, carrying the same username and on-disk layout while
+# matching neither arm above. Nobody types it; it arrives by pasting displayed tool output, and a
+# committed instance of exactly that shape passed this gate green.
+#
+# BOUNDS, because the encoded form is only a hyphen-separated word sequence and must not fire on
+# ordinary hyphenated English. Flattening turns the LEADING `/` of an absolute path into a leading
+# `-`, so an encoded `/Users/…` or `/home/…` starts its token: the character before it must be
+# neither alphanumeric NOR a hyphen. That rules out a hyphenated phrase (`per-users-quota`,
+# `nav-home-link` — preceded by a letter) and a GNU-style double-dash long flag (`--users-file`,
+# `--home-dir` — preceded by `-`), while still matching the real shapes, where the token follows
+# `/`, whitespace, a quote, `=`, `_` or the start of the line. A single-dash long option
+# (`-home-dir`) does still red, and that is accepted rather than excluded: it is also exactly how
+# `/home/dir` encodes, so a leak gate should err that way. At least one name character must
+# follow, so a bare `-Users-` is not a hit.
+#
+# Two limits taken deliberately, stated so the next editor does not read the bound as wider than
+# it is. There is no trailing-separator anchor, because an encoded home directory with nothing
+# after it still discloses the username. And unlike the slash arms, which match `/home/` at any
+# depth, this one sees only a home root that is the FIRST path component: a layout that puts the
+# home root below the filesystem root encodes without a separator in front of the root component,
+# so the slash arm catches that shape and this arm does not.
+deny="$deny"'|(^|[^A-Za-z0-9-])-(Users|home)-[a-zA-Z0-9._]+'
 deny="$deny"'|(ghp|gho|ghu|ghs|ghr)_[A-Za-z0-9]{16,}|glpat-[A-Za-z0-9_-]{16,}'
 deny="$deny"'|-----BEGIN [A-Z ]*PRIVATE KEY-----|xox[baprs]-[A-Za-z0-9-]{10,}'
 deny="$deny"'|TZ=[A-Za-z]+/[A-Za-z_]+'
