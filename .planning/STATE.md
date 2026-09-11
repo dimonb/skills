@@ -65,12 +65,59 @@ Four outcomes are now distinguished where two used to be merged — `unprovable`
 merge) and `no-proof-tool` (git older than 2.38) gave the same "just `--force`" advice, which on
 Ubuntu 22.04 meant every unmerged slot.
 
-### In flight
+### #125 SHIPPED (`b4524d4`) — the leak gate sees the encoded form
+
+One arm plus three probes, and the **bounds were derived from the encoding rather than chosen**:
+flattening turns an absolute path's leading `/` into a leading `-`, so the encoded root always
+begins a token, which means the preceding character can be neither alphanumeric nor a hyphen. That
+one requirement excludes hyphenated English (`per-users-quota`) and long flags (`--users-file`)
+without losing a real shape. Deliberately not anchored on a trailing separator: an encoded home
+directory with nothing after it discloses the username just the same. Zero blocking findings; two
+optionals were one defect (the bounds comment overclaimed) and were fixed as comment text only,
+leaving the pattern byte-identical. Follow-ups **#126** and **#127** filed rather than folded in.
+
+### #123 SHIPPED (`57f418b`) — and its own review round proved the bug twice
+
+The watchdog now asks **why** a child is not moving before consulting the clock. Both triggers were
+measured rather than argued, and the second one fired *during this PR's review*: after the four-day
+pause, the block accused two healthy children of a 5420-minute stall, and then both hit a real
+session limit mid-review and it fired again.
+
+Round 1 returned blocking findings on five of six axes, and **four were one mistake** — reasoning
+about what a client renders instead of reading the captures. So the fix *removes* surface: the
+service-bullet arm is gone rather than narrowed (it accepted one kind's own prose and tool-call
+headers, so a child that merely greps the phrase bought a permanent stall exemption), the
+"resets left" line is gone (it is that kind's chrome, and the positive test built on it pinned a
+line proving nothing), and the transport-fault arm is gone (no capture shows its glyph). **Two
+evidenced states instead of five that guess.**
+
+The property that keeps it honest: a banner must be **live**, not merely present. A child that hit
+a limit, resumed, worked, and *then* wedged still has the banner in the capture — excusing it would
+recreate the 8.5-hour silent stall with a reassurance attached. The clearing rule is **mirrored**
+from the existing capacity-state read rather than shared, and the PR names the seam instead of
+hiding it: that function is fused to an episode counter with a different contract and a
+single-kind vocabulary.
+
+Two findings about tests that were not testing:
+
+* the change's own new test extracted a glyph byte-wise under `LC_ALL=C`, got a literal space, and
+  so asserted *indentation* — and both of its vacuity guards passed on it. A guard built from the
+  same expression it guards.
+* the report's plumbing was pinned only by `grep`: **six of seven** semantic mutations shipped
+  green, including inverting the supervision-gap comparison. The suite now drives the real script
+  over a faked container and every one of them reds.
+
+### In flight — the last one
 
 | slot | PR | change | state |
 |---|---|---|---|
-| `ship-22` | **#123** | the stall watchdog stops prescribing compaction to a child that is waiting (#22) | round 1 found 5 blockers; fix direction REMOVES surface |
-| `ship-122` | — | the leak gate sees a home path in its encoded form (#122) | just launched |
+| `ship-61` | — | `report` must not exit 0 when the backend is unreachable (#61) | launched |
+
+Briefed to read #123's classifier first: an unreachable backend belongs to the family that change
+just built a home for — reasons a slot yields no signal that are not the slot being finished — so
+it extends that distinction rather than inventing a parallel one. And it has two worked precedents
+from today for the principle it needs, that an unanswerable question must never read as a clean
+bill of health: the teardown gate (#118) and the delivery verdict (#116).
 
 ### Two findings filed from supervision, not from a diff
 
