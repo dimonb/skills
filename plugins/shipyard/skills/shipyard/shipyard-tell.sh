@@ -23,14 +23,20 @@
 # An escalation id (`57-3`) is accepted as a convenience and resolves to its slot,
 # so you can reply to a notice with the id you were shown.
 #
-# Exit: 0 delivered (queued or accepted), 3 no live terminal for that slot,
-#       2 usage error, 1 mailbox/backend failure.
+# Exit: 0 delivered or queued (the child took it), 6 UNCONFIRMED — it was typed and submitted
+#       but no turn was seen to start, so it may be sitting unsent in the input box and wants
+#       your eyes, 3 no live terminal for that slot, 2 usage error, 1 mailbox/backend failure.
+#       6 rather than 0 on purpose: an `unconfirmed` that exits 0 is a note nobody has to
+#       notice, which is the same defect class as the false `delivered` it replaced.
 set -o pipefail
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=shipyard-lib.sh
 . "$DIR/shipyard-lib.sh"
 
-usage() { sed -n '3,30p' "$0" | sed 's/^# \{0,1\}//'; }
+# The header, to the first line that is not a comment. Line-numbered ranges go stale the moment
+# anyone adds a paragraph above them, and this one already had: it over-ran by three lines and
+# `--help` printed `set -o pipefail` back at the operator.
+usage() { awk 'NR < 3 { next } /^#/ { sub(/^# ?/, ""); print; next } /^$/ { print; next } { exit }' "$0"; }
 
 # How long a one-line directive may get before we send a pointer to the full text
 # instead of the text itself (a very long send-keys line is fragile to read back).
@@ -103,28 +109,88 @@ else
   LINE="$PREFIX $ONELINE"
 fi
 
-BEFORE=$(shipyard_capture "$SLOT")
+# --- delivery: a STATE read, sampled, never a before/after screen diff --------
+# The diff this replaced could not answer the question. Typing changes the screen whether or not
+# the Return took, so it was non-empty either way and an unsubmitted directive reported
+# `delivered`. `adp_delivery_verdict` (shared/adapters) holds the rule and the definition of each
+# verdict, including what `unconfirmed` does and does not rule out; this loop only samples.
+#
+# It POLLS rather than sleeping once because the sampling rate is the only thing that sets how
+# often a real delivery still reads `unconfirmed`: the residual case is a turn that starts AND
+# finishes between two samples, and one `sleep 3` misses a two-second turn completely.
+#
+# Re-folding the whole series on every sample is deliberate — the rule stays in exactly one place
+# and the loop stays a sampler. Over one window that is at most a few hundred string comparisons.
+#
+# Both knobs are VALIDATED, not just defaulted. An unusable value here fails OPEN in the worst
+# way: a non-numeric window makes the deadline arithmetic empty, `[ … -lt "" ]` errors, and the
+# loop breaks after ONE sample — which is exactly the single-sleep behaviour the poll exists to
+# replace, announced only by a stray test error on stderr. `_shipyard_admission_uint` already
+# carries this lesson for the admission gate's knobs; the interval is deliberately fractional, so
+# it gets its own pattern check rather than that helper.
+CONFIRM_SECS=$(_shipyard_admission_uint "${SHIPYARD_TELL_CONFIRM_SECS:-}" 10)
+# The interval must contain at least one digit and be a plain decimal: a bare `.` makes `sleep`
+# error every iteration and `0` makes it a no-op, and either turns the bounded poll into a spin
+# that re-captures as fast as it can fork. (No `''` arm — the default has already substituted.)
+case "${SHIPYARD_TELL_CONFIRM_INTERVAL:-0.5}" in
+  *[!0-9.]*|*.*.*|.|0|0.|0.0|.0)
+    echo "warning: SHIPYARD_TELL_CONFIRM_INTERVAL is not a positive number — using 0.5" >&2
+    CONFIRM_INTERVAL=0.5 ;;
+  *) CONFIRM_INTERVAL=${SHIPYARD_TELL_CONFIRM_INTERVAL:-0.5} ;;
+esac
+
+# The pre-send sample. It is what lets a turn seen LATER count as one our submit started, and what
+# stops a queued hint left over from an earlier send being read as being about this one.
+STATES=("$(adp_turn_state "$(shipyard_capture "$SLOT")")")
 shipyard_type "$SLOT" "$LINE" || { echo "error: typing into $WHERE failed" >&2; exit 1; }
 sleep 1
 shipyard_submit "$SLOT" || { echo "error: submitting to $WHERE failed" >&2; exit 1; }
-sleep 3
-AFTER=$(shipyard_capture "$SLOT")
 
-# Delivery check. Claude Code either starts working on it, or shows the queued-message
-# hint when it is mid-turn. An unchanged pane means the keys went nowhere.
-DELIVERY=delivered
-if printf '%s' "$AFTER" | grep -q 'queued message'; then
-  DELIVERY=queued
-elif [ "$BEFORE" = "$AFTER" ]; then
-  DELIVERY=unconfirmed
-fi
+DEADLINE=$(( $(date +%s) + CONFIRM_SECS ))
+while :; do
+  STATES+=("$(adp_turn_state "$(shipyard_capture "$SLOT")")")
+  DELIVERY=$(adp_delivery_verdict "${STATES[@]}")
+  [ "$DELIVERY" = unconfirmed ] || break
+  [ "$(date +%s)" -lt "$DEADLINE" ] || break
+  sleep "$CONFIRM_INTERVAL"
+done
 shipyard_json_set "$MB/$ID.json" --arg d "$DELIVERY" '.delivery=$d'
+
+# A run-length census of what was ACTUALLY sampled, pre-send state first. This replaced a list of
+# the causes `unconfirmed` could have had: that list was incomplete the moment the rule changed
+# (it omitted the commonest one, a child mid-turn all window with no queued hint), and naming the
+# evidence cannot go stale the way an enumeration does.
+SAMPLED=""; _prev=""; _run=0
+for _s in "${STATES[@]}"; do
+  if [ "$_s" = "$_prev" ]; then _run=$((_run + 1)); continue; fi
+  if [ -n "$_prev" ]; then
+    if [ "$_run" -gt 1 ]; then SAMPLED="$SAMPLED,$_prev x$_run"; else SAMPLED="$SAMPLED,$_prev"; fi
+  fi
+  _prev="$_s"; _run=1
+done
+if [ "$_run" -gt 1 ]; then SAMPLED="$SAMPLED,$_prev x$_run"; else SAMPLED="$SAMPLED,$_prev"; fi
+SAMPLED=${SAMPLED#,}
 
 case "$DELIVERY" in
   queued)      echo "told ship-$SLOT ($WHERE) — $ID queued; the child is mid-turn and will take it next" ;;
   delivered)   echo "told ship-$SLOT ($WHERE) — $ID delivered" ;;
-  unconfirmed) echo "warning: told ship-$SLOT ($WHERE) — $ID sent but the screen did not change." >&2
-               echo "         look inside: $(shipyard_peek_hint "$SLOT")" >&2 ;;
+  unconfirmed) echo "warning: told ship-$SLOT ($WHERE) — $ID was typed and submitted, but no turn" >&2
+               echo "         was seen to start within ${CONFIRM_SECS}s and the child never said it had" >&2
+               echo "         queued it. Sampled: $SAMPLED." >&2
+               echo "         THE TEXT MAY BE SITTING UNSENT IN THE INPUT BOX. Look before re-sending —" >&2
+               echo "         a second send types another copy onto the first:" >&2
+               echo "           $(shipyard_peek_hint "$SLOT")" >&2
+               echo "         if your directive is in the box, submit what is already there:" >&2
+               echo "           bash -c '. \"$DIR/shipyard-lib.sh\"; shipyard_submit \"$SLOT\"'" >&2
+               echo "         This is NOT proof it went nowhere — see adp_delivery_verdict in" >&2
+               echo "         shared/adapters for what the verdict does and does not rule out." >&2 ;;
+  *)           # Only reachable if the shared module did not load, which leaves the verdict empty.
+               # Never report that as success: an unverified directive exiting 0 silently is the
+               # defect this whole path exists to remove.
+               echo "error: could not read a delivery verdict for $ID (got '${DELIVERY:-<empty>}')." >&2
+               echo "       the shared turn-state module may be missing — reinstall the plugin." >&2
+               exit 1 ;;
 esac
 [ -n "$SRC" ] && echo "(in reply to $SRC — that record is not polled by the child, hence this channel)"
+[ "$DELIVERY" = unconfirmed ] && exit 6
 exit 0

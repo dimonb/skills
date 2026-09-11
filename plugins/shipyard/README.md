@@ -89,8 +89,9 @@ terminal for a question it asked.
 
 **A way to speak first.** The mailbox is child-initiated, so it cannot carry a reply to a
 `notice` or anything the child never asked about. For that there is a directive channel that
-types into the child's terminal, records what was sent, and reports whether it was delivered
-or queued.
+types into the child's terminal, records what was sent, and then confirms delivery by polling
+the child's own turn state — so a directive left sitting unsent in the input box comes back
+`unconfirmed` and non-zero rather than reported as delivered.
 
 **A diagnosis order for a child that looks stuck.** Several different failures wear one face:
 a child at its context ceiling, one compacted and never resumed, one that left its own next
@@ -118,7 +119,7 @@ message dies with the context that held it.
 | file | role |
 |---|---|
 | `shipyard-agent.sh` | select and launch the child runtime that matches the parent — which kinds shipyard admits, and what it hands the shared adapters |
-| `agent-adapters.sh` | vendored copy of the shared per-agent-kind adapters (`shared/adapters/agent-adapters.sh`), shared with `council` |
+| `agent-adapters.sh` | vendored copy of the shared per-agent-kind adapters (`shared/adapters/agent-adapters.sh`), shared with `council`: launch knowledge, plus the turn-state read and delivery verdict that confirm a directive actually landed |
 | `shipyard-backend.sh` | the agterm/tmux abstraction — every terminal operation goes through it |
 | `shipyard-lib.sh` | mailbox paths, slot resolution, payload input, the child env preamble |
 | `shipyard-continuity.sh` | automatic capacity retry and paused-goal continuity for a Codex parent in agterm |
@@ -173,7 +174,8 @@ starts nothing.
 Environment knobs: `SHIPYARD_AGENT`, `SHIPYARD_BACKEND`, `SHIPYARD_WORKSPACE`, `SHIPYARD_SESSION`,
 `SHIPYARD_ENV_PASS`, `SHIPYARD_ENV_SCRUB`, `SHIPYARD_SLOT`, `SHIPYARD_FORCE`, `SHIPYARD_DRY`,
 `SHIPYARD_MAX_SLOTS`, `SHIPYARD_MEM_MIN_FREE_PCT`, `SHIPYARD_STALL_SECS`, `SHIPYARD_CTX_WINDOW`,
-`SHIPYARD_TELL_MAXLINE`, `SHIPYARD_ASK_TIMEOUT`.
+`SHIPYARD_TELL_MAXLINE`, `SHIPYARD_TELL_CONFIRM_SECS`, `SHIPYARD_TELL_CONFIRM_INTERVAL`,
+`SHIPYARD_ASK_TIMEOUT`.
 
 `SHIPYARD_MAX_SLOTS` (default `2`) and `SHIPYARD_MEM_MIN_FREE_PCT` (default `10`) are the two
 admission-gate knobs — the concurrency cap and the macOS free-memory floor a launch must clear.

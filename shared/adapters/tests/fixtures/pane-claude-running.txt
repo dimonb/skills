@@ -1,0 +1,33 @@
+
+⏺ Resuming. Reading the decision and setting state.
+
+  Read 1 file, ran 2 shell commands 
+
+⏺ Decision read and understood. Its own convention — naming the markers by role rather than spelling them — applies to me
+  directly: my pane is a ship child's pane, so a literal I print becomes evidence a parent's predicate could read. I'll
+  name them by role from here.
+
+  Starting with the rebase the directive flagged.
+ 
+  Rebased onto origin/main, ran 2 shell commands 
+
+⏺ Rebase clean. #NN added a check 12 (a suite must be declared in $GATED_SUITES and invoked by a Makefile recipe) — my
+  new test lands in shared/adapters/tests/, an existing gated suite, so only check 10's registration array needs editing.
+  And AGENTS.md now states the shared-engine rule as law, with my own misjudgement as its first worked example.
+
+  Now the part the decision makes conditional: deriving the anchor from real captures, not a guess.
+
+  Ran 2 shell commands 
+
+⏺ Both clients are on PATH, so I can capture real renders rather than guess. Starting with the most authoritative "turn in
+  flight" sample available: my own pane, which is genuinely mid-turn right now.
+
+⏺ Running 1 shell command…
+  ⎿  $ mkdir -p /tmp/scratch     96bfdedcfd/scratchpad/caps && agtermctl session text --target SESSION-UUID --json 2>/dev/null
+     | jq -r '.result.text // ""' > /tmp/scratch Scurrying… (2m 3s · ↓ 6.3k tokens)
+  ⎿  Tip: Send messages to Claude while it works to steer Claude in real-time
+                                                                                  ✔ Update installed · Restart to update
+──────────────────────────────────────────────────────────────────────────────────────────────────────────────── ship-51 ─
+❯ 
+──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+  ⏵⏵ auto mode on (shift+tab to cycle) · PR #NN · esc to interrupt · ← for agents                                   /rc

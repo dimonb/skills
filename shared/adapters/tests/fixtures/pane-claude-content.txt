@@ -1,0 +1,40 @@
+
+ ▐▛███▛█   Claude Code v2.1.268
+▝▜██████▀  example-model - Example Plan
+  ▝▝ ▝▝    ~/src/example/.claude/worktrees/ship-NN
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+       20:ADP_TURN_MARKER='esc to interrupt'
+────────────────────────────────────────────────────────────────────────────────────────────────────
+❯ Try "edit verbs.sh to..."
+────────────────────────────────────────────────────────────────────────────────────────────────────
+  ⏵⏵ auto mode on (shift+tab to cycle) · PR #NN · ← for agents

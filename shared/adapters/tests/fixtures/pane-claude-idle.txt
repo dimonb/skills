@@ -1,0 +1,40 @@
+
+ ▐▛███▛█   Claude Code v2.1.268
+▝▜██████▀  example-model - Example Plan
+  ▝▝ ▝▝    ~/src/example/.claude/worktrees/ship-NN
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+  tmux detected · scroll with PgUp/PgDn · or add 'set -g mouse on' to ~/.tmux.conf for wheel scro…
+────────────────────────────────────────────────────────────────────────────────────────────────────
+❯ Try "edit verbs.sh to..."
+────────────────────────────────────────────────────────────────────────────────────────────────────
+  ⏵⏵ auto mode on (shift+tab to cycle) · PR #NN · ← for agents

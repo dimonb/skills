@@ -13,13 +13,17 @@
 - `scenarios/{debate,freeform,review}.md` — roles per scenario.
 - `tests/` — `run-all.sh`, `_helpers.sh`, 21 `t*.sh`.
 
-## shipyard — `plugins/shipyard/skills/shipyard/` (SKILL.md 765 lines / 48 KB)
+## shipyard — `plugins/shipyard/skills/shipyard/` (SKILL.md 872 lines / 56 KB)
 
 - `shipyard-backend.sh` — terminal backend abstraction (agterm|tmux) — **the driver, copy B**.
 - `shipyard-launch.sh` — start a child ship in its own terminal + worktree; write protocol+launcher.
 - `shipyard-continuity.sh` — Codex-parent **supervisor/watcher** lifecycle (`watch`/`watch-foreground`).
-- `shipyard-lib.sh` — shared helpers; defines the **mailbox** (`:20-32`).
+- `shipyard-lib.sh` — shared helpers; defines the **mailbox** (`shipyard_mailbox`,
+  `shipyard_mailbox_ensure` — named rather than line-numbered, because a line range goes stale on
+  the next edit above it and had).
 - `shipyard-agent.sh` — child-agent (codex|claude) exec abstraction.
+- `agent-adapters.sh` — vendored copy of `shared/adapters/`: per-kind launch knowledge, plus the
+  anchored turn-state read and the delivery-verdict fold that confirm a typed directive landed.
 - `shipyard-report.sh` — one markdown status table for a set of children (forge calls live here).
 - `shipyard-escalations.sh` — parent: surface child escalations from the mailbox.
 - `shipyard-ask.sh` — child: raise question/decision/notice into the mailbox.
@@ -27,7 +31,9 @@
 - `shipyard-compact.sh` — compact a child and resume.
 - `shipyard-ctx.sh` — child context-window usage.
 - `shipyard-down.sh` — tear a slot down (terminal + worktree) then lifecycle cleanup.
-- `tests/` — `run-all.sh`, `_helpers.sh`, 7 `t*.sh`.
+- `tests/` — `run-all.sh`, `_helpers.sh`, and the `t*.sh` files it registers (that registration is
+  what `make check`'s check 10 gates; a count written here instead would go stale unnoticed, and
+  had).
 
 ## Map to the three layers being extracted
 

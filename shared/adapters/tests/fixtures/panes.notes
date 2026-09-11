@@ -1,0 +1,60 @@
+Pane fixtures for the turn-state read (adp_turn_running / adp_turn_state).
+
+PROVENANCE MATTERS MORE THAN USUAL HERE, because the anchor these pin is a claim about what real
+clients render. Nine of the ten are verbatim captures of real client TUIs, taken at 100 columns;
+one is derived from a capture and says so.
+
+Machine- and person-specific text was replaced in all ten — rule zero: checkout and scratch paths,
+usernames, the numeric UID, session identifiers, model identifiers and plan tiers, quota
+percentages, and issue numbers. Nothing else was touched: the leading codepoints, the line
+positions and where each marker sits are as captured, and those are the only properties the anchor
+reads.
+
+One substitution is worth naming because the first pass MISSED it and the gate could not help. A
+scratch path can carry the home directory HYPHEN-ENCODED rather than as a path, and the gate's
+structural scan looks for a literal "/Users/" or "/home/", which that form does not contain. Rule
+zero already covers it ("not hashed or split up to hide it"), so judgement is the only thing that
+catches it — the builder now substitutes the mangled form first and re-scans every fixture before
+writing. If you add a capture, check for that shape by hand.
+
+Why the anchor needs fixtures at all: a too-loose anchor restores the false `delivered` this
+change exists to remove; a too-tight one makes a healthy running turn read as not-running, so the
+commonest healthy path alarms and an operator learns to ignore the signal. Neither failure is
+visible without real renders to measure against.
+
+  pane-claude-running.txt        live, the first kind, mid-turn. Captured from a real supervised
+                                 session's own pane over the agterm control socket. The turn
+                                 marker is in the footer, which is the LAST non-empty line.
+  pane-claude-idle.txt           live, same kind, idle at the composer. Same footer, no marker.
+  pane-claude-draft.txt          live, same kind: a long directive TYPED BUT NOT SUBMITTED, so it
+                                 wraps inside the composer. The marker is in the box, three lines
+                                 above the footer. ADVERSARIAL: must read as not running.
+  pane-claude-draft-welded.txt   live, same kind, the flattening case. Two fragments were typed as
+                                 separate keystroke batches and the client rendered them as the
+                                 intact marker inside the box — the shape `tr` welds together when
+                                 a multi-line directive is flattened to one line. ADVERSARIAL.
+                                 This is the case no earlier fixture had.
+  pane-claude-queued.txt         live, same kind, a second message submitted while the first turn
+                                 was still running. The client's queued hint is on the BOX line;
+                                 the turn marker is simultaneously in the footer.
+  pane-claude-content.txt        DERIVED, not a verbatim capture. Built from pane-claude-idle.txt
+                                 by putting the marker into a line that frame already rendered as
+                                 two-space-indented transcript text, and changing nothing else. It
+                                 stands for a child displaying this plugin's own source, which is
+                                 what permanently poisons a slot if the anchor is loose. The line's
+                                 SHAPE is real; only its words are ours. ADVERSARIAL.
+  pane-codex-running.txt         live, the second kind, mid-turn. This kind puts the marker in a
+                                 column-one service line in the transcript flow, NOT in the
+                                 footer — which is why the anchor needs two arms.
+  pane-codex-idle.txt            live, same kind, idle at the composer.
+  pane-codex-draft-welded.txt    live, same kind, typed-not-submitted and welded. ADVERSARIAL.
+  pane-codex-queued.txt          live, same kind, a second message submitted mid-turn. This kind
+                                 renders its queued header as a COLUMN-ONE SERVICE LINE, not in
+                                 the composer — a different place from the first kind, which is
+                                 why the queued arm has two anchors. Reasoning by analogy from one
+                                 kind to the other would have got this wrong and made every
+                                 mid-turn send on this kind alarm. That line also carries the turn
+                                 marker, which is why `queued` outranks `running`.
+
+NOT ASSERTED: whether either kind ever renders its queued hint somewhere other than the place
+captured here. A third placement, if one exists, reads as not-queued and falls to the alarm path.
