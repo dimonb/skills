@@ -16,12 +16,58 @@ bias, which had told slot 51 to take most of its optionals.
 beside #116 instead of behind it. Slot cap stays 2; it guards memory, and a third lane would buy
 nothing here since #22 changes the very printed protocol #116 is re-scoping.
 
+### #116 SHIPPED (`c204c06`) — the fleet's main blocker is closed
+
+Two rounds, 14 axes, 5 skeptics; 2 of round 1's blocking candidates were refuted by their own
+skeptics and correctly not treated as blockers. `tell` now concludes delivery from the child's
+**turn state**, anchored per line, with a non-zero exit for `unconfirmed`. The read lives in
+`shared/adapters/`, kind-less, with eleven live-captured fixtures and the notes on how each was
+taken.
+
+**The captures earned their cost.** The condition I attached to decision 51-4 — capture the second
+kind rather than extend the first kind's shape by analogy — turned out to be load-bearing: the two
+kinds render the queued hint in **different places**, so that arm needed two anchors. Analogy
+would have alarmed on every mid-turn send on one kind, i.e. on the commonest healthy path, which
+is the failure that teaches an operator to ignore the signal.
+
+Two findings worth keeping:
+
+* **A committed rule-zero leak the gate structurally cannot see.** A home path in its
+  separator-encoded form; `check.sh:356` wants a literal `/Users/` or `/home/` prefix, so the
+  encoded form passes while disclosing the same thing. `make check` was green over it and a
+  reading agent caught it, not the gate. Verified by hand, filed as **#122** — a *publishing*
+  risk rather than a usability one, and the likeliest remaining shape to be committed by accident,
+  because nobody types it: it arrives by pasting tool output.
+* A one-spelling assertion of the child's own that would have reddened `make check` in the main
+  checkout whenever any child worktree was live.
+
+Its teardown then became the **third live reproduction of #54**, in exactly the form slot 54 had
+diagnosed: a slot's branch has the *base* branch as its upstream, never its own remote branch, so
+the ancestry question is unanswerable after a squash. Containment was proven the way #118 does it
+— `merge-tree --write-tree` produced `main`'s own tree exactly — and only then `--force`.
+
 ### In flight
 
 | slot | PR | change | state |
 |---|---|---|---|
-| `ship-51` | **#116** | `tell` confirms from turn state, not a screen diff (#51) | one pass over amended 51-1 + the confirmed fixes, then one scoped round |
-| `ship-54` | **#118** | the teardown gate asks content, not ancestry (#54) | opened in ~30 min, review round running |
+| `ship-54` | **#118** | the teardown gate asks content, not ancestry (#54) | round 1 found a regression it introduced itself; rebasing onto the merged #116 |
+| `ship-22` | — | the stall watchdog stops prescribing compaction to a child that is waiting (#22) | just launched |
+
+### Remainder re-prioritised, because #116 changed the picture
+
+| # | was | now | why |
+|---|---|---|---|
+| **#22** | third | **in flight** | the watchdog discards live context — active harm |
+| **#61** | fourth | next, same file as #22 | a socket blip silences the monitor permanently |
+| **#112** | second | **last, and questionable** | see below |
+
+**#112 dropped for two independent reasons.** #116 turned it from *silent* corruption into
+corruption you are told about: `tell` no longer claims `delivered`, it returns `unconfirmed` with
+a non-zero exit. And its fix is an open design question rather than a settled one — "is the box
+empty" is **not decidable from a capture**, now proven by a live frame in which the client rendered
+suggestion text nobody had typed. Spending a lane on the undecidable while two decidable fixes
+wait is the wrong trade. Recorded on the issue so the next reader does not start from the approach
+its body implies.
 
 **A collision neither slot knew about, caught by reading both diffs:** both edit the shipyard
 suite's single-line `tests=()` registration array, and both independently claimed the number
