@@ -288,7 +288,9 @@ so do not plan on driving it from here.
   from the declared slot graph — see below);
 * whole report in one block → Monitor batches it into one notification;
 * exit 0 = nothing in flight **and** no open escalation → stop the loop; exit 1 = work
-  is still open.
+  is still open, **or this run could not tell**. Those two share an exit code deliberately: the
+  loop's only decision is whether to keep watching, and the answer to "I do not know" is the same
+  as the answer to "yes".
 
 Each slot's **supervision phase** — `launched → in-review → concluded → done` — is a declared graph
 (`shipyard-slot-graph.sh`) that the shared flow guard (`flow.sh`, vendored from `shared/flow/flow.sh`)
@@ -348,6 +350,32 @@ column and its own block, and is exempt from the stall clock:
 nothing asked of it, announcing no reason, at no stage that waits by design — is genuinely
 STUCK, and that still raises the loud block that bypasses `--only-changed`. The point of the
 classification is to make that alarm **rarer and right**, never quieter.
+
+**The same question, one level up: an empty answer is not a finished fleet.** `exit 0` ends
+supervision for good, so it is the loudest thing this script says — and it used to be reachable
+from an *absence*. `SHIPYARD_BACKEND=auto` decides per process by probing the agterm control
+socket; one failed probe sent a single tick to tmux, where a session named after the repo holds
+no ship windows for entirely correct reasons, and that tick printed `no live ship terminals` and
+`__all changes shipped — exiting monitor__`. Two children were mid-review with open PRs. Nothing
+was wrong with what the report saw; what was wrong was reading *"I looked somewhere else and
+found nothing"* as *"there is nothing"*.
+
+So an empty answer must now be **corroborated** before it may stop the loop, by two facts the
+skill already had: the container actually **answered** (`shipyard_slots` reports that separately
+from what it said — `shipyard-down.sh` has always refused to drop the container pin without it),
+and we asked the backend this fleet was **launched on** (the driver's pin file is named
+`container-<backend>`, so the pin's own name is that record). When either fails, the report
+raises a `🛑 NO SIGNAL` block — bypassing `--only-changed`, like `🛑 STALLED` — and **exits 1**,
+so the monitor keeps running and the next tick recovers by itself. The header also flags a
+backend disagreement on every tick, since in the incident it was the only visible trace.
+
+What is deliberately **not** suspicious: named slots that are all gone. The loop is armed once
+with a fixed slot list and children are torn down one at a time, so the last teardown leaving
+zero terminals is how a healthy run *ends*. Teardown and unreachability are told apart by
+whether the backend answered, never by the emptiness itself.
+
+If `auto` keeps moving under you, pin it for the run — `SHIPYARD_BACKEND=agterm` (or `tmux`) in
+the monitor's environment — which is what the `NO SIGNAL` block tells the operator to do.
 
 **Two screen-read states, not five.** The report only believes a capacity banner sitting behind
 the client's own warning glyph, because that is the one shape a child's output cannot forge — one

@@ -137,10 +137,20 @@ shipyard_backend_check() {
 }
 
 # shipyard_container_unpin — forget the pinned name, so the next launch derives a fresh one. Only
-# correct once nothing is left in the old container (shipyard-down.sh calls it then). The pin file
-# is the driver's now — reuse its path so unpin removes exactly what drv_container_pin wrote.
+# correct once nothing is left in the old container, which is why shipyard-down.sh calls it solely
+# after `shipyard_continuity_cleanup_last_slot` has PROVEN the fleet empty.
+#
+# It clears EVERY backend's pin, not just the one this process resolved. Removing only the current
+# one used to leave the other behind — invisibly, because nothing read those files by name. Now
+# shipyard_backend_pinned_elsewhere does, and a leftover `container-agterm` would make every later
+# tmux tick report a disagreement with a fleet that no longer exists. A proven-empty fleet has no
+# backend, so neither pin should survive it.
 shipyard_container_unpin() {
-  local f; f=$(_drv_pin_file 2>/dev/null) && rm -f "$f" 2>/dev/null
+  local d b
+  d="${DRV_CONTAINER_PIN_DIR:-}"
+  if [ -n "$d" ]; then
+    for b in agterm tmux; do rm -f "$d/container-$b" 2>/dev/null; done
+  fi
   return 0
 }
 
@@ -237,12 +247,57 @@ shipyard_peek_hint() {
 
 # shipyard_slots — every slot that currently has a terminal. No driver twin (the driver resolves
 # one session by name; enumerating them is shipyard's own).
+#
+# THE EXIT STATUS IS PART OF THE CONTRACT, and it carries the one distinction this change is about:
+# rc 0 means the container ANSWERED (its slot list follows, possibly empty), non-zero means it did
+# not answer at all. `shipyard-down.sh` has always relied on that — it refuses to drop the container
+# pin on anything but a proven-empty fleet — and `shipyard-report.sh` now does too.
+#
+# The agterm arm used to be a bare pipeline, so its status was `sed`'s, which is 0 whether or not
+# anything upstream survived. It happened to work because both callers set `pipefail`: an ambient
+# option in the CALLER decided whether a failed enumeration was distinguishable from an empty
+# container. Capture it explicitly instead, so a third caller cannot inherit the wrong answer by
+# forgetting an option it never knew it needed.
 shipyard_slots() {
+  local raw
   case "$(shipyard_backend)" in
-    agterm) _shipyard_at_sessions | jq -r '.name // empty' 2>/dev/null | sed -n -E 's/^ship-(.+)$/\1/p' ;;
+    agterm)
+      # Non-zero on a dead control socket AND on a tree that fails the shape assertion inside
+      # _shipyard_at_sessions; empty output with rc 0 when the workspace simply holds no sessions.
+      raw=$(_shipyard_at_sessions) || return 1
+      printf '%s' "$raw" | jq -r '.name // empty' 2>/dev/null | sed -n -E 's/^ship-(.+)$/\1/p' ;;
     tmux)   _shipyard_tmux_slots ;;
     *) _shipyard_no_backend; return 1 ;;
   esac
+}
+
+# shipyard_backend_pinned_elsewhere — echoes the backend(s) this fleet was actually launched on,
+# and returns 0 ONLY when a pin exists and NONE of them is the backend this process resolved.
+#
+# There is no separate backend pin file to maintain. The driver's container pin is already named
+# `container-<backend>`, so the set of pin files present IS the record of which backends this
+# mailbox has launched a fleet on. Reading that name keeps one fact in one place, and it needs
+# nothing from the driver's backend resolution — which is cached at source time, before shipyard's
+# pin directory is known, so a pin consulted there could not be read in the first place.
+#
+# WHY IT MATTERS. `SHIPYARD_BACKEND=auto` decides per PROCESS by probing the agterm control socket,
+# so a socket that blips for one tick resolves tmux for that tick — and a tmux session named after
+# the repo holds no ship windows, correctly and uselessly. Nothing is wrong with either answer;
+# what was wrong was reading "I looked somewhere else and found nothing" as "there is nothing".
+shipyard_backend_pinned_elsewhere() {
+  local d b f now any="" found=""
+  d="${DRV_CONTAINER_PIN_DIR:-}"
+  [ -n "$d" ] && [ -d "$d" ] || return 1
+  now=$(shipyard_backend)
+  for b in agterm tmux; do
+    f="$d/container-$b"
+    [ -f "$f" ] || continue
+    any="${any:+$any and }$b"
+    [ "$b" = "$now" ] && found=1
+  done
+  [ -n "$any" ] || return 1        # nothing was ever launched from this mailbox — no disagreement
+  [ -n "$found" ] && return 1      # the resolved backend is one of them — no disagreement
+  printf '%s' "$any"
 }
 
 _shipyard_tmux_slots() {
