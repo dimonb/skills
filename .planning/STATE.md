@@ -107,17 +107,74 @@ Two findings about tests that were not testing:
   green, including inverting the supervision-gap comparison. The suite now drives the real script
   over a faked container and every one of them reds.
 
-### In flight — the last one
+### ✅ #130 SHIPPED (`b0ff815`) — THE FINISH LINE IS MET
 
-| slot | PR | change | state |
-|---|---|---|---|
-| `ship-61` | — | `report` must not exit 0 when the backend is unreachable (#61) | launched |
+Exit 0 is the monitor's stop signal, so it is the loudest claim the report makes, and it was
+reachable from an **absence**. The mechanism is sharper than the issue's "socket blip":
+`SHIPYARD_BACKEND=auto` re-resolves per tick, so when the agterm socket failed one probe that tick
+fell back to tmux, where a session named after the repo holds no ship windows — and the report
+truthfully announced that everything had shipped while two children sat mid-review with open PRs.
+**It was not wrong about what it saw. It was wrong about what seeing nothing means.**
 
-Briefed to read #123's classifier first: an unreachable backend belongs to the family that change
-just built a home for — reasons a slot yields no signal that are not the slot being finished — so
-it extends that distinction rather than inventing a parallel one. And it has two worked precedents
-from today for the principle it needs, that an unanswerable question must never read as a clean
-bill of health: the teardown gate (#118) and the delivery verdict (#116).
+Emptiness must now be corroborated by two facts before it may end the watch: the container answered
+at all, and the backend asked was the one the fleet was launched on. "I do not know" now shares an
+exit code with "yes, work is open", because the loop's only decision is whether to keep watching.
+
+Neither fact was new knowledge here — `shipyard-down.sh` already refused to drop the pin unless
+enumeration *proved* the fleet empty, so the report was the last place still reading a failed
+enumeration as a drained fleet.
+
+**It closes an instance, not the class, and says so in its own body:** the same defect lives in the
+admission gate (#131, an unreachable backend counted as zero live slots, bypassing the concurrency
+cap) and in `tell`/`compact` (#134, a child reported gone when its terminal is merely absent on the
+backend that tick resolved).
+
+Eleven blocking findings fixed across three rounds, **ten of them introduced by the change's own
+earlier rounds** — including a guard added in round 1 that was wrong twice and ended up fully
+reverted to the rule already there. Third time today a change improved by *removing* what its
+author added rather than by adding another guard.
+
+## ✅ THE FLEET IS USABLE — the four blockers are closed
+
+| PR | merge | what it fixes |
+|---|---|---|
+| **#116** | `c204c06` | `tell` confirms delivery from turn state, not a screen diff (#51) |
+| **#118** | `419f53f` | teardown asks content, not ancestry (#54) |
+| **#123** | `57f418b` | the watchdog asks *why* before consulting the clock (#22) |
+| **#130** | `b0ff815` | the report earns its stop signal instead of assuming it (#61) |
+
+Plus two that were not on the line: **#115** (`67972b5`, the policy suite finally runs; check 12)
+and **#125** (`b4524d4`, the leak gate sees an encoded home path).
+
+**Verified on the merged head, by running it rather than by inference:** `make check` rc=0 with all
+four fast suites executing, `make check-test` **101 assertions proven / 0 not proven**, `make test`
+rc=0 with all six suites, working tree clean.
+
+### Deliberately left undone, so nobody has to re-derive the reasoning
+
+* **#112** (`tell` types over an unsubmitted draft) — demoted twice and left. #116 turned it from
+  silent corruption into corruption that reports itself, and its fix is *undecidable from a
+  capture*: a live frame showed the client rendering suggestion text nobody typed, so a draft and
+  an empty box are the same bytes. Spending a lane on the undecidable while decidable fixes waited
+  was the wrong trade. Recorded on the issue so the next reader does not start from the approach
+  its body implies.
+* **#131 / #134** — the remaining instances of #130's class. Neither *silently ends supervision*,
+  which is what made #61 a blocker: a false "child is gone" is visible and repeatable, and the cap
+  bypass needs an unreachable backend and a launch at once. #134 is the closest call if there is
+  another pass.
+* **#117** (council `say`, the same defect as #51) — cheap now that the predicate is shared, but it
+  is council's bug, not the fleet's.
+* **#124** (`ship` writes its state file late, so the status table is blind for most of a run) —
+  found by supervising, and the reason I read panes and queried the forge by hand all day.
+* **#126, #127, #128, #132, #133, #135, #114** — filed by the children's own rounds, all below the
+  line.
+
+### One thing I did to myself, worth remembering
+
+`make check-test` left `docs/_probe.md` behind when I killed it with a two-minute timeout, and the
+next run refused to start with `BASELINE DIRTY`. Its EXIT trap does not cover a hard kill — exactly
+the incidental finding slot 111 reported and I said I would triage. Reproduced first-hand, filed,
+and below the line. Give that target a real budget: it takes minutes, not seconds.
 
 ### Two findings filed from supervision, not from a diff
 
