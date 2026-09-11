@@ -140,26 +140,27 @@ shipyard_backend_check() {
 # correct once nothing is left in the old container, which is why shipyard-down.sh calls it solely
 # after `shipyard_continuity_cleanup_last_slot` has PROVEN the fleet empty.
 #
-# It clears every backend's pin — but ONLY when this process has no disagreement with them, and
-# that guard is the whole subtlety. What the caller proved is that the backend it RESOLVED holds no
-# slots; it learned nothing about the other one. So the single situation in which the extra removal
-# has any effect at all — resolved tmux, pinned agterm — is precisely the situation in which it is
-# unjustified, and it is worse than unjustified: the pin is the evidence
-# shipyard_backend_pinned_elsewhere reads, so deleting it there disarms the report's corroboration
-# and lets the next blip exit 0 over live children. That is the #61 incident, reintroduced by its
-# own fix. Measured on this branch before the guard existed.
+# IT CLEARS ONLY THE RESOLVED BACKEND'S PIN, which is the rule that was already here, and the
+# reuse of `_drv_pin_file` that goes with it: unpin removes exactly what `drv_container_pin` wrote.
 #
-# With the guard, the two cases that remain are both right: a pin naming the resolved backend is
-# cleared because its fleet really is drained, and a mailbox holding BOTH pins is cleared because
-# the resolved half is proven empty and the other is already indistinguishable to the disagreement
-# check (see shipyard_backend_pinned_elsewhere) — leaving it would be a stale file nothing reads.
+# That is worth a note because this change spent two review rounds getting back to it. Reading the
+# pin's NAME as evidence (shipyard_backend_pinned_elsewhere, below) made a leftover pin look like
+# litter worth sweeping, so unpin was widened to clear every backend's. It was wrong twice, in the
+# same direction both times:
+#   * resolved tmux, pinned agterm — the extra removal deletes the evidence the report reads, so
+#     the next blip exits 0 over live children. #61, reintroduced by its own fix.
+#   * resolved tmux, BOTH pinned — patched with an early return when the pins disagree, which does
+#     not fire here (tmux IS pinned). The justification written for it was circular: the agterm pin
+#     is invisible to the disagreement check only BECAUSE the tmux pin sits beside it, and this very
+#     call is about to delete that one. Afterwards the leftover is exactly what the check reads.
+#
+# The rule that covers all three configurations without a guard is the original one: the caller
+# proved that the backend it RESOLVED holds no slots and learned nothing about the other, so clear
+# that one and leave the other alone. A pin whose fleet ended some other way does outlive it — and
+# that is fail-CLOSED (a refusal that names itself and says what to run), which is the direction to
+# be wrong in.
 shipyard_container_unpin() {
-  local d b
-  d="${DRV_CONTAINER_PIN_DIR:-}"
-  [ -n "$d" ] || return 0
-  # A disagreement means this process proved nothing about the backend that was actually pinned.
-  shipyard_backend_pinned_elsewhere >/dev/null 2>&1 && return 0
-  for b in agterm tmux; do rm -f "$d/container-$b" 2>/dev/null; done
+  local f; f=$(_drv_pin_file 2>/dev/null) && rm -f "$f" 2>/dev/null
   return 0
 }
 

@@ -70,8 +70,13 @@ sitting*, so re-deriving it later — a report run from another workspace, a scr
 inside a child — would name a different container and honestly report that it holds no
 children. That is the worst thing a monitor can do, so the name is written down at the
 first launch and every later script reads it. `shipyard-down.sh` erases the pin once the last
-child is gone, so the next run picks a fresh workspace; to repoint sooner, delete
-`<mailbox>/container-<backend>` or pass `SHIPYARD_WORKSPACE`.
+child is gone — **the pin of the backend it resolved**, and only that one, since proving one
+container empty says nothing about the other — so the next run picks a fresh workspace; to
+repoint sooner, delete `<mailbox>/container-<backend>` or pass `SHIPYARD_WORKSPACE`.
+
+The pin's *name* is also read as evidence by the status report (see Step 2's corroboration), so
+deleting one by hand switches off the half of that check which notices the backend moving under
+you. That is the trade the escape hatch buys.
 
 A caveat that comes with reading the environment: `AGTERM_*` is inherited by every
 descendant, long-lived daemons included. A launch driven from a process that some *other*

@@ -25,10 +25,11 @@
 # lines asserts that a line exists and nothing about reachability or branch bodies, and six of
 # seven semantic mutations survived that idiom.
 #
-# COST: three cases (4d's control and 4e) need a LIVE slot and so pay the report's 3s motion diff
-# each; measured ~13s for the file. That is why it sits in `make test` and not the per-commit gate.
-# The live cases are not optional — a torn-down fleet always prints a terminal report, so only a
-# slot in flight can show that --only-changed still filters at all.
+# COST: five report RUNS across three cases (4d's control twice, 4e, 4e2 twice) use a LIVE slot and
+# so pay the report's 3s motion diff each; measured 14-16s for the file, varying with machine and
+# load. That is why it sits in `make test` and not the per-commit gate. The live runs are not
+# optional — a torn-down fleet always prints a terminal report, so only a slot in flight can show
+# that --only-changed still filters at all.
 set -uo pipefail
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SKILL_DIR="$(cd "$DIR/.." && pwd)"
@@ -79,16 +80,33 @@ ok "a missing pin dir is not a disagreement"   "|1" \
               shipyard_backend_pinned_elsewhere ) || rc=$?
        printf '%s|%s' "$out" "${rc:-0}" )"
 
-# --- unpin clears EVERY backend's pin -------------------------------------------------------
-# It runs only after the fleet is PROVEN empty, and a proven-empty fleet has no backend. Leaving
-# the other file behind was invisible until this change read those names: a stale `container-agterm`
-# would make every later tmux tick report a disagreement with a fleet that no longer exists.
-( export SHIPYARD_BACKEND=tmux
-  . "$SKILL_DIR/shipyard-backend.sh" >/dev/null 2>&1
-  DRV_CONTAINER_PIN_DIR="$PINDIR"
-  shipyard_container_unpin ) >/dev/null 2>&1
-ok "unpin removes both pins, not just the resolved one" "0" \
-   "$(ls -1 "$PINDIR" 2>/dev/null | grep -c 'container-')"
+# --- unpin clears ONLY the backend it proved empty -------------------------------------------
+# THE REGRESSION THIS PINS was written by this very change and had to be reverted twice. Reading a
+# pin's NAME as evidence makes a leftover pin look like litter, so unpin was widened to clear every
+# backend's — which deletes the evidence the report reads and lets the next blip exit 0 over live
+# children. What the caller proved is that the backend it RESOLVED is empty; it learned nothing
+# about the other one, so the other one's pin must survive. Both directions, because a rule that
+# holds in one is not a rule.
+unpin_leaves() { # <resolved backend> -> what is still pinned, sorted
+  ( export SHIPYARD_BACKEND="$1"
+    . "$SKILL_DIR/shipyard-backend.sh" >/dev/null 2>&1
+    DRV_CONTAINER_PIN_DIR="$PINDIR"
+    shipyard_container_unpin ) >/dev/null 2>&1
+  ls -1 "$PINDIR" 2>/dev/null | sort | tr '\n' ' ' | sed 's/ $//'
+}
+
+rm -f "$PINDIR"/container-*; : > "$PINDIR/container-agterm"
+ok "unpin resolved as tmux leaves the agterm pin alone" "container-agterm" "$(unpin_leaves tmux)"
+ok "...and resolved as agterm then clears it"           ""                 "$(unpin_leaves agterm)"
+rm -f "$PINDIR"/container-*; : > "$PINDIR/container-tmux"
+ok "unpin resolved as agterm leaves the tmux pin alone"  "container-tmux"  "$(unpin_leaves agterm)"
+ok "...and resolved as tmux then clears it"              ""                "$(unpin_leaves tmux)"
+# Both pinned: still only the proved-empty one goes. This is the case whose first patch was
+# circular — the other pin looks invisible to the disagreement check only while this one sits
+# beside it, and this call is about to remove that.
+rm -f "$PINDIR"/container-*; : > "$PINDIR/container-agterm"; : > "$PINDIR/container-tmux"
+ok "both pinned: unpin still clears only the resolved one" "container-agterm" "$(unpin_leaves tmux)"
+rm -f "$PINDIR"/container-*
 
 # --------------------------------------------- 2. did the container ANSWER?
 # `shipyard_slots`' exit status is the first half of corroboration, and it is a contract two
@@ -176,6 +194,13 @@ tmux() {
           n=$(cat "$FLAKY" 2>/dev/null); n=$(( ${n:-0} + 1 )); printf '%s\n' "$n" >"$FLAKY"
           if [ "$n" = 1 ]; then printf 'ship-41\n'; return 0; fi
           echo "error connecting to server" >&2; return 1 ;;
+        blip)
+          # The NARROWER shape: answer the enumeration, fail only the row loop's lookup, then
+          # recover in time for the tail's re-ask. The status alone says "corroborated" and the
+          # tick would stop the loop — while the re-ask is listing the slot it just called gone.
+          n=$(cat "$FLAKY" 2>/dev/null); n=$(( ${n:-0} + 1 )); printf '%s\n' "$n" >"$FLAKY"
+          if [ "$n" = 2 ]; then echo "error connecting to server" >&2; return 1; fi
+          case "$*" in *window_index*) printf '1 ship-41\n' ;; *) printf 'ship-41\n' ;; esac ;;
       esac
       return 0 ;;
     has-session)  [ "${TMUX_MODE:-empty}" = live ] && return 0; return 1 ;;
@@ -194,6 +219,10 @@ run_report() { # <tmux-mode> [args...]; prints the report, then a last line "rc=
   printf '%s\nrc=%s\n' "$out" "$rc"
 }
 rc_of() { printf '%s' "$1" | sed -n 's/^rc=//p' | tail -1; }
+# Presence, not a line COUNT. The class-remedy checks below are about whether a piece of advice was
+# printed at all; counting lines makes them assert how the prose happens to wrap, so re-flowing a
+# sentence onto two lines reds a check whose property never changed. That already happened once.
+has() { printf '%s' "$1" | grep -q -- "$2" && printf yes || printf no; }
 
 rm -f "$MB"/container-*
 
@@ -225,10 +254,12 @@ ok "4a: ...and never claims completion"    0 "$(printf '%s' "$out" | grep -c 'no
 # The block's CLASS-SELECTED remedy is its only actionable content, and nothing pinned it: with the
 # class hardcoded, or the whole `case` deleted, every check above stayed green while an `elsewhere`
 # tick told the operator to go and check a socket that is working perfectly.
-ok "4a: ...and prescribes the pin, not a socket check" 1 \
-   "$(printf '%s' "$out" | grep -c 'SHIPYARD_BACKEND=agterm')"
-ok "4a: ...and does NOT prescribe the unreachable remedy" 0 \
-   "$(printf '%s' "$out" | grep -c 'agtermctl version')"
+ok "4a: ...and prescribes the pin, not a socket check"    yes "$(has "$out" 'SHIPYARD_BACKEND=agterm')"
+# BOTH halves of the unreachable remedy, not just the first: the second-cause line leaking into
+# this arm would tell an operator whose socket is demonstrably healthy to go and inspect the tree,
+# which is the misdirection the per-class assertions exist to prevent.
+ok "4a: ...and does NOT prescribe the unreachable remedy" no  "$(has "$out" 'agtermctl version')"
+ok "4a: ...nor its second cause"                         no  "$(has "$out" 'agtermctl tree --json')"
 
 # 4b. The backend could not be asked at all. The container pin agrees here, so this is the half a
 #     pinned backend would NOT have caught — the socket answers `version` and fails on `tree`.
@@ -238,10 +269,10 @@ ok "4b: unreachable -> NOT exit 0"         1 "$(rc_of "$out")"
 ok "4b: ...raises the block"               1 "$(printf '%s' "$out" | grep -c '🛑 NO SIGNAL')"
 ok "4b: ...saying the backend did not answer" 1 \
    "$(printf '%s' "$out" | grep -c 'did not answer when asked which terminals exist')"
-ok "4b: ...and prescribes the socket check, not the pin" 1 \
-   "$(printf '%s' "$out" | grep -c 'agtermctl version')"
-ok "4b: ...and offers the second cause, whose socket answers fine" 1 \
-   "$(printf '%s' "$out" | grep -c 'agtermctl tree --json')"
+ok "4b: ...and prescribes the socket check, not the pin"  yes "$(has "$out" 'agtermctl version')"
+ok "4b: ...and offers the second cause, whose socket answers fine" yes \
+   "$(has "$out" 'agtermctl tree --json')"
+ok "4b: ...and does NOT prescribe the elsewhere remedy"   no  "$(has "$out" 'SHIPYARD_BACKEND=')"
 
 # 4c. THE SECOND ROUTE. Named slots skip the discovery branch entirely, render every row as
 #     `⛔ no terminal`, count nothing in flight and reach the tail — an identical false completion
@@ -278,6 +309,24 @@ out=$(run_report flaky)
 ok "4c3: a backend that dies mid-tick -> NOT exit 0"  1 "$(rc_of "$out")"
 ok "4c3: ...and does NOT print monitor stopped"       0 \
    "$(printf '%s' "$out" | grep -c 'monitor stopped')"
+# ANCHOR THE FIXTURE, or this case can go vacuous without saying so: rc 1 and no "monitor stopped"
+# are also what plain `down` produces, so a fake that stopped answering the FIRST call would turn
+# 4c3 into a duplicate of 4b while still looking like it guards the timing route. Asserting the row
+# proves the tick really did enumerate the slot before the backend went away.
+ok "4c3: ...having really enumerated the slot first"  yes "$(has "$out" '^| 41 .*⛔ no terminal')"
+
+# 4c4. THE NARROWER BLIP, and it is why the re-ask keeps its ANSWER and not just its status. Here
+#      the backend fails only the row-loop lookup and has recovered by the tail, so the status says
+#      "corroborated" while the very same call lists the slot this tick just rendered `⛔ no
+#      terminal`. Reproduced before the fix: rc 0 and "monitor stopped" over a live child. The
+#      contradiction is the evidence, and it is matched PER SLOT — a bare "the list is non-empty"
+#      test would let an unrelated ship-* terminal block the designed termination forever.
+out=$(run_report blip)
+ok "4c4: enumerated but unresolvable -> NOT exit 0"   1 "$(rc_of "$out")"
+ok "4c4: ...and does NOT print monitor stopped"       0 \
+   "$(printf '%s' "$out" | grep -c 'monitor stopped')"
+ok "4c4: ...and names the contradiction"              yes "$(has "$out" 'still listed by the backend')"
+ok "4c4: ...having rendered that very slot as gone"   yes "$(has "$out" '^| 41 .*⛔ no terminal')"
 
 # 4d. --only-changed must not swallow it, for the reason the STALLED block bypasses the filter:
 #     silence is what made the original defect invisible. The first run seeds the signature so the
@@ -306,6 +355,17 @@ ok "4e: the header flags the disagreement"  1 \
 ok "4e: ...and live work still exits 1"     1 "$(rc_of "$out")"
 ok "4e: ...without the NO SIGNAL block, which is only about an EMPTY answer" 0 \
    "$(printf '%s' "$out" | grep -c 'NO SIGNAL')"
+
+# 4e2. A disagreement is news on EVERY tick it holds, not once. It is kept out of the --only-changed
+#      signature and put in the suppression condition for exactly that reason, and without this case
+#      removing that clause left the whole suite green: 4e runs without --only-changed, so nothing
+#      exercised the filter against a standing disagreement. The first run seeds the signature, so
+#      the second would be silent on state alone.
+rm -f "$MB/report-sig"
+run_report live --only-changed 41 >/dev/null
+out=$(run_report live --only-changed 41)
+ok "4e2: a standing disagreement re-announces on every tick" 1 \
+   "$(printf '%s' "$out" | grep -c 'but this fleet was launched on `agterm`')"
 
 if [ "$FAILURES" -eq 0 ]; then
   printf 't14-signal: %d checks, all passed\n' "$CHECKS"; exit 0

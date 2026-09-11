@@ -178,16 +178,17 @@ no_signal_block() {  # <class> <why>
       echo "  tmux:   check \`tmux ls\`."
       # Two causes reach this class and the second one answers `version` perfectly well, so an
       # operator told only to check the socket would find it healthy and have nothing to act on.
-      echo "- If the socket IS answering, the tree it returned did not have the shape this report"
-      echo "  requires — inspect \`agtermctl tree --json\`. The shape is asserted over the WHOLE tree,"
-      echo "  so a malformed session in an unrelated workspace reaches here too." ;;
+      echo "  agterm: if the socket IS answering, the tree it returned did not have the shape this"
+      echo "  report requires — inspect \`agtermctl tree --json\`. The shape is asserted over the WHOLE"
+      echo "  tree, so a malformed session in an unrelated workspace reaches here too." ;;
     elsewhere)
       echo "- \`SHIPYARD_BACKEND=auto\` decides per PROCESS, so one failed socket probe sends a single tick"
       echo "  to the other backend, where this repo's container is empty for entirely correct reasons."
       echo "  Pin it for the run — \`SHIPYARD_BACKEND=$PINNED_ELSEWHERE\` in the monitor's environment —"
       echo "  and the choice stops moving under you."
-      echo "- If that fleet really is finished, the pin is stale: \`shipyard-down.sh\` clears it once the"
-      echo "  last slot is torn down, which is the supported way to end a run." ;;
+      echo "- If that fleet really is finished, the pin is stale. \`shipyard-down.sh\` clears only the pin"
+      echo "  of the backend IT resolved, so pin \`SHIPYARD_BACKEND=$PINNED_ELSEWHERE\` first and then tear"
+      echo "  the slots down; a down run resolved on the other backend leaves this one in place." ;;
   esac
 }
 
@@ -374,6 +375,7 @@ declare -a ROWS
 declare -a SIG
 inflight=0
 total_pend=0
+GONE=""      # slots this tick rendered `⛔ no terminal`; consulted by the tail's re-ask
 
 # ONCE, HERE, IN THIS SHELL — never from inside the loop below. The per-slot ctx call is
 # $(ctx_probe ...), which nests $(ctx_window ...): a warning raised down there fires once per
@@ -399,6 +401,10 @@ for slot in "${SLOTS[@]}"; do
   if [ -z "$addr" ]; then
     ROWS+=("| $slot | $mr_label | — | ⛔ no terminal | — | $esc | — | — |")
     SIG+=("$slot|$mr_label|term=0|—|—|$pend")
+    # Remember WHICH slots this tick concluded were gone. The tail re-asks the backend before it
+    # may stop the loop, and the only honest reading of "still enumerated, but I rendered it gone"
+    # is that the lookup failed, not that the child ended.
+    GONE="$GONE $slot"
     continue
   fi
 
@@ -587,9 +593,33 @@ if [ "$TERMINAL" = 1 ]; then
   # slot. The window this closes is far larger than the one the pre-loop sample covers, and one
   # extra enumeration is charged only on the tick that would otherwise END supervision.
   ENUM_RC=0
-  shipyard_slots >/dev/null 2>&1 || ENUM_RC=$?
+  RECHECK=$(shipyard_slots 2>/dev/null) || ENUM_RC=$?
   NOSIG=$(fleet_signal) || NOSIG_RC=$?
   [ "$NOSIG_RC" = 0 ] || TERMINAL=0
+  # KEEP THE ANSWER, not just the status. A blip that fails the row loop's lookups and recovers
+  # before this point returns rc 0 — corroborated — while listing the very slot the tick has just
+  # rendered `⛔ no terminal`. Reproduced: a fake failing only the middle call printed "monitor
+  # stopped" and exited 0 over a live child. The contradiction is the evidence, and it costs
+  # nothing extra: the list is already in hand.
+  #
+  # It is matched per slot, NOT by asking whether the list is non-empty. With named slots an
+  # unrelated `ship-*` terminal in the same container would satisfy a bare emptiness test and block
+  # the designed termination forever — the opposite-direction bug this change keeps having to
+  # defend against.
+  if [ "$TERMINAL" = 1 ] && [ -n "$GONE" ] && [ -n "$RECHECK" ]; then
+    for g in $GONE; do
+      case "
+$RECHECK
+" in
+        *"
+$g
+"*) TERMINAL=0
+            NOSIG_RC=9
+            NOSIG="unreachable${TAB}slot $g is still listed by the backend, but its terminal could not be resolved while this tick was building the table"
+            break ;;
+      esac
+    done
+  fi
 fi
 
 # --only-changed: stay silent unless the meaningful state moved. A terminal report is
