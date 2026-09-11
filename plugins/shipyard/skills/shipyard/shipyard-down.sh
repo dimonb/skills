@@ -57,6 +57,13 @@ esac
 
 wt_of() { printf '%s/.claude/worktrees/ship-%s' "$ROOT" "$1"; }
 
+# Shell-quote anything that goes into a `look:` line. Those lines exist to be COPY-PASTED, and
+# a ref name may legally contain `;`, `$`, `|` and a single quote (`git check-ref-format
+# 'refs/heads/release;touch${IFS}x'` passes), while a remote chooses the name its HEAD points
+# at. Hand-rolled single quotes are not enough for a ref that contains one, so use bash's own
+# quoting and never interpolate a ref or a path raw.
+qq() { printf '%q' "$1"; }
+
 if [ "$LIST" = 1 ]; then
   printf '%-24s %-10s %-9s %s\n' SLOT TERMINAL WORKTREE STATE
   for w in "$ROOT"/.claude/worktrees/ship-*; do
@@ -77,9 +84,11 @@ if [ "$LIST" = 1 ]; then
       unmerged)   st="UNMERGED against $ref" ;;
       # Not "unmerged": the gate failed to PROVE containment, and a column that asserts more
       # than the gate measured is how the old commit count read as a loss warning.
-      unprovable) st="unproven against $ref" ;;
-      no-default) st="NO BASE REF" ;;
-      *)          st="UNKNOWN ($kind)" ;;
+      unprovable)    st="unprovable against $ref" ;;
+      # Louder, because on this git nothing can ever read UNMERGED — see the gate's verdict list.
+      no-proof-tool) st="NO PROOF TOOL (git < 2.38)" ;;
+      no-default)    st="NO BASE REF" ;;
+      *)             st="UNKNOWN ($kind)" ;;
     esac
     printf '%-24s %-10s %-9s %s\n' "$s" "$t" "present" "$st"
   done
@@ -105,7 +114,7 @@ for slot in "${SLOTS[@]}"; do
         # The gate that actually stands between the operator and unrecoverable content:
         # committed work survives `worktree remove`, uncommitted work does not.
         echo "refused: ship-$slot has uncommitted or untracked changes in $WT" >&2
-        echo "         look: git -C '$WT' status" >&2
+        echo "         look: git -C $(qq "$WT") status" >&2
         rc=1; continue
         ;;
       unmerged)
@@ -114,29 +123,41 @@ for slot in "${SLOTS[@]}"; do
         # warning on the successful path and trained everyone to reach straight for
         # --force. Point at the content instead, which is the thing actually at stake.
         echo "refused: ship-$slot carries content that is NOT in $ref" >&2
-        echo "         look: git -C '$WT' diff $ref" >&2
-        echo "         look: git -C '$WT' log --oneline $ref..HEAD" >&2
+        echo "         look: git -C $(qq "$WT") diff $(qq "$ref")" >&2
+        echo "         look: git -C $(qq "$WT") log --oneline $(qq "$ref")..HEAD" >&2
         echo "         --force would orphan that content in its branch" >&2
         rc=1; continue
         ;;
       unprovable)
         echo "refused: ship-$slot's content could not be PROVEN to be in $ref" >&2
-        echo "         (a later change to the same region blocks the test merge, or this git" >&2
-        echo "          is older than 2.38 — this is not a claim that anything is missing)" >&2
-        echo "         look: git -C '$WT' diff $ref" >&2
+        echo "         (the base branch has since edited the same region, so the test merge" >&2
+        echo "          conflicts — this is not a claim that anything is missing)" >&2
+        echo "         look: git -C $(qq "$WT") diff $(qq "$ref")" >&2
         echo "         --force is the right answer once you have looked" >&2
+        rc=1; continue
+        ;;
+      no-proof-tool)
+        # Deliberately NOT the reassuring wording. Without merge-tree the gate cannot reach
+        # `unmerged` at all, so this verdict also covers a slot holding the only copy of its
+        # work — advising --force here would force past the very case the gate exists to catch.
+        echo "refused: ship-$slot could not be proven either way — this git cannot run the" >&2
+        echo "         containment proof (needs 2.38 for 'merge-tree --write-tree'), and the" >&2
+        echo "         worktree is not byte-identical to $ref" >&2
+        echo "         this says NOTHING about whether content is missing; check before forcing" >&2
+        echo "         look: git -C $(qq "$WT") diff $(qq "$ref")" >&2
+        echo "         look: git -C $(qq "$WT") log --oneline $(qq "$ref")..HEAD" >&2
         rc=1; continue
         ;;
       no-default)
         echo "refused: ship-$slot has no base branch to compare against" >&2
         echo "         (tried origin/HEAD, the branch's upstream, origin/main, origin/master)" >&2
-        echo "         look: git -C '$WT' branch -r" >&2
+        echo "         look: git -C $(qq "$WT") branch -r" >&2
         rc=1; continue
         ;;
       *)
         echo "refused: ship-$slot could not be inspected — git did not answer" >&2
         echo "         (not a worktree, or an unreadable index; the gate never ran)" >&2
-        echo "         look: git -C '$WT' status" >&2
+        echo "         look: git -C $(qq "$WT") status" >&2
         rc=1; continue
         ;;
     esac

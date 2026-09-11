@@ -56,18 +56,27 @@
 #      (identical to the branch by construction, so every pushed-but-unmerged branch would
 #      read `safe`).
 #
+#   W  a forge remote that is not named `origin`, and whose name itself contains a slash. The
+#      module claims to work in such a repo and the lazy fetch must split a ref to honour it;
+#      splitting on the first slash passed every origin-named fixture, so restoring the old
+#      fetch line left the suite fully green.
+#
 # NOT COVERED, so a green run is never read as more than it is:
 #   * proof 1 (tree equality) is never exercised in ISOLATION — every case that satisfies it
 #     also satisfies proof 2.
-#   * `shipyard-down.sh` ITSELF is executed by nothing here: its argument parsing, the awk
-#     --help extractor, the --list rendering and every refusal message are verified by hand
-#     only. Change the verdict vocabulary and this suite stays green while --list falls to its
-#     catch-all for healthy slots.
-#   * git older than 2.38 has no `merge-tree --write-tree`. The gate degrades correctly there
-#     (more refusals, never a wrong allow), but D1's expectation does NOT hold, so the case is
-#     SKIPPED with a printed note rather than left to red and read as a gate regression.
+#   * `shipyard-down.sh` ITSELF is barely executed here. `t7-continuity.sh` runs it with
+#     `--force`, which skips the whole gate block, so argument parsing is exercised and nothing
+#     else is: the awk --help extractor, the --list rendering and every refusal message are
+#     verified by hand only. Change the verdict vocabulary and this suite stays green while
+#     --list falls to its catch-all for healthy slots.
+#   * git older than 2.38 has no `merge-tree --write-tree`, so proof 2 never runs and `unmerged`
+#     is unreachable. That is not merely uncovered — it moves FIVE expectations, so the suite
+#     resolves the expected word from a capability probe ($UNMERGED) and skips D1 outright.
+#     Before that it went red four times on such a git, under a note claiming otherwise.
 #   * every remote is a local path, so no network failure, credential prompt or timeout is
-#     exercised — only that the fetch is attempted, and counted.
+#     exercised — only that the fetch is attempted, counted, and aimed at the right remote.
+#   * nothing asserts that SHIPYARD_DOWN_REF is EMPTY on the dirty/unknown/no-default paths;
+#     neither caller reads it there.
 set -uo pipefail
 export LC_ALL=C
 
@@ -87,8 +96,9 @@ export GIT_AUTHOR_NAME=shipyard-test GIT_AUTHOR_EMAIL=shipyard-test
 export GIT_COMMITTER_NAME=shipyard-test GIT_COMMITTER_EMAIL=shipyard-test
 
 TMP=$(mktemp -d "${TMPDIR:-/tmp}/shipyard-t12.XXXXXXXX") || exit 1
-# chmod 000 fixtures (case X) would defeat a plain rm -rf if the case died between the two
-# chmods, so restore permissions before removing.
+# Case X chmods an index to 000. A 000 FILE does not actually defeat `rm -rf` (only a 000
+# directory would), so this is insurance rather than a fix for a measured failure — kept
+# because the cost is one command and a future case may chmod a directory.
 cleanup() { chmod -R u+rwX "$TMP" 2>/dev/null; rm -rf "$TMP"; }
 trap cleanup EXIT
 
@@ -106,14 +116,11 @@ done_() {
   printf '%s: %d checks, %d FAILED%s\n' "$1" "$CHECKS" "$FAILURES" "$tail"; return 1
 }
 
-# Does this git have proof 2? Probed once, against the fixtures' own git.
-MERGE_TREE=no
-if git merge-tree --write-tree --help >/dev/null 2>&1 || \
-   git merge-tree --write-tree HEAD HEAD >/dev/null 2>&1; then MERGE_TREE=yes; fi
-
-# verdict <worktree> — the verdict WORD. Deliberately not a `$( )` wrapper around the real
-# function: these call it directly so the module's fetch latch lives in this shell, which is
-# the behaviour case N asserts.
+# verdict <worktree> — the verdict WORD, for the cases that only care about that. Every call
+# site wraps this in `$( )`, so the module's fetch latch is forked away at all of them. That is
+# fine for these assertions and it is exactly why case N does NOT use this helper: N calls
+# shipyard_down_verdict directly, in the suite's own shell, because the latch is the thing it
+# measures. Do not fold N into this helper — it is the only coverage of that property.
 verdict() { shipyard_down_verdict "$1"; printf '%s' "$SHIPYARD_DOWN_KIND"; }
 # old_guard <worktree> — the question the gate used to ask, verbatim, including the discarded
 # stderr and the `wc -l` that turned a fatal error into a zero.
@@ -129,6 +136,22 @@ repo() {
   git -C "$c" push -q -u origin main
   printf '%s' "$c"
 }
+
+# Does this git have proof 2? Probed ONCE, inside a repository the suite builds, because the
+# probe is about the git BINARY and `merge-tree` needs a repo to answer at all: run from a
+# non-repo directory a perfectly modern git answers 128, and the suite would then skip its most
+# load-bearing check with a false reason and still exit 0. (`--help` is no probe either — it
+# exits 129 on every git, old and new, so it can only ever answer "no".)
+MERGE_TREE=no
+git -C "$(repo probe)" merge-tree --write-tree HEAD HEAD >/dev/null 2>&1 && MERGE_TREE=yes
+# Without proof 2 the gate cannot reach `unmerged` AT ALL — everything failing tree equality
+# lands on `no-proof-tool`. So the expected word is resolved once, here, rather than per case:
+# the unmerged-vs-unprovable distinction is still asserted on a modern git, while an old git
+# reports honestly instead of reddening four checks that read like a gate regression. Measured:
+# before this, a pre-2.38 git gave `29 checks, 4 FAILED, 1 skipped` under a note claiming the
+# case was handled by a skip.
+UNMERGED=unmerged
+[ "$MERGE_TREE" = yes ] || UNMERGED=no-proof-tool
 
 # ---------------------------------------------------------------- A: the measured false refusal
 C=$(repo a)
@@ -178,7 +201,7 @@ printf 'c1\n' > "$C/c.txt"; git -C "$C" add -A; git -C "$C" commit -qm c1
 git -C "$C" switch -q main
 git -C "$C" worktree add -q "$TMP/wtC" feat/c
 ok "C the old question answered 0 for unpushed work" "0"        "$(old_guard "$TMP/wtC")"
-ok "C committed, never pushed -> unmerged"          "unmerged" "$(verdict "$TMP/wtC")"
+ok "C committed, never pushed -> unmerged"          "$UNMERGED" "$(verdict "$TMP/wtC")"
 
 # ---------------------------------------------------------------- P: partially merged
 C=$(repo p)
@@ -190,7 +213,7 @@ git -C "$C" checkout -q feat/p -- p1.txt
 git -C "$C" add -A; git -C "$C" commit -qm "only p1 landed"
 git -C "$C" push -q origin main
 git -C "$C" worktree add -q "$TMP/wtP" feat/p
-ok "P only half the branch landed -> unmerged" "unmerged" "$(verdict "$TMP/wtP")"
+ok "P only half the branch landed -> unmerged" "$UNMERGED" "$(verdict "$TMP/wtP")"
 
 # ------------------------------------------------- D1/D3: the base branch moves on after the merge
 C=$(repo d)
@@ -220,7 +243,35 @@ fi
 printf 'zz\n' >> "$C/a.txt"; git -C "$C" add -A; git -C "$C" commit -qm "append to a.txt too"
 git -C "$C" push -q origin main
 git -C "$TMP/wtD" fetch -q origin
-ok "D3 same region edited later -> unprovable, not unmerged" "unprovable" "$(verdict "$TMP/wtD")"
+if [ "$MERGE_TREE" = yes ]; then
+  ok "D3 same region edited later -> unprovable, not unmerged" "unprovable" "$(verdict "$TMP/wtD")"
+else
+  skip "D3 same region edited later" \
+       "the conflicting-test-merge path needs 'merge-tree --write-tree' (git 2.38); without it every non-identical slot reads no-proof-tool"
+fi
+
+# ------------------------------------------- O: a git too old for proof 2, asserted on ANY git
+# The no-proof-tool verdict only ever appears on a pre-2.38 git, so on the machine this suite
+# normally runs it is unreachable — folding it back into `unprovable`, or deleting the
+# capability check outright, left every other check green. Both mutations matter: on such a git
+# `unmerged` is unreachable, so a slot holding the only copy of its work lands on this verdict,
+# and `unprovable`'s message tells the operator to --force. Stub the capability the way an old
+# git presents it, assert the two verdicts that must differ, then restore the real function.
+# Asserted on BOTH sides of the lazy fetch: the verdict is mapped in two separate case blocks,
+# and with the fetch allowed the second silently overwrites whatever the first decided — so a
+# wrong mapping in the first one is invisible unless the fetch is forbidden here.
+_shipyard_down_have_merge_tree() { return 1; }
+_SHIPYARD_DOWN_FETCHED=''
+ok "O no proof tool, before the fetch -> no-proof-tool" "no-proof-tool" \
+   "$(SHIPYARD_DOWN_FETCH=0 verdict "$TMP/wtD")"
+_SHIPYARD_DOWN_FETCHED=''
+ok "O no proof tool, content differs -> no-proof-tool, not unprovable" "no-proof-tool" \
+   "$(verdict "$TMP/wtD")"
+ok "O no proof tool, byte-identical -> proof 1 still says safe" "safe" "$(verdict "$TMP/wtA")"
+# shellcheck source=../shipyard-down-gate.sh
+. "$SKILL_DIR/shipyard-down-gate.sh"
+ok "O the real capability check is back" "$MERGE_TREE" \
+   "$(_shipyard_down_have_merge_tree "$TMP/wtA" && echo yes || echo no)"
 
 # ---------------------------------------------------------------- F: the stale remote-tracking ref
 C=$(repo f)
@@ -236,10 +287,37 @@ git -C "$TMP/f-other" fetch -q origin
 git -C "$TMP/f-other" merge -q --squash origin/feat/f >/dev/null 2>&1
 git -C "$TMP/f-other" commit -qm "squashed (#4)"
 git -C "$TMP/f-other" push -q origin main
-ok "F stale ref, fetch forbidden -> unmerged" "unmerged" \
+ok "F stale ref, fetch forbidden -> unmerged" "$UNMERGED" \
    "$(SHIPYARD_DOWN_FETCH=0 verdict "$TMP/wtF")"
 _SHIPYARD_DOWN_FETCHED=''
 ok "F stale ref, gate fetches once -> safe" "safe" "$(verdict "$TMP/wtF")"
+
+# ------------------------------- W: a forge remote that is not called `origin`, with a stale ref
+# The module claims to ship to repos "whose forge remote is not origin", and the lazy fetch has
+# to split a ref into remote and branch to honour that. Splitting on the first slash passes every
+# origin-named fixture, so nothing here saw it: restoring the old `fetch origin "${ref#origin/}"`
+# left the suite fully green. This is the shape that catches it — and a remote name may itself
+# contain a slash, which is legal git and which first-slash splitting sends to a remote called
+# `team`.
+git init -q --bare -b main "$TMP/w.git"
+git clone -q --origin team/fork "$TMP/w.git" "$TMP/w" 2>/dev/null
+printf 'base\n' > "$TMP/w/a.txt"; git -C "$TMP/w" add -A; git -C "$TMP/w" commit -qm base
+git -C "$TMP/w" push -q -u team/fork main
+git -C "$TMP/w" switch -q -c feat/w 'team/fork/main'
+printf 'w1\n' >> "$TMP/w/a.txt"; git -C "$TMP/w" add -A; git -C "$TMP/w" commit -qm w1
+git -C "$TMP/w" push -q team/fork feat/w:feat/w
+git -C "$TMP/w" switch -q main
+git -C "$TMP/w" worktree add -q "$TMP/wtW" feat/w
+# Merge on the remote only, so this clone's tracking ref is stale — the state the fetch repairs.
+git clone -q "$TMP/w.git" "$TMP/w-other" 2>/dev/null
+git -C "$TMP/w-other" fetch -q origin
+git -C "$TMP/w-other" merge -q --squash origin/feat/w >/dev/null 2>&1
+git -C "$TMP/w-other" commit -qm "squashed (#7)"
+git -C "$TMP/w-other" push -q origin main
+_SHIPYARD_DOWN_FETCHED=''
+ok "W a slashed non-origin remote resolves its base" "team/fork/main" \
+   "$(shipyard_down_default_ref "$TMP/wtW")"
+ok "W the lazy fetch reaches a non-origin remote" "safe" "$(verdict "$TMP/wtW")"
 
 # ------------------------------------------- N: the fetch is latched per INVOCATION, not per slot
 # Three unproven slots in one invocation must produce exactly one fetch. `git` is shadowed by a
@@ -249,9 +327,11 @@ C=$(repo n)
 COUNTER="$TMP/fetches"; : > "$COUNTER"
 FAKEBIN="$TMP/bin"; mkdir -p "$FAKEBIN"
 REAL_GIT=$(command -v git)
+# %q, not %s: a $TMPDIR containing a space makes the generated redirect split, the count stays
+# empty, and the stray file lands outside the fixture tree where the EXIT trap cannot reap it.
 { printf '#!/usr/bin/env bash\n'
-  printf 'for a in "$@"; do [ "$a" = fetch ] && { printf x >> %s; break; }; done\n' "$COUNTER"
-  printf 'exec %s "$@"\n' "$REAL_GIT"
+  printf 'for a in "$@"; do [ "$a" = fetch ] && { printf x >> %q; break; }; done\n' "$COUNTER"
+  printf 'exec %q "$@"\n' "$REAL_GIT"
 } > "$FAKEBIN/git"
 chmod +x "$FAKEBIN/git"
 for s in 1 2 3; do
@@ -310,8 +390,15 @@ ok "S stray directory -> unknown, not the parent repo's answer" "unknown" \
 
 # ---------------------------------------------------------------- R: base-ref resolution
 C=$(repo r)
-git -C "$C" remote set-head origin main
-ok "R origin/HEAD when it is set" "origin/main" "$(shipyard_down_default_ref "$C")"
+# origin/HEAD deliberately points at something that is NOT origin/main, or this check cannot
+# tell the canonical answer from the last-resort fallback: with both spelled `origin/main`,
+# deleting the origin/HEAD arm outright leaves the suite green. The live regression that hides
+# is a repo whose default branch was renamed while the old one was kept — every containment
+# proof would then run against the wrong branch.
+git -C "$C" push -q origin main:trunk
+git -C "$C" fetch -q origin
+git -C "$C" remote set-head origin trunk
+ok "R origin/HEAD wins over the fallback" "origin/trunk" "$(shipyard_down_default_ref "$C")"
 git -C "$C" remote set-head origin --delete
 ok "R falls back to origin/main"  "origin/main" "$(shipyard_down_default_ref "$C")"
 
@@ -357,7 +444,38 @@ git -C "$C" worktree add -q "$TMP/wtU" feat/u
 git -C "$TMP/wtU" remote set-head origin --delete 2>/dev/null
 ok "R the branch's own remote ref is never the base" "origin/main" \
    "$(shipyard_down_default_ref "$TMP/wtU")"
-ok "R pushed but unmerged -> unmerged, not safe" "unmerged" "$(verdict "$TMP/wtU")"
+ok "R pushed but unmerged -> not safe" "$UNMERGED" "$(verdict "$TMP/wtU")"
+
+# The same trap under a DIFFERENT name. A first cut compared the upstream's tail against the
+# branch name, and a push under another name walked straight through it: the base ref became
+# the branch's own copy, `git diff --quiet <own copy> HEAD` was rc 0, and a branch whose content
+# is on no base branch verdicted `safe`. Measured, and it is why the guard asks git's own
+# `branch.<name>.merge` rather than slicing the ref.
+C=$(repo v)
+git -C "$C" switch -q -c feat/v origin/main
+printf 'v1\n' > "$C/v.txt"; git -C "$C" add -A; git -C "$C" commit -qm v1
+git -C "$C" push -q -u origin feat/v:feat/v-remote
+git -C "$C" switch -q main
+git -C "$C" worktree add -q "$TMP/wtV" feat/v
+git -C "$TMP/wtV" remote set-head origin --delete 2>/dev/null
+ok "R a push under another name is still its own copy" "origin/main" \
+   "$(shipyard_down_default_ref "$TMP/wtV")"
+ok "R renamed push, unmerged -> not safe" "$UNMERGED" "$(verdict "$TMP/wtV")"
+
+# The shape the OID test alone cannot see: pushed with `-u`, then amended. Same tree, new OID,
+# so the identity test passes it — and only the name guard knows the upstream is this branch's
+# own copy. Without that guard the trees match and an unmerged branch reads `safe`.
+C=$(repo z)
+git -C "$C" switch -q -c feat/z origin/main
+printf 'z1\n' > "$C/z.txt"; git -C "$C" add -A; git -C "$C" commit -qm z1
+git -C "$C" push -q -u origin feat/z
+git -C "$C" commit -q --amend -m "z1 reworded"
+git -C "$C" switch -q main
+git -C "$C" worktree add -q "$TMP/wtZ" feat/z
+git -C "$TMP/wtZ" remote set-head origin --delete 2>/dev/null
+ok "R amended after -u: same tree, new OID, still its own copy" "origin/main" \
+   "$(shipyard_down_default_ref "$TMP/wtZ")"
+ok "R amended after -u, unmerged -> not safe" "$UNMERGED" "$(verdict "$TMP/wtZ")"
 
 # A repo with no origin refs at all cannot be asked the question — and must not be told yes.
 git init -q -b main "$TMP/lonely"

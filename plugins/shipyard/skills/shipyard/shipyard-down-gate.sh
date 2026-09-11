@@ -24,9 +24,10 @@
 # down with committed, never-pushed work leaves that branch — and `git show <branch>:<file>` —
 # intact in the repository. So gate 2 does not protect commits from deletion; it protects a
 # change's history from being ORPHANED in a branch nobody will look at again, together with
-# whatever untracked and ignored files the directory carried. The gate that stands between the
-# operator and genuinely unrecoverable content is gate 1, the dirty check — which is why a
-# `dirty` refusal deserves MORE weight than an `unmerged` one, not less.
+# whatever IGNORED files the directory carried (untracked ones are gate 1's business — git
+# status lists them, so they read as dirty and never reach gate 2). The gate that stands
+# between the operator and genuinely unrecoverable content is gate 1, the dirty check — which
+# is why a `dirty` refusal deserves MORE weight than an `unmerged` one, not less.
 #
 # CONTAINMENT IS PROVEN, NEVER ASSUMED. Two independent proofs, first one that succeeds wins:
 #
@@ -37,8 +38,10 @@
 #      This is the one that survives the base branch moving ahead, which it always does in a
 #      fleet: sibling slots land while this one waits to be torn down, so tree equality stops
 #      holding within minutes of the merge even though nothing is missing.
-#      Needs `git merge-tree --write-tree` (git >= 2.38); on an older git it simply fails and
-#      the gate falls back to proof 1 — more refusals, never a wrong allow.
+#      Needs `git merge-tree --write-tree` (git >= 2.38); on an older git proof 1 is the whole
+#      gate — more refusals, never a wrong allow, but `unmerged` then becomes UNREACHABLE, so
+#      those refusals get their own word (`no-proof-tool`) rather than borrowing one that
+#      would understate them.
 #
 # Proof 1 is subsumed by proof 2 whenever merge-tree is available. It is kept because it costs
 # one command, answers the commonest case without invoking a merge, and is the whole gate on a
@@ -98,20 +101,30 @@ _shipyard_down_ref_ok() {
 #      branch `safe` — the old guard's bug with a new mechanism. What makes the upstream useful
 #      here is the OTHER case: `git switch -c <branch> origin/<base>` leaves it naming the BASE
 #      branch, which is exactly the ref we want and the only one a single-branch clone has.
+#
+#      THE GUARD ASKS GIT, NOT THE STRING. A first cut compared `${up#*/}` against the branch
+#      name, and two ordinary states walked straight through it, each yielding a wrong `safe`:
+#      a push under a different name (`push -u origin feat/w:feat/w-remote`) and a remote whose
+#      own name contains a slash (`git remote add team/fork` is legal). Both were measured.
+#      `branch.<name>.merge` is git's own record of which remote branch this branch tracks, so
+#      it needs no parsing; the OID test then catches the renamed-push case, where the config
+#      name differs but the ref is still this branch's own copy.
 #   3. origin/main, then origin/master — a last resort, not a definition.
 #
 # Prints the ref name (e.g. `origin/main`); rc 1 when none resolves, which the caller must treat
 # as "cannot ask the question" rather than as a verdict.
 shipyard_down_default_ref() {
-  local wt="$1" r b up
+  local wt="$1" r b up tracked
   r=$(git -C "$wt" symbolic-ref --quiet --short refs/remotes/origin/HEAD 2>/dev/null)
   if _shipyard_down_ref_ok "$r" && git -C "$wt" rev-parse --verify --quiet "$r^{commit}" >/dev/null 2>&1; then
     printf '%s' "$r"; return 0
   fi
   b=$(git -C "$wt" symbolic-ref --quiet --short HEAD 2>/dev/null)
   up=$(git -C "$wt" rev-parse --abbrev-ref '@{upstream}' 2>/dev/null)
-  if [ -n "$b" ] && [ "${up#*/}" != "$b" ] && _shipyard_down_ref_ok "$up" \
-     && git -C "$wt" rev-parse --verify --quiet "$up^{commit}" >/dev/null 2>&1; then
+  tracked=$(git -C "$wt" config --get "branch.$b.merge" 2>/dev/null)
+  if [ -n "$b" ] && [ "${tracked#refs/heads/}" != "$b" ] && _shipyard_down_ref_ok "$up" \
+     && git -C "$wt" rev-parse --verify --quiet "$up^{commit}" >/dev/null 2>&1 \
+     && [ "$(git -C "$wt" rev-parse "$up" 2>/dev/null)" != "$(git -C "$wt" rev-parse HEAD 2>/dev/null)" ]; then
     printf '%s' "$up"; return 0
   fi
   for r in origin/main origin/master; do
@@ -122,15 +135,25 @@ shipyard_down_default_ref() {
   return 1
 }
 
+# Can this git run proof 2 at all? `merge-tree --write-tree` arrived in git 2.38, and an older
+# one fails the whole option rather than the merge. Probed against the worktree so the answer
+# is about THIS repository's git, not about whatever directory the caller happened to be in.
+_shipyard_down_have_merge_tree() {
+  git -C "$1" merge-tree --write-tree HEAD HEAD >/dev/null 2>&1
+}
+
 # rc 0 the content is PROVEN to be in <ref> already
 # rc 1 the test merge succeeded and still adds content — genuinely not in <ref>
-# rc 2 the question could not be answered (unusable ref, conflicting merge, git too old)
+# rc 2 the merge proof ran and could not settle it (a conflicting test merge)
+# rc 3 the merge proof could not run at all (git older than 2.38, or an unusable ref)
 # Nothing returns 0 by falling through: an unanswerable question can never read as a clean
-# bill of health.
+# bill of health. 2 and 3 are split because they deserve opposite advice — see the verdict
+# words below.
 shipyard_down_contained() {
   local wt="$1" ref="$2" tree out
   git -C "$wt" diff --quiet "$ref" HEAD 2>/dev/null && return 0
-  tree=$(git -C "$wt" rev-parse --verify --quiet "$ref^{tree}" 2>/dev/null) || return 2
+  tree=$(git -C "$wt" rev-parse --verify --quiet "$ref^{tree}" 2>/dev/null) || return 3
+  _shipyard_down_have_merge_tree "$wt" || return 3
   out=$(git -C "$wt" merge-tree --write-tree "$ref" HEAD 2>/dev/null) || return 2
   [ "$(printf '%s\n' "$out" | head -1)" = "$tree" ] && return 0
   return 1
@@ -152,11 +175,18 @@ shipyard_down_contained() {
 # forever on a credential prompt nobody is watching.
 _SHIPYARD_DOWN_FETCHED=''
 shipyard_down_refresh() {
-  local wt="$1" ref="$2" remote branch
+  local wt="$1" ref="$2" r remote='' branch=''
   [ "${SHIPYARD_DOWN_FETCH:-1}" = 1 ] || return 1
   case " $_SHIPYARD_DOWN_FETCHED " in *" $ref "*) return 1 ;; esac
   _SHIPYARD_DOWN_FETCHED="$_SHIPYARD_DOWN_FETCHED $ref"
-  remote=${ref%%/*}; branch=${ref#*/}
+  # Split on a remote git actually has, rather than on the first slash: a remote name may
+  # itself contain one (`git remote add team/fork <url>` is accepted), and splitting by shape
+  # then fetches from a remote called `team`. Longest match would be better still, but remote
+  # names cannot nest here — one of them is a prefix or none is.
+  for r in $(git -C "$wt" remote 2>/dev/null); do
+    case "$ref" in "$r/"?*) remote=$r; branch=${ref#"$r/"}; break ;; esac
+  done
+  [ -n "$remote" ] && [ -n "$branch" ] || return 1
   GIT_TERMINAL_PROMPT=0 git -C "$wt" fetch --quiet "$remote" -- \
     "+refs/heads/$branch:refs/remotes/$ref" >/dev/null 2>&1 || return 1
   return 0
@@ -165,12 +195,19 @@ shipyard_down_refresh() {
 # shipyard_down_verdict <worktree> — the whole gate. Sets SHIPYARD_DOWN_KIND and
 # SHIPYARD_DOWN_REF in the caller's shell and returns 0 ONLY for `safe`:
 #
-#   safe        <ref>  content already in the base branch; removing the worktree loses nothing
-#   dirty              uncommitted or untracked changes — refused exactly as before
-#   unmerged    <ref>  the branch genuinely carries content the base branch does not have
-#   unprovable  <ref>  containment could not be proven (later edit to the same region, old git)
-#   no-default         no base branch could be discovered to compare against
-#   unknown            not a worktree, or git could not answer — the question was never asked
+#   safe          <ref>  content already in the base branch; removing the worktree loses nothing
+#   dirty                uncommitted or untracked changes — refused exactly as before
+#   unmerged      <ref>  the branch genuinely carries content the base branch does not have
+#   unprovable    <ref>  the test merge conflicted: the base branch has since edited the same
+#                        region, so containment is undecidable here. Not a claim of loss.
+#   no-proof-tool <ref>  this git predates `merge-tree --write-tree`, so proof 2 never ran and
+#                        `unmerged` is UNREACHABLE. Kept separate from `unprovable` because on
+#                        such a git EVERY slot that is not byte-identical lands here, including
+#                        one holding the only copy of committed work — so the message must not
+#                        be the reassuring one. Measured: folding the two told an operator on
+#                        git 2.34 to `--force` past exactly the case the gate exists to catch.
+#   no-default           no base branch could be discovered to compare against
+#   unknown              not a worktree, or git could not answer — the question was never asked
 #
 # It returns its answer in globals rather than on stdout so that callers do not have to spawn a
 # subshell to read it; see shipyard_down_refresh for what that buys.
@@ -190,7 +227,8 @@ shipyard_down_verdict() {
   case $? in
     0) SHIPYARD_DOWN_KIND=safe; return 0 ;;
     1) SHIPYARD_DOWN_KIND=unmerged ;;
-    *) SHIPYARD_DOWN_KIND=unprovable ;;
+    2) SHIPYARD_DOWN_KIND=unprovable ;;
+    *) SHIPYARD_DOWN_KIND=no-proof-tool ;;
   esac
   # A stale remote-tracking ref looks exactly like both of those, so spend the one fetch and
   # ask again before refusing.
@@ -199,7 +237,8 @@ shipyard_down_verdict() {
     case $? in
       0) SHIPYARD_DOWN_KIND=safe; return 0 ;;
       1) SHIPYARD_DOWN_KIND=unmerged ;;
-      *) SHIPYARD_DOWN_KIND=unprovable ;;
+      2) SHIPYARD_DOWN_KIND=unprovable ;;
+      *) SHIPYARD_DOWN_KIND=no-proof-tool ;;
     esac
   fi
   return 1
