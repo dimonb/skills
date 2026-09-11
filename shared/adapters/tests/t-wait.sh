@@ -61,7 +61,12 @@ ok "a model-at-capacity banner is overloaded" overloaded \
    "$(cls '⚠ Selected model is at capacity. Please try a different model.')"
 # A transport fault is NOT a capacity class, and the difference is the whole point: policy parks a
 # capacity wait and escalates this, so the caller nudges instead of waiting — and neither compacts.
+# NOTE what this does and does not establish. No capture shows which glyph a client puts this
+# behind, so the arm fires only if it is the warning glyph, and in practice it may never fire. The
+# pair below pins exactly that, rather than implying an unobserved rendering is covered.
 ok "a slept-mid-response fault is error, not capacity" error \
+   "$(cls '⚠ API Error: Your computer went to sleep mid-response')"
+ok "...but bare at column one it is NOT eligible" "" \
    "$(cls 'API Error: Your computer went to sleep mid-response')"
 
 # --- 2. nothing announced -> nothing, so the caller's stall path still owns the slot -------
@@ -82,8 +87,8 @@ ok "the deciding line is returned after the class" '⚠ Usage limit reached · a
 # A screen can still show an older banner above newer output, so the live announcement is the most
 # recent one. Pinned in both orders, or the check would pass on a first-match implementation too.
 two_down='⚠ Usage limit reached · continuing automatically at 2am
-API Error: Your computer went to sleep mid-response'
-two_up='API Error: Your computer went to sleep mid-response
+⚠ API Error: Your computer went to sleep mid-response'
+two_up='⚠ API Error: Your computer went to sleep mid-response
 ⚠ Usage limit reached · continuing automatically at 2am'
 ok "fault below a banner -> the fault"  error        "$(cls "$two_down")"
 ok "banner below a fault -> the banner" rate_limited "$(cls "$two_up")"
@@ -124,6 +129,37 @@ ok "a banner in a tool-output block is refused" "" \
 # one, which is precisely where this must not be believed.
 ok "a banner typed in the other kind's composer is refused" "" \
    "$(cls '› please read the Usage limit reached note in issue text')"
+
+# --- 5b. ADVERSARIAL: THE CHILD'S OWN PROSE may never supply it either --------------------
+# THE REGRESSION THAT EARNS THIS SECTION. The first version of the anchor took any column-one,
+# non-composer line, on the stated grounds that transcript content is indented. That is true of tool
+# output and FALSE of assistant prose: `pane-claude-running.txt` is a live capture of one kind
+# writing its own sentences at column one behind its assistant glyph, with only the wrapped
+# continuations indented. A child working on this very defect writes these phrases constantly, so
+# the loose anchor let such a child classify ITSELF as rate-limited and silence its own alarm —
+# a false clearance on a possibly-wedged slot, which is the one direction this must never fail in.
+#
+# Built from that capture, by substituting into its real assistant line, so the check is pinned to
+# the rendering that actually fooled it rather than to a guess about one.
+assistant_glyph=$(sed -n 's/^\(.\) [A-Z].*/\1/p' "$FIX/pane-claude-running.txt" | head -1)
+ok "the capture really renders assistant prose in column one" 1 \
+   "$([ -n "$assistant_glyph" ] && echo 1 || echo 0)"
+prose=$(awk -v g="$assistant_glyph" '
+    BEGIN { hit = 0 }
+    substr($0,1,1) == g && hit == 0 { print g " the watchdog fires on a usage limit and prescribes compaction"; hit = 1; next }
+    { print }
+  ' "$FIX/pane-claude-running.txt")
+# VACUITY GUARD before the property, same discipline as the box case above.
+ok "the prose screen really carries the phrase in column one" 1 \
+   "$(printf '%s\n' "$prose" | grep -c "^${assistant_glyph} the watchdog fires on a usage limit")"
+ok "a child's OWN prose is not an announcement" "" "$(cls "$prose")"
+# And the narrow version of the same thing, so the property is readable without the fixture rig.
+ok "an assistant-glyph line carrying the phrase is refused" "" \
+   "$(cls '⏺ I am reading the usage limit handling in the report')"
+# The allow-list is what buys those: an arbitrary column-one line is NOT eligible just for being in
+# column one. If this ever goes green with a leading letter, the deny-list has crept back in.
+ok "a bare column-one sentence is not eligible" "" \
+   "$(cls 'the session limit note is what issue 22 is about')"
 
 # --- 6. the real captured panes announce nothing -------------------------------------------
 # Every committed fixture is a healthy running, idle, drafting or queued child. If any of them

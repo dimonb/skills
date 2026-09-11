@@ -500,30 +500,50 @@ adp_delivery_verdict() {
 # answer; the resume time is the supervisor's to re-probe.
 #
 # ANCHORED, for the same reason the turn read is, and with the consequence inverted. The capture
-# includes the child's input box, so an unanchored substring search lets a message that merely
-# MENTIONS a banner manufacture the evidence — and here that direction is the dangerous one: a
-# genuinely wedged child would be reported as "waiting, nothing to do" and its alarm suppressed.
-# The eligible anchor is a COLUMN-ONE line that is not a composer line. Tool output and transcript
-# content are indented, and a WRAPPED continuation of box text is indented too (pinned by
-# fixtures/pane-claude-draft.txt, whose second box line begins with two spaces), so neither can
-# reach column one.
+# includes everything the child rendered — its input box AND its own prose — so an unanchored
+# substring search lets text that merely MENTIONS a banner manufacture the evidence. Here that
+# direction is the dangerous one: a genuinely wedged child would read as "waiting, nothing to do"
+# and its alarm would be suppressed. And it is not a hypothetical — a child working on THIS defect
+# discusses these very phrases, so its own transcript is full of them.
 #
-# BIASED TIGHT, deliberately. A shape this MISSES falls through to the caller's existing stall
-# path, i.e. to today's behaviour; a shape it matches too LOOSELY silences a real alarm. So the
-# residual is a miss, never a false clearance — the opposite bias from the turn read, and for the
-# same underlying reason: bias towards the failure an operator can still see.
+# THE ANCHOR IS AN ALLOW-LIST OF LEADING GLYPHS, not "a line in column one", and that distinction
+# is the whole of it. The first version of this function took any column-one line that was not a
+# composer line, on the stated grounds that "tool output and transcript content are indented". That
+# is TRUE OF TOOL OUTPUT AND FALSE OF ASSISTANT PROSE: `fixtures/pane-claude-running.txt` shows one
+# kind rendering its own sentences at column one behind its assistant glyph, with only their
+# WRAPPED continuations indented. So a child writing the sentence "the watchdog fires on a usage
+# limit" would have classified itself as rate-limited and silenced its own alarm. Only a line whose
+# FIRST character is one of the two evidenced client-status glyphs below is eligible, which excludes
+# assistant prose, both composers, indented tool output and every wrapped continuation by
+# construction rather than by a deny-list that has to anticipate each of them.
 #
-# RESIDUAL the gate cannot check, stated here because it lives here. Unlike the turn marker, these
-# shapes are NOT pinned to committed pane captures. The WORDS are verbatim — from the supervising
-# operator's own reports of what the `last line` column carried, and from the Codex service-line
-# list `shipyard-continuity.sh` already matches off a real capture — but the column-one PLACEMENT
-# is inferred for the first kind rather than observed. If a client renders one indented it reads as
-# no class at all (see BIASED TIGHT). Add a capture and a fixture when one is taken.
+# BIASED TIGHT, deliberately, and this is the bias that made the bug above survivable in the other
+# direction. A shape this MISSES falls through to the caller's existing stall path, i.e. to today's
+# behaviour; a shape it matches too LOOSELY silences a real alarm. So the residual must always be a
+# miss, never a false clearance — the opposite bias from the turn read, and for the same underlying
+# reason: bias towards the failure an operator can still see.
+#
+# RESIDUAL the gate cannot check, stated here because it lives here. Unlike the turn marker, the
+# WORDS below are not pinned to committed pane captures: they are verbatim from the supervising
+# operator's reports of what the `last line` column carried, and from the Codex service-line list
+# `shipyard-continuity.sh` matches off a real capture — but which glyph each is rendered behind is
+# inferred, not observed. The transport-fault phrase in particular has NO observed glyph at all, so
+# it classifies only if a client puts it behind the warning glyph, and may in practice never fire.
+# That is the safe direction on purpose (see BIASED TIGHT). Add a capture and a fixture when one is
+# taken, and widen the allow-list only from a capture — never from reasoning about what a client
+# "probably" renders, which is exactly how the first version got it wrong.
 #
 # Written as explicit `case` arms rather than as an editable ADP_* list, unlike the markers above:
 # those are constants because a caller INTERPOLATES them (shipyard-report.sh builds a grep from the
 # turn marker), while these are matched only here — and a list would have to be word-split
 # unquoted, where the bracket classes below would become pathname globs.
+
+# The warning glyph both admitted kinds put in column one ahead of a client-status banner ("⚠ Usage
+# limit reached …", "⚠ Selected model is at capacity …", the second of which shipyard-continuity.sh
+# already matches as a whole line off a real capture). A constant, not an inline literal, because it
+# is the one thing here a client could rename — and because the assistant glyph it must NOT be
+# confused with differs from it by a single codepoint.
+ADP_BANNER_GLYPH='⚠'
 _ADP_WAIT_CLASS=''
 
 # _adp_wait_line_class <line> — 0 when the line announces a wait or fault, with the AgentSignal
@@ -558,15 +578,23 @@ _adp_wait_line_class() {
 # most recent announcement is the live one — and a caller should only ask this of a child that is
 # already motionless, since on a MOVING child any banner on screen is history by definition.
 adp_wait_class() {
-  local screen=${1:-} line hit_cls='' hit_line=''
+  local screen=${1:-} line body hit_cls='' hit_line=''
   [ -n "$screen" ] || return 1
   while IFS= read -r line || [ -n "$line" ]; do
-    # Column one only: an empty or indented line is tool output, transcript content, or a wrapped
-    # continuation of the composer, and none of those may carry this evidence.
-    case "$line" in ''|[[:space:]]*) continue ;; esac
-    # And never the composer itself, whose glyph IS in column one.
-    if _adp_box_content "$line"; then continue; fi
-    if _adp_wait_line_class "$line"; then hit_cls=$_ADP_WAIT_CLASS; hit_line=$line; fi
+    # THE ALLOW-LIST. Both arms pattern-match from the START of the line, so column one is a
+    # property of the match rather than a separate test — and a line that is indented, is assistant
+    # prose, is a composer line, or is a wrapped continuation of any of those simply matches
+    # neither. The body is what follows the glyph, so a phrase must be in the banner itself and not
+    # merely somewhere on a line that happens to begin with one.
+    body=''
+    case "$line" in
+      "$ADP_BANNER_GLYPH"*) body=${line#"$ADP_BANNER_GLYPH"} ;;
+      # The other kind states its capacity waits as ordinary service lines, so reuse the helper that
+      # already knows that shape rather than spelling the bullet again here.
+      *) if _adp_service_content "$line"; then body=$_ADP_LINE_CONTENT; fi ;;
+    esac
+    [ -n "$body" ] || continue
+    if _adp_wait_line_class "$body"; then hit_cls=$_ADP_WAIT_CLASS; hit_line=$line; fi
   done <<<"$screen"
   [ -n "$hit_cls" ] || return 1
   printf '%s\t%s' "$hit_cls" "$hit_line"

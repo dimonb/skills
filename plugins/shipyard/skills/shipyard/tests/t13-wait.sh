@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# t12-wait.sh — WHY a motionless child is not moving, asked before the stall clock is consulted
+# t13-wait.sh — WHY a motionless child is not moving, asked before the stall clock is consulted
 # (`shipyard_wait_state` in shipyard-lib.sh, and its wiring in shipyard-report.sh).
 #
 # PROVENANCE. The stall watchdog measures motionlessness and concludes death, and it fired three
@@ -45,7 +45,12 @@ action() { shipyard_wait_state "$1" "$2" "$3" | cut -f4; }
 IDLE='Waiting on the pipeline'
 LIMIT='⚠ Usage limit reached · continuing automatically at 2am'
 CAP='⚠ Selected model is at capacity. Please try a different model.'
-SLEPT='API Error: Your computer went to sleep mid-response'
+SLEPT='⚠ API Error: Your computer went to sleep mid-response'
+# The adapter's anchor is an allow-list of leading client-status glyphs, not "column one" — because
+# one kind renders its OWN prose at column one, so a child writing about this very defect would
+# otherwise classify itself and silence its own alarm. `t-wait.sh` owns that property in full; what
+# matters here is that the joiner inherits it, which the STUCK section below pins.
+PROSE='⏺ the watchdog fires on a usage limit and prescribes compaction'
 
 # --------------------------------------------- 1. WAS NOT ASKED — terminal by design
 # The phase comes from the DECLARED slot graph, which already computes `concluded` for
@@ -82,6 +87,10 @@ ok "a banner quoted in the input box stays STUCK" 1 \
    "$(rc_of '❯ the watchdog fires on Usage limit reached and prescribes compaction' in-review impl-review)"
 ok "a banner in indented transcript content stays STUCK" 1 \
    "$(rc_of '  it printed ⚠ Usage limit reached in the last line column' in-review impl-review)"
+# The one that is not merely theoretical: a child working on THIS issue writes these phrases in its
+# own prose, at column one behind its assistant glyph. If the joiner ever exempts that, every such
+# child becomes permanently unalarmable.
+ok "a child's own prose about the defect stays STUCK" 1 "$(rc_of "$PROSE" in-review impl-review)"
 # A context ceiling is NOT answered here on purpose: `policy_dispose context_full` is `compact`, and
 # compaction is exactly the decision the existing stall path already governs by the ctx band. So no
 # arm here may shadow it — an unknown disposition falls through rather than inventing a verdict.
@@ -159,8 +168,8 @@ ok "the policy table answers under /bin/bash" "park|reprobe" \
 
 printf '\n'
 if [ "$FAILURES" -eq 0 ]; then
-  printf 't12-wait: %d checks, all passed\n' "$CHECKS"
+  printf 't13-wait: %d checks, all passed\n' "$CHECKS"
   exit 0
 fi
-printf 't12-wait: %d checks, %d FAILED\n' "$CHECKS" "$FAILURES"
+printf 't13-wait: %d checks, %d FAILED\n' "$CHECKS" "$FAILURES"
 exit 1
