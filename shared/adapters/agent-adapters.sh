@@ -38,7 +38,7 @@
 # sourcing anything, so it constrains nothing; shipyard is the binding caller.
 
 # A version marker, bumped when the body changes, so sync + the drift gate stay easy to prove.
-_ADP_VERSION=1
+_ADP_VERSION=2
 
 # --- the kinds -----------------------------------------------------------------
 # One per line, sorted, so a caller can `paste -sd, -` them into a message.
@@ -476,4 +476,98 @@ adp_delivery_verdict() {
     esac
   done
   printf 'unconfirmed'
+}
+
+# --- WHY a child is not moving: the waits and faults a client ANNOUNCES ---------
+# Both skills ask this question, and both get it wrong the same way. shipyard's stall watchdog
+# measures MOTIONLESSNESS and concludes death, so a child that CANNOT move (a usage limit) and a
+# child nobody ASKED to move both read as wedged — and the remedy it prints ends in compaction,
+# discarding live context to cure a condition the child does not have. Measured three times on one
+# fleet: a rate-limited pair, a finished change correctly waiting for a human, and a 90-hour
+# operator pause that produced a 5420-minute alarm. council's room STALL alarm has the same blind
+# spot from the other end — a participant blocked on a capacity limit is indistinguishable from one
+# that is thinking, and the alarm guesses "it may be sitting on a permission prompt".
+#
+# What a client RENDERS is per-KIND knowledge, which is why the shapes live here beside the turn
+# marker rather than in either skill. What to DO about the answer is deliberately NOT here: this
+# returns a class from the driver's AgentSignal vocabulary (DRV-03), so a caller hands it straight
+# to `policy_dispose` in shared/policy and gets the one disposition both skills share.
+#
+# IN PARTICULAR, NOTHING HERE READS A TIME OUT OF A BANNER. shared/policy's ESC-03 already records
+# why — a capacity banner states when the window RAN OUT, not when it resumes, so a timestamp
+# lifted from one is in the past — and re-deriving that judgement here would be a second place for
+# the same question, which is the defect the shared engine exists to remove. The class is the whole
+# answer; the resume time is the supervisor's to re-probe.
+#
+# ANCHORED, for the same reason the turn read is, and with the consequence inverted. The capture
+# includes the child's input box, so an unanchored substring search lets a message that merely
+# MENTIONS a banner manufacture the evidence — and here that direction is the dangerous one: a
+# genuinely wedged child would be reported as "waiting, nothing to do" and its alarm suppressed.
+# The eligible anchor is a COLUMN-ONE line that is not a composer line. Tool output and transcript
+# content are indented, and a WRAPPED continuation of box text is indented too (pinned by
+# fixtures/pane-claude-draft.txt, whose second box line begins with two spaces), so neither can
+# reach column one.
+#
+# BIASED TIGHT, deliberately. A shape this MISSES falls through to the caller's existing stall
+# path, i.e. to today's behaviour; a shape it matches too LOOSELY silences a real alarm. So the
+# residual is a miss, never a false clearance — the opposite bias from the turn read, and for the
+# same underlying reason: bias towards the failure an operator can still see.
+#
+# RESIDUAL the gate cannot check, stated here because it lives here. Unlike the turn marker, these
+# shapes are NOT pinned to committed pane captures. The WORDS are verbatim — from the supervising
+# operator's own reports of what the `last line` column carried, and from the Codex service-line
+# list `shipyard-continuity.sh` already matches off a real capture — but the column-one PLACEMENT
+# is inferred for the first kind rather than observed. If a client renders one indented it reads as
+# no class at all (see BIASED TIGHT). Add a capture and a fixture when one is taken.
+#
+# Written as explicit `case` arms rather than as an editable ADP_* list, unlike the markers above:
+# those are constants because a caller INTERPOLATES them (shipyard-report.sh builds a grep from the
+# turn marker), while these are matched only here — and a list would have to be word-split
+# unquoted, where the bracket classes below would become pathname globs.
+_ADP_WAIT_CLASS=''
+
+# _adp_wait_line_class <line> — 0 when the line announces a wait or fault, with the AgentSignal
+# class in $_ADP_WAIT_CLASS. Set rather than printed, the same way the line helpers above do it, so
+# the per-line walk forks nothing.
+#
+# Each phrase is the SHORTEST leading substring common to every observed variant — the discipline
+# the queued hints above state — so a client varying the rest of the sentence cannot break the
+# match. The leading letter is a bracket class because both a capitalised form ("Usage limit
+# reached · continuing automatically at <time>") and a lowercase one ("You have N usage limit
+# resets left") were recorded, on different kinds.
+_adp_wait_line_class() {
+  case "${1:-}" in
+    *[Uu]'sage limit'*)             _ADP_WAIT_CLASS=rate_limited; return 0 ;;
+    *[Ss]'ession limit'*)           _ADP_WAIT_CLASS=rate_limited; return 0 ;;
+    *'at capacity'*)                _ADP_WAIT_CLASS=overloaded;   return 0 ;;
+    # A transport fault, not a capacity one: the TURN died mid-response while the session stayed
+    # up. It maps to `error`, so policy escalates it to a human instead of parking — the right
+    # answer, because this one does need a nudge. What it never needs is compaction: the context
+    # is intact, which is exactly the distinction the measured false alarms collapsed.
+    *'went to sleep mid-response'*) _ADP_WAIT_CLASS=error;        return 0 ;;
+  esac
+  _ADP_WAIT_CLASS=''
+  return 1
+}
+
+# adp_wait_class <screen> — the AgentSignal class the child's own screen announces, or nothing.
+# Prints "<class><TAB><the line that said so>" and returns 0; prints nothing and returns 1 when no
+# anchored line carries a known shape.
+#
+# THE LAST anchored match wins. A screen can still show an older banner above newer output, so the
+# most recent announcement is the live one — and a caller should only ask this of a child that is
+# already motionless, since on a MOVING child any banner on screen is history by definition.
+adp_wait_class() {
+  local screen=${1:-} line hit_cls='' hit_line=''
+  [ -n "$screen" ] || return 1
+  while IFS= read -r line || [ -n "$line" ]; do
+    # Column one only: an empty or indented line is tool output, transcript content, or a wrapped
+    # continuation of the composer, and none of those may carry this evidence.
+    case "$line" in ''|[[:space:]]*) continue ;; esac
+    # And never the composer itself, whose glyph IS in column one.
+    if _adp_box_content "$line"; then continue; fi
+    if _adp_wait_line_class "$line"; then hit_cls=$_ADP_WAIT_CLASS; hit_line=$line; fi
+  done <<<"$screen"
+  [ -n "$hit_cls" ] || return 1
+  printf '%s\t%s' "$hit_cls" "$hit_line"
 }

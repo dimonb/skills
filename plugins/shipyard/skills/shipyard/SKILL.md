@@ -331,6 +331,44 @@ escalation has not moved for 30 minutes (`SHIPYARD_STALL_SECS` to tune). Treat t
 an alarm, not as a status line — and work the order it prints, which is Step 5's: git,
 then a nudge, then compaction.
 
+**But motionless is not the same as stuck, and the report asks WHY before it consults that
+clock.** Two of the three reasons a healthy child stops moving are not failures at all: it
+**cannot** move (a stated capacity wait), or nobody **asked** it to (it is finished, or blocked
+on a person). Both used to reach the alarm above and its compaction step — discarding live
+context to cure a condition the child did not have. Each now gets its own row in the `session`
+column and its own block, and is exempt from the stall clock:
+
+| `session` column | what it means | what to do |
+|---|---|---|
+| `⏳ rate-limited` / `⏳ overloaded` | the client announced a capacity wait | nothing — it resumes itself |
+| `⚠️ turn died` | the client announced a transport fault; the turn ended mid-response | nudge it (Step 5, order 2) — its context is intact |
+| `✅ finished` | the slot graph says the change is concluded | review and merge, or tell it what to change |
+| `🙋 needs you` | ship's stage is `needs-human`: it stopped on blockers it will not fix | read its record on the PR/MR and answer it |
+
+**None of those is ever a compaction trigger**, and each block says so. What is left — idle,
+nothing asked of it, announcing no reason, at no stage that waits by design — is genuinely
+STUCK, and that still raises the loud block that bypasses `--only-changed`. The point of the
+classification is to make that alarm **rarer and right**, never quieter.
+
+The class is part of the `--only-changed` signature, so entering or leaving one of these states
+breaks silence **exactly once** rather than every ten minutes for as long as it lasts.
+
+**The stall clock also restarts after a gap in supervision.** `since` is carried between runs, so
+the figure is wall-clock time between two *invocations* — the same thing as observed motionlessness
+only while the monitor is actually ticking. A fleet stopped for four days, with both children
+deliberately left intact, came back to `motionless for 5420 min`: ninety hours of which the script
+had observed two instants. So if a run is further from the previous one than the stall threshold
+itself, every clock is restarted and the report says so in one line. That is also the honest answer
+to a deliberate **pause** — and it needs nothing from the pane, because the parent's own absence is
+a fact this side already has.
+
+Where these shapes live, and why not here: the per-client banner text is in `shared/adapters`
+(`adp_wait_class`) with the turn marker, because what a client renders is per-kind knowledge; what
+to DO with a class is `shared/policy`'s `policy_dispose` (`park` = self-healing wait,
+`escalate|error` = a person's call); and `shipyard_wait_state` in `shipyard-lib.sh` joins those to
+the declared slot graph's phase. Nothing reads a resume TIME off a banner — the policy module's
+ESC-03 records why: a capacity banner states when the window **ran out**, not when it resumes.
+
 Arm the **fast escalation monitor** too — 10 minutes is too slow for a child that is
 blocked on a question:
 
@@ -524,6 +562,16 @@ next instruction UNSUBMITTED in the input box, and a healthy child waiting on CI
 identically from the report: `⏸ idle/wait`, `esc —`, nothing moving. One ceiling stall ran
 that way for **8.5 hours** overnight; the unsubmitted-line case turned up **three times in
 one run**. So do not diagnose from the silhouette — work the order below.
+
+**First, check that the report has not already told you.** The cases it can name — a capacity
+wait, a dead turn, a concluded change, a `needs-human` stop — no longer reach the `🛑 STALLED`
+block at all; they get `⏳`/`⚠️`/`✅`/`🙋` in the `session` column and a block of their own (Step
+2). If the slot is in one of those, the answer is there and **none of them is a compaction
+case**. The order below is for what is left: idle, nothing asked of it, announcing no reason.
+Three measured false alarms are why the split exists — a rate-limited pair, a change parked at
+its hand-off with every review round clean, and a four-day operator pause that printed a
+5420-minute stall — and all three ended at a compaction step that would have discarded live
+working context to cure nothing.
 
 ### The order: git, then a nudge, then compaction
 

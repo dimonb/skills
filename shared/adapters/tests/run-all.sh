@@ -13,7 +13,7 @@
 set -uo pipefail
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
-tests=(t-adapters.sh t-callers.sh t-turn.sh)
+tests=(t-adapters.sh t-callers.sh t-turn.sh t-wait.sh)
 
 rc=0
 for t in "${tests[@]}"; do

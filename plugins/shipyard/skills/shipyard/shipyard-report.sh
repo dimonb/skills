@@ -9,7 +9,10 @@
 # --only-changed prints NOTHING while the meaningful state is the same as the last
 # printed report, so a child parked in idle-wait for hours stops generating identical
 # tables. Meaningful = slot, MR iid, terminal present, MR state, pipeline stage, open
-# escalation count, and the ctx BAND. Deliberately NOT meaningful: the timestamp, the
+# escalation count, the ctx BAND, and the WAIT CLASS (see the stall section below —
+# entering or leaving a stated wait is news, and it is news exactly once, which is what
+# makes suppressing the stall block for it cost the operator nothing).
+# Deliberately NOT meaningful: the timestamp, the
 # `last line` column (elapsed time / token counts change every tick), the raw ctx
 # figure — only its band — and ▶️/⏸, which flips
 # constantly while ship works and re-waits. A terminal report (nothing in flight) is
@@ -38,6 +41,12 @@
 #    there is none, and the slot counts as in-flight;
 #  * open escalations are appended, so a question raised between fast-monitor
 #    ticks still shows up here;
+#  * a motionless slot is asked WHY before the stall clock is consulted (shipyard_wait_state in
+#    shipyard-lib.sh). A child that CANNOT move (a stated capacity wait) and one nobody ASKED to
+#    move (finished, or blocked on a human) get their own row and their own block, and are exempt
+#    from the clock; only a slot with no known reason is STUCK, and that still raises the loud
+#    block. The clock itself is restarted across a gap in supervision, because time this script
+#    did not watch is not motionlessness it can report;
 #  * exit 0 = nothing in flight (all MRs merged/closed) → stop the loop;
 #    exit 1 = work is still open.
 #
@@ -90,14 +99,51 @@ fi
 # Where the last printed report's signature lives (shared .git, never committed).
 SIGFILE=""
 STALLFILE=""
+TICKFILE=""
 STALL_SECS="${SHIPYARD_STALL_SECS:-1800}"   # 30 min of no movement, idle, nothing asked of you
 # ENSURE, not just resolve: if the directory is missing the stall table cannot be
 # written, `since` resets to now on every run, and the watchdog silently never
 # fires. A watchdog that fails closed is worse than none — it looks armed.
-if mb=$(shipyard_mailbox_ensure 2>/dev/null); then SIGFILE="$mb/report-sig"; STALLFILE="$mb/report-stall"; fi
+if mb=$(shipyard_mailbox_ensure 2>/dev/null); then
+  SIGFILE="$mb/report-sig"; STALLFILE="$mb/report-stall"; TICKFILE="$mb/report-tick"
+fi
 STALLED=()
 STALL_ROWS=()
+WAITING=()    # motionless for a stated, self-healing reason — nothing to do
+ATTENTION=()  # motionless for a known reason that needs a person, but never compaction
 UNSCALED=()   # slots whose ctx figure exceeds every window size the report knows of
+
+# --- the supervision gap ---------------------------------------------------------------
+# THE STALL CLOCK ONLY MEASURES WHAT THIS SCRIPT WATCHED. `since` is carried across runs in
+# $STALLFILE, so the figure it yields is wall-clock time between two INVOCATIONS — not observed
+# motionlessness. While the monitor ticks every ~10 min those are the same thing. They stop being
+# the same thing the moment nobody is watching, and then the clock reports a number it cannot
+# justify: an operator stopped a fleet for four days with both children deliberately left intact
+# and idle, and the next run printed "motionless for 5420 min ... A child does not idle this long
+# on its own" — ninety hours of which the script observed two instants.
+#
+# So: if this run is further from the previous one than the stall threshold itself, one tick could
+# take a slot from zero to alarmed with no observation in between, which is exactly the untrustworthy
+# case. Restart every clock and say so. Derived from $STALL_SECS rather than given a knob of its
+# own, so it scales with whatever the threshold is set to and there is no second thing to tune.
+#
+# This is also the honest answer to an operator-initiated PAUSE, and it needs nothing from the pane:
+# the parent's own absence is a parent-side fact, recorded here as it happens rather than re-derived
+# afterwards from a child's screen.
+RUN_EPOCH=$(date +%s)
+GAP=0
+if [ -n "$TICKFILE" ] && [ -f "$TICKFILE" ]; then
+  prev_tick=$(cat "$TICKFILE" 2>/dev/null)
+  case "${prev_tick:-}" in
+    ''|*[!0-9]*) ;;   # unreadable or not an epoch: claim no gap rather than a wrong one
+    *) if [ "$RUN_EPOCH" -gt "$prev_tick" ] && [ $(( RUN_EPOCH - prev_tick )) -gt "$STALL_SECS" ]; then
+         GAP=$(( RUN_EPOCH - prev_tick ))
+       fi ;;
+  esac
+fi
+# Stamped BEFORE the loop on purpose: a run that dies part-way still recorded that it was here, so
+# one crash cannot leave a permanent "nothing was watching" verdict on every later tick.
+[ -n "$TICKFILE" ] && printf '%s\n' "$RUN_EPOCH" >"$TICKFILE" 2>/dev/null
 
 # iid: numeric slot is the iid; otherwise read it from .pipeline-state.
 # Which forge origin points at. The report used to assume GitLab everywhere and ran
@@ -305,6 +351,33 @@ for slot in "${SLOTS[@]}"; do
     unknown) ctx="❓ $ctx"; UNSCALED+=("$slot") ;;
   esac
 
+  # --- WHY is it not moving? asked BEFORE the clock is consulted ---------------
+  # The watchdog below measures motionlessness and concludes death. Two of the three things that
+  # make a healthy child motionless are not death at all: it CANNOT move (a stated capacity wait),
+  # or nobody ASKED it to (it is finished, or blocked on a human). Both used to reach the same
+  # alarm and the same prescription, whose last step is compaction — discarding live context to
+  # cure a condition the child does not have. So classify first; only what has no known reason is
+  # STUCK, and that still gets the loud block, unchanged.
+  #
+  # Only ever asked of a MOTIONLESS child. On a moving one any banner still on screen is history by
+  # definition, and reading it would park a child that is working.
+  #
+  # The knowledge is not local: shipyard_wait_state joins the declared graph's phase, the shared
+  # adapters' per-kind banner shapes and the shared policy's disposition. See shipyard-lib.sh.
+  # Cleared every iteration, not just assigned: these are plain shell variables in one long loop,
+  # so a value left over from the previous slot would otherwise decide this one's row.
+  wait_kind=""; wait_class=""; wait_label=""; wait_action=""; wait_line=""
+  if [ "$run" = "⏸ idle/wait" ]; then
+    wait_line=$(shipyard_wait_state "$b" "$phase" "$stage" 2>/dev/null) || wait_line=""
+    if [ -n "$wait_line" ]; then
+      wait_kind=$(printf '%s' "$wait_line" | cut -f1)
+      wait_class=$(printf '%s' "$wait_line" | cut -f2)
+      wait_label=$(printf '%s' "$wait_line" | cut -f3)
+      wait_action=$(printf '%s' "$wait_line" | cut -f4)
+      run="$wait_label"
+    fi
+  fi
+
   # --- stall detection -------------------------------------------------------
   # The silence of --only-changed is indistinguishable from death: a child that has
   # hit its context ceiling, that was compacted and never told to resume, or that left
@@ -322,10 +395,21 @@ for slot in "${SLOTS[@]}"; do
     [ "$prev_sig" = "$slot_sig" ] && since="$prev_epoch"
   fi
   [ -z "$since" ] && since="$now_epoch"
+  # Restart the clock rather than carry a figure nothing observed (see the supervision gap above),
+  # and while a stated wait is in effect, so the timer never accumulates minutes that were never
+  # idle in the sense the alarm means. Both rebase `since`, so the figure the NEXT tick reports is
+  # measured from an instant this script was actually watching.
+  { [ "$GAP" != 0 ] || [ -n "$wait_kind" ]; } && since="$now_epoch"
   STALL_ROWS+=("$slot	$slot_sig	$since")
   motionless=$(( now_epoch - since ))
   stalled_now=0
-  if [ "$run" = "⏸ idle/wait" ] && [ "$pend" = 0 ] && [ "$motionless" -ge "$STALL_SECS" ]; then
+  if [ -n "$wait_kind" ]; then
+    # Motionless for a reason it told us. Not a stall, and never a compaction candidate.
+    case "$wait_kind" in
+      wait) WAITING+=("$slot|$wait_class|$ctx|$wait_action") ;;
+      *)    ATTENTION+=("$slot|$wait_class|$ctx|$wait_action") ;;
+    esac
+  elif [ "$run" = "⏸ idle/wait" ] && [ "$pend" = 0 ] && [ "$motionless" -ge "$STALL_SECS" ]; then
     STALLED+=("$slot|$((motionless/60))|$ctx")
     stalled_now=1
   fi
@@ -335,14 +419,21 @@ for slot in "${SLOTS[@]}"; do
   # completed-vs-active verdict is the declared graph's (via shipyard-slot-graph.sh) — the
   # single authority for a slot's phase (FLOW-03) — while the escalation and stall overlays
   # below still take precedence over it, exactly as before.
-  if   [ "$pend" != 0 ];       then shipyard_note "$slot" blocked --blink
-  elif [ "$stalled_now" = 1 ];  then shipyard_note "$slot" blocked
-  else                              shipyard_note "$slot" "$verdict"
+  # An `attention` wait keeps the blocked glyph such a slot already got from the stall overlay it
+  # now bypasses — it does want a person, just never a compaction. A `wait` one wants nobody, so it
+  # falls through to the graph's verdict.
+  if   [ "$pend" != 0 ];          then shipyard_note "$slot" blocked --blink
+  elif [ "$wait_kind" = attention ]; then shipyard_note "$slot" blocked
+  elif [ "$stalled_now" = 1 ];     then shipyard_note "$slot" blocked
+  else                                 shipyard_note "$slot" "$verdict"
   fi
 
   ROWS+=("| $slot | $mr_label | $addr | $run | $state / $stage | $esc | $ctx | ${line} |")
-  # No $run and no $line here on purpose — see the --only-changed note in the header.
-  SIG+=("$slot|$mr_label|term=1|$state|$stage|$pend|$band")
+  # No $run and no $line here on purpose — see the --only-changed note in the header. $wait_class
+  # IS meaningful: entering or leaving a stated wait is exactly the tick worth breaking silence
+  # for, and it is the news the first time it appears, which is why it is not left to the (now
+  # suppressed) stall block to announce.
+  SIG+=("$slot|$mr_label|term=1|$state|$stage|$pend|$band|$wait_class")
   :
 done
 
@@ -353,7 +444,8 @@ TERMINAL=0
 
 # --only-changed: stay silent unless the meaningful state moved. A terminal report is
 # always printed so the end of the run is never swallowed.
-if [ "$ONLY_CHANGED" = 1 ] && [ "$TERMINAL" = 0 ] && [ "${#STALLED[@]}" -eq 0 ] && [ -n "$SIGFILE" ]; then
+if [ "$ONLY_CHANGED" = 1 ] && [ "$TERMINAL" = 0 ] && [ "${#STALLED[@]}" -eq 0 ] \
+   && [ "$GAP" = 0 ] && [ -n "$SIGFILE" ]; then
   NOW_SIG=$(printf '%s\n' "${SIG[@]}")
   if [ -f "$SIGFILE" ] && [ "$NOW_SIG" = "$(cat "$SIGFILE" 2>/dev/null)" ]; then
     exit 1   # still in flight, just nothing new to say
@@ -375,12 +467,23 @@ fi
   else
     echo "_in flight: ${inflight}; open escalations: ${total_pend}_"
   fi
+  if [ "$GAP" != 0 ]; then
+    echo
+    echo "_supervision resumed after $((GAP/60)) min with nothing watching — every stall clock was"
+    echo "restarted from now, because a figure measured across that gap is one this report cannot"
+    echo "justify. If the fleet was paused on purpose, this line is the whole of the news._"
+  fi
   if [ "${#STALLED[@]}" -gt 0 ]; then
     echo
     echo "### 🛑 STALLED — idle, nothing asked of you, and nothing moving"
     for x in "${STALLED[@]}"; do
       sl=${x%%|*}; rest=${x#*|}; mins=${rest%%|*}; c=${rest#*|}
-      echo "- \`$sl\` — motionless for ${mins} min (ctx $c). A child does not idle this long on its own."
+      # NOT "a child does not idle this long on its own" any more. That sentence was this block's
+      # stated justification and it was the one assumption that failed: a child idles exactly that
+      # long when it cannot move, or when nobody asked it to. Both now leave before here, so what
+      # this line may claim is what the classification actually ruled out — and no more, since the
+      # reason could still be one the classifier has no shape for.
+      echo "- \`$sl\` — motionless for ${mins} min (ctx $c), announcing no reason and at no stage that waits by design."
       # The order is load-bearing and is the whole of Step 5's diagnosis rule, restated at the
       # point of alarm: the cheapest and most reliable evidence first, hand-driving never.
       echo "  1. GIT FIRST: \`git -C $ROOT/.claude/worktrees/ship-$sl log --oneline -5\` and \`git status\`."
@@ -396,6 +499,26 @@ fi
       echo "     on a child that was running all window is the healthy case and is NOT a compaction trigger."
       echo "     A ❓ ctx is NOT a compaction trigger and NOT a clearance: it means the figure could not be"
       echo "     scaled, so resolve that first (see the block below) and act on the band it turns into."
+    done
+  fi
+  # The two blocks the STALLED one used to swallow. Each is a slot that is motionless for a reason
+  # it stated, so neither bypasses --only-changed: the class is in the signature, which makes the
+  # state the news exactly once — on the tick it appears and on the tick it clears — instead of
+  # once every ten minutes for as long as it lasts.
+  if [ "${#WAITING[@]}" -gt 0 ]; then
+    echo
+    echo "### ⏳ WAITING — a stated, self-healing wait, not a stall"
+    for x in "${WAITING[@]}"; do
+      sl=${x%%|*}; rest=${x#*|}; cl=${rest%%|*}; rest=${rest#*|}; c=${rest%%|*}; act=${rest#*|}
+      echo "- \`$sl\` — \`$cl\` (ctx $c). $act"
+    done
+  fi
+  if [ "${#ATTENTION[@]}" -gt 0 ]; then
+    echo
+    echo "### 🙋 WAITING FOR YOU — a known cause, not a stall (do NOT compact)"
+    for x in "${ATTENTION[@]}"; do
+      sl=${x%%|*}; rest=${x#*|}; cl=${rest%%|*}; rest=${rest#*|}; c=${rest%%|*}; act=${rest#*|}
+      echo "- \`$sl\` — \`$cl\` (ctx $c). $act"
     done
   fi
   # An unscalable ctx figure is NOT a healthy one, and the band alone is easy to miss in a wide
