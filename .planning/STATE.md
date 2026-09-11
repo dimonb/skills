@@ -1,12 +1,38 @@
 # STATE — session memory
 
-## ⏸ PAUSED AGAIN (2026-09-07, ~15:05) — one lane, one change shipped, nothing mid-flight
+## ▶ RUNNING again (2026-09-11) — one lane, `ship-51` holds it
 
-Paused on request a second time, three hours into the one-lane resume. **This is a clean stop, not
-a stall:** the lane's change had already merged, and the next slot had not started, so nothing was
-interrupted mid-work and nothing needs recovering.
+Resumed after a four-day pause. Both terminals survived it, so neither child needed rebuilding.
+`ship-111` is torn down (its change merged on the 7th), so the single lane is now `ship-51`
+working PR #116, started from `.git/ship-escalations/decision-51-3.md` and rebasing onto a `main`
+that moved under it.
 
-### The instruction this resume ran under, and it still stands
+### Two findings the pause itself produced, both already on their issues
+
+* **#54's trigger is the dangling upstream, not the squash.** `ship-111` was torn down with
+  `shipyard-down.sh` and it **succeeded, rc=0, no `--force`** — because #115 was merged with
+  `--delete-branch=false`, so `@{upstream}` still resolved. Not one of the branch's commits was an
+  ancestor of `main`, which is nominally what the guard measures, and it passed anyway. A guard
+  that says *safe* here and *unsafe* for the identical situation with the ref deleted is not
+  measuring what it claims in either case. Practical workaround until the fix lands: merge with
+  `--delete-branch=false`, tear down, then delete the remote branch.
+* **#22 has a second trigger with the same wrong prescription: a slot paused on purpose.** The
+  resume printed `🛑 STALLED — motionless for 5420 min`, whose stated justification is *"a child
+  does not idle this long on its own"* — the one assumption that is false here, since it idled that
+  long *because* it was told to. Ninety hours, and the block's third step is compaction, i.e.
+  discarding 446k tokens of live context to cure nobody having asked it anything. Same defect as
+  the rate-limit case: the watchdog measures motionlessness and concludes death, when what it needs
+  to separate is *cannot move* and *was not asked* from *stuck*. The pause case is the cheap one to
+  fix, because the parent knows it happened and need not infer it from the pane.
+
+**A containment proof that stopped being one.** With `main` ahead of a merged branch,
+`git diff origin/main..<head>` shows main's own later commits and looks alarming while nothing is
+missing. What actually proves containment: the files still differing between the branch head and
+`main` (for #115, only the two files `main` had edited independently), or comparing the squash
+commit's diff against the branch's three-dot diff — which matched exactly, 19 files, 485
+insertions, 151 deletions on both sides.
+
+### The instruction this lane runs under, and it still stands
 
 Two narrowings, both from the owner: **one slot at a time**, and the objective is only **what
 actually blocks using the fleet** — not the backlog.
@@ -45,34 +71,39 @@ Everything after #61 is explicitly NOT part of it:
 **#117** (council `say`, the same defect as #51) rides the shared predicate #116 introduces, so it
 is cheap afterwards — but it is council's bug, not the fleet's, and it sits below the line.
 
-### State at this pause, verified rather than assumed
+### The lane, verified rather than assumed
 
-| slot | branch | head | PR | worktree | what it is waiting on |
+| slot | branch | head at resume | PR | worktree | state |
 |---|---|---|---|---|---|
-| `ship-111` | `fix/gate-policy-tests-registration` | `30609b5` | **#115 MERGED** | clean, pushed | nothing — it is **done**; only its teardown is outstanding |
-| `ship-51` | `fix/shipyard-tell-delivery-confirmation` | `08ad8f8` | **#116** open | clean, pushed (0 ahead of origin) | the directive that starts its one fix pass |
+| ~~`ship-111`~~ | ~~`fix/gate-policy-tests-registration`~~ | `30609b5` | **#115 MERGED** `67972b5` | **torn down** | done; remote branch deleted after the teardown |
+| `ship-51` | `fix/shipyard-tell-delivery-confirmation` | `08ad8f8` | **#116** open, MERGEABLE/CLEAN | clean, 0 ahead of origin | **running** — one pass over amended 51-1 + the confirmed fixes |
 
-Both monitors stopped. Neither child was sent a pause directive: 111 had already handed off and 51
-had never started, so a `tell` would have been noise — and on this very code a `tell` is a small
+Neither child was sent a pause directive on the way down: 111 had already handed off and 51 had
+never started, so a `tell` would have been noise — and on this very code a `tell` carries a small
 risk of its own until #116 lands.
 
-**`ship-111` was deliberately NOT torn down.** Its merge is the legitimate trigger and the teardown
-is the correct next step, but removing a worktree is the one irreversible move available here, and
-"pause" is not the moment for it. It is clean, pushed and merged, so it costs nothing to leave.
-Expect `shipyard-down.sh` to refuse it — that is **#54**, the squash-merge ancestry bug, reproducing
-for the third time — and prove containment with `git diff` against `main` before reaching for
-`--force`. Note that a plain `git diff origin/main..30609b5` is NOT that proof any more: `main` has
-moved ahead of the branch, so the diff shows main's own newer commits and looks alarming while
-nothing is missing.
+### What `ship-51` is doing, and what it was given
 
-### To resume
+Its round-1 review is COMPLETE (9 axes + 5 skeptics); the full ledger survived the pause in
+`.git/ship-escalations/pause-51-round1-findings.md`. The one thing that blocked it — an open
+design question about B1's fix shape — is answered in `.git/ship-escalations/decision-51-3.md`,
+which also dispositions every finding of the round and fences the scope to this change only.
 
-`ship-51` is the whole lane. Its round-1 review is COMPLETE (9 axes + 5 skeptics) and its full
-ledger survives the pause in `.git/ship-escalations/pause-51-round1-findings.md`. The one thing
-that blocked it — an open design question about B1's fix shape — **is answered** in
-`.git/ship-escalations/decision-51-3.md`, which also dispositions every finding of the round and
-fences the scope. So the resume is one `shipyard-tell.sh 51` pointing at that file, then the
-monitors.
+**Decision 51-3: anchor the match by line shape; do NOT thread the typed line in as a parameter.**
+Both fixes were proposed by confirmed sources and the choice had API consequences, since amended
+51-1 puts the function in the shared module. Anchoring wins on three counts: the parameter is the
+plumbing the upheld objection was against; anchoring closes a strict superset of the triggers,
+including the one that permanently poisons a slot (a child displaying this plugin's own source);
+and the technique, with its discipline, is already in the tree at `shipyard-continuity.sh:28-36`.
+The condition attached is not optional — **derive the anchor from real captured panes committed as
+fixtures.** A too-loose anchor restores the false `delivered`; a too-tight one alarms on the
+commonest healthy path, which is the failure that teaches an operator to ignore the signal and so
+defeats the change's own premise.
+
+Also folded into the same pass: B3's surviving optional (OR over both real queued shapes, now that
+the code sits behind the `adp_*` seam), B2's verified fix, B5's corrected form, B6 handled honestly
+rather than justified into coverage, and F1–F6. B3 and B4 were **refuted** as blockers by their
+skeptics and must not be treated as such.
 
 Standing rules: `shipyard-down.sh` only after a merge or a close (it removes the worktree);
 monitors carry `SHIPYARD_CTX_WINDOW=1000000` or the ctx column lies about a 1M-window session.
