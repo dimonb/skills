@@ -304,12 +304,13 @@ probe '-----BEGIN RSA PRIVATE KEY-----'     'private key header'
 probe "date TZ=Europe/Somewhere"            'hardcoded timezone'
 
 # And the other direction for the same arm: the encoded form is a hyphen-separated word sequence,
-# so the bounds must not red on ordinary hyphenated English or on a long CLI flag. No pin is
-# needed on this one — "the arm was deleted" is already excluded by the two red probes above, so
-# green here can only mean the bounds held.
+# so the bounds must not red on ordinary hyphenated English or on a double-dash long flag. A
+# SINGLE-dash long option is deliberately not in this fixture, because it does red and check.sh
+# says why. No pin is needed on this one — "the arm was deleted" is already excluded by the two
+# red probes above, so green here can only mean the bounds held.
 printf '%s\n' 'a per-users-quota note, a nav-home-link class, --users-file and --home-dir' \
   > docs/_probe.md
-expect_pass "leak: hyphenated prose and long flags are not encoded home paths"
+expect_pass "leak: hyphenated prose and double-dash long flags are not encoded home paths"
 rm -f docs/_probe.md
 
 # 7b — English everywhere: the script check. Each fixture is BUILT from code points instead
