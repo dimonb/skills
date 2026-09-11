@@ -499,18 +499,17 @@ adp_delivery_verdict() {
 # the same question, which is the defect the shared engine exists to remove. The class is the whole
 # answer; the resume time is the supervisor's to re-probe.
 #
-# THE RULE, because this is its THIRD appearance and there will be a fourth. ANY predicate that
-# reads a child's SCREEN is forgeable by a child whose own work IS that predicate — and in this
-# repo that child is the common case, not the adversarial one. It has now cost three defects: a
-# child displaying this plugin's source read as permanently mid-turn (#116); a first version of
-# this function accepted any column-one line, so a child writing "the watchdog fires on a usage
-# limit" classified ITSELF as rate-limited; and its second version accepted the service bullet,
-# which is where one client renders its own prose and every one of its tool calls. So:
+# THE RULE IS REPO LAW, and AGENTS.md ("Reading a child's screen: anchor on chrome, never on
+# anything it can type") is where it is stated, with its two corollaries — derive the anchor from a
+# committed capture, and remember that too tight is not the safe direction either. Not restated
+# here; what follows is only how this particular anchor obeys it.
 #
-#   ANCHOR ONLY ON CLIENT CHROME THE CHILD'S OWN OUTPUT CANNOT PRODUCE.
-#   NEVER ANCHOR ON ANYTHING A CHILD CAN TYPE OR PRINT.
+# This function cost two of the three instances behind that law. Its first version accepted any
+# column-one line, so a child writing "the watchdog fires on a usage limit" classified ITSELF as
+# rate-limited; its second accepted the service bullet, which is where one client renders its own
+# prose and every one of its tool calls. (#116 was the third, from the other direction.)
 #
-# One glyph passes that test today. Both admitted kinds put their own words behind a DIFFERENT
+# One glyph passes the chrome test today. Both admitted kinds put their own words behind a DIFFERENT
 # column-one glyph — one an assistant bullet, one a service bullet — so neither can reach column
 # one behind the warning glyph, and indentation covers tool output and every wrapped continuation.
 # That is why the allow-list below has exactly one entry and why the service bullet was REMOVED
