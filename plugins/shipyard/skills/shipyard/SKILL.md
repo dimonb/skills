@@ -786,18 +786,35 @@ bash <SKILL>/shipyard-down.sh <slot> --force
 ```
 
 It refuses a slot with uncommitted changes, or one whose content it cannot prove is already in
-the base branch, and says what to look at; `--force` overrides both. The second gate asks about
-CONTENT, never ancestry: a squash merge leaves none of the branch's commits an ancestor of the
-base branch, so an ancestry test refuses the *successful* path — and it passes a branch with no
-upstream configured, which is the one case where work really would be lost. Containment is
-proven either by tree equality or by a test merge that adds nothing to the base branch, with one
-lazy `git fetch` when a stale remote-tracking ref is the likely reason a proof failed
-(`SHIPYARD_DOWN_FETCH=0` forbids it). A slot the base branch has since edited in the same region
-stays refused — unprovable, so it asks. It removes the worktree with a DOUBLE `-f` (one
+the base branch, and says what to look at; `--force` overrides all of it. The second gate asks
+about CONTENT, never ancestry: a squash merge leaves none of the branch's commits an ancestor of
+the base branch, so an ancestry test refuses the *successful* path — and it passes a branch with
+no upstream configured at all. Containment is proven either by tree equality or by a test merge
+that adds nothing to the base branch, with one lazy `git fetch` per invocation when a stale
+remote-tracking ref is the likely reason a proof failed (`SHIPYARD_DOWN_FETCH=0` forbids it).
+The base branch is discovered — `origin/HEAD`, else the branch's upstream when that is not the
+branch's own remote ref, else `origin/main`/`origin/master` — so a repo based on anything else
+tears down normally.
+
+The refusal words are worth telling apart, because they want opposite things from you.
+`UNMERGED` means the test merge succeeded and still added content: the branch really does carry
+something the base branch does not, and `--force` orphans it. `unproven` means the question
+could not be answered — the base branch has since edited the same region, or this git predates
+`merge-tree --write-tree` (2.38) — and there `--force` is the right answer once you have looked.
+`NO BASE REF` and `UNKNOWN` mean the gate never ran at all: no base branch to compare against,
+or a tree git could not read (a stray directory, an unreadable index). **Weigh a `DIRTY` refusal
+higher than any of them** — `git worktree remove` does not delete the branch, so committed work
+survives a teardown and is recoverable from its branch; uncommitted, untracked and ignored files
+go with the directory and are not.
+
+It removes the worktree with a DOUBLE `-f` (one
 for dirty, one for locked — a single `-f` fails on a lock with a message that reads like a
 permissions problem), prunes, and on agterm drops the `-ai` workspace — plus its pinned
-name — once it holds no ship sessions. The change's feature branch can go afterwards
-(`git branch -d <branch>` — `-d` refuses an unmerged branch, which is what you want after a CLOSE rather than a merge).
+name — once it holds no ship sessions. The change's feature branch can go afterwards — but note
+that `git branch -d` asks the ANCESTRY question this gate abandoned, so after a squash merge it
+refuses a branch whose content is fully in the base branch (measured). Once teardown has printed
+`content is already in <ref>`, that IS the containment proof and `git branch -D <branch>` is the
+correct follow-up; keep `-d` for a CLOSE, where nothing has been proven contained.
 Removing the last slot also asks every token-matched parent continuity watcher to stop itself
 and removes its live mailbox records, but only after a successful, structurally valid backend
 query proves that no slot remains. A small admission generation remains so a start already in

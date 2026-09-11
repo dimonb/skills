@@ -7,8 +7,11 @@
 # in the single-line `tests` array below, so a test cannot silently stop being run; check 12
 # requires this suite to be named in $GATED_SUITES and its runner to be named by a Makefile recipe,
 # so the suite as a whole cannot stop running either. The suite itself runs under `make test` (not
-# `make check` — at ~20s it is too slow for a per-commit gate, so its RUNTIME errors surface there,
-# not at commit time). check 9's temp-room grep stays council-specific.
+# `make check` — it is minutes rather than seconds, so its RUNTIME errors surface there, not at
+# commit time). No wall-clock figure is quoted here on purpose: the one that used to be went stale
+# by a factor of four without anything saying so, and a stale number gets used to justify a
+# decision. The Makefile measures what `make check` costs, because that is the one under a budget.
+# check 9's temp-room grep stays council-specific.
 #
 # Most tests are pure functions over fixture files and environment variables. The continuity
 # suite also starts one short detached watcher against a fake `agtermctl`, proves idempotency,

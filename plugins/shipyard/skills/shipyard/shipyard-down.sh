@@ -7,19 +7,23 @@
 #
 # usage:
 #   shipyard-down.sh <slot> [<slot> ...]     tear down, refusing anything unsafe
-#   shipyard-down.sh <slot> --force          tear down even with uncommitted/unpushed work
+#   shipyard-down.sh <slot> --force          tear down even when the gates below refuse
 #   shipyard-down.sh --list                  what is safe to tear down right now
 #
 # Safety gates (each one refuses, and says what to look at):
-#   * uncommitted changes in the worktree;
-#   * content that is not provably in the base branch already.
-# --force overrides both. There is no gate on the MR state: the report knows that,
-# and a slot can also be legitimately torn down after a CLOSE.
+#   * uncommitted or untracked changes in the worktree;
+#   * content that is not provably in the base branch already;
+#   * a question that could not be asked at all — no base branch to compare against,
+#     or a tree git could not read.
+# --force overrides all of them. There is no gate on the MR state: the report knows
+# that, and a slot can also be legitimately torn down after a CLOSE.
 #
 # The second gate asks about CONTENT, not ancestry: a squash merge leaves none of the
 # branch's commits an ancestor of the base branch, so an ancestry test refuses the
-# successful path — and passes a branch with no upstream at all, which is the one case
-# where work really would be lost. shipyard-down-gate.sh carries both measurements.
+# successful path — and passes a branch with no upstream at all. It also distinguishes
+# work that is genuinely missing from the base branch from containment it merely could
+# not prove, because those want opposite things from the operator.
+# shipyard-down-gate.sh carries the measurements behind all of it.
 #
 # Exit: 0 all requested slots are down, 1 at least one was refused or failed.
 set -uo pipefail
@@ -62,12 +66,20 @@ if [ "$LIST" = 1 ]; then
     # The listed state is the GATE's own verdict, not a second opinion computed here: a
     # column that says "clean" where teardown then refuses is how an operator learns to
     # stop reading the column.
-    read -r kind ref <<<"$(shipyard_down_verdict "$w")"
+    # Called WITHOUT a command substitution on purpose: the verdict comes back in globals so
+    # the gate's one-fetch-per-invocation latch lives in THIS shell. A `$( )` here would fork
+    # it away and make a listing fetch once per in-flight slot.
+    shipyard_down_verdict "$w"
+    kind=$SHIPYARD_DOWN_KIND; ref=$SHIPYARD_DOWN_REF
     case "$kind" in
       safe)       st="safe, content in $ref" ;;
       dirty)      st="DIRTY" ;;
       unmerged)   st="UNMERGED against $ref" ;;
-      *)          st="NO BASE REF" ;;
+      # Not "unmerged": the gate failed to PROVE containment, and a column that asserts more
+      # than the gate measured is how the old commit count read as a loss warning.
+      unprovable) st="unproven against $ref" ;;
+      no-default) st="NO BASE REF" ;;
+      *)          st="UNKNOWN ($kind)" ;;
     esac
     printf '%-24s %-10s %-9s %s\n' "$s" "$t" "present" "$st"
   done
@@ -81,7 +93,8 @@ for slot in "${SLOTS[@]}"; do
   WT=$(wt_of "$slot")
 
   if [ -d "$WT" ] && [ "$FORCE" != 1 ]; then
-    read -r kind ref <<<"$(shipyard_down_verdict "$WT")"
+    shipyard_down_verdict "$WT"          # globals, not $( ) — see the --list note above
+    kind=$SHIPYARD_DOWN_KIND; ref=$SHIPYARD_DOWN_REF
     case "$kind" in
       safe)
         # Say WHY it is safe. The guard spent a long time crying wolf on the happy path,
@@ -89,25 +102,41 @@ for slot in "${SLOTS[@]}"; do
         echo "ship-$slot: content is already in $ref — nothing to lose"
         ;;
       dirty)
-        echo "refused: ship-$slot has uncommitted changes in $WT" >&2
+        # The gate that actually stands between the operator and unrecoverable content:
+        # committed work survives `worktree remove`, uncommitted work does not.
+        echo "refused: ship-$slot has uncommitted or untracked changes in $WT" >&2
         echo "         look: git -C '$WT' status" >&2
         rc=1; continue
         ;;
-      no-default)
-        echo "refused: ship-$slot has no base branch to compare against" >&2
-        echo "         (looked for origin/HEAD, origin/main, origin/master)" >&2
-        echo "         look: git -C '$WT' branch -r" >&2
-        rc=1; continue
-        ;;
-      *)
+      unmerged)
         # Deliberately NO commit count. The count is what made the old message unreadable:
         # after a squash it names commits that are fully merged, so it read as a loss
         # warning on the successful path and trained everyone to reach straight for
         # --force. Point at the content instead, which is the thing actually at stake.
-        echo "refused: ship-$slot has content that is not provably in $ref" >&2
+        echo "refused: ship-$slot carries content that is NOT in $ref" >&2
         echo "         look: git -C '$WT' diff $ref" >&2
         echo "         look: git -C '$WT' log --oneline $ref..HEAD" >&2
-        echo "         --force removes it anyway, once you have looked" >&2
+        echo "         --force would orphan that content in its branch" >&2
+        rc=1; continue
+        ;;
+      unprovable)
+        echo "refused: ship-$slot's content could not be PROVEN to be in $ref" >&2
+        echo "         (a later change to the same region blocks the test merge, or this git" >&2
+        echo "          is older than 2.38 — this is not a claim that anything is missing)" >&2
+        echo "         look: git -C '$WT' diff $ref" >&2
+        echo "         --force is the right answer once you have looked" >&2
+        rc=1; continue
+        ;;
+      no-default)
+        echo "refused: ship-$slot has no base branch to compare against" >&2
+        echo "         (tried origin/HEAD, the branch's upstream, origin/main, origin/master)" >&2
+        echo "         look: git -C '$WT' branch -r" >&2
+        rc=1; continue
+        ;;
+      *)
+        echo "refused: ship-$slot could not be inspected — git did not answer" >&2
+        echo "         (not a worktree, or an unreadable index; the gate never ran)" >&2
+        echo "         look: git -C '$WT' status" >&2
         rc=1; continue
         ;;
     esac
