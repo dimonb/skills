@@ -10,8 +10,12 @@
 # (path resolution to the common git dir, and an entry whose JSON shape is byte-for-byte the one
 # shipyard's viewer already reads).
 #
-# Baseline bash >= 5 like the driver: re-exec into one if a stock bash 3.2 started us, so a
-# future bash-5-only construct fails as a clear version message rather than a confusing syntax error.
+# THIS HARNESS runs under bash >= 5 for its own convenience — re-exec into one if a stock bash 3.2
+# started us, so a bash-5-only construct in the TEST fails as a clear version message rather than a
+# confusing syntax error. That says nothing about the MODULE, whose floor is bash 3.2 (it is sourced
+# in-process by shipyard's status reporter, which runs on stock macOS /bin/bash). The floor block at
+# the end of this file is what actually holds that, by running the module under /bin/bash rather
+# than under whatever interpreter this harness picked.
 if [ "${BASH_VERSINFO[0]:-0}" -lt 5 ] && [ -z "${POLICY_TEST_BASH_REEXEC:-}" ]; then
   for _c in /opt/homebrew/bin/bash /usr/local/bin/bash /usr/bin/bash bash; do
     _p=$(command -v "$_c" 2>/dev/null) || continue

@@ -499,102 +499,129 @@ adp_delivery_verdict() {
 # the same question, which is the defect the shared engine exists to remove. The class is the whole
 # answer; the resume time is the supervisor's to re-probe.
 #
-# ANCHORED, for the same reason the turn read is, and with the consequence inverted. The capture
-# includes everything the child rendered — its input box AND its own prose — so an unanchored
-# substring search lets text that merely MENTIONS a banner manufacture the evidence. Here that
-# direction is the dangerous one: a genuinely wedged child would read as "waiting, nothing to do"
-# and its alarm would be suppressed. And it is not a hypothetical — a child working on THIS defect
-# discusses these very phrases, so its own transcript is full of them.
+# THE RULE, because this is its THIRD appearance and there will be a fourth. ANY predicate that
+# reads a child's SCREEN is forgeable by a child whose own work IS that predicate — and in this
+# repo that child is the common case, not the adversarial one. It has now cost three defects: a
+# child displaying this plugin's source read as permanently mid-turn (#116); a first version of
+# this function accepted any column-one line, so a child writing "the watchdog fires on a usage
+# limit" classified ITSELF as rate-limited; and its second version accepted the service bullet,
+# which is where one client renders its own prose and every one of its tool calls. So:
 #
-# THE ANCHOR IS AN ALLOW-LIST OF LEADING GLYPHS, not "a line in column one", and that distinction
-# is the whole of it. The first version of this function took any column-one line that was not a
-# composer line, on the stated grounds that "tool output and transcript content are indented". That
-# is TRUE OF TOOL OUTPUT AND FALSE OF ASSISTANT PROSE: `fixtures/pane-claude-running.txt` shows one
-# kind rendering its own sentences at column one behind its assistant glyph, with only their
-# WRAPPED continuations indented. So a child writing the sentence "the watchdog fires on a usage
-# limit" would have classified itself as rate-limited and silenced its own alarm. Only a line whose
-# FIRST character is one of the two evidenced client-status glyphs below is eligible, which excludes
-# assistant prose, both composers, indented tool output and every wrapped continuation by
-# construction rather than by a deny-list that has to anticipate each of them.
+#   ANCHOR ONLY ON CLIENT CHROME THE CHILD'S OWN OUTPUT CANNOT PRODUCE.
+#   NEVER ANCHOR ON ANYTHING A CHILD CAN TYPE OR PRINT.
 #
-# BIASED TIGHT, deliberately, and this is the bias that made the bug above survivable in the other
-# direction. A shape this MISSES falls through to the caller's existing stall path, i.e. to today's
-# behaviour; a shape it matches too LOOSELY silences a real alarm. So the residual must always be a
-# miss, never a false clearance — the opposite bias from the turn read, and for the same underlying
-# reason: bias towards the failure an operator can still see.
+# One glyph passes that test today. Both admitted kinds put their own words behind a DIFFERENT
+# column-one glyph — one an assistant bullet, one a service bullet — so neither can reach column
+# one behind the warning glyph, and indentation covers tool output and every wrapped continuation.
+# That is why the allow-list below has exactly one entry and why the service bullet was REMOVED
+# from it rather than narrowed: a bullet line is authored content, and no amount of phrase-pinning
+# makes authored content trustworthy.
 #
-# RESIDUAL the gate cannot check, stated here because it lives here. Unlike the turn marker, the
-# WORDS below are not pinned to committed pane captures: they are verbatim from the supervising
-# operator's reports of what the `last line` column carried, and from the Codex service-line list
-# `shipyard-continuity.sh` matches off a real capture — but which glyph each is rendered behind is
-# inferred, not observed. The transport-fault phrase in particular has NO observed glyph at all, so
-# it classifies only if a client puts it behind the warning glyph, and may in practice never fire.
-# That is the safe direction on purpose (see BIASED TIGHT). Add a capture and a fixture when one is
-# taken, and widen the allow-list only from a capture — never from reasoning about what a client
-# "probably" renders, which is exactly how the first version got it wrong.
+# BIASED TIGHT, which is what made all three of those survivable in the other direction. A shape
+# this MISSES falls through to the caller's existing stall path, i.e. to today's behaviour; a shape
+# it matches too LOOSELY silences a real alarm on a possibly-dead child. The residual must always
+# be a miss, never a false clearance — the opposite bias from the turn read, and for the same
+# underlying reason: bias towards the failure an operator can still see.
 #
-# Written as explicit `case` arms rather than as an editable ADP_* list, unlike the markers above:
-# those are constants because a caller INTERPOLATES them (shipyard-report.sh builds a grep from the
-# turn marker), while these are matched only here — and a list would have to be word-split
-# unquoted, where the bracket classes below would become pathname globs.
+# WHAT IS DELIBERATELY NOT HERE, and why the list is this short:
+#   * The other kind's `You have N usage limit resets left` line. It is CHROME, not a stop — this
+#     repo's own `shipyard_continuity_is_service_line` lists it beside `Working` and `Ran ` among
+#     the lines that prove nothing about the turn. An earlier version of this file read it as a
+#     capacity wait, which would have made a Codex child unalarmable while it was merely idle.
+#   * A transport fault ("went to sleep mid-response"). No capture shows which glyph, if any, a
+#     client puts it behind, and an exemption that cannot be evidenced is worth less than not
+#     having it: such a child falls through to the stall path, whose remedy order opens with the
+#     nudge it actually needs. Take a capture, then widen — never widen from reasoning, which is
+#     precisely how the two defects above were introduced.
+#
+# RESIDUAL the gate cannot check, stated here because it lives here: the WORDS below are verbatim
+# from the supervising operator's reports of what the report's own `last line` column carried, and
+# the warning-glyph placement is corroborated by `shipyard_continuity_capacity_state`, which
+# matches one such banner as a whole line off a real capture. There is still no committed pane
+# fixture containing one, so a client that changes the glyph makes this silently stop firing — in
+# the safe direction. Add a fixture when a capture is taken.
 
-# The warning glyph both admitted kinds put in column one ahead of a client-status banner ("⚠ Usage
-# limit reached …", "⚠ Selected model is at capacity …", the second of which shipyard-continuity.sh
-# already matches as a whole line off a real capture). A constant, not an inline literal, because it
-# is the one thing here a client could rename — and because the assistant glyph it must NOT be
-# confused with differs from it by a single codepoint.
+# The warning glyph a client puts in column one ahead of a status banner it authored itself
+# ("⚠ Usage limit reached …", "⚠ Selected model is at capacity …"). A constant, not an inline
+# literal, because it is the one thing here a client could rename.
 ADP_BANNER_GLYPH='⚠'
+
+# Column-one glyphs that prove the client rendered something AFTER a banner. Both are captured:
+# the assistant glyph in fixtures/pane-claude-running.txt, the service bullet in
+# fixtures/pane-codex-running.txt. They are exactly the two shapes excluded from the banner
+# allow-list above — the child's own output — which is the point: a banner is stale once the child
+# has spoken again.
+ADP_PROGRESS_GLYPHS='⏺ •'
+
 _ADP_WAIT_CLASS=''
 
-# _adp_wait_line_class <line> — 0 when the line announces a wait or fault, with the AgentSignal
-# class in $_ADP_WAIT_CLASS. Set rather than printed, the same way the line helpers above do it, so
-# the per-line walk forks nothing.
+# _adp_wait_line_class <banner body> — 0 when the body announces a capacity wait, with the
+# AgentSignal class in $_ADP_WAIT_CLASS. Set rather than printed, the same way the line helpers
+# above do it, so the per-line walk forks nothing.
 #
 # Each phrase is the SHORTEST leading substring common to every observed variant — the discipline
 # the queued hints above state — so a client varying the rest of the sentence cannot break the
 # match. The leading letter is a bracket class because both a capitalised form ("Usage limit
-# reached · continuing automatically at <time>") and a lowercase one ("You have N usage limit
-# resets left") were recorded, on different kinds.
+# reached · continuing automatically at <time>") and a lowercase one were recorded.
 _adp_wait_line_class() {
   case "${1:-}" in
-    *[Uu]'sage limit'*)             _ADP_WAIT_CLASS=rate_limited; return 0 ;;
-    *[Ss]'ession limit'*)           _ADP_WAIT_CLASS=rate_limited; return 0 ;;
-    *'at capacity'*)                _ADP_WAIT_CLASS=overloaded;   return 0 ;;
-    # A transport fault, not a capacity one: the TURN died mid-response while the session stayed
-    # up. It maps to `error`, so policy escalates it to a human instead of parking — the right
-    # answer, because this one does need a nudge. What it never needs is compaction: the context
-    # is intact, which is exactly the distinction the measured false alarms collapsed.
-    *'went to sleep mid-response'*) _ADP_WAIT_CLASS=error;        return 0 ;;
+    *[Uu]'sage limit'*)   _ADP_WAIT_CLASS=rate_limited; return 0 ;;
+    *[Ss]'ession limit'*) _ADP_WAIT_CLASS=rate_limited; return 0 ;;
+    *'at capacity'*)      _ADP_WAIT_CLASS=overloaded;   return 0 ;;
   esac
   _ADP_WAIT_CLASS=''
   return 1
 }
 
-# adp_wait_class <screen> — the AgentSignal class the child's own screen announces, or nothing.
+# _adp_progress_line <line> — 0 when the line shows the client rendered something of its own,
+# i.e. the child spoke after whatever came before it.
+_adp_progress_line() {
+  local line="${1:-}" g
+  # `local IFS=' '` for the same reason _adp_box_content gives: this module is sourced into other
+  # people's shells, and splitting on a caller's IFS would silently match nothing.
+  local IFS=' '
+  for g in $ADP_PROGRESS_GLYPHS; do
+    case "$line" in "$g"*) return 0 ;; esac
+  done
+  return 1
+}
+
+# adp_wait_class <screen> — the AgentSignal class the child's client announces, or nothing.
 # Prints "<class><TAB><the line that said so>" and returns 0; prints nothing and returns 1 when no
-# anchored line carries a known shape.
+# LIVE banner is on screen.
 #
-# THE LAST anchored match wins. A screen can still show an older banner above newer output, so the
-# most recent announcement is the live one — and a caller should only ask this of a child that is
-# already motionless, since on a MOVING child any banner on screen is history by definition.
+# LIVE, not merely present, and that is the second half of the anchor. "The last banner wins" is
+# not enough: a child that hit a limit, resumed when the window reset, worked, and then genuinely
+# wedged still has the banner inside the visible capture — and being motionless NOW does not make
+# a banner from an hour ago current. Reporting that child as "waiting, nothing to do" is the
+# 8.5-hour silent stall the watchdog exists to catch, with a reassurance attached.
+#
+# So a banner is cleared the moment the client renders anything of its own after it. That rule is
+# MIRRORED, not shared, from `shipyard_continuity_capacity_state`, which counts banners since the
+# last non-service line for the Codex parent path and states the same principle: once real
+# assistant output follows the latest banner, every visible capacity event is historical. Sharing
+# the code was considered and rejected — that function is fused to an episode counter with a
+# different contract, a different return and a Codex-only vocabulary, so calling it would mean
+# reshaping it around a second caller. The rule is one sentence; the implementations are two, and
+# that is a seam worth naming rather than hiding.
+#
+# Clearing on ANY progress glyph is looser than that function, which ignores its own service lines.
+# Looser here means MORE clearing, hence more misses, hence today's behaviour — the safe direction.
 adp_wait_class() {
   local screen=${1:-} line body hit_cls='' hit_line=''
   [ -n "$screen" ] || return 1
   while IFS= read -r line || [ -n "$line" ]; do
-    # THE ALLOW-LIST. Both arms pattern-match from the START of the line, so column one is a
-    # property of the match rather than a separate test — and a line that is indented, is assistant
-    # prose, is a composer line, or is a wrapped continuation of any of those simply matches
-    # neither. The body is what follows the glyph, so a phrase must be in the banner itself and not
-    # merely somewhere on a line that happens to begin with one.
-    body=''
+    # The allow-list, matched from the START of the line, so column one is a property of the match
+    # rather than a separate test: an indented line, a composer line, a wrapped continuation and
+    # anything the child authored all match nothing here.
     case "$line" in
-      "$ADP_BANNER_GLYPH"*) body=${line#"$ADP_BANNER_GLYPH"} ;;
-      # The other kind states its capacity waits as ordinary service lines, so reuse the helper that
-      # already knows that shape rather than spelling the bullet again here.
-      *) if _adp_service_content "$line"; then body=$_ADP_LINE_CONTENT; fi ;;
+      "$ADP_BANNER_GLYPH"*)
+        body=${line#"$ADP_BANNER_GLYPH"}
+        if _adp_wait_line_class "$body"; then hit_cls=$_ADP_WAIT_CLASS; hit_line=$line; fi ;;
+      *)
+        # Not a banner. If the client spoke, whatever banner stood before it is history.
+        if _adp_progress_line "$line"; then hit_cls=''; hit_line=''; fi ;;
     esac
-    [ -n "$body" ] || continue
-    if _adp_wait_line_class "$body"; then hit_cls=$_ADP_WAIT_CLASS; hit_line=$line; fi
   done <<<"$screen"
   [ -n "$hit_cls" ] || return 1
   printf '%s\t%s' "$hit_cls" "$hit_line"

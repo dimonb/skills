@@ -52,7 +52,8 @@ a slot behaves identically on either; when neither is available the skill refuse
 
 **A monitor that stays quiet until something happens.** The status table reports running
 versus idle from a snapshot diff rather than spinner glyphs, and `--only-changed` keeps it
-silent until a state, stage, escalation count, ctx band or terminal presence actually moves.
+silent until a state, stage, escalation count, ctx band, terminal presence or the reason a
+slot is motionless actually moves.
 
 **A Codex parent that survives transient model-capacity stops.** When shipyard is launched
 from Codex in agterm, the first live child also starts one idempotent continuity watcher for
@@ -79,6 +80,14 @@ board. So the report tracks how long each slot has been motionless and prints a 
 block that bypasses `--only-changed`, and it surfaces each child's context usage, because a
 session at its context ceiling stops accepting turns silently. One ran that way for eight and
 a half hours before anyone noticed; both watchdogs exist because of it.
+
+**And the alarm asks why before it fires.** Motionless is not the same as stuck: a child can
+be unable to move (a capacity wait its client announced) or simply not have been asked (it is
+finished, or stopped at `needs-human`). Those get their own row and their own block, never a
+compaction prescription, and the stall clock also restarts after a gap in supervision, because
+time nothing was watching is not motionlessness the report can attest to. Whatever is left —
+idle, announcing no reason, at no stage that waits by design — still raises the loud block.
+The skill's Step 2 has the table.
 
 **A mailbox, not a guessing game.** A background session has no human in it, so it escalates
 instead of deciding: `question` and `decision` block until you answer, `notice` is

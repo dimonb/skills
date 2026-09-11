@@ -141,9 +141,13 @@ if [ -n "$TICKFILE" ] && [ -f "$TICKFILE" ]; then
        fi ;;
   esac
 fi
-# Stamped BEFORE the loop on purpose: a run that dies part-way still recorded that it was here, so
-# one crash cannot leave a permanent "nothing was watching" verdict on every later tick.
-[ -n "$TICKFILE" ] && printf '%s\n' "$RUN_EPOCH" >"$TICKFILE" 2>/dev/null
+# The tick is stamped AFTER the loop, beside the stall table it must stay consistent with — see the
+# write below. Stamping it here instead looks safer and is not: the clocks are rebased inside the
+# loop and written after it, so a run interrupted part-way would CONSUME the gap without restarting
+# anything, and the next run would print "motionless for 5420 min" with no gap notice — exactly the
+# unjustified figure this mechanism exists to remove, now silent. The cost of stamping late is that
+# a report which always dies mid-loop re-announces the gap every tick; that is noisy, honest, and
+# true (nothing IS being watched), which is the right way round.
 
 # iid: numeric slot is the iid; otherwise read it from .pipeline-state.
 # Which forge origin points at. The report used to assume GitLab everywhere and ran
@@ -367,7 +371,11 @@ for slot in "${SLOTS[@]}"; do
   # Cleared every iteration, not just assigned: these are plain shell variables in one long loop,
   # so a value left over from the previous slot would otherwise decide this one's row.
   wait_kind=""; wait_class=""; wait_label=""; wait_action=""; wait_line=""
-  if [ "$run" = "⏸ idle/wait" ]; then
+  # `$pend = 0` for the same reason the stall condition below carries it: a slot with an open
+  # escalation is already accounted for by the esc column and the escalation block, and it is
+  # asking for something. Without this guard such a slot could be printed under "a stated,
+  # self-healing wait ... Do not nudge" while a child is in fact blocked on an unanswered question.
+  if [ "$run" = "⏸ idle/wait" ] && [ "$pend" = 0 ]; then
     wait_line=$(shipyard_wait_state "$b" "$phase" "$stage" 2>/dev/null) || wait_line=""
     if [ -n "$wait_line" ]; then
       wait_kind=$(printf '%s' "$wait_line" | cut -f1)
@@ -419,13 +427,15 @@ for slot in "${SLOTS[@]}"; do
   # completed-vs-active verdict is the declared graph's (via shipyard-slot-graph.sh) — the
   # single authority for a slot's phase (FLOW-03) — while the escalation and stall overlays
   # below still take precedence over it, exactly as before.
-  # An `attention` wait keeps the blocked glyph such a slot already got from the stall overlay it
-  # now bypasses — it does want a person, just never a compaction. A `wait` one wants nobody, so it
-  # falls through to the graph's verdict.
-  if   [ "$pend" != 0 ];          then shipyard_note "$slot" blocked --blink
-  elif [ "$wait_kind" = attention ]; then shipyard_note "$slot" blocked
-  elif [ "$stalled_now" = 1 ];     then shipyard_note "$slot" blocked
-  else                                 shipyard_note "$slot" "$verdict"
+  # ONLY `needs_human` overrides the graph's verdict. A `finished` slot must keep the graph's
+  # `completed` glyph: FLOW-03 states outright that `_syg_concluded` "reproduces shipyard-report.sh's
+  # old completed verdict EXACTLY ... so the glyph does not change", and painting it `blocked` from
+  # its first idle tick would break that — the old code only reached `blocked` after 30 motionless
+  # minutes, which is not the same claim. A `wait` slot wants nobody, so it falls through too.
+  if   [ "$pend" != 0 ];             then shipyard_note "$slot" blocked --blink
+  elif [ "$wait_class" = needs_human ]; then shipyard_note "$slot" blocked
+  elif [ "$stalled_now" = 1 ];        then shipyard_note "$slot" blocked
+  else                                    shipyard_note "$slot" "$verdict"
   fi
 
   ROWS+=("| $slot | $mr_label | $addr | $run | $state / $stage | $esc | $ctx | ${line} |")
@@ -438,6 +448,9 @@ for slot in "${SLOTS[@]}"; do
 done
 
 [ -n "$STALLFILE" ] && [ "${#STALL_ROWS[@]}" -gt 0 ] && printf '%s\n' "${STALL_ROWS[@]}" >"$STALLFILE" 2>/dev/null
+# Together with the stall table, never before it: a gap may only be consumed by a run that actually
+# restarted the clocks (see the supervision-gap block above).
+[ -n "$TICKFILE" ] && printf '%s\n' "$RUN_EPOCH" >"$TICKFILE" 2>/dev/null
 
 TERMINAL=0
 [ "$inflight" -eq 0 ] && [ "$total_pend" -eq 0 ] && TERMINAL=1

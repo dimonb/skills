@@ -53,21 +53,34 @@ cls() { adp_wait_class "${1:-}" | cut -f1; }
 # caller feeds it straight to policy_dispose. A wrong class here is a wrong disposition there.
 ok "a capitalised usage-limit banner is rate_limited" rate_limited \
    "$(cls '⚠ Usage limit reached · continuing automatically at 2am')"
-ok "a lowercase usage-limit service line is rate_limited" rate_limited \
-   "$(cls '• You have 5 usage limit resets left')"
 ok "a session limit is rate_limited too" rate_limited \
    "$(cls "⚠ You've hit your session limit · resets at 20:10")"
 ok "a model-at-capacity banner is overloaded" overloaded \
    "$(cls '⚠ Selected model is at capacity. Please try a different model.')"
-# A transport fault is NOT a capacity class, and the difference is the whole point: policy parks a
-# capacity wait and escalates this, so the caller nudges instead of waiting — and neither compacts.
-# NOTE what this does and does not establish. No capture shows which glyph a client puts this
-# behind, so the arm fires only if it is the warning glyph, and in practice it may never fire. The
-# pair below pins exactly that, rather than implying an unobserved rendering is covered.
-ok "a slept-mid-response fault is error, not capacity" error \
-   "$(cls '⚠ API Error: Your computer went to sleep mid-response')"
-ok "...but bare at column one it is NOT eligible" "" \
+
+# THE SERVICE BULLET IS NOT AN ANCHOR, and these two pin why it was removed rather than narrowed.
+# One kind renders its own prose AND every one of its tool calls behind that bullet in column one —
+# `shipyard_continuity_is_service_line` enumerates `• Ran `/`• Explored`/`• Edited ` off a real
+# capture precisely because `'• '*` alone proves nothing. So a child in this repo grepping for the
+# phrase, which is the normal case here and not an adversarial one, bought a permanent exemption.
+ok "a bullet tool-call line carrying the phrase is refused" "" \
+   "$(cls '• Ran grep -rn "usage limit" plugins/')"
+ok "a bullet prose line carrying the phrase is refused" "" \
+   "$(cls '• The watchdog fires on a usage limit and prescribes compaction')"
+# And the specific line an earlier version pinned as a POSITIVE. It is chrome: the same repo file
+# lists it beside `• Working`, i.e. among the lines that say nothing about the turn — it reports
+# resets REMAINING, so a child showing it is not blocked at all.
+ok "the remaining-resets chrome line is not a wait" "" \
+   "$(cls '• You have 5 usage limit resets left')"
+
+# A transport fault has NO observed glyph, so there is no arm for it at all. Both forms are refused,
+# and that is the intended outcome rather than a gap: such a child falls through to the caller's
+# stall path, whose remedy order opens with the nudge it needs. Widen from a capture, never from
+# reasoning — which is exactly how the two defects above were introduced.
+ok "a slept-mid-response fault is not classified, bare" "" \
    "$(cls 'API Error: Your computer went to sleep mid-response')"
+ok "...nor behind the banner glyph"                     "" \
+   "$(cls '⚠ API Error: Your computer went to sleep mid-response')"
 
 # --- 2. nothing announced -> nothing, so the caller's stall path still owns the slot -------
 ok "an ordinary idle frame yields no class" "" "$(cls 'Waiting for the pipeline to finish')"
@@ -78,20 +91,41 @@ ok "a class is rc 0" 0 \
    "$(adp_wait_class '⚠ Usage limit reached' >/dev/null 2>&1; echo $?)"
 
 # --- 3. the evidence line comes back with the class ---------------------------------------
-# The caller does not use it today, but a supervisor reading a report needs to see WHICH line
-# decided — an alarm that cannot show its evidence is the defect this whole issue is about.
+# The report PRINTS this in the WAITING row, so an operator can see which line bought the exemption
+# instead of taking the verdict on trust — which matters most for the one case the staleness rule
+# below cannot fully rule out.
 ok "the deciding line is returned after the class" '⚠ Usage limit reached · at 2am' \
    "$(adp_wait_class '⚠ Usage limit reached · at 2am' | cut -f2)"
 
-# --- 4. THE LAST anchored match wins ------------------------------------------------------
-# A screen can still show an older banner above newer output, so the live announcement is the most
-# recent one. Pinned in both orders, or the check would pass on a first-match implementation too.
-two_down='⚠ Usage limit reached · continuing automatically at 2am
-⚠ API Error: Your computer went to sleep mid-response'
-two_up='⚠ API Error: Your computer went to sleep mid-response
-⚠ Usage limit reached · continuing automatically at 2am'
-ok "fault below a banner -> the fault"  error        "$(cls "$two_down")"
-ok "banner below a fault -> the banner" rate_limited "$(cls "$two_up")"
+# --- 4. A BANNER GOES STALE the moment the client speaks again ----------------------------
+# THE DEFECT THIS PINS, and it is the one an operator cannot see: "the last banner wins" is not
+# enough. A child that hit a limit, resumed when the window reset, worked, and THEN genuinely wedged
+# still has the banner inside the visible capture — and being motionless now does not make an
+# hour-old banner current. Classifying it parks the slot, rebases its stall clock every tick and
+# reports "resumes on its own. Do not nudge": the 8.5-hour silent stall, with a reassurance on top.
+#
+# The rule is mirrored from `shipyard_continuity_capacity_state`, which already counts banners since
+# the last non-service line on the Codex parent path. Both progress glyphs are captured fixtures.
+resumed_claude='⚠ Usage limit reached · continuing automatically at 2am
+⏺ Resumed. Opening the PR next.'
+resumed_codex='⚠ Selected model is at capacity. Please try a different model.
+• Ran make check'
+ok "a banner the client spoke after is stale (assistant glyph)" "" "$(cls "$resumed_claude")"
+ok "a banner the client spoke after is stale (service bullet)"  "" "$(cls "$resumed_codex")"
+# The converse, or the rule would be indistinguishable from "never classify anything": progress
+# BEFORE the banner does not clear it, because the banner is then the newest thing said.
+ok "progress ABOVE a banner leaves it live" rate_limited \
+   "$(cls '⏺ Working on the review round.
+⚠ Usage limit reached · continuing automatically at 2am')"
+# And the composer is not progress — a draft sitting unsubmitted is the stall silhouette itself,
+# not evidence the child moved on.
+ok "a composer line below a banner does not clear it" rate_limited \
+   "$(cls '⚠ Usage limit reached · continuing automatically at 2am
+❯ next: run make check')"
+# Two banners, the later one winning, with no progress between them.
+ok "the later of two live banners wins" overloaded \
+   "$(cls '⚠ Usage limit reached · continuing automatically at 2am
+⚠ Selected model is at capacity. Please try a different model.')"
 
 # --- 5. ADVERSARIAL: the box may never supply the evidence --------------------------------
 # Built from the real composer capture. `boxed <first> <cont>` puts <first> after the captured box
@@ -141,17 +175,34 @@ ok "a banner typed in the other kind's composer is refused" "" \
 #
 # Built from that capture, by substituting into its real assistant line, so the check is pinned to
 # the rendering that actually fooled it rather than to a guess about one.
-assistant_glyph=$(sed -n 's/^\(.\) [A-Z].*/\1/p' "$FIX/pane-claude-running.txt" | head -1)
-ok "the capture really renders assistant prose in column one" 1 \
-   "$([ -n "$assistant_glyph" ] && echo 1 || echo 0)"
+#
+# THE GLYPH IS WRITTEN OUT, NOT DERIVED, and that is a correction of this very rig. It used to
+# extract it with `sed -n 's/^\(.\) [A-Z].*/\1/p'` — but this file sets LC_ALL=C, so `.` matches one
+# BYTE and the glyph is three, meaning the pattern could never match an assistant line at all. It
+# matched an indented tool line instead and yielded a literal SPACE. The builder then rewrote an
+# indented line, and the vacuity guard — computed from the same wrong value — passed. So the check
+# labelled "a child's OWN prose" was testing indentation, which three other checks already cover:
+# with the loose anchor restored in a scratch copy, it still passed. A guard built from the same
+# expression as the thing it guards is not a guard, which is this repo's own lesson about vacuous
+# checks, and it survived because both halves were wrong in the same direction.
+assistant_glyph='⏺'
+# Guard 1: the capture really does render assistant prose in column one behind that glyph. If a
+# recapture ever changes it, this reds instead of quietly testing nothing.
+ok "the capture renders assistant prose in column one" 1 \
+   "$([ "$(grep -c "^${assistant_glyph} " "$FIX/pane-claude-running.txt")" -gt 0 ] && echo 1 || echo 0)"
+# `index($0,g)==1` rather than `substr($0,1,1)==g`: substr is byte-wise under LC_ALL=C too, so it
+# could never equal a three-byte glyph — the same trap one layer down.
 prose=$(awk -v g="$assistant_glyph" '
     BEGIN { hit = 0 }
-    substr($0,1,1) == g && hit == 0 { print g " the watchdog fires on a usage limit and prescribes compaction"; hit = 1; next }
+    index($0, g) == 1 && hit == 0 { print g " the watchdog fires on a usage limit and prescribes compaction"; hit = 1; next }
     { print }
   ' "$FIX/pane-claude-running.txt")
-# VACUITY GUARD before the property, same discipline as the box case above.
-ok "the prose screen really carries the phrase in column one" 1 \
+# Guard 2: the built line carries the phrase AND begins with the real glyph in column one. The
+# second half is what a degenerate extraction could satisfy before; a space now fails it.
+ok "the prose screen carries the phrase behind the glyph" 1 \
    "$(printf '%s\n' "$prose" | grep -c "^${assistant_glyph} the watchdog fires on a usage limit")"
+ok "...and that line does not start with whitespace" 0 \
+   "$(printf '%s\n' "$prose" | grep -c '^[[:space:]].*the watchdog fires on a usage limit')"
 ok "a child's OWN prose is not an announcement" "" "$(cls "$prose")"
 # And the narrow version of the same thing, so the property is readable without the fixture rig.
 ok "an assistant-glyph line carrying the phrase is refused" "" \

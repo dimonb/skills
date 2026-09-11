@@ -58,8 +58,18 @@ PROSE='⏺ the watchdog fires on a usage limit and prescribes compaction'
 # authority for "this change is over" and not a second copy in the stall path.
 ok "a concluded slot is finished, not stalled" "attention/finished/✅ finished" \
    "$(state3 "$IDLE" concluded ready-to-merge)"
-ok "...whatever its stage says"                "attention/finished/✅ finished" \
+ok "...and when its stage says done too"       "attention/finished/✅ finished" \
    "$(state3 "$IDLE" concluded done)"
+# BUT THE PHASE ALONE IS NOT ENOUGH, and this pair is the reason. `_syg_concluded` is
+# `merged|closed OR stage = ready-to-merge`, so a merged forge state reaches it on its own — and a
+# ship session OUTLIVES ITS FIRST MR wherever a repo lands a spec change before its implementation.
+# Exempting on the phase alone disarmed the clock for a child that was still working, which is the
+# incident report.sh's own comment records as measured: two green signals while the session sat with
+# an unsubmitted line in its box.
+ok "a merged PR with work still in flight is NOT exempt" 1 \
+   "$(rc_of "$IDLE" concluded impl-review)"
+ok "...nor mid-apply"                                    1 \
+   "$(rc_of "$IDLE" concluded apply)"
 # needs-human is the one ship state the graph deliberately leaves as `active`, and before this it
 # appeared in no script at all — so a child that had finished and was correctly waiting for a person
 # got "A child does not idle this long on its own".
@@ -71,11 +81,12 @@ ok "a usage limit is a self-healing wait" "wait/rate_limited/⏳ rate-limited" \
    "$(state3 "$LIMIT" in-review impl-review)"
 ok "model-at-capacity is a self-healing wait" "wait/overloaded/⏳ overloaded" \
    "$(state3 "$CAP" in-review apply)"
-# A transport fault is the one announced cause that DOES want a person — policy escalates it rather
-# than parking it — and it still must not want compaction. Keeping these two apart is the reason the
-# disposition comes from the shared policy module instead of from a local guess.
-ok "a dead turn wants a nudge, not a park" "attention/error/⚠️ turn died" \
-   "$(state3 "$SLEPT" in-review apply)"
+# TWO SCREEN-READ STATES, NOT FIVE. An earlier version also claimed a transport fault ("the turn
+# died, nudge it"), which read well and rested on nothing — no capture shows which glyph a client
+# renders that behind. An exemption that cannot be evidenced is worth less than not having it, so it
+# was deleted rather than narrowed, and such a child now falls through to the stall path, whose
+# remedy order opens with exactly the nudge it needs.
+ok "a transport fault is NOT classified" 1 "$(rc_of "$SLEPT" in-review apply)"
 
 # --------------------------------------------- 3. STUCK still alarms
 ok "an unexplained idle slot has no answer here" 1 "$(rc_of "$IDLE" in-review impl-review)"
@@ -105,31 +116,42 @@ ok "no shape maps to a compaction verdict" 0 \
 # remedy offered as covering both branches of a guess is how two healthy sessions nearly lost ~85k
 # and ~180k tokens of live context. Matching a bare "compact" would be useless here: every action
 # deliberately contains the words "Do NOT compact", which is the check below.
+# EVERY row an operator can be shown. Kept as one list, used by both checks, so a state added later
+# cannot be covered by one and missed by the other.
+ANSWERED_ROWS="concluded|ready-to-merge|$IDLE
+in-review|needs-human|$IDLE
+in-review|impl-review|$LIMIT
+in-review|apply|$CAP"
 compaction_hits=0
-for row in "concluded|ready-to-merge|$IDLE" "in-review|needs-human|$IDLE" \
-           "in-review|impl-review|$LIMIT" "in-review|apply|$CAP" "in-review|apply|$SLEPT"; do
+while IFS= read -r row; do
+  [ -n "$row" ] || continue
   ph=${row%%|*}; rest=${row#*|}; st=${rest%%|*}; scr=${rest#*|}
   a=$(action "$scr" "$ph" "$st")
   [ -n "$a" ] || { compaction_hits=$((compaction_hits + 1)); continue; }   # an empty action is a silent row
   case "$a" in
     *compact.sh*|*'/compact'*|*'compact '*[Ii]'t'*) compaction_hits=$((compaction_hits + 1)) ;;
   esac
-done
+done <<EOF
+$ANSWERED_ROWS
+EOF
 ok "no action prescribes compaction, and none is empty" 0 "$compaction_hits"
 # And each one says so out loud, so an operator reading the block is told rather than left to infer
 # it from an absence.
-ok "every action says NOT to compact" 5 \
-   "$(for row in "concluded|ready-to-merge|$IDLE" "in-review|needs-human|$IDLE" \
-                 "in-review|impl-review|$LIMIT" "in-review|apply|$CAP" "in-review|apply|$SLEPT"; do
+ok "every action says NOT to compact" "$(printf '%s\n' "$ANSWERED_ROWS" | grep -c .)" \
+   "$(while IFS= read -r row; do
+        [ -n "$row" ] || continue
         ph=${row%%|*}; rest=${row#*|}; st=${rest%%|*}; scr=${rest#*|}
         action "$scr" "$ph" "$st"
-      done | grep -ci 'do not compact')"
+      done <<EOF | grep -ci 'do not compact'
+$ANSWERED_ROWS
+EOF
+)"
 
 # --------------------------------------------- 5. the wiring is load-bearing
 ok "report.sh asks why before the clock" 1 \
    "$(grep -Fc 'shipyard_wait_state "$b" "$phase" "$stage"' "$REPORT")"
-ok "...only of a motionless child" 1 \
-   "$(grep -Fc 'if [ "$run" = "⏸ idle/wait" ]; then' "$REPORT")"
+ok "...only of a motionless child with nothing pending" 1 \
+   "$(grep -Fc 'if [ "$run" = "⏸ idle/wait" ] && [ "$pend" = 0 ]; then' "$REPORT")"
 ok "an answered slot never reaches STALLED" 1 \
    "$(grep -Fc 'if [ -n "$wait_kind" ]; then' "$REPORT")"
 ok "the class is in the --only-changed signature" 1 \
@@ -151,20 +173,144 @@ ok "...and from the skill's text" 0 \
 ok "the STALLED block still exists" 1 "$(grep -Fc '### 🛑 STALLED' "$REPORT")"
 ok "...and still bypasses --only-changed" 1 "$(grep -Fc '[ "${#STALLED[@]}" -eq 0 ]' "$REPORT")"
 
-# --------------------------------------------- 6. the interpreter floor
-# report.sh now sources shared/policy in-process (through shipyard-lib.sh) and runs on stock macOS
-# /bin/bash, which is 3.2. Parse BOTH under the real /bin/bash and run the policy table there, so a
-# bash-4+ construct added to the shared module later cannot silently break status reporting.
+# --------------------------------------------- 6. THE REPORT, EXECUTED
+# WHY THIS SECTION EXISTS, and it is the most important one in the file. Section 5 above pins the
+# wiring with `grep -Fc` over exact source lines, which is this repo's established idiom — and a
+# review of this very change measured what that idiom is worth by mutating the report: SIX of seven
+# semantic mutations shipped with all checks green. Inverting the supervision-gap comparison (the
+# change's headline fix) — green. Deleting the tick stamp — green. Routing ATTENTION rows into the
+# WAITING block, so a child explicitly waiting for a human is filed under "nothing to do" — green.
+# Transposing the label and action fields — green. Dropping `run="$wait_label"`, so the documented
+# session column never changes — green. Adding one `wait_line=""` after the pinned call, killing the
+# whole classification while every grepped byte stayed put — green. Only deleting the grepped text
+# itself reds. So `grep -Fc` asserts that a line EXISTS, and nothing about reachability, ordering,
+# branch bodies, or `if` versus `elif`. Read section 5 as "the call site has not been renamed", not
+# as "the wiring works".
 #
-# WORTH LESS THAN IT LOOKS WHERE /bin/bash IS NEWER: on Linux CI /bin/bash is 5.x and these three
-# checks pass vacuously. They bite on the platform the fleet actually runs on, which is the one
-# that ships 3.2 — and `t-policy.sh` states the same caveat for the module's own floor assertion.
-ok "shipyard-lib.sh parses under /bin/bash" 0 \
-   "$(/bin/bash -n "$SKILL_DIR/shipyard-lib.sh" >/dev/null 2>&1; echo $?)"
-ok "shipyard-report.sh parses under /bin/bash" 0 \
-   "$(/bin/bash -n "$REPORT" >/dev/null 2>&1; echo $?)"
+# This section executes the real script instead. The rig is the one t7-continuity.sh already uses:
+# exported shell functions shadow `git`, `tmux` and `gh`, which works where a fake binary on PATH
+# does not because shipyard-lib.sh prepends the system PATH over anything a test puts in front.
+#
+# COST, stated because someone will want it back: the report sleeps 3s per slot for its motion diff,
+# so three slots over two runs is ~18s. That is why this suite is in `make test` and not in the
+# per-commit gate, and it is the price of the six mutations above going red.
+if [ "${SHIPYARD_T13_SKIP_EXEC:-}" = 1 ]; then
+  printf '  skip executed-report section (SHIPYARD_T13_SKIP_EXEC=1)\n'
+else
+T13TMP=$(mktemp -d "${TMPDIR:-/tmp}/t13-report.XXXXXXXX") || exit 1
+trap 'rm -rf "$T13TMP"' EXIT
+FAKE_ROOT="$T13TMP/repo"; FAKE_GIT="$T13TMP/gitdir"
+mkdir -p "$FAKE_ROOT" "$FAKE_GIT/ship-escalations"
+for s in 41 42 43; do mkdir -p "$FAKE_ROOT/.claude/worktrees/ship-$s/.pipeline-state"; done
+# 41: rate-limited mid-review. 42: stopped at needs-human. 43: mid-review, announcing nothing.
+printf '{"pr_number":901,"state":"impl-review"}\n'  >"$FAKE_ROOT/.claude/worktrees/ship-41/.pipeline-state/PR-901.json"
+printf '{"pr_number":902,"state":"needs-human"}\n'  >"$FAKE_ROOT/.claude/worktrees/ship-42/.pipeline-state/PR-902.json"
+printf '{"pr_number":903,"state":"impl-review"}\n'  >"$FAKE_ROOT/.claude/worktrees/ship-43/.pipeline-state/PR-903.json"
+export FAKE_ROOT FAKE_GIT
+git() {
+  case "${1:-} ${2:-}" in
+    "rev-parse --show-toplevel")  printf '%s\n' "$FAKE_ROOT"; return 0 ;;
+    "rev-parse --git-common-dir") printf '%s\n' "$FAKE_GIT";  return 0 ;;
+    "remote get-url")             printf 'https://github.com/example/example.git\n'; return 0 ;;
+  esac
+  return 0
+}
+# drv_target builds "<container>:<window-index>", so the capture fake keys on the index.
+tmux() {
+  case "${1:-}" in
+    list-windows) printf '1 ship-41\n2 ship-42\n3 ship-43\n'; return 0 ;;
+    has-session)  return 0 ;;
+    capture-pane)
+      case "$*" in
+        *t13ex:1*) printf 'ran the check suite\n⚠ Usage limit reached · continuing automatically at 2am\n' ;;
+        *t13ex:2*) printf '⏺ Blockers posted on the PR. Holding for a human.\n' ;;
+        *)         printf '⏺ spec review round 2, awaiting the verifier\n' ;;
+      esac
+      return 0 ;;
+  esac
+  return 0
+}
+gh() { printf 'OPEN\n'; return 0; }
+export -f git tmux gh
+run_report() {  # <stall-secs> [extra args...]; prints the whole report
+  local ss="$1"; shift
+  SHIPYARD_STALL_SECS="$ss" SHIPYARD_BACKEND=tmux SHIPYARD_SESSION=t13ex \
+    bash "$REPORT" "$@" 41 42 43 2>/dev/null
+}
+
+# --- run A: a four-day supervision gap. Every clock restarts, and nothing may be STALLED yet.
+printf '%s\n' "$(( $(date +%s) - 345600 ))" >"$FAKE_GIT/ship-escalations/report-tick"
+outA=$(run_report 1800)
+ok "A: the gap is announced"            1 "$(printf '%s' "$outA" | grep -c 'supervision resumed after')"
+ok "A: ...with a plausible figure"      1 "$(printf '%s' "$outA" | grep -c 'resumed after 5760 min')"
+ok "A: nothing is STALLED across a gap" 0 "$(printf '%s' "$outA" | grep -c '🛑 STALLED')"
+# The classification itself, rendered by the real script.
+ok "A: the rate-limited slot says so in its row" 1 \
+   "$(printf '%s' "$outA" | grep -c '^| 41 .*⏳ rate-limited')"
+ok "A: ...and appears under WAITING"             1 \
+   "$(printf '%s' "$outA" | grep -A3 '### ⏳ WAITING' | grep -c '^- `41`')"
+ok "A: ...with the evidence line printed"        1 \
+   "$(printf '%s' "$outA" | grep -c 'Evidence: ⚠ Usage limit reached')"
+ok "A: the needs-human slot says so in its row"  1 \
+   "$(printf '%s' "$outA" | grep -c '^| 42 .*🙋 needs you')"
+ok "A: ...and appears under WAITING FOR YOU"     1 \
+   "$(printf '%s' "$outA" | grep -A3 '### 🙋 WAITING FOR YOU' | grep -c '^- `42`')"
+# The two blocks must not be interchangeable: a needs-human child is NOT "nothing to do".
+ok "A: needs-human is NOT under WAITING"         0 \
+   "$(printf '%s' "$outA" | sed -n '/### ⏳ WAITING —/,/^$/p' | grep -c '^- `42`')"
+ok "A: the rate-limited slot is NOT under WAITING FOR YOU" 0 \
+   "$(printf '%s' "$outA" | sed -n '/### 🙋 WAITING FOR YOU/,/^$/p' | grep -c '^- `41`')"
+ok "A: neither block ever prescribes compaction" 0 \
+   "$(printf '%s' "$outA" | sed -n '/### ⏳ WAITING —/,$p' | grep -c 'shipyard-compact.sh')"
+
+# --- run B: no gap now, and a 1s threshold, so the slot announcing NOTHING must alarm.
+printf '%s\n' "$(date +%s)" >"$FAKE_GIT/ship-escalations/report-tick"
+outB=$(run_report 1)
+ok "B: no gap is claimed"                   0 "$(printf '%s' "$outB" | grep -c 'supervision resumed after')"
+# THE POINT OF THE WHOLE CHANGE: rarer and right, not quieter.
+ok "B: the unexplained slot IS stalled"     1 \
+   "$(printf '%s' "$outB" | grep -A1 '🛑 STALLED' | grep -c '^- `43`')"
+ok "B: ...and the loud block kept its remedy order" 1 \
+   "$(printf '%s' "$outB" | grep -c '1. GIT FIRST')"
+ok "B: the rate-limited slot is NOT stalled" 0 \
+   "$(printf '%s' "$outB" | sed -n '/🛑 STALLED/,/^$/p' | grep -c '^- `41`')"
+ok "B: the needs-human slot is NOT stalled"  0 \
+   "$(printf '%s' "$outB" | sed -n '/🛑 STALLED/,/^$/p' | grep -c '^- `42`')"
+ok "B: the classified slots still report"    2 \
+   "$(printf '%s' "$outB" | grep -c '^- `4[12]`')"
+
+# --- run C: --only-changed is silent when nothing moved, which is what makes suppressing the
+# stall block for a classified slot cost the operator nothing.
+printf '%s\n' "$(date +%s)" >"$FAKE_GIT/ship-escalations/report-tick"
+outC=$(run_report 100000 --only-changed)
+ok "C: an unchanged tick prints nothing" 0 "$(printf '%s' "$outC" | grep -c .)"
+unset -f git tmux gh
+fi
+
+# --------------------------------------------- 7. the interpreter floor
+# report.sh sources shared/policy in-process (through shipyard-lib.sh) and runs on stock macOS
+# /bin/bash, which is 3.2. These EXECUTE rather than parse, because a review of this change measured
+# that `bash -n` is nearly empty as a floor assertion: under the real /bin/bash 3.2.57 a `${v^^}`, a
+# `declare -A` and a `mapfile` are ALL accepted by `-n` and by sourcing — only CALLING the function
+# fails. So the two `-n` checks this section used to carry would have caught none of the three
+# constructs their own comment named.
+#
+# WORTH LESS THAN IT LOOKS WHERE /bin/bash IS NEWER: on Linux CI /bin/bash is 5.x and these pass
+# vacuously. They bite on the platform the fleet actually runs on, which is the one that ships 3.2 —
+# t-policy.sh states the same caveat and prints the version so a reader can tell which run they have.
+floor() { /bin/bash -c ". '$SKILL_DIR/shipyard-lib.sh' >/dev/null 2>&1; $1" 2>/dev/null; }
+ok "the joiner runs under /bin/bash: a capacity wait" "wait" \
+   "$(floor "shipyard_wait_state '⚠ Usage limit reached' in-review apply | cut -f1")"
+ok "...a concluded slot"                              "attention" \
+   "$(floor "shipyard_wait_state '' concluded ready-to-merge | cut -f1")"
+ok "...and an unexplained one returns rc 1"           "1" \
+   "$(floor "shipyard_wait_state 'nothing' in-review apply >/dev/null; echo \$?")"
 ok "the policy table answers under /bin/bash" "park|reprobe" \
    "$(/bin/bash -c ". '$SKILL_DIR/policy.sh'; policy_dispose rate_limited")"
+# The report is still only PARSE-checked there: executing it needs the whole rig above, which
+# section 6 does under the test's own interpreter. Said plainly rather than implied.
+ok "shipyard-report.sh at least parses under /bin/bash" 0 \
+   "$(/bin/bash -n "$REPORT" >/dev/null 2>&1; echo $?)"
 
 printf '\n'
 if [ "$FAILURES" -eq 0 ]; then

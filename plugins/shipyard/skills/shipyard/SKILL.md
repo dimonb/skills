@@ -340,15 +340,30 @@ column and its own block, and is exempt from the stall clock:
 
 | `session` column | what it means | what to do |
 |---|---|---|
-| `⏳ rate-limited` / `⏳ overloaded` | the client announced a capacity wait | nothing — it resumes itself |
-| `⚠️ turn died` | the client announced a transport fault; the turn ended mid-response | nudge it (Step 5, order 2) — its context is intact |
-| `✅ finished` | the slot graph says the change is concluded | review and merge, or tell it what to change |
+| `⏳ rate-limited` / `⏳ overloaded` | the client announced a capacity wait, and has said nothing since | nothing — it resumes itself |
+| `✅ finished` | the slot graph says the change is concluded **and** ship's stage agrees | review and merge, or tell it what to change |
 | `🙋 needs you` | ship's stage is `needs-human`: it stopped on blockers it will not fix | read its record on the PR/MR and answer it |
 
 **None of those is ever a compaction trigger**, and each block says so. What is left — idle,
 nothing asked of it, announcing no reason, at no stage that waits by design — is genuinely
 STUCK, and that still raises the loud block that bypasses `--only-changed`. The point of the
 classification is to make that alarm **rarer and right**, never quieter.
+
+**Two screen-read states, not five.** The report only believes a capacity banner sitting behind
+the client's own warning glyph, because that is the one shape a child's output cannot forge — one
+client renders its prose behind an assistant glyph, the other behind a service bullet, and both
+put a child's own words somewhere the anchor refuses. A transport fault ("went to sleep
+mid-response") is deliberately **not** classified: no capture shows which glyph, if any, a client
+renders it behind, and such a child falls through to the stall block, whose remedy order opens
+with the nudge it needs. The rule for anyone widening this: **widen from a capture, never from
+reasoning about what a client probably renders.** That mistake has now cost three defects.
+
+**A banner goes stale the moment the client speaks again.** A child that hit a limit, resumed when
+the window reset, worked briefly and then genuinely wedged still has the banner inside the visible
+pane — and being motionless *now* does not make an hour-old banner current. So any output the
+client renders after a banner clears it, and the slot falls back to the ordinary stall path. The
+row prints the evidence line that bought the exemption, so a wait you can see is old is visible
+rather than taken on trust.
 
 The class is part of the `--only-changed` signature, so entering or leaving one of these states
 breaks silence **exactly once** rather than every ten minutes for as long as it lasts.
@@ -360,7 +375,10 @@ deliberately left intact, came back to `motionless for 5420 min`: ninety hours o
 had observed two instants. So if a run is further from the previous one than the stall threshold
 itself, every clock is restarted and the report says so in one line. That is also the honest answer
 to a deliberate **pause** — and it needs nothing from the pane, because the parent's own absence is
-a fact this side already has.
+a fact this side already has. Know its boundary: it answers "nobody was watching", not "nobody was
+asking". A child left unasked while the monitor is ticking still reaches STALLED at the threshold,
+which is correct — from the report's side that is indistinguishable from a wedge, and the cheap
+answer is to send it a directive.
 
 Where these shapes live, and why not here: the per-client banner text is in `shared/adapters`
 (`adp_wait_class`) with the turn marker, because what a client renders is per-kind knowledge; what
@@ -877,7 +895,7 @@ starts a fresh watcher for its own parent session.
 | slot | terminal/worktree key (number or slug) |
 | MR | `!<number>` once the MR/PR exists |
 | term | tmux window index, or the agterm session-id prefix |
-| session | ▶️ running / ⏸ idle-wait (snapshot diff) / ⛔ no terminal |
+| session | ▶️ running / ⏸ idle-wait (snapshot diff) / ⛔ no terminal — or, when a motionless slot's reason is known, `⏳ rate-limited`, `⏳ overloaded`, `✅ finished` or `🙋 needs you` (Step 2) |
 | MR state / stage | forge state (opened/merged/closed) + ship's pipeline stage |
 | esc | open escalations for this slot |
 | ctx | child context usage as `<pct>% · <tokens>`, read from its transcript; `⚠️` ≥65%, `🛑` ≥80%. A bare `<pct>%` is the client's own footer figure, used when no transcript was found. Two non-readings, neither meaning healthy: `—` = nothing measurable yet; `❓ <tokens>` = the figure exceeds every window this script knows, so the percentage would be invented — resolve it with `SHIPYARD_CTX_WINDOW` or a new `CTX_WINDOWS` entry before acting (Step 5) |
@@ -890,7 +908,9 @@ is waiting on *you*. A child at its context ceiling looks idle too, with `esc �
 does one that simply left its own next instruction unsubmitted in the input box — the `ctx`
 column and the diagnosis order in Step 5 are what separate those three. `/ship` never waits
 for an approval, so a session parked for a long stretch with a green pipeline and no
-escalation is worth a look — check its stage for `needs-human` or `ready-to-merge`.
+escalation is worth a look — though the report now names `needs-human` and `ready-to-merge`
+itself, in the `session` column and in its own block, rather than leaving you to check the
+stage (Step 2).
 
 ## There is no companion reviewer session
 
