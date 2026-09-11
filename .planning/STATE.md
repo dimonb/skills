@@ -46,12 +46,60 @@ diagnosed: a slot's branch has the *base* branch as its upstream, never its own 
 the ancestry question is unanswerable after a squash. Containment was proven the way #118 does it
 — `merge-tree --write-tree` produced `main`'s own tree exactly — and only then `--force`.
 
+### #118 SHIPPED (`419f53f`) — and it proved itself on its own author
+
+The teardown gate asks **content**, not ancestry. Its first use in anger was the teardown of the
+very slot that built it: `ship-54: content is already in origin/main — nothing to lose`, no
+`--force`. The three teardowns before it had each required switching the guard off.
+
+It also closed the defect in the **opposite** direction, which was in neither the issue nor my
+reproduction: a branch with no upstream made `@{upstream}` fatal, stderr was discarded, and `wc -l`
+counted the empty stdout as zero — so a worktree holding never-pushed work passed the gate and was
+removed. Review then found three more, **two of them introduced by the fix round itself** and both
+wrong-ALLOWs: an unreadable index made `git status` answer empty and a staged file verdicted safe;
+and a self-upstream guard that was a string test defeatable by a renamed push. A fourth: `git`
+discovers upward, so a stray directory under the worktree root got a confident answer about the
+parent repo.
+
+Four outcomes are now distinguished where two used to be merged — `unprovable` (a conflicting test
+merge) and `no-proof-tool` (git older than 2.38) gave the same "just `--force`" advice, which on
+Ubuntu 22.04 meant every unmerged slot.
+
 ### In flight
 
 | slot | PR | change | state |
 |---|---|---|---|
-| `ship-54` | **#118** | the teardown gate asks content, not ancestry (#54) | round 1 found a regression it introduced itself; rebasing onto the merged #116 |
-| `ship-22` | — | the stall watchdog stops prescribing compaction to a child that is waiting (#22) | just launched |
+| `ship-22` | **#123** | the stall watchdog stops prescribing compaction to a child that is waiting (#22) | round 1 found 5 blockers; fix direction REMOVES surface |
+| `ship-122` | — | the leak gate sees a home path in its encoded form (#122) | just launched |
+
+### Two findings filed from supervision, not from a diff
+
+* **#124 — `ship` never writes its state file, so the status table is blind.** `ship` §4 specifies
+  `.pipeline-state/<KEY>.json` and §2 says to write it before anything else. It exists in **no**
+  live worktree: three children launched today wrote none, while one launched days earlier did. The
+  cost is direct — `shipyard-report.sh` reads the PR number from there and correctly refuses to
+  assume a numeric slot is a PR (on GitHub the slot is an *issue* number; the old assumption once
+  made the monitor declare a run finished a minute after it started), so with no state file the
+  column reads `no MR yet` over an open, reviewed, mergeable PR, and the stage column reads `—`.
+  Supervising then means reading panes and querying the forge by hand — exactly what the table
+  exists to replace. **#64 is the narrower problem and this is its precondition:** that issue
+  reports rounds not reaching the file and quotes the file to prove it.
+* **#122 — the leak gate cannot see a home path in its separator-encoded form.** Filed from a
+  committed instance `make check` was green over. A publishing risk, not a usability one, and now
+  in flight because the lane was free.
+
+### A rule that earned its way into AGENTS.md
+
+Three changes in a row hit the same failure, always in the harmful direction: **any predicate that
+reads a child's screen is forgeable by a child whose work IS that predicate.** #116's read counted
+its own typed directive and the plugin's own source as evidence; #123's first anchor accepted one
+kind's prose and tool-call headers, and its positive test pinned a line that proves nothing.
+
+Written up in `AGENTS.md` as a standing rule — anchor on client **chrome** the child's output
+cannot produce, derive the anchor from a committed capture, and remember that too tight is not safe
+either, because an alarm on the commonest healthy path is one the operator learns to ignore. When
+no anchorable shape exists, drop the arm: an exemption you cannot evidence is worth less than not
+having it.
 
 ### Remainder re-prioritised, because #116 changed the picture
 

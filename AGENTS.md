@@ -161,6 +161,40 @@ Three failure modes this has actually produced, kept because each cost a decisio
 A module reached by only one skill is not wrong — `ship`'s own machinery is nobody else's — but
 it stops being defensible the moment the other skill grows the same need.
 
+## Reading a child's screen: anchor on chrome, never on anything it can type
+
+Both skills decide things by reading a terminal an agent is driving — is a turn running, has a
+message been queued, is this child waiting rather than wedged. That read has one failure mode, and
+it has now appeared three times in three separate changes, each time in the direction that hurts:
+
+> **Any predicate that reads a child's screen is forgeable by a child whose work IS that
+> predicate.**
+
+The screen holds four things the reader must keep apart: the client's own **chrome** (footers,
+service lines, composer placeholders), the **transcript** of what the agent said, **tool output**,
+and the **composer** — which, after the supervisor types into it, holds the supervisor's own text.
+Only the first is evidence. The other three are things a child can put on screen by doing its job,
+and a child working on shipyard or council does exactly that: it writes the marker into a file, it
+quotes the phrase in its own prose, it displays the plugin's source.
+
+So the rule is: **anchor on a shape the child's own output cannot produce** — a known glyph in
+column one, the last non-empty line, a placeholder that by construction renders only in an empty
+box — and never on a substring that could appear anywhere. Two corollaries, both learned the hard
+way:
+
+* **Derive the anchor from a captured pane, and commit the capture.** Reasoning about what a client
+  renders has been wrong every time it was checked: the two agent kinds put the same hint in
+  different places, and a line that looked like a client banner turned out to be one kind's chrome
+  for something else entirely. A fixture built from the same expression it guards proves nothing —
+  that one shipped, briefly, and was caught by its own author.
+* **Too tight is not the safe direction either.** An anchor that misses a real running turn makes
+  the commonest healthy path raise the alarm, and an alarm that fires on the normal case is one the
+  operator learns to ignore — which costs more than the bug it was added for.
+
+When no anchorable shape exists, the honest answer is to drop the arm. An exemption you cannot
+evidence is worth less than not having it, and a classifier that is right about two states beats
+one that guesses at five.
+
 ## How work happens here
 
 One change is one issue, one branch, one pull request:
