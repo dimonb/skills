@@ -1,6 +1,57 @@
 # STATE — session memory
 
-## ▶ RUNNING again (2026-09-11) — one lane, `ship-51` holds it
+## ▶ RUNNING (2026-09-11) — TWO lanes, and the posture is "working, not ideal"
+
+**Posture change from the owner, and it governs everything below:** working beats ideal, and
+pragmatic compromises are explicitly wanted. Both children were told the four consequences, all
+of which loosen rather than tighten: decide design questions yourself and escalate only what is
+unsafe, irreversible, or would change what the PR is FOR; ONE scoped review round after the fix
+pass; optional findings become follow-up ISSUES by default rather than in-PR fixes, unless a fix
+is one or two lines in a file already in the diff. This deliberately reverses decision 51-3's
+bias, which had told slot 51 to take most of its optionals.
+
+**Two lanes, not one, because the queue's serialisation is by FILE and #54 is disjoint.** #112,
+#22 and #61 all wait on #116 — it holds `tell.sh`, `compact.sh`, `report.sh` and
+`shared/adapters/` at once — but #54 lives in `down.sh` and collides with nothing, so it runs
+beside #116 instead of behind it. Slot cap stays 2; it guards memory, and a third lane would buy
+nothing here since #22 changes the very printed protocol #116 is re-scoping.
+
+### In flight
+
+| slot | PR | change | state |
+|---|---|---|---|
+| `ship-51` | **#116** | `tell` confirms from turn state, not a screen diff (#51) | one pass over amended 51-1 + the confirmed fixes, then one scoped round |
+| `ship-54` | **#118** | the teardown gate asks content, not ancestry (#54) | opened in ~30 min, review round running |
+
+**A collision neither slot knew about, caught by reading both diffs:** both edit the shipyard
+suite's single-line `tests=()` registration array, and both independently claimed the number
+`t12`. The number works out — 51 deletes its `t12-turn-delivery.sh` (its table moves to
+`shared/adapters/tests/`) and 54 adds `t12-down-gate.sh` — but whoever merges second hits a
+one-line conflict there. Both were warned, and told to re-read the whole array rather than resolve
+it wholesale, because the gate's own comment notes that a resolution silently dropping a name
+looks exactly like a clean one.
+
+### #118 found the defect in the OPPOSITE direction, which neither the issue nor I had
+
+The issue, and my own reproduction, only ever described the **false refusal**. The child measured a
+**silent pass** as well: a branch with **no upstream configured** makes `@{upstream}` a fatal
+error, stderr was discarded, and `wc -l` counted the empty stdout as **zero** — so a worktree
+holding work that had never been pushed anywhere passed the gate and was removed. The guard that
+exists to protect unpushed work was blind to the one case where nothing else would have caught it.
+
+It also explains the false refusal more precisely than the issue did: a slot's branch is created
+with `git switch -c <branch> origin/<base>`, so its upstream is `origin/<base>` — never its own
+remote branch — and a push by refspec never updates it. `@{upstream}..HEAD` is therefore the
+branch's own commits, which after a squash are ancestors of nothing.
+
+Both dissolve once the question is content. The gate now proves containment two ways — tree
+equality, then merge emptiness via `git merge-tree --write-tree`, the second being the one that
+survives the base branch moving ahead, which in a fleet it always does. Every unanswerable
+question returns a refusal rather than a clean bill of health, and the residual is written down:
+if the base later edits the same region of the same file, the test merge conflicts and a
+fully-merged slot is still refused — the conservative direction.
+
+## The lane's history (2026-09-11) — one lane at the start, `ship-51`
 
 Resumed after a four-day pause. Both terminals survived it, so neither child needed rebuilding.
 `ship-111` is torn down (its change merged on the 7th), so the single lane is now `ship-51`
