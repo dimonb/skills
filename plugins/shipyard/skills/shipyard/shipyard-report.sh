@@ -16,8 +16,11 @@
 # `last line` column (elapsed time / token counts change every tick), the raw ctx
 # figure — only its band — and ▶️/⏸, which flips
 # constantly while ship works and re-waits. A terminal report (nothing in flight) is
-# always printed, so the end of the run is never swallowed. Exit codes are unchanged
-# whether or not anything was printed.
+# always printed, so the end of the run is never swallowed — and so is a tick that could
+# NOT TELL whether anything is in flight (the 🛑 NO SIGNAL block below), and a tick whose
+# backend disagrees with the fleet's pin, for the same reason: those are the two states
+# where silence would be the quietest possible way to say the loudest thing. Exit codes
+# are unchanged whether or not anything was printed.
 #
 # The ctx band has always been in the signature, but it could never move it while the
 # column was blind: the old pane-scraping ctx_of returned "—" on current builds, so the
@@ -48,7 +51,11 @@
 #    block. The clock itself is restarted across a gap in supervision, because time this script
 #    did not watch is not motionlessness it can report;
 #  * exit 0 = nothing in flight (all MRs merged/closed) → stop the loop;
-#    exit 1 = work is still open.
+#    exit 1 = work is still open, OR this run could not tell. Those two share an exit code on
+#    purpose: the loop's only decision is whether to keep watching, and the answer to "I do not
+#    know" is the same as the answer to "yes" — keep watching. Only a CORROBORATED empty answer
+#    exits 0 (see the fleet_signal block below); an unreachable backend, or one that disagrees
+#    with the fleet's own container pin, raises 🛑 NO SIGNAL and keeps the monitor alive.
 #
 # Env:
 #   SHIPYARD_BACKEND    agterm (default) | tmux | auto
@@ -90,11 +97,100 @@ for a in "$@"; do
     *)              SLOTS+=("$a") ;;
   esac
 done
+
+# --- may an EMPTY answer be read as "all shipped"? ---------------------------------------
+# EXIT 0 IS THE MONITOR'S STOP SIGNAL, so it is the loudest claim this script makes: the loop in
+# Step 2 breaks on it and supervision ends for good. Everything below exists because that claim
+# used to be reachable from an ABSENCE — the script asked which terminals exist, got no usable
+# answer, and reported the one shape that ends the watch.
+#
+# Measured: two children were mid-review with open PRs when the agterm control socket failed a
+# single probe. `auto` re-resolved to tmux for that one tick, a tmux session named after the repo
+# holds no ship windows, and the tick printed "no live ship terminals ... all changes shipped —
+# exiting monitor". Both children were alive; re-running seconds later produced the normal table.
+# The report was not wrong about what it saw. It was wrong about what seeing nothing MEANS.
+#
+# So emptiness must be CORROBORATED before it may end the watch, and corroboration is two facts:
+#   * the container answered at all (`shipyard_slots` rc — see its contract note), and
+#   * we asked the backend this fleet was actually launched on (the container pin's own name).
+# Neither is a new kind of knowledge. `shipyard-down.sh` already refuses to drop the container pin
+# unless enumeration PROVED the fleet empty (`shipyard_continuity_cleanup_last_slot` returns 2 for
+# "could not prove"), so the report is the second consumer to ask, not the first.
+#
+# It is not the last, either: `shipyard_admission_slot_count` still pipes `shipyard_slots` into
+# `wc -l` and drops the status, so the concurrency cap reads an unanswerable question as "nothing
+# running". That is the same defect at a different gate, out of scope here and filed on its own —
+# recorded so a later reader does not take this block as the end of the sweep.
+#
+# It is also the same distinction the stall classifier draws one level down. `shipyard_wait_state`
+# asks why a SLOT yields no signal and refuses to call "not moving" death; this asks why the FLEET
+# yields no signal and refuses to call "not found" completion. One principle, two scopes — and
+# deliberately not one function, because the evidence is different in kind: that one reads a
+# child's screen, this one reads whether the parent's own transport answered.
+ENUM_RC=0
+SLOTS_OUT=""
+SLOTS_OUT=$(shipyard_slots 2>/dev/null) || ENUM_RC=$?
+# The fleet's backend, from the driver's `container-<backend>` pin. Empty when they agree, when
+# nothing was ever launched here, or when this run pins nothing — i.e. silent unless it is news.
+PINNED_ELSEWHERE=$(shipyard_backend_pinned_elsewhere) || PINNED_ELSEWHERE=""
+
 if [ ${#SLOTS[@]} -eq 0 ]; then
+  # Read the list captured above rather than enumerating a second time: two calls could disagree,
+  # and the status this run refuses to exit 0 on must belong to the very list it printed.
   while IFS= read -r slot; do
-    SLOTS+=("$slot")
-  done < <(shipyard_slots)
+    [ -n "$slot" ] && SLOTS+=("$slot")
+  done <<EOF
+$SLOTS_OUT
+EOF
 fi
+
+TAB=$(printf '\t')
+# fleet_signal — "<class><TAB><why>" and rc 1 when an empty answer may NOT be read as completion;
+# nothing and rc 0 when it may. A pure reader of the two facts above, so it can be asked at both
+# exit-0 sites without re-probing anything.
+fleet_signal() {
+  if [ "$ENUM_RC" != 0 ]; then
+    printf 'unreachable%sthe %s backend did not answer when asked which terminals exist' \
+      "$TAB" "$(shipyard_backend)"
+    return 1
+  fi
+  if [ -n "$PINNED_ELSEWHERE" ]; then
+    printf 'elsewhere%sthis tick resolved %s, but this fleet was launched on %s' \
+      "$TAB" "$(shipyard_backend)" "$PINNED_ELSEWHERE"
+    return 1
+  fi
+  return 0
+}
+
+# The loud refusal, printed wherever an empty answer would otherwise have ended the watch. Modelled
+# on the STALLED block deliberately: an operator who has learned that a 🛑 heading means "read this
+# one" should not have to learn a second convention for the same severity.
+no_signal_block() {  # <class> <why>
+  echo "### 🛑 NO SIGNAL — this report cannot tell whether anything is still running"
+  echo
+  echo "- $2."
+  echo "- Finding no ship terminals is therefore not the same as finding that there are none, so"
+  echo "  this tick claims nothing about whether the fleet is drained and the monitor keeps running."
+  case "$1" in
+    unreachable)
+      echo "- If the backend is simply down, start it and the next tick reports normally; nothing was lost."
+      echo "  agterm: check that the app is running and answering \`agtermctl version\`."
+      echo "  tmux:   check \`tmux ls\`."
+      # Two causes reach this class and the second one answers `version` perfectly well, so an
+      # operator told only to check the socket would find it healthy and have nothing to act on.
+      echo "  agterm: if the socket IS answering, the tree it returned did not have the shape this"
+      echo "  report requires — inspect \`agtermctl tree --json\`. The shape is asserted over the WHOLE"
+      echo "  tree, so a malformed session in an unrelated workspace reaches here too." ;;
+    elsewhere)
+      echo "- \`SHIPYARD_BACKEND=auto\` decides per PROCESS, so one failed socket probe sends a single tick"
+      echo "  to the other backend, where this repo's container is empty for entirely correct reasons."
+      echo "  Pin it for the run — \`SHIPYARD_BACKEND=$PINNED_ELSEWHERE\` in the monitor's environment —"
+      echo "  and the choice stops moving under you."
+      echo "- If that fleet really is finished, the pin is stale. \`shipyard-down.sh\` clears only the pin"
+      echo "  of the backend IT resolved, so pin \`SHIPYARD_BACKEND=$PINNED_ELSEWHERE\` first and then tear"
+      echo "  the slots down; a down run resolved on the other backend leaves this one in place." ;;
+  esac
+}
 
 # Where the last printed report's signature lives (shared .git, never committed).
 SIGFILE=""
@@ -248,11 +344,24 @@ status_line() {
 }
 
 if [ ${#SLOTS[@]} -eq 0 ]; then
+  # The FIRST of the two exits this script has, and the one the incident came through: discovery
+  # mode found no terminals. Whether that ends the watch is now fleet_signal's call, not the
+  # emptiness's own.
+  NOSIG=""; NOSIG_RC=0
+  NOSIG=$(fleet_signal) || NOSIG_RC=$?
   {
     echo "### ship status — $(date '+%H:%M:%S %Z')"
     echo
-    echo "_no live ship terminals in $KIND \`$CONTAINER\` ($(shipyard_backend))_"
+    if [ "$NOSIG_RC" = 0 ]; then
+      echo "_no live ship terminals in $KIND \`$CONTAINER\` ($(shipyard_backend))_"
+    else
+      no_signal_block "${NOSIG%%$TAB*}" "${NOSIG#*$TAB}"
+    fi
   } | cat
+  # A guard clause, so the ordinary empty report still leaves on a bare `exit 0` — t7-continuity.sh
+  # anchors on that line to prove this branch returns before shipyard_continuity_start below can
+  # re-arm a watcher for a fleet that has just drained.
+  if [ "$NOSIG_RC" != 0 ]; then exit 1; fi
   exit 0
 fi
 
@@ -266,6 +375,7 @@ declare -a ROWS
 declare -a SIG
 inflight=0
 total_pend=0
+GONE=""      # slots this tick rendered `⛔ no terminal`; consulted by the tail's re-ask
 
 # ONCE, HERE, IN THIS SHELL — never from inside the loop below. The per-slot ctx call is
 # $(ctx_probe ...), which nests $(ctx_window ...): a warning raised down there fires once per
@@ -291,6 +401,10 @@ for slot in "${SLOTS[@]}"; do
   if [ -z "$addr" ]; then
     ROWS+=("| $slot | $mr_label | — | ⛔ no terminal | — | $esc | — | — |")
     SIG+=("$slot|$mr_label|term=0|—|—|$pend")
+    # Remember WHICH slots this tick concluded were gone. The tail re-asks the backend before it
+    # may stop the loop, and the only honest reading of "still enumerated, but I rendered it gone"
+    # is that the lookup failed, not that the child ended.
+    GONE="$GONE $slot"
     continue
   fi
 
@@ -334,9 +448,11 @@ for slot in "${SLOTS[@]}"; do
   # that was mid implementation, and took the STALL detector down with it, so the
   # supervisor got two green signals while the session sat with an unsubmitted line
   # in its box. Teardown is the supervisor's act; the absence of a terminal is the
-  # honest end signal. (A dead terminal never reaches here — it `continue`s above —
-  # so this counts live sessions only, and the monitor still exits once every
-  # terminal is gone.)
+  # honest end signal — but only once CORROBORATED, which is the fleet_signal block
+  # above: an absence nobody could verify is not an end signal at all, and reading it
+  # as one is #61. (A dead terminal never reaches here — it `continue`s above — so
+  # this counts live sessions only, and the monitor still exits once every terminal
+  # is gone AND the backend confirmed it.)
   #
   # The graph expresses exactly this rule: a live slot is at launched|in-review|concluded, never the
   # empty `torn-down` phase (an absent terminal `continue`d above), so this counts every live
@@ -455,10 +571,67 @@ done
 TERMINAL=0
 [ "$inflight" -eq 0 ] && [ "$total_pend" -eq 0 ] && TERMINAL=1
 
+# The SECOND exit, and it needs the same corroboration for the same reason. Named slots do not
+# reach the discovery branch above, so `shipyard-report.sh --only-changed 22 61` against a backend
+# that cannot answer renders every row as `⛔ no terminal`, counts nothing in flight, and lands
+# here — an identical false completion by a different route.
+#
+# What is deliberately NOT treated as an anomaly: named slots that are all gone. The Step 2 loop is
+# armed once with a fixed slot list and the supervisor tears children down one at a time, so the
+# last teardown leaving zero terminals IS the designed end of a run. "Slots were named, therefore
+# finding none is suspicious" would make that termination unreachable and every finished fleet
+# would monitor itself forever. Teardown and unreachability are told apart by the backend having
+# ANSWERED, which is what fleet_signal asks.
+NOSIG=""; NOSIG_RC=0
+if [ "$TERMINAL" = 1 ]; then
+  # RE-ASK, rather than trust the sample taken before the loop. The row loop is the slow part of a
+  # tick — a 3s motion diff per live slot, plus a forge call and a graph subprocess — so a backend
+  # that answers the enumeration and dies a second later leaves the pre-loop ENUM_RC stale and
+  # reassuring. Measured: a socket that served the first query and failed afterwards enumerated
+  # `ship-41`, rendered it `⛔ no terminal` when the addr lookup failed, counted nothing in flight,
+  # and exited 0 with "monitor stopped" — #61's exact symptom on a tick that had just seen a live
+  # slot. The window this closes is far larger than the one the pre-loop sample covers, and one
+  # extra enumeration is charged only on the tick that would otherwise END supervision.
+  ENUM_RC=0
+  RECHECK=$(shipyard_slots 2>/dev/null) || ENUM_RC=$?
+  NOSIG=$(fleet_signal) || NOSIG_RC=$?
+  [ "$NOSIG_RC" = 0 ] || TERMINAL=0
+  # KEEP THE ANSWER, not just the status. A blip that fails the row loop's lookups and recovers
+  # before this point returns rc 0 — corroborated — while listing the very slot the tick has just
+  # rendered `⛔ no terminal`. Reproduced: a fake failing only the middle call printed "monitor
+  # stopped" and exited 0 over a live child. The contradiction is the evidence, and it costs
+  # nothing extra: the list is already in hand.
+  #
+  # It is matched per slot, NOT by asking whether the list is non-empty. With named slots an
+  # unrelated `ship-*` terminal in the same container would satisfy a bare emptiness test and block
+  # the designed termination forever — the opposite-direction bug this change keeps having to
+  # defend against.
+  if [ "$TERMINAL" = 1 ] && [ -n "$GONE" ] && [ -n "$RECHECK" ]; then
+    for g in $GONE; do
+      case "
+$RECHECK
+" in
+        *"
+$g
+"*) TERMINAL=0
+            NOSIG_RC=9
+            NOSIG="unreachable${TAB}slot $g is still listed by the backend, but its terminal could not be resolved while this tick was building the table"
+            break ;;
+      esac
+    done
+  fi
+fi
+
 # --only-changed: stay silent unless the meaningful state moved. A terminal report is
-# always printed so the end of the run is never swallowed.
+# always printed so the end of the run is never swallowed — and so is a tick that could not tell,
+# which would otherwise be the quietest possible way to say the loudest thing (the STALLED
+# precedent: a block that bypasses the filter, because silence is what made the bug invisible).
+# `$PINNED_ELSEWHERE` is in the condition rather than in the signature: a disagreement is news on
+# EVERY tick it holds, not once. Left to the signature it would be announced the first time and
+# then suppressed for as long as it lasted, which is the one tick shape the report is supposed to
+# be loudest about — the header line is the only trace the incident left behind.
 if [ "$ONLY_CHANGED" = 1 ] && [ "$TERMINAL" = 0 ] && [ "${#STALLED[@]}" -eq 0 ] \
-   && [ "$GAP" = 0 ] && [ -n "$SIGFILE" ]; then
+   && [ "$NOSIG_RC" = 0 ] && [ -z "$PINNED_ELSEWHERE" ] && [ "$GAP" = 0 ] && [ -n "$SIGFILE" ]; then
   NOW_SIG=$(printf '%s\n' "${SIG[@]}")
   if [ -f "$SIGFILE" ] && [ "$NOW_SIG" = "$(cat "$SIGFILE" 2>/dev/null)" ]; then
     exit 1   # still in flight, just nothing new to say
@@ -470,15 +643,30 @@ fi
 
 {
   echo "### ship status — $(date '+%H:%M:%S %Z') · $(shipyard_backend) $KIND \`$CONTAINER\`"
+  # Say WHICH backend answered whenever it is not the one the fleet was launched on, on every such
+  # tick and not only on the ones that refuse to exit. In the incident the header was the sole
+  # visible trace that anything had moved — it stopped naming an agterm workspace and started
+  # naming a tmux session — and nobody reads a header for a word that is normally constant.
+  [ -n "$PINNED_ELSEWHERE" ] && \
+    echo "⚠️ resolved \`$(shipyard_backend)\`, but this fleet was launched on \`$PINNED_ELSEWHERE\` — this table may be looking in the wrong place."
   echo
   echo "| slot | MR | term | session | MR state / stage | esc | ctx | last line |"
   echo "|------|----|------|---------|------------------|-----|-----|-----------|"
   for r in "${ROWS[@]}"; do echo "$r"; done
   echo
-  if [ "$inflight" -eq 0 ] && [ "$total_pend" -eq 0 ]; then
+  # $TERMINAL, not the two counts it was computed from: they are also 0 when the backend could not
+  # be asked, and printing "monitor stopped" there is the sentence the operator was left with while
+  # two children went on working.
+  if [ "$TERMINAL" = 1 ]; then
     echo "_nothing in flight (all merged/closed) — monitor stopped_"
+  elif [ "$NOSIG_RC" != 0 ]; then
+    echo "_cannot tell what is in flight — see below; the monitor keeps running_"
   else
     echo "_in flight: ${inflight}; open escalations: ${total_pend}_"
+  fi
+  if [ "$NOSIG_RC" != 0 ]; then
+    echo
+    no_signal_block "${NOSIG%%$TAB*}" "${NOSIG#*$TAB}"
   fi
   if [ "$GAP" != 0 ]; then
     echo

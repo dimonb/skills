@@ -137,8 +137,28 @@ shipyard_backend_check() {
 }
 
 # shipyard_container_unpin — forget the pinned name, so the next launch derives a fresh one. Only
-# correct once nothing is left in the old container (shipyard-down.sh calls it then). The pin file
-# is the driver's now — reuse its path so unpin removes exactly what drv_container_pin wrote.
+# correct once nothing is left in the old container, which is why shipyard-down.sh calls it solely
+# after `shipyard_continuity_cleanup_last_slot` has PROVEN the fleet empty.
+#
+# IT CLEARS ONLY THE RESOLVED BACKEND'S PIN, which is the rule that was already here, and the
+# reuse of `_drv_pin_file` that goes with it: unpin removes exactly what `drv_container_pin` wrote.
+#
+# That is worth a note because this change spent two review rounds getting back to it. Reading the
+# pin's NAME as evidence (shipyard_backend_pinned_elsewhere, below) made a leftover pin look like
+# litter worth sweeping, so unpin was widened to clear every backend's. It was wrong twice, in the
+# same direction both times:
+#   * resolved tmux, pinned agterm — the extra removal deletes the evidence the report reads, so
+#     the next blip exits 0 over live children. #61, reintroduced by its own fix.
+#   * resolved tmux, BOTH pinned — patched with an early return when the pins disagree, which does
+#     not fire here (tmux IS pinned). The justification written for it was circular: the agterm pin
+#     is invisible to the disagreement check only BECAUSE the tmux pin sits beside it, and this very
+#     call is about to delete that one. Afterwards the leftover is exactly what the check reads.
+#
+# The rule that covers all three configurations without a guard is the original one: the caller
+# proved that the backend it RESOLVED holds no slots and learned nothing about the other, so clear
+# that one and leave the other alone. A pin whose fleet ended some other way does outlive it — and
+# that is fail-CLOSED (a refusal that names itself and says what to run), which is the direction to
+# be wrong in.
 shipyard_container_unpin() {
   local f; f=$(_drv_pin_file 2>/dev/null) && rm -f "$f" 2>/dev/null
   return 0
@@ -237,12 +257,76 @@ shipyard_peek_hint() {
 
 # shipyard_slots — every slot that currently has a terminal. No driver twin (the driver resolves
 # one session by name; enumerating them is shipyard's own).
+#
+# THE EXIT STATUS IS PART OF THE CONTRACT, and it carries the one distinction this change is about:
+# rc 0 means the container ANSWERED (its slot list follows, possibly empty), non-zero means it did
+# not answer at all. `shipyard-down.sh` consults it today — it refuses to drop the container pin on
+# anything but a proven-empty fleet — and `shipyard-report.sh` now does too. ("Today", not "always":
+# the original down.sh unpinned on `[ -z "$(shipyard_slots)" ]`, i.e. read a failed enumeration as
+# empty, and the proof-of-empty gate arrived later with shipyard_continuity_cleanup_last_slot.)
+#
+# THE THIRD CALLER STILL DISCARDS IT. `shipyard_admission_slot_count` pipes this function into
+# `wc -l`, so a socket that answers `version` and fails `tree` reads as zero live slots and the
+# SHIPYARD_MAX_SLOTS cap is silently bypassed — the same defect one gate over. That is out of this
+# change's scope and filed separately; it is named here so the next reader does not infer from the
+# paragraph above that every caller now branches on the status.
+#
+# The agterm arm used to be a bare pipeline, so its status was `sed`'s, which is 0 whether or not
+# anything upstream survived. It happened to work because both callers that CONSULT the status set
+# `pipefail`: an ambient option in the caller decided whether a failed enumeration was
+# distinguishable from an empty container. Capture it explicitly instead, so no later caller
+# inherits the wrong answer by forgetting an option it never knew it needed.
 shipyard_slots() {
+  local raw
   case "$(shipyard_backend)" in
-    agterm) _shipyard_at_sessions | jq -r '.name // empty' 2>/dev/null | sed -n -E 's/^ship-(.+)$/\1/p' ;;
+    agterm)
+      # Non-zero on a dead control socket AND on a tree that fails the shape assertion inside
+      # _shipyard_at_sessions; empty output with rc 0 when the workspace simply holds no sessions.
+      raw=$(_shipyard_at_sessions) || return 1
+      printf '%s' "$raw" | jq -r '.name // empty' 2>/dev/null | sed -n -E 's/^ship-(.+)$/\1/p' ;;
     tmux)   _shipyard_tmux_slots ;;
     *) _shipyard_no_backend; return 1 ;;
   esac
+}
+
+# shipyard_backend_pinned_elsewhere — echoes the backend(s) this fleet was actually launched on,
+# and returns 0 ONLY when a pin exists and NONE of them is the backend this process resolved.
+#
+# There is no separate backend pin file to maintain. The driver's container pin is already named
+# `container-<backend>`, so the set of pin files present IS the record of which backends this
+# mailbox has launched a fleet on. Reading that name keeps one fact in one place, and it needs
+# nothing from the driver's backend resolution — which is cached at source time, before shipyard's
+# pin directory is set (shipyard-lib.sh, at the end), so a pin consulted there would have to move
+# that whole ordering. That is a cost argument, not an impossibility: the mailbox derives from
+# `git rev-parse --git-common-dir` and could be computed earlier.
+#
+# THE SEAM, stated because this file now spells a path the driver owns. `_drv_pin_file` names only
+# the CURRENT backend, so it cannot answer "which pins exist"; both sites here therefore write
+# `container-<b>` themselves, duplicating the driver's template. A rename in the driver would make
+# this read nothing and fail OPEN — back to the incident, silently. The right home is a
+# `drv_pins_present` in shared/driver, vendored into both plugins; it is not there yet because
+# council, checked rather than assumed, has no empty-answer conclusion to protect (its verdict is
+# computed from the room's on-disk log, and `council say` already refuses per peer), so the shared
+# module would have exactly one consumer today. Move it the moment that stops being true.
+#
+# WHY IT MATTERS. `SHIPYARD_BACKEND=auto` decides per PROCESS by probing the agterm control socket,
+# so a socket that blips for one tick resolves tmux for that tick — and a tmux session named after
+# the repo holds no ship windows, correctly and uselessly. Nothing is wrong with either answer;
+# what was wrong was reading "I looked somewhere else and found nothing" as "there is nothing".
+shipyard_backend_pinned_elsewhere() {
+  local d b f now any="" found=""
+  d="${DRV_CONTAINER_PIN_DIR:-}"
+  [ -n "$d" ] && [ -d "$d" ] || return 1
+  now=$(shipyard_backend)
+  for b in agterm tmux; do
+    f="$d/container-$b"
+    [ -f "$f" ] || continue
+    any="${any:+$any and }$b"
+    [ "$b" = "$now" ] && found=1
+  done
+  [ -n "$any" ] || return 1        # nothing was ever launched from this mailbox — no disagreement
+  [ -n "$found" ] && return 1      # the resolved backend is one of them — no disagreement
+  printf '%s' "$any"
 }
 
 _shipyard_tmux_slots() {

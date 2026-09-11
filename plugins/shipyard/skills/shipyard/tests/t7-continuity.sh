@@ -220,6 +220,15 @@ if [ "${1:-}" = tree ]; then
     printf '%s\n' '{"ok":true,"result":{"tree":{"idleMs":5000,"workspaces":[{"name":"test-ai","sessions":[{}]}]}}}'
     exit 0
   fi
+  # A WELL-FORMED workspace that genuinely holds no sessions. The `normal` tree below names no
+  # workspace and no session, so it fails _shipyard_at_sessions' own shape assertion — which used
+  # to be invisible, because a failed enumeration was indistinguishable from an empty container.
+  # The empty-report checks therefore ran for years against a tree the enumerator rejects, and
+  # proved only that the rejection was silent. This mode is what they always meant to assert.
+  if [ "$(cat "$FAKE_MODE")" = empty-workspace ]; then
+    printf '%s\n' '{"ok":true,"result":{"tree":{"idleMs":5000,"workspaces":[{"name":"test-ai","sessions":[]}]}}}'
+    exit 0
+  fi
   jq -n --argjson idle "$(cat "$FAKE_IDLE")" \
     '{ok:true,result:{tree:{idleMs:$idle,workspaces:[{sessions:[{id:"test-session"}]}]}}}'
   exit 0
@@ -691,14 +700,37 @@ tmux_error=$(
 )
 check rc=1 "$tmux_error" "an unrelated tmux query failure preserves lifecycle state"
 
-report_rc=0
-CODEX_SESSION_ID= CODEX_THREAD_ID= AGTERM_ENABLED=0 SHIPYARD_BACKEND=agterm \
-  SHIPYARD_WORKSPACE=test-ai bash "$SKILL_DIR/shipyard-report.sh" \
-  >"$TMP/report.out" 2>"$TMP/report.err" || report_rc=$?
+run_report() { # sets report_rc; writes report.out / report.err
+  report_rc=0
+  CODEX_SESSION_ID= CODEX_THREAD_ID= AGTERM_ENABLED=0 SHIPYARD_BACKEND=agterm \
+    SHIPYARD_WORKSPACE=test-ai bash "$SKILL_DIR/shipyard-report.sh" \
+    >"$TMP/report.out" 2>"$TMP/report.err" || report_rc=$?
+}
+
+# A workspace that really is empty: the report may conclude the fleet is drained, and exit 0 is
+# what stops the Step 2 loop.
+printf '%s\n' empty-workspace >"$FAKE_MODE"
+run_report
 check 0 "$report_rc" "status monitoring executes on macOS Bash 3.2"
 check "" "$(cat "$TMP/report.err")" "status monitoring uses no unavailable Bash 4 builtins"
 check 1 "$(grep -Fc '_no live ship terminals' "$TMP/report.out")" \
   "status monitoring reaches its authoritative empty report"
+
+# THE SAME QUESTION THE TWO `down` CHECKS ABOVE ALREADY ASK, of the other consumer. A tree the
+# enumerator rejects is not an empty workspace, and `exit 0` is the monitor's "stop watching"
+# signal — so the report must refuse it exactly as teardown does. These two encode the defect that
+# a single failed agterm probe permanently ended supervision over two live children; until they
+# existed this fixture demanded fail-closed of `down` and fail-open of `report`, twelve lines apart.
+for bad_tree in malformed-session malformed-tree; do
+  printf '%s\n' "$bad_tree" >"$FAKE_MODE"
+  run_report
+  check 1 "$report_rc" "status monitoring refuses to exit 0 on a $bad_tree enumeration"
+  check 0 "$(grep -Fc '_no live ship terminals' "$TMP/report.out")" \
+    "a $bad_tree enumeration never claims an empty fleet"
+  check 1 "$(grep -Fc '🛑 NO SIGNAL' "$TMP/report.out")" \
+    "a $bad_tree enumeration raises the alarm instead"
+done
+printf '%s\n' normal >"$FAKE_MODE"
 
 unset -f git
 unset -f agtermctl

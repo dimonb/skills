@@ -55,6 +55,19 @@ versus idle from a snapshot diff rather than spinner glyphs, and `--only-changed
 silent until a state, stage, escalation count, ctx band, terminal presence or the reason a
 slot is motionless actually moves.
 
+**...and that never mistakes silence for completion.** Exiting 0 is how the report tells the
+monitor to stop watching, so it is earned rather than assumed: an empty answer ends the run only
+when the terminal backend actually answered — asked again at the moment the decision is taken, not
+sampled at the top of a tick — and, where a container pin survives to say so, when it was the
+backend this fleet was launched on. A control socket that blips, or an `auto` choice that lands on
+the other backend for one tick, raises a `🛑 NO SIGNAL` block and keeps the loop alive instead of
+reporting that everything shipped. The same principle one level down decides that a motionless
+child is not a dead one.
+
+The pin half is a *disagreement* check, so it is only as good as the pin: a mailbox that never
+launched a fleet through `shipyard-launch.sh`, or whose pin was deleted by hand, has nothing to
+disagree with and falls back to the reachability half alone.
+
 **A Codex parent that survives transient model-capacity stops.** When shipyard is launched
 from Codex in agterm, the first live child also starts one idempotent continuity watcher for
 the parent session, even when a child-runtime override selects Claude. A root capacity banner
