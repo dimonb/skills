@@ -286,6 +286,14 @@ probe() {
 }
 probe '/Users/someone/secret/path'          'absolute home path (macOS)'
 probe '/home/someone/secret/path'           'absolute home path (Linux)'
+# The same two roots separator-encoded (#122). These are kill tests for the NEW arm only: the
+# fixtures carry no `/Users/` or `/home/`, so no other alternative can substitute for it — and the
+# two probes above are the kill tests for the pre-existing slash arm, which this change leaves
+# untouched. Both arms therefore stay proven; deleting either reds here. The first fixture starts
+# at the line boundary to exercise the `(^|...)` branch, the second sits after a `/` the way a real
+# flattened path does.
+probe '-Users-someone-work-project/state.json' 'encoded home path (macOS)'
+probe 'projects/-home-someone-work-project/log' 'encoded home path (Linux)'
 probe 'someone@example.invalid'             'e-mail address'
 probe 'run ~/.local/bin/mytool'             'personal bin path'
 probe 'CFG=$HOME/.config/gh-someone'        'personal tool config dir'
@@ -294,6 +302,15 @@ probe 'glpat-AbCdEfGhIjKlMnOpQrSt'          'GitLab token'
 probe 'xoxb-AbCdEfGhIjKlMnOpQrSt'           'Slack token'
 probe '-----BEGIN RSA PRIVATE KEY-----'     'private key header'
 probe "date TZ=Europe/Somewhere"            'hardcoded timezone'
+
+# And the other direction for the same arm: the encoded form is a hyphen-separated word sequence,
+# so the bounds must not red on ordinary hyphenated English or on a long CLI flag. No pin is
+# needed on this one — "the arm was deleted" is already excluded by the two red probes above, so
+# green here can only mean the bounds held.
+printf '%s\n' 'a per-users-quota note, a nav-home-link class, --users-file and --home-dir' \
+  > docs/_probe.md
+expect_pass "leak: hyphenated prose and long flags are not encoded home paths"
+rm -f docs/_probe.md
 
 # 7b — English everywhere: the script check. Each fixture is BUILT from code points instead
 # of being written out, because a literal would put a violation into this very file — and

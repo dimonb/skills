@@ -355,6 +355,22 @@ fi
 # pattern with grep and shipping it to git grep is precisely how this bites.
 deny='/Users/[a-zA-Z0-9._-]+|/home/[a-zA-Z0-9._-]+|[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}'
 deny="$deny"'|\.local/bin/|\.config/(gh|glab)-[a-zA-Z0-9._-]+'
+# The same two path roots in their SEPARATOR-ENCODED form. Agent runtimes name per-project state
+# directories by flattening an absolute path — every `/` becomes `-` — so `/Users/<name>/<proj>`
+# is also disclosed as `-Users-<name>-<proj>`, carrying the same username and on-disk layout while
+# matching neither arm above. Nobody types it; it arrives by pasting displayed tool output, and a
+# committed instance of exactly that shape passed this gate green.
+#
+# BOUNDS, because the encoded form is only a hyphen-separated word sequence and must not fire on
+# ordinary hyphenated English. Flattening turns the LEADING `/` of an absolute path into a leading
+# `-`, so the encoded root always starts a token: the character before it must be neither
+# alphanumeric NOR a hyphen. That rules out a hyphenated phrase (`per-users-quota`,
+# `nav-home-link` — preceded by a letter) and a long CLI flag (`--users-file`, `--home-dir` —
+# preceded by `-`), while still matching the real shapes, where the token follows `/`, whitespace,
+# a quote, `=`, `_` or the start of the line. At least one name character must follow, so a bare
+# `-Users-` is not a hit. Deliberately NOT anchored on a trailing separator: an encoded home
+# directory with nothing after it still discloses the username.
+deny="$deny"'|(^|[^A-Za-z0-9-])-(Users|home)-[a-zA-Z0-9._]+'
 deny="$deny"'|(ghp|gho|ghu|ghs|ghr)_[A-Za-z0-9]{16,}|glpat-[A-Za-z0-9_-]{16,}'
 deny="$deny"'|-----BEGIN [A-Z ]*PRIVATE KEY-----|xox[baprs]-[A-Za-z0-9-]{10,}'
 deny="$deny"'|TZ=[A-Za-z]+/[A-Za-z_]+'
