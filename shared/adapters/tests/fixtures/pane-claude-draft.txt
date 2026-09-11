@@ -1,0 +1,40 @@
+
+ ▐▛███▛█   Claude Code v2.1.268
+▝▜██████▀  Opus 5 (1M context) · Claude Team
+  ▝▝ ▝▝    ~/src/example/.claude/worktrees/ship-NN
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+  tmux detected · scroll with PgUp/PgDn · or add 'set -g mouse on' to ~/.tmux.conf for wheel scro…
+────────────────────────────────────────────────────────────────────────────────────────────────────
+❯ please confirm the handoff by watching the footer flip to esc to interrupt before you do
+  anything else at all
+────────────────────────────────────────────────────────────────────────────────────────────────────
+  ⏵⏵ auto mode on (shift+tab to cycle) · PR #NN

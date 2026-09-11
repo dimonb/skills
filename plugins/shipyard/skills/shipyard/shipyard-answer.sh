@@ -95,4 +95,13 @@ jq --arg a "$ANS" --arg now "$(shipyard_now)" \
   && mv "$TMP" "$F" || { rm -f "$TMP"; echo "error: write failed" >&2; exit 1; }
 
 SLOT=$(jq -r '.slot // "?"' "$F")
-echo "answered $ID (slot $SLOT) — the child session will pick it up within ~5s"
+# The ~5s pickup is true only for a record the child actually POLLS. On a `notice` or a consumed
+# record it does not, which is the whole reason the branch above delivers through the window — so
+# claiming a pickup here would contradict the warning printed moments earlier. Keep the record
+# write (it is the only surviving copy if the directive never started a turn) and say what is true.
+if [ "$KIND" = "notice" ] || [ "$ST" = "done" ]; then
+  echo "recorded the answer on $ID (slot $SLOT) — the child does NOT poll this record; it was"
+  echo "delivered through its window instead, and this copy is the audit trail"
+else
+  echo "answered $ID (slot $SLOT) — the child session will pick it up within ~5s"
+fi

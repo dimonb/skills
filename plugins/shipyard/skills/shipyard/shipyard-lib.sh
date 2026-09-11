@@ -21,11 +21,6 @@ export PATH="/opt/homebrew/bin:/opt/local/bin:/usr/local/bin:/usr/bin:/bin:/usr/
 # the launch inherits the system PATH this file prepended above.
 # shellcheck source=shipyard-admission.sh
 . "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/shipyard-admission.sh"
-# The child's turn state — the one place the client's turn-in-flight marker is spelled, plus the
-# fold that turns a series of sampled states into a delivery verdict. Pure functions over a
-# captured screen; its own file so the suite can source it without a terminal or a socket.
-# shellcheck source=shipyard-turn.sh
-. "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/shipyard-turn.sh"
 
 # Escalation mailbox. Lives in the SHARED .git (git-common-dir), so the very same
 # path resolves from the main worktree (parent watcher) and from

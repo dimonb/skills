@@ -13,15 +13,17 @@
 - `scenarios/{debate,freeform,review}.md` — roles per scenario.
 - `tests/` — `run-all.sh`, `_helpers.sh`, 21 `t*.sh`.
 
-## shipyard — `plugins/shipyard/skills/shipyard/` (SKILL.md 765 lines / 48 KB)
+## shipyard — `plugins/shipyard/skills/shipyard/` (SKILL.md 872 lines / 56 KB)
 
 - `shipyard-backend.sh` — terminal backend abstraction (agterm|tmux) — **the driver, copy B**.
 - `shipyard-launch.sh` — start a child ship in its own terminal + worktree; write protocol+launcher.
 - `shipyard-continuity.sh` — Codex-parent **supervisor/watcher** lifecycle (`watch`/`watch-foreground`).
-- `shipyard-lib.sh` — shared helpers; defines the **mailbox** (`:20-32`).
-- `shipyard-turn.sh` — pure turn-state read of a captured screen + the delivery verdict fold; the
-  one place the client's turn-in-flight marker is spelled.
+- `shipyard-lib.sh` — shared helpers; defines the **mailbox** (`shipyard_mailbox`,
+  `shipyard_mailbox_ensure` — named rather than line-numbered, because a line range goes stale on
+  the next edit above it and had).
 - `shipyard-agent.sh` — child-agent (codex|claude) exec abstraction.
+- `agent-adapters.sh` — vendored copy of `shared/adapters/`: per-kind launch knowledge, plus the
+  anchored turn-state read and the delivery-verdict fold that confirm a typed directive landed.
 - `shipyard-report.sh` — one markdown status table for a set of children (forge calls live here).
 - `shipyard-escalations.sh` — parent: surface child escalations from the mailbox.
 - `shipyard-ask.sh` — child: raise question/decision/notice into the mailbox.

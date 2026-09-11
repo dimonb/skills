@@ -22,7 +22,10 @@ while [ $# -gt 0 ]; do
     --resume)      RESUME_TEXT="${2:-}"; shift 2 || true ;;
     --timeout)     TIMEOUT="${2:-300}"; shift 2 || true ;;
     --no-resume)   NO_RESUME=1; shift ;;
-    -h|--help)     sed -n '2,14p' "$0"; exit 0 ;;
+    # The header, to the first line that is not a comment. A line-numbered range goes stale the
+    # moment anyone adds a paragraph above it, and this one already had: it over-ran by one line
+    # and printed a shell option back at the operator.
+    -h|--help)     awk 'NR < 2 { next } /^#/ { sub(/^# ?/, ""); print; next } { exit }' "$0"; exit 0 ;;
     *)             [ -z "$SLOT" ] && SLOT="$1"; shift ;;
   esac
 done
@@ -40,7 +43,7 @@ pane() { shipyard_capture "$SLOT"; }
 submit() {
   shipyard_submit "$SLOT"
   sleep 3
-  if ! shipyard_turn_running "$(pane)"; then
+  if ! adp_turn_running "$(pane)"; then
     shipyard_submit "$SLOT" alt
     sleep 3
   fi
@@ -48,9 +51,15 @@ submit() {
 
 # NEVER drive the pane mid-turn. The first thing we send is Escape, and Escape is
 # INTERRUPT while a turn is running — it would kill the work in flight, which is the
-# opposite of the point. Wait for the turn marker to leave the footer (shipyard-turn.sh spells it).
+# opposite of the point. Wait for the turn marker to leave (shared/adapters spells it).
+#
+# The THREE-state read, not the boolean, and that is the point of this line: an unreadable capture
+# is what a backend blip returns as well as what a blank screen returns, and the boolean calls
+# both "no turn running" — so a socket hiccup here would fall straight through to the Escape.
+# Waiting on `unknown` too means an unreadable pane times out into the exit below, which is the
+# safe direction, instead of into an interrupt.
 waited=0
-while shipyard_turn_running "$(pane)"; do
+while case "$(adp_turn_state "$(pane)")" in running|queued|unknown) true ;; *) false ;; esac; do
   if [ "$waited" -eq 0 ]; then echo "ship-$SLOT is mid-turn — waiting for it to finish before compacting…"; fi
   sleep 10; waited=$((waited+10))
   if [ "$waited" -ge "$TIMEOUT" ]; then
@@ -71,7 +80,7 @@ waited=0
 while [ "$waited" -lt "$TIMEOUT" ]; do
   p=$(pane)
   if printf '%s' "$p" | grep -q 'Compacted'; then
-    if ! shipyard_turn_running "$p"; then
+    if ! adp_turn_running "$p"; then
       echo "compacted after ${waited}s"
       break
     fi

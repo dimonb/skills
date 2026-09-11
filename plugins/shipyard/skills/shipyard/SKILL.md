@@ -482,14 +482,22 @@ the id you were shown. Exit 3 = no live terminal for that slot (the child is gon
 | `queued` | the client showed its queued-message hint: it is mid-turn and will take it next | 0 |
 | `unconfirmed` | neither, within the wait — **the text may be sitting unsent in the input box** | **6** |
 
-`unconfirmed` is worth an operator's eyes and nothing else is: it does NOT prove the directive
-went nowhere (a turn that began and ended between two samples looks the same, so does a screen
-that could not be read), but it is the only state in which the text may still be in the box.
+`unconfirmed` is worth an operator's eyes and nothing else is. It does NOT prove the directive
+went nowhere — **three different things produce it**, and the warning names which one it saw by
+printing the states it actually sampled (`Sampled: idle,running x17`), so you do not have to
+guess from this list:
+
+* the text is sitting unsent in the input box — the case worth looking at;
+* the child was mid-turn for the whole window and its client never rendered a queued hint — a
+  **healthy** child, and the commonest of the three;
+* a turn began and ended between two samples, or the screen could not be read at all.
+
 **Look before re-sending** — a second send types another copy onto the first; the warning prints
 the peek command and the one-liner that submits what is already there. The bias is deliberate:
 re-sending on a false `unconfirmed` is cheap and visible, believing a false `delivered` is
-neither. `SHIPYARD_TELL_CONFIRM_SECS` (default 10) and `SHIPYARD_TELL_CONFIRM_INTERVAL`
-(default 0.5) set the window and the sampling rate.
+neither. `SHIPYARD_TELL_CONFIRM_SECS` and `SHIPYARD_TELL_CONFIRM_INTERVAL` set the window and the
+sampling rate; both are validated, and the defaults live in `shipyard-tell.sh` rather than being
+restated here.
 
 Why not a screen diff: **typing changes the screen whether or not the Return took**, so the diff
 was non-empty either way and an unsubmitted directive reported `delivered` — twice in one night,
@@ -560,8 +568,19 @@ tracked separately. So look at the input line in step 1 while you are there, and
 leftover draft, expect the child to treat your nudge as ordinary input rather than as the human
 speaking.
 
-**3. ONLY THEN COMPACT** — `shipyard-compact.sh <slot>`, and only when `ctx` is `⚠️`/`🛑`
-or the nudge came back `unconfirmed`. Compaction is not the default remedy (below).
+**2b. ON `unconfirmed`, SUBMIT THE BOX BEFORE YOU EVEN CONSIDER COMPACTING.** The nudge prints a
+peek command and a one-liner that submits what is already in the box; work those first.
+`shipyard-compact.sh`'s **first act on the pane is Escape, and Escape CLEARS the box** — so
+compacting on an `unconfirmed` nudge discards the very directive the verdict was warning you
+about. The text itself survives in `directive-<slot>-<n>.txt`, so nothing is lost permanently,
+but the delivery is, silently.
+
+**3. ONLY THEN COMPACT** — `shipyard-compact.sh <slot>`, and only when `ctx` is `⚠️`/`🛑`, or
+when an `unconfirmed` nudge turns out to be a child **refusing input** (box empty, keystrokes
+going nowhere). An `unconfirmed` on a child that was RUNNING all window is the expected verdict
+for a healthy busy child and is **not** a compaction trigger — compacting it would discard live
+context, which is the same mistake the `❓` ctx rule below exists to prevent. Compaction is not
+the default remedy (below).
 
 **A `❓` ctx is neither a compaction trigger nor a clearance.** It says the figure could not be
 scaled — the child may be at 5% of a window this script has not heard of, or past a ceiling it
@@ -679,9 +698,11 @@ the ones this step exists for:
   back with an empty context and sits idle until told to continue. Same silhouette again.
 
 So reach for a manual compaction when the figure keeps climbing through `🛑` without one
-firing, or when a nudge came back `unconfirmed` — and on `❓`, resolve the window first rather
-than compacting or ignoring, per the rule in the order above. Once you have decided to, do not
-put it off:
+firing, or when an `unconfirmed` nudge turns out to be a child **refusing input** — not on an
+`unconfirmed` by itself, which also fires for a healthy child that was mid-turn all window, and
+whose first act would be the Escape that clears the box (step 2b above). And on `❓`, resolve the
+window first rather than compacting or ignoring, per the rule in the order above. Once you have
+decided to, do not put it off:
 compaction is itself an API call and needs working room, so run it before the figure reaches
 the ceiling rather than at it. The footer hint
 `/clear to save NNNk tokens` means the ceiling is close — it does not mean `/clear` is the
@@ -715,6 +736,11 @@ Prefer `--resume-file` for a long change: a resume brief that names where the ch
 actually is (HEAD, pushed state, task count — read from git, not from its own last
 summary) stops it re-deriving the whole change from scratch on an empty context.
 
+Exit 6 comes from the RESUME, not the compaction: every arm `exec`s `shipyard-tell.sh`, so its
+`unconfirmed` becomes this script's status. The compaction itself succeeded and the resume brief
+may be sitting unsent — **do not re-compact**, which would discard the context the first
+compaction just rebuilt. Work the nudge's own output instead (Step 5, 2b).
+
 Exit 5 means the child was still mid-turn when the wait ran out: `shipyard-compact.sh` will NOT
 drive a terminal during a turn, because the Escape it sends to clear the input box is
 INTERRUPT while one is running — it would kill the work in flight. Re-run when idle.
@@ -741,8 +767,12 @@ If you drive the terminal by hand instead, three facts that each cost a wrong di
   the other.
 * **Confirm by the FOOTER flipping to `esc to interrupt`**, never by the box looking
   empty — a capture can hand back a stale frame. This is the read `shipyard-tell.sh` and
-  `shipyard-compact.sh` already make for you (`shipyard-turn.sh` is the one place that marker
-  is spelled), so by the time you are driving the pane by hand you are reproducing it by eye.
+  `shipyard-compact.sh` already make for you, so by the time you are driving the pane by hand you
+  are reproducing it by eye. They read it through `adp_turn_state` in `shared/adapters`, which is
+  where that marker is spelled for the whole repo — once in the canonical module plus the vendored
+  copies its `targets.txt` lists, which the drift check holds identical. The string quoted here is
+  for your eyes; test fixtures spell it too, and both are exempt from that count on purpose. The
+  count itself is asserted by `shared/adapters/tests/t-turn.sh`, which `make check` runs.
 
 ## Step 6. Teardown, after a merge
 
@@ -814,7 +844,7 @@ collide with it.
 | `agent-adapters.sh` | vendored copy of the shared per-agent-kind adapters (`shared/adapters/agent-adapters.sh`): how a kind is started, how a skill is referenced in it, which kind is running the parent |
 | `shipyard-backend.sh` | the agterm/tmux abstraction — every terminal operation goes through it |
 | `shipyard-lib.sh` | mailbox paths, slot resolution, payload input, the child env preamble |
-| `shipyard-turn.sh` | is the child mid-turn, and did what we typed start one — the ONE place the client's turn marker is spelled |
+| `agent-adapters.sh` | vendored copy of the shared per-agent-kind adapters — launch knowledge, plus `adp_turn_state`/`adp_delivery_verdict`, the ONE place a client's turn marker is spelled |
 | `shipyard-continuity.sh` | capacity retry and paused-goal continuity for a Codex parent in agterm |
 | `shipyard-ctx.sh` | the ctx column: reads a child's transcript, infers its window, bands it |
 | `tests/run-all.sh` | the shipyard script suite — run by hand: `bash <SKILL>/tests/run-all.sh` |

@@ -23,8 +23,14 @@
 # silence for, and it is the only thing in the ctx column that does.
 #
 # Design notes:
-#  * running-vs-idle comes from a snapshot DIFF (two captures 3s apart), not from
-#    parsing spinner glyphs / the footer — those always look "busy";
+#  * running-vs-idle comes from a snapshot DIFF (two captures 3s apart). That answers "is this
+#    child MOVING", which is what this column is for, and it is a different question from "is a
+#    turn in flight" — a turn marker holds steady across a long tool call, and motion says nothing
+#    about whether a turn was ever started. `adp_turn_state` in shared/adapters answers the second
+#    question and `shipyard-tell.sh` relies on it; the two are complementary, not rivals. (This
+#    note used to say the footer was useless because it "always looks busy". That was about
+#    spinner glyphs, it was wrong as written, and a maintainer reading it would have concluded the
+#    module this file now imports its marker from could not work.);
 #  * the whole report is buffered and printed in ONE block so Monitor batches it
 #    into a single notification;
 #  * the MR iid of a text slot is read out of ship's own state
@@ -175,12 +181,18 @@ slot_pending() {
   printf '%s' "$n"
 }
 
-# The turn marker is interpolated rather than written out: shipyard-turn.sh is the one place it is
+# The turn marker is interpolated rather than written out: shared/adapters is the one place it is
 # spelled, so a client renaming it does not leave this column quietly printing a footer line as if
-# it were the child's last word. Only that alternative is a variable — every other one keeps its
-# original quoting byte for byte.
+# it were the child's last word.
+#
+# It gets its OWN fixed-string stage rather than joining the alternation below. The constant exists
+# to be edited when a client renames the marker, and a value carrying a regex metacharacter would
+# either change this filter's meaning or make the expression invalid — and an invalid one blanks
+# the `last line` column for every slot with no error anyone sees. Every other alternative keeps
+# its original quoting byte for byte.
 status_line() {
-  grep -vE '^[[:space:]]*$|──|❯|tokens$|'"$SHIPYARD_TURN_MARKER"'|shift\+tab|current: [0-9]|scroll with|tmux detected|Tip:' \
+  grep -vF -- "$ADP_TURN_MARKER" \
+    | grep -vE '^[[:space:]]*$|──|❯|tokens$|shift\+tab|current: [0-9]|scroll with|tmux detected|Tip:' \
     | grep -iE '✻|✽|·|agents done|Cogitated|Waddling|Whirlpool|ship|propose|spec|apply|archive|merg|approv|pipeline|await|waiting|escalat|ready|pushed|done' \
     | tail -1 | sed -E 's/^[[:space:]]*//; s/[[:space:]]+$//'
 }
@@ -376,8 +388,12 @@ fi
       echo "     stall silhouette is a child that left its own next instruction unsubmitted in the input box."
       echo "  2. THEN NUDGE IT: \`bash $DIR/shipyard-tell.sh $sl \"<what to do next>\"\`. It types, submits, polls"
       echo "     the child's turn state and reports delivered/queued, or unconfirmed and exit 6. Do not hand-drive."
+      echo "  2b. IF IT CAME BACK unconfirmed: peek, and submit what is already in the box — the nudge prints"
+      echo "     both commands. Compaction's FIRST act is Escape, which CLEARS the box, so compacting here"
+      echo "     throws the directive away. The text survives in the mailbox .txt, the delivery does not."
       echo "  3. ONLY THEN COMPACT: \`bash $DIR/shipyard-compact.sh $sl\` (compacts AND resumes) — and only if"
-      echo "     ctx is ⚠️/🛑 or the nudge went unconfirmed. The client's own autocompact usually gets there first."
+      echo "     ctx is ⚠️/🛑, or the unconfirmed nudge turns out to be a child REFUSING input. An unconfirmed"
+      echo "     on a child that was running all window is the healthy case and is NOT a compaction trigger."
       echo "     A ❓ ctx is NOT a compaction trigger and NOT a clearance: it means the figure could not be"
       echo "     scaled, so resolve that first (see the block below) and act on the band it turns into."
     done

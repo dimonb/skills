@@ -1,0 +1,44 @@
+Pane fixtures for the turn-state read (adp_turn_running / adp_turn_state).
+
+PROVENANCE MATTERS MORE THAN USUAL HERE, because the anchor these pin is a claim about what real
+clients render. Eight of the nine are verbatim captures of real client TUIs, taken at 100 columns;
+one is derived from a capture and says so. Machine- and change-specific text was replaced
+(checkout path, PR number, model name, quota percentage) — rule zero. Nothing else was touched:
+the leading codepoints, the line positions and where each marker sits are as captured, and those
+are the only properties the anchor reads.
+
+Why the anchor needs fixtures at all: a too-loose anchor restores the false `delivered` this
+change exists to remove; a too-tight one makes a healthy running turn read as not-running, so the
+commonest healthy path alarms and an operator learns to ignore the signal. Neither failure is
+visible without real renders to measure against.
+
+  pane-claude-running.txt        live, the first kind, mid-turn. Captured from a real supervised
+                                 session's own pane over the agterm control socket. The turn
+                                 marker is in the footer, which is the LAST non-empty line.
+  pane-claude-idle.txt           live, same kind, idle at the composer. Same footer, no marker.
+  pane-claude-draft.txt          live, same kind: a long directive TYPED BUT NOT SUBMITTED, so it
+                                 wraps inside the composer. The marker is in the box, three lines
+                                 above the footer. ADVERSARIAL: must read as not running.
+  pane-claude-draft-welded.txt   live, same kind, the flattening case. Two fragments were typed as
+                                 separate keystroke batches and the client rendered them as the
+                                 intact marker inside the box — the shape `tr` welds together when
+                                 a multi-line directive is flattened to one line. ADVERSARIAL.
+                                 This is the case no earlier fixture had.
+  pane-claude-queued.txt         live, same kind, a second message submitted while the first turn
+                                 was still running. The client's queued hint is on the BOX line;
+                                 the turn marker is simultaneously in the footer.
+  pane-claude-content.txt        DERIVED, not a verbatim capture. Built from pane-claude-idle.txt
+                                 by putting the marker into a line that frame already rendered as
+                                 two-space-indented transcript text, and changing nothing else. It
+                                 stands for a child displaying this plugin's own source, which is
+                                 what permanently poisons a slot if the anchor is loose. The line's
+                                 SHAPE is real; only its words are ours. ADVERSARIAL.
+  pane-codex-running.txt         live, the second kind, mid-turn. This kind puts the marker in a
+                                 column-one service line in the transcript flow, NOT in the
+                                 footer — which is why the anchor needs two arms.
+  pane-codex-idle.txt            live, same kind, idle at the composer.
+  pane-codex-draft-welded.txt    live, same kind, typed-not-submitted and welded. ADVERSARIAL.
+
+NOT CAPTURED, so not asserted: a queued render for the second kind. Its queued headers are known
+from the client binary (read during review) but their placement on screen is not, so no fixture
+claims it. If you add one, capture it rather than adapting the first kind's.

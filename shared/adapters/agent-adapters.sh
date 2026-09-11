@@ -251,3 +251,206 @@ adp_parent_kind() {
     printf 'none'
   fi
 }
+
+# --- the child's TURN STATE, and whether what we typed started one --------------
+# Both skills ask this question. `shipyard tell` asks it to confirm a directive actually landed;
+# `council say` has the same gap (its confirmation only proves the keystrokes were injected). It
+# lives here, in the per-agent-kind module, because a client's on-screen vocabulary is per-KIND
+# knowledge — the terminal backend knows agterm from tmux and nothing about what a client renders.
+#
+# It is deliberately KIND-LESS: no caller passes a kind, because no caller needs to. Each of the
+# markers below has ONE home per kind, and no kind uses another's home, so accepting either shape
+# answers the question without ever being told which client is on screen. THE SEAM: the day two
+# kinds disagree about the same home, these functions take a kind and the callers grow the lookup
+# — not before. Adding that parameter today would buy nothing and cost every caller.
+#
+# WHY ANCHORING, AND WHAT IT IS FOR. A plain substring search over the whole capture is what this
+# replaced, and it was wrong in a way that matters: a caller TYPES its message into the child's
+# input box, and the capture includes that box — so a directive that merely mentioned a marker
+# manufactured the very evidence the read was looking for, and an unsubmitted message reported as
+# delivered. Three real shapes carry the markers and nothing else may:
+#
+#   * the FOOTER, which is the last non-empty line of the capture;
+#   * a SERVICE LINE, whose first character is the bullet below, in column one;
+#   * the composer PLACEHOLDER, which only renders while the box is empty (see the queued arm).
+#
+# Everything else is ignored, and that is what excludes the three ways the old read was fooled: a
+# marker inside the box's first line, inside a WRAPPED continuation of it, and inside transcript
+# content (a child displaying this repo's own source — the case that permanently poisons a slot).
+# Tool output is indented, so it is never column one and never last; the discipline is the one
+# `shipyard-continuity.sh` already documents for the other client's service lines.
+#
+# Every shape above was read off a LIVE capture of both admitted kinds, committed as fixtures in
+# `tests/fixtures/pane-*.txt` with their provenance in `panes.notes`. Do not retune an anchor
+# without a capture: too loose restores the false confirmation, and too tight makes a healthy
+# running turn read as not-running, so the commonest healthy path alarms and an operator learns to
+# ignore the signal.
+#
+# RESIDUAL the gate cannot check, stated here because it lives here: the footer arm assumes a
+# footer is rendered, so if a client ever omits it the last non-empty line could be a box line.
+# None of the nine captures showed that.
+ADP_TURN_MARKER='esc to interrupt'
+
+# A service line's column-one bullet. One kind puts BOTH its turn marker and its queued header
+# here; the other uses this for neither.
+ADP_SERVICE_BULLET='•'
+
+# The composer glyphs, and the separators that follow them. One kind follows its glyph with a
+# NON-BREAKING space, which is why the separator is stripped explicitly rather than with a
+# whitespace class: under `LC_ALL=C` (which the suites set) a class would not match it.
+ADP_BOX_GLYPHS='❯ ›'
+ADP_NBSP=$'\xc2\xa0'
+
+# The queued hints, pinned to the SHORTEST leading phrase common to every observed variant rather
+# than to the longest phrase seen — so a client varying the rest of the sentence cannot break the
+# match. One kind renders its hint as the composer placeholder; the other as a service line.
+ADP_QUEUED_BOX_HINT='Press up'
+ADP_QUEUED_BLOCK_HINT='Messages to be submitted'
+
+# Set by _adp_box_content instead of returned, so the hot predicates fork nothing: these run once
+# per line per poll sample, and a command substitution there costs a process each time.
+_ADP_BOX_CONTENT=''
+
+# _adp_box_content <line> — 0 when the line is the composer's, with its content (after the glyph
+# and one separator) in $_ADP_BOX_CONTENT. 1 when the line is not a box line.
+_adp_box_content() {
+  local line="$1" g rest
+  for g in $ADP_BOX_GLYPHS; do
+    case "$line" in
+      "$g"*)
+        rest=${line#"$g"}
+        rest=${rest# }
+        rest=${rest#"$ADP_NBSP"}
+        _ADP_BOX_CONTENT=$rest
+        return 0 ;;
+    esac
+  done
+  _ADP_BOX_CONTENT=''
+  return 1
+}
+
+# _adp_service_content <line> — 0 when the line is a column-one service line, content in
+# $_ADP_BOX_CONTENT.
+_adp_service_content() {
+  local line="$1" rest
+  case "$line" in
+    "$ADP_SERVICE_BULLET"*)
+      rest=${line#"$ADP_SERVICE_BULLET"}
+      rest=${rest# }
+      _ADP_BOX_CONTENT=$rest
+      return 0 ;;
+  esac
+  _ADP_BOX_CONTENT=''
+  return 1
+}
+
+# adp_turn_running <screen> — 0 while a turn is in flight, by the footer or service-line anchor.
+adp_turn_running() {
+  local line last=''
+  while IFS= read -r line || [ -n "$line" ]; do
+    if _adp_service_content "$line"; then
+      case "$_ADP_BOX_CONTENT" in *"$ADP_TURN_MARKER"*) return 0 ;; esac
+    fi
+    case "$line" in *[![:space:]]*) last=$line ;; esac
+  done <<<"$1"
+  case "$last" in *"$ADP_TURN_MARKER"*) return 0 ;; esac
+  return 1
+}
+
+# adp_turn_queued <screen> — 0 when the CLIENT says it has taken a message for the next turn.
+#
+# THE INVARIANT, THE TEST, AND THE BELT — in that order, because a maintainer who knows only the
+# test will eventually relax it back to a substring match and restore the forgery this closes.
+#
+#   INVARIANT: on the kind that renders this hint in the composer, the hint IS the placeholder, so
+#     it appears ONLY while the box is empty. The real hint and anyone's typed text are therefore
+#     mutually exclusive on screen. (Established by capture, not by reasoning.)
+#   TEST: "the box's content BEGINS with the hint" is a decidable test for exactly that — the box
+#     is showing its own placeholder rather than someone's text. It is not a heuristic that
+#     happens to work.
+#   BELT: a caller's message also always carries its own bracketed prefix, so a mentioned phrase
+#     can only ever land mid-line. Independent of the invariant, and second to it.
+#
+# The other kind renders the hint as a column-one service line, where no typed text can reach at
+# all, so that arm needs no placeholder argument.
+#
+# NOTE FOR A LATER READER: this reads a box line for a KNOWN literal, which is decidable. It does
+# NOT make the open question of whether arbitrary box content is a real draft solvable — a live
+# capture during this work showed the client rendering suggestion text nobody typed. That question
+# is tracked separately and nothing here answers it.
+adp_turn_queued() {
+  local line
+  while IFS= read -r line || [ -n "$line" ]; do
+    if _adp_box_content "$line"; then
+      case "$_ADP_BOX_CONTENT" in "$ADP_QUEUED_BOX_HINT"*) return 0 ;; esac
+    fi
+    if _adp_service_content "$line"; then
+      case "$_ADP_BOX_CONTENT" in "$ADP_QUEUED_BLOCK_HINT"*) return 0 ;; esac
+    fi
+  done <<<"$1"
+  return 1
+}
+
+# adp_turn_state <screen> — queued | running | idle | unknown, in that precedence.
+#
+# `unknown` IS NOT `idle`, and the difference is load-bearing: an empty capture is what a FAILED
+# read returns as well as what a blank screen returns, and letting it count as idle would let
+# adp_delivery_verdict conclude a send landed from a turn that was already running before anything
+# was typed. An unreadable screen contributes no evidence at all.
+#
+# `queued` outranks `running` because one kind carries both markers on the same service line, and
+# queued is the more specific answer.
+adp_turn_state() {
+  if [ -z "$1" ]; then printf 'unknown'
+  elif adp_turn_queued "$1"; then printf 'queued'
+  elif adp_turn_running "$1"; then printf 'running'
+  else printf 'idle'
+  fi
+}
+
+# adp_delivery_verdict <pre-send-state> [<post-send-state> ...]
+#   -> delivered | queued | unconfirmed
+#
+# What this replaced: a before/after screen DIFF. That diff could not answer the question it was
+# asked — typing changes the screen whether or not the submit took, so it was non-empty either way
+# and a message left sitting UNSENT reported as delivered. It happened twice in one night on two
+# different slots, and both times the child then read as healthy and idle.
+#
+# The evidence used instead is a STATE, not a change, and BOTH positive verdicts require the
+# evidence to be ABSENT and then PRESENT, so that nothing already on screen can be read as being
+# about this send:
+#
+#   * `delivered` needs an idle observation first (`seen_idle`); the pre-send sample may supply it.
+#     A child already mid-turn therefore cannot yield it from the turn marker alone.
+#   * `queued` needs a NON-queued observation first (`pre_queued` cleared). A hint still rendered
+#     from an EARLIER send is not evidence about this one — and because the hint persists while its
+#     queue is non-empty, the first post-send sample would otherwise re-supply it and decide, which
+#     was a live false positive.
+#
+# `unknown` clears neither: an unreadable frame is not an observation.
+#
+# WHAT `unconfirmed` DOES AND DOES NOT RULE OUT — stated here because this is where the word is
+# defined. It says no turn was observed to start and the client never said it had queued anything.
+# It does NOT prove the message was not delivered: a turn that started AND finished between two
+# samples looks identical, so does one on a child whose screen could not be read, and so does a
+# child that was mid-turn for the whole window whose client rendered no queued hint. What it DOES
+# mean is that the text may be sitting unsent in the input box, which is the one case worth an
+# operator's eyes. The bias is deliberate — re-sending on a false `unconfirmed` is cheap and
+# visible, believing a false confirmation is neither — and dense sampling by the caller is what
+# keeps the false case rare. A fourth verdict naming the residual would be fuzzier than these three.
+adp_delivery_verdict() {
+  local state seen_idle=0 pre_queued=0
+  case "${1:-}" in
+    idle)   seen_idle=1 ;;
+    queued) pre_queued=1 ;;
+  esac
+  shift 2>/dev/null || true
+  for state in "$@"; do
+    case "$state" in
+      queued)  [ "$pre_queued" = 1 ] || { printf 'queued'; return 0; } ;;
+      running) pre_queued=0; [ "$seen_idle" = 1 ] && { printf 'delivered'; return 0; } ;;
+      idle)    pre_queued=0; seen_idle=1 ;;
+    esac
+  done
+  printf 'unconfirmed'
+}

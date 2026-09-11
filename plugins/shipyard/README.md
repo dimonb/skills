@@ -119,10 +119,9 @@ message dies with the context that held it.
 | file | role |
 |---|---|
 | `shipyard-agent.sh` | select and launch the child runtime that matches the parent — which kinds shipyard admits, and what it hands the shared adapters |
-| `agent-adapters.sh` | vendored copy of the shared per-agent-kind adapters (`shared/adapters/agent-adapters.sh`), shared with `council` |
+| `agent-adapters.sh` | vendored copy of the shared per-agent-kind adapters (`shared/adapters/agent-adapters.sh`), shared with `council`: launch knowledge, plus the turn-state read and delivery verdict that confirm a directive actually landed |
 | `shipyard-backend.sh` | the agterm/tmux abstraction — every terminal operation goes through it |
 | `shipyard-lib.sh` | mailbox paths, slot resolution, payload input, the child env preamble |
-| `shipyard-turn.sh` | is the child mid-turn, and did what we typed start one — the only place the client's turn marker is spelled |
 | `shipyard-continuity.sh` | automatic capacity retry and paused-goal continuity for a Codex parent in agterm |
 | `shipyard-launch.sh` | start a child: slot, protocol, launcher, container |
 | `shipyard-admission.sh` | the pre-launch admission gate: concurrency cap + macOS memory-pressure |
@@ -175,7 +174,8 @@ starts nothing.
 Environment knobs: `SHIPYARD_AGENT`, `SHIPYARD_BACKEND`, `SHIPYARD_WORKSPACE`, `SHIPYARD_SESSION`,
 `SHIPYARD_ENV_PASS`, `SHIPYARD_ENV_SCRUB`, `SHIPYARD_SLOT`, `SHIPYARD_FORCE`, `SHIPYARD_DRY`,
 `SHIPYARD_MAX_SLOTS`, `SHIPYARD_MEM_MIN_FREE_PCT`, `SHIPYARD_STALL_SECS`, `SHIPYARD_CTX_WINDOW`,
-`SHIPYARD_TELL_MAXLINE`, `SHIPYARD_ASK_TIMEOUT`.
+`SHIPYARD_TELL_MAXLINE`, `SHIPYARD_TELL_CONFIRM_SECS`, `SHIPYARD_TELL_CONFIRM_INTERVAL`,
+`SHIPYARD_ASK_TIMEOUT`.
 
 `SHIPYARD_MAX_SLOTS` (default `2`) and `SHIPYARD_MEM_MIN_FREE_PCT` (default `10`) are the two
 admission-gate knobs — the concurrency cap and the macOS free-memory floor a launch must clear.
