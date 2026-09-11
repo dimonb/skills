@@ -12,7 +12,10 @@
 #
 # Most tests are pure functions over fixture files and environment variables. The continuity
 # suite also starts one short detached watcher against a fake `agtermctl`, proves idempotency,
-# and reaps it through the real lifecycle cleanup. Nothing uses the network or fixtures outside
+# and reaps it through the real lifecycle cleanup. t12 is the one deliberate exception to the
+# fixture rule: the teardown gate's whole defect was a wrong belief about what git answers, so
+# it builds real repositories, real squash merges and real worktrees and asks the real git — a
+# faked git there would only replay the belief. Nothing uses the network or fixtures outside
 # its own mktemp directory.
 #
 # SCOPE IS DELIBERATELY NARROW, and the rule is about PROVENANCE, not about counting: every
@@ -34,7 +37,7 @@ DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # One single-line array: the gate (scripts/check.sh check 10) reads registrations from a
 # single-line `tests` array and reds loudly if a test file here is not listed, so a test cannot
 # silently stop running. Splitting this across lines hides the tail from that extraction.
-tests=(t1-totals.sh t2-window.sh t3-probe.sh t4-band.sh t5-agent.sh t6-codex-ctx.sh t7-continuity.sh t8-backend-adapter.sh t9-admission.sh t10-continuity-canary.sh t11-slot-graph.sh)
+tests=(t1-totals.sh t2-window.sh t3-probe.sh t4-band.sh t5-agent.sh t6-codex-ctx.sh t7-continuity.sh t8-backend-adapter.sh t9-admission.sh t10-continuity-canary.sh t11-slot-graph.sh t12-down-gate.sh)
 
 rc=0
 for t in "${tests[@]}"; do

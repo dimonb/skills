@@ -785,8 +785,15 @@ bash <SKILL>/shipyard-down.sh <slot>        # close the terminal, remove the wor
 bash <SKILL>/shipyard-down.sh <slot> --force
 ```
 
-It refuses a slot with uncommitted changes or with commits not in its upstream, and says
-what to look at; `--force` overrides both. It removes the worktree with a DOUBLE `-f` (one
+It refuses a slot with uncommitted changes, or one whose content it cannot prove is already in
+the base branch, and says what to look at; `--force` overrides both. The second gate asks about
+CONTENT, never ancestry: a squash merge leaves none of the branch's commits an ancestor of the
+base branch, so an ancestry test refuses the *successful* path — and it passes a branch with no
+upstream configured, which is the one case where work really would be lost. Containment is
+proven either by tree equality or by a test merge that adds nothing to the base branch, with one
+lazy `git fetch` when a stale remote-tracking ref is the likely reason a proof failed
+(`SHIPYARD_DOWN_FETCH=0` forbids it). A slot the base branch has since edited in the same region
+stays refused — unprovable, so it asks. It removes the worktree with a DOUBLE `-f` (one
 for dirty, one for locked — a single `-f` fails on a lock with a message that reads like a
 permissions problem), prunes, and on agterm drops the `-ai` workspace — plus its pinned
 name — once it holds no ship sessions. The change's feature branch can go afterwards
