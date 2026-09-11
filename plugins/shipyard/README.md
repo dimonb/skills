@@ -175,11 +175,15 @@ Environment knobs: `SHIPYARD_AGENT`, `SHIPYARD_BACKEND`, `SHIPYARD_WORKSPACE`, `
 `SHIPYARD_ENV_PASS`, `SHIPYARD_ENV_SCRUB`, `SHIPYARD_SLOT`, `SHIPYARD_FORCE`, `SHIPYARD_DRY`,
 `SHIPYARD_MAX_SLOTS`, `SHIPYARD_MEM_MIN_FREE_PCT`, `SHIPYARD_STALL_SECS`, `SHIPYARD_CTX_WINDOW`,
 `SHIPYARD_TELL_MAXLINE`, `SHIPYARD_TELL_CONFIRM_SECS`, `SHIPYARD_TELL_CONFIRM_INTERVAL`,
-`SHIPYARD_ASK_TIMEOUT`.
+`SHIPYARD_ASK_TIMEOUT`, `SHIPYARD_DOWN_FETCH`.
 
 `SHIPYARD_MAX_SLOTS` (default `2`) and `SHIPYARD_MEM_MIN_FREE_PCT` (default `10`) are the two
 admission-gate knobs — the concurrency cap and the macOS free-memory floor a launch must clear.
 See **A launch this machine cannot take** above.
+
+`SHIPYARD_DOWN_FETCH` (default `1`) allows the teardown gate one `git fetch` of the base branch
+per invocation, so a slot torn down seconds after its merge is not refused over a
+remote-tracking ref this clone has simply not seen yet. Set it to `0` to keep teardown offline.
 
 `SHIPYARD_CTX_WINDOW` pins the context window, in tokens as a plain integer, that the `ctx`
 percentage is measured against. Without it the window is inferred from the largest total the
