@@ -192,11 +192,18 @@ ok "the capture renders assistant prose in column one" 1 \
    "$([ "$(grep -c "^${assistant_glyph} " "$FIX/pane-claude-running.txt")" -gt 0 ] && echo 1 || echo 0)"
 # `index($0,g)==1` rather than `substr($0,1,1)==g`: substr is byte-wise under LC_ALL=C too, so it
 # could never equal a three-byte glyph — the same trap one layer down.
+#
+# THE LAST assistant line, not the first, and that is a second correction to this rig. Substituting
+# into the first one left four more assistant lines BELOW it, so the staleness rule cleared the
+# screen and the check passed for that reason instead of for the anchor's — restoring the loose
+# anchor on its own did not red it. The last line is also the realistic shape the section is about:
+# a motionless child whose FINAL utterance mentions the banner. Two passes over the file, because
+# the last match is not known until the first pass ends.
 prose=$(awk -v g="$assistant_glyph" '
-    BEGIN { hit = 0 }
-    index($0, g) == 1 && hit == 0 { print g " the watchdog fires on a usage limit and prescribes compaction"; hit = 1; next }
+    NR == FNR { if (index($0, g) == 1) last = FNR; next }
+    FNR == last { print g " the watchdog fires on a usage limit and prescribes compaction"; next }
     { print }
-  ' "$FIX/pane-claude-running.txt")
+  ' "$FIX/pane-claude-running.txt" "$FIX/pane-claude-running.txt")
 # Guard 2: the built line carries the phrase AND begins with the real glyph in column one. The
 # second half is what a degenerate extraction could satisfy before; a space now fails it.
 ok "the prose screen carries the phrase behind the glyph" 1 \

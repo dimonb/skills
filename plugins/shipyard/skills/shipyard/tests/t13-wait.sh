@@ -10,9 +10,10 @@
 # discarding live working context to cure a condition the child did not have.
 #
 # WHAT THIS FILE PINS, and the order matters because the third is the one that keeps the fix honest:
-#   1. the classification: a child that CANNOT move (a stated capacity wait), one nobody ASKED to
-#      move (finished at its hand-off, or blocked on a human), and a turn that died on a transport
-#      fault, each get their own answer — and every answer's action text refuses compaction;
+#   1. the classification: a child that CANNOT move (a stated capacity wait) and one nobody ASKED
+#      to move (finished at its hand-off, or blocked on a human) each get their own answer — and
+#      every answer's action text refuses compaction. TWO states, not more: section 2 says why a
+#      third, a turn dead on a transport fault, was deleted rather than guessed at;
 #   2. the wiring is LOAD-BEARING (the #99 lesson): report.sh really asks, really exempts, and puts
 #      the class in the --only-changed signature so the state is news exactly once;
 #   3. A GENUINELY STUCK CHILD STILL ALARMS. The job was to make that block rarer and RIGHT, not
@@ -162,6 +163,12 @@ ok "a gap breaks --only-changed silence" 1 \
    "$(grep -Fc '[ "$GAP" = 0 ] && [ -n "$SIGFILE" ]' "$REPORT")"
 ok "both new blocks are printed" 2 \
    "$(grep -cE '^    echo "### (⏳ WAITING|🙋 WAITING FOR YOU)' "$REPORT")"
+# The sidebar glyph, which no execution here can reach: shipyard_note is a no-op on the tmux backend
+# the rig uses, so this is grep-only by necessity. ONLY needs_human may override the graph verdict —
+# FLOW-03 states that `concluded` keeps `completed`, and painting a finished slot `blocked` from its
+# first idle tick would break that. Mirrors t11-slot-graph.sh, which pins the else branch already.
+ok "only needs_human overrides the graph's glyph" 1 \
+   "$(grep -Fc 'elif [ "$wait_class" = needs_human ]; then shipyard_note "$slot" blocked' "$REPORT")"
 # THE SENTENCE THAT WAS THE BUG. It was written as the alarm's justification and it is the one
 # assumption that failed — a child idles exactly that long when it cannot move, or when nobody
 # asked it to. It must not come back, in the script or in the skill's own text.
@@ -238,12 +245,12 @@ run_report() {  # <stall-secs> [extra args...]; prints the whole report
     bash "$REPORT" "$@" 41 42 43 2>/dev/null
 }
 
-# --- run A: a four-day supervision gap. Every clock restarts, and nothing may be STALLED yet.
-printf '%s\n' "$(( $(date +%s) - 345600 ))" >"$FAKE_GIT/ship-escalations/report-tick"
+# --- run A: an ordinary tick. Seeds the stall clocks that runs A2 and B depend on, and renders the
+# classification. No gap, so nothing may be announced as one.
+printf '%s\n' "$(date +%s)" >"$FAKE_GIT/ship-escalations/report-tick"
 outA=$(run_report 1800)
-ok "A: the gap is announced"            1 "$(printf '%s' "$outA" | grep -c 'supervision resumed after')"
-ok "A: ...with a plausible figure"      1 "$(printf '%s' "$outA" | grep -c 'resumed after 5760 min')"
-ok "A: nothing is STALLED across a gap" 0 "$(printf '%s' "$outA" | grep -c '🛑 STALLED')"
+ok "A: no gap is claimed on an ordinary tick" 0 \
+   "$(printf '%s' "$outA" | grep -c 'supervision resumed after')"
 # The classification itself, rendered by the real script.
 ok "A: the rate-limited slot says so in its row" 1 \
    "$(printf '%s' "$outA" | grep -c '^| 41 .*⏳ rate-limited')"
@@ -263,10 +270,34 @@ ok "A: the rate-limited slot is NOT under WAITING FOR YOU" 0 \
 ok "A: neither block ever prescribes compaction" 0 \
    "$(printf '%s' "$outA" | sed -n '/### ⏳ WAITING —/,$p' | grep -c 'shipyard-compact.sh')"
 
+# --- run A2: the SUPERVISION GAP, and this ordering is what makes the assertion mean something.
+# Run A has just seeded stall clocks, and the threshold here is 1s while ~9s of wall time has
+# passed — so WITHOUT the rebase slot 43 would cross it and alarm. Nothing stalling is therefore
+# evidence the clocks restarted, not an artefact of a fresh mailbox. (The previous version of this
+# check ran first against an empty mailbox, where no clock had accumulated and it could not fail.)
+printf '%s\n' "$(( $(date +%s) - 345600 ))" >"$FAKE_GIT/ship-escalations/report-tick"
+outA2=$(run_report 1)
+ok "A2: the gap is announced"               1 "$(printf '%s' "$outA2" | grep -c 'supervision resumed after')"
+ok "A2: ...with a plausible figure"         1 "$(printf '%s' "$outA2" | grep -c 'resumed after 5760 min')"
+ok "A2: a restarted clock cannot be stalled" 0 "$(printf '%s' "$outA2" | grep -c '🛑 STALLED')"
+
 # --- run B: no gap now, and a 1s threshold, so the slot announcing NOTHING must alarm.
+# An open escalation is also written for slot 42 first, so the `pend` guard is exercised rather
+# than only grepped: an escalated slot must be classified by nothing and stalled by nothing.
+cat >"$FAKE_GIT/ship-escalations/42-1.json" <<'ESCEOF'
+{"id":"42-1","slot":"42","kind":"question","text":"which option?","context":"",
+ "worktree":"","created_at":"2026-09-11T00:00:00Z","status":"pending","notified":false,
+ "answer":null,"answered_at":null}
+ESCEOF
 printf '%s\n' "$(date +%s)" >"$FAKE_GIT/ship-escalations/report-tick"
 outB=$(run_report 1)
 ok "B: no gap is claimed"                   0 "$(printf '%s' "$outB" | grep -c 'supervision resumed after')"
+ok "B: the escalated slot is classified by nothing" 0 \
+   "$(printf '%s' "$outB" | sed -n '/### 🙋 WAITING FOR YOU/,/^$/p' | grep -c '^- `42`')"
+ok "B: ...and its row shows the escalation instead" 1 \
+   "$(printf '%s' "$outB" | grep -c '^| 42 .*⚠️ 1')"
+ok "B: ...and it is not stalled either"     0 \
+   "$(printf '%s' "$outB" | sed -n '/🛑 STALLED/,/^$/p' | grep -c '^- `42`')"
 # THE POINT OF THE WHOLE CHANGE: rarer and right, not quieter.
 ok "B: the unexplained slot IS stalled"     1 \
    "$(printf '%s' "$outB" | grep -A1 '🛑 STALLED' | grep -c '^- `43`')"
@@ -274,18 +305,49 @@ ok "B: ...and the loud block kept its remedy order" 1 \
    "$(printf '%s' "$outB" | grep -c '1. GIT FIRST')"
 ok "B: the rate-limited slot is NOT stalled" 0 \
    "$(printf '%s' "$outB" | sed -n '/🛑 STALLED/,/^$/p' | grep -c '^- `41`')"
-ok "B: the needs-human slot is NOT stalled"  0 \
-   "$(printf '%s' "$outB" | sed -n '/🛑 STALLED/,/^$/p' | grep -c '^- `42`')"
-ok "B: the classified slots still report"    2 \
-   "$(printf '%s' "$outB" | grep -c '^- `4[12]`')"
+ok "B: the rate-limited slot still reports"  1 \
+   "$(printf '%s' "$outB" | grep -c '^- `41`')"
 
 # --- run C: --only-changed is silent when nothing moved, which is what makes suppressing the
 # stall block for a classified slot cost the operator nothing.
-printf '%s\n' "$(date +%s)" >"$FAKE_GIT/ship-escalations/report-tick"
+#
+# It also pins THE TICK STAMP ITSELF, at no extra run. A SENTINEL goes in first — recent enough that
+# no gap is claimed, but distinguishable — and the report must overwrite it with its own epoch. The
+# earlier version of this section could not see the stamp at all, because every run pre-wrote the
+# file and nothing ever read it back: deleting the stamp outright, or moving it back above the loop,
+# both shipped with all checks green while this file claimed otherwise.
+tick_sentinel=$(( $(date +%s) - 5 ))
+printf '%s\n' "$tick_sentinel" >"$FAKE_GIT/ship-escalations/report-tick"
 outC=$(run_report 100000 --only-changed)
 ok "C: an unchanged tick prints nothing" 0 "$(printf '%s' "$outC" | grep -c .)"
+tick_after=$(cat "$FAKE_GIT/ship-escalations/report-tick" 2>/dev/null)
+ok "C: the report stamped its own tick" yes \
+   "$([ -n "$tick_after" ] && [ "$tick_after" != "$tick_sentinel" ] && echo yes || echo no)"
+ok "C: ...with a current epoch, not a stale one" yes \
+   "$([ -n "$tick_after" ] && [ "$tick_after" -gt "$tick_sentinel" ] 2>/dev/null && echo yes || echo no)"
 unset -f git tmux gh
 fi
+
+# WHERE the stamp happens is a source-ORDER property, and no execution here can see it: both
+# placements stamp the file, and the difference only shows when a run dies mid-loop. Pinned the way
+# t7-continuity.sh pins its own ordering constraint, and labelled as what it is — an assertion about
+# the text's order, not about behaviour. It matters because stamping early lets an interrupted run
+# CONSUME the gap without rebasing any clock, which silently restores the unjustified figure.
+# THE ANCHOR IS THE SLOT LOOP'S `done`, not the file's first one — which is what the first version
+# of this check got wrong. `grep -n '^done$' | head -1` returns an unrelated earlier loop near the
+# top of the file, so the comparison was true for ANY placement of the stamp, including the one it
+# exists to forbid. Measured: with that anchor, moving the stamp back above the slot loop still
+# passed. Both anchors are asserted non-empty, so renaming either reds this instead of quietly
+# making it vacuous again.
+slot_loop_line=$(grep -n '^for slot in "${SLOTS\[@\]}"; do' "$REPORT" | head -1 | cut -d: -f1)
+loop_end_line=$(awk -v s="${slot_loop_line:-0}" 'NR > s && /^done$/ { print NR; exit }' "$REPORT")
+tick_line=$(grep -n '^\[ -n "$TICKFILE" \] && printf' "$REPORT" | head -1 | cut -d: -f1)
+ok "the slot loop and its end were both located" yes \
+   "$([ -n "$slot_loop_line" ] && [ -n "$loop_end_line" ] && echo yes || echo no)"
+ok "the tick stamp was located"                  yes \
+   "$([ -n "$tick_line" ] && echo yes || echo no)"
+ok "the tick is stamped after the slot loop, not before" yes \
+   "$([ -n "$tick_line" ] && [ -n "$loop_end_line" ] && [ "$tick_line" -gt "$loop_end_line" ] && echo yes || echo no)"
 
 # --------------------------------------------- 7. the interpreter floor
 # report.sh sources shared/policy in-process (through shipyard-lib.sh) and runs on stock macOS

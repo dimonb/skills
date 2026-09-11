@@ -561,8 +561,15 @@ _ADP_WAIT_CLASS=''
 #
 # Each phrase is the SHORTEST leading substring common to every observed variant — the discipline
 # the queued hints above state — so a client varying the rest of the sentence cannot break the
-# match. The leading letter is a bracket class because both a capitalised form ("Usage limit
-# reached · continuing automatically at <time>") and a lowercase one were recorded.
+# match.
+#
+# THE BRACKET CLASS NOW OUTLIVES ITS EVIDENCE, which is worth saying rather than leaving to be
+# re-derived. It is there because a lowercase form was recorded — but that form was
+# "You have N usage limit resets left", which this file no longer treats as a wait at all: it is
+# chrome, and it is excluded by the GLYPH, not by the phrase. So the only surviving positive is
+# capitalised. The class is kept because a client may capitalise a banner differently tomorrow and
+# the cost of the class is nothing, but do NOT read it as evidence that a lowercase banner exists —
+# that is precisely the inference that made the retired line look like a positive.
 _adp_wait_line_class() {
   case "${1:-}" in
     *[Uu]'sage limit'*)   _ADP_WAIT_CLASS=rate_limited; return 0 ;;
