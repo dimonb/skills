@@ -16,8 +16,11 @@
 # `last line` column (elapsed time / token counts change every tick), the raw ctx
 # figure — only its band — and ▶️/⏸, which flips
 # constantly while ship works and re-waits. A terminal report (nothing in flight) is
-# always printed, so the end of the run is never swallowed. Exit codes are unchanged
-# whether or not anything was printed.
+# always printed, so the end of the run is never swallowed — and so is a tick that could
+# NOT TELL whether anything is in flight (the 🛑 NO SIGNAL block below), and a tick whose
+# backend disagrees with the fleet's pin, for the same reason: those are the two states
+# where silence would be the quietest possible way to say the loudest thing. Exit codes
+# are unchanged whether or not anything was printed.
 #
 # The ctx band has always been in the signature, but it could never move it while the
 # column was blind: the old pane-scraping ctx_of returned "—" on current builds, so the
@@ -112,8 +115,12 @@ done
 #   * we asked the backend this fleet was actually launched on (the container pin's own name).
 # Neither is a new kind of knowledge. `shipyard-down.sh` already refuses to drop the container pin
 # unless enumeration PROVED the fleet empty (`shipyard_continuity_cleanup_last_slot` returns 2 for
-# "could not prove"), so the report was the last place in this skill still reading a failed
-# enumeration as a drained fleet.
+# "could not prove"), so the report is the second consumer to ask, not the first.
+#
+# It is not the last, either: `shipyard_admission_slot_count` still pipes `shipyard_slots` into
+# `wc -l` and drops the status, so the concurrency cap reads an unanswerable question as "nothing
+# running". That is the same defect at a different gate, out of scope here and filed on its own —
+# recorded so a later reader does not take this block as the end of the sweep.
 #
 # It is also the same distinction the stall classifier draws one level down. `shipyard_wait_state`
 # asks why a SLOT yields no signal and refuses to call "not moving" death; this asks why the FLEET
@@ -168,7 +175,12 @@ no_signal_block() {  # <class> <why>
     unreachable)
       echo "- If the backend is simply down, start it and the next tick reports normally; nothing was lost."
       echo "  agterm: check that the app is running and answering \`agtermctl version\`."
-      echo "  tmux:   check \`tmux ls\`." ;;
+      echo "  tmux:   check \`tmux ls\`."
+      # Two causes reach this class and the second one answers `version` perfectly well, so an
+      # operator told only to check the socket would find it healthy and have nothing to act on.
+      echo "- If the socket IS answering, the tree it returned did not have the shape this report"
+      echo "  requires — inspect \`agtermctl tree --json\`. The shape is asserted over the WHOLE tree,"
+      echo "  so a malformed session in an unrelated workspace reaches here too." ;;
     elsewhere)
       echo "- \`SHIPYARD_BACKEND=auto\` decides per PROCESS, so one failed socket probe sends a single tick"
       echo "  to the other backend, where this repo's container is empty for entirely correct reasons."
@@ -430,9 +442,11 @@ for slot in "${SLOTS[@]}"; do
   # that was mid implementation, and took the STALL detector down with it, so the
   # supervisor got two green signals while the session sat with an unsubmitted line
   # in its box. Teardown is the supervisor's act; the absence of a terminal is the
-  # honest end signal. (A dead terminal never reaches here — it `continue`s above —
-  # so this counts live sessions only, and the monitor still exits once every
-  # terminal is gone.)
+  # honest end signal — but only once CORROBORATED, which is the fleet_signal block
+  # above: an absence nobody could verify is not an end signal at all, and reading it
+  # as one is #61. (A dead terminal never reaches here — it `continue`s above — so
+  # this counts live sessions only, and the monitor still exits once every terminal
+  # is gone AND the backend confirmed it.)
   #
   # The graph expresses exactly this rule: a live slot is at launched|in-review|concluded, never the
   # empty `torn-down` phase (an absent terminal `continue`d above), so this counts every live
@@ -564,6 +578,16 @@ TERMINAL=0
 # ANSWERED, which is what fleet_signal asks.
 NOSIG=""; NOSIG_RC=0
 if [ "$TERMINAL" = 1 ]; then
+  # RE-ASK, rather than trust the sample taken before the loop. The row loop is the slow part of a
+  # tick — a 3s motion diff per live slot, plus a forge call and a graph subprocess — so a backend
+  # that answers the enumeration and dies a second later leaves the pre-loop ENUM_RC stale and
+  # reassuring. Measured: a socket that served the first query and failed afterwards enumerated
+  # `ship-41`, rendered it `⛔ no terminal` when the addr lookup failed, counted nothing in flight,
+  # and exited 0 with "monitor stopped" — #61's exact symptom on a tick that had just seen a live
+  # slot. The window this closes is far larger than the one the pre-loop sample covers, and one
+  # extra enumeration is charged only on the tick that would otherwise END supervision.
+  ENUM_RC=0
+  shipyard_slots >/dev/null 2>&1 || ENUM_RC=$?
   NOSIG=$(fleet_signal) || NOSIG_RC=$?
   [ "$NOSIG_RC" = 0 ] || TERMINAL=0
 fi
@@ -572,8 +596,12 @@ fi
 # always printed so the end of the run is never swallowed — and so is a tick that could not tell,
 # which would otherwise be the quietest possible way to say the loudest thing (the STALLED
 # precedent: a block that bypasses the filter, because silence is what made the bug invisible).
+# `$PINNED_ELSEWHERE` is in the condition rather than in the signature: a disagreement is news on
+# EVERY tick it holds, not once. Left to the signature it would be announced the first time and
+# then suppressed for as long as it lasted, which is the one tick shape the report is supposed to
+# be loudest about — the header line is the only trace the incident left behind.
 if [ "$ONLY_CHANGED" = 1 ] && [ "$TERMINAL" = 0 ] && [ "${#STALLED[@]}" -eq 0 ] \
-   && [ "$NOSIG_RC" = 0 ] && [ "$GAP" = 0 ] && [ -n "$SIGFILE" ]; then
+   && [ "$NOSIG_RC" = 0 ] && [ -z "$PINNED_ELSEWHERE" ] && [ "$GAP" = 0 ] && [ -n "$SIGFILE" ]; then
   NOW_SIG=$(printf '%s\n' "${SIG[@]}")
   if [ -f "$SIGFILE" ] && [ "$NOW_SIG" = "$(cat "$SIGFILE" 2>/dev/null)" ]; then
     exit 1   # still in flight, just nothing new to say

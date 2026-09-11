@@ -362,12 +362,19 @@ found nothing"* as *"there is nothing"*.
 
 So an empty answer must now be **corroborated** before it may stop the loop, by two facts the
 skill already had: the container actually **answered** (`shipyard_slots` reports that separately
-from what it said — `shipyard-down.sh` has always refused to drop the container pin without it),
-and we asked the backend this fleet was **launched on** (the driver's pin file is named
+from what it said — `shipyard-down.sh` consults it today before dropping the container pin), and
+we asked the backend this fleet was **launched on** (the driver's pin file is named
 `container-<backend>`, so the pin's own name is that record). When either fails, the report
 raises a `🛑 NO SIGNAL` block — bypassing `--only-changed`, like `🛑 STALLED` — and **exits 1**,
 so the monitor keeps running and the next tick recovers by itself. The header also flags a
-backend disagreement on every tick, since in the incident it was the only visible trace.
+backend disagreement on every such tick, since in the incident it was the only visible trace.
+
+Two limits worth knowing, because neither is obvious from the block's wording. The reachability
+half is asked **again** just before the loop would be stopped, not only at the top of the tick —
+the row loop is the slow part, and a backend that answered and then died used to leave the early
+answer stale and reassuring. The pin half is a *disagreement* check, so a mailbox with no pin (one
+that never launched through `shipyard-launch.sh`, or whose pin was deleted) has nothing to
+disagree with and rests on reachability alone.
 
 What is deliberately **not** suspicious: named slots that are all gone. The loop is armed once
 with a fixed slot list and children are torn down one at a time, so the last teardown leaving

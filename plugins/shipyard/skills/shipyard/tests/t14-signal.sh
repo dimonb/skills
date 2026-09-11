@@ -23,8 +23,12 @@
 #
 # Section 4 executes the real script, for the reason t13-wait.sh measured: `grep -Fc` over source
 # lines asserts that a line exists and nothing about reachability or branch bodies, and six of
-# seven semantic mutations survived that idiom. Every case here is sleep-free — the motion diff
-# costs 3s per LIVE slot, and no case has one — so the whole file runs in about a second.
+# seven semantic mutations survived that idiom.
+#
+# COST: three cases (4d's control and 4e) need a LIVE slot and so pay the report's 3s motion diff
+# each; measured ~13s for the file. That is why it sits in `make test` and not the per-commit gate.
+# The live cases are not optional — a torn-down fleet always prints a terminal report, so only a
+# slot in flight can show that --only-changed still filters at all.
 set -uo pipefail
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SKILL_DIR="$(cd "$DIR/.." && pwd)"
@@ -102,31 +106,48 @@ slots_rc() { # <backend> <fake-def> -> "<slots>|<rc>"
   printf '%s|%s' "$(printf '%s' "$out" | tr '\n' ',')" "$rc"
 }
 
+# EVERY FAKE IS HOISTED INTO A VARIABLE, and that is not style. Under stock macOS /bin/bash 3.2 a
+# single-quoted argument inside `"$( … )"` loses its grouping, so a fake containing `{…,…}` — which
+# any JSON tree does — is then BRACE-EXPANDED: `ok` received five arguments, `slots_rc` ran three
+# times on fragments, and the intended tree never reached shipyard_slots. Two checks below failed
+# on 3.2 and passed on bash 5, which is the worst shape a test can have in this repo: `make test`
+# reds on the platform the fleet runs on while ubuntu CI stays green. A `$(…)` on an assignment's
+# right-hand side is not brace-expanded, so hoisting fixes it. Keep it that way.
+AT_DEAD='agtermctl() { return 1; }'
+AT_BADSHAPE='agtermctl() { printf "{\"ok\":false}\n"; }'
+AT_EMPTY='agtermctl() { printf "{\"ok\":true,\"result\":{\"tree\":{\"workspaces\":[{\"name\":\"t14ws\",\"sessions\":[]}]}}}\n"; }'
+AT_TWO='agtermctl() { printf "{\"ok\":true,\"result\":{\"tree\":{\"workspaces\":[{\"name\":\"t14ws\",\"sessions\":[{\"id\":\"a\",\"name\":\"ship-7\"},{\"id\":\"b\",\"name\":\"ship-8\"}]}]}}}\n"; }'
+TM_DEAD='tmux() { echo "error connecting to server" >&2; return 1; }'
+TM_ABSENT='tmux() { echo "can'\''t find session: t14ex" >&2; return 1; }'
+
 # agterm: a control socket that does not answer `tree` is NOT an empty workspace.
-ok "agterm: a dead tree call is a failure, not an empty container" "|1" \
-   "$(slots_rc agterm 'agtermctl() { return 1; }')"
+r=$(slots_rc agterm "$AT_DEAD")
+ok "agterm: a dead tree call is a failure, not an empty container" "|1" "$r"
 # ...and neither is a tree whose shape fails the assertion inside _shipyard_at_sessions.
-ok "agterm: a malformed tree is a failure too" "|1" \
-   "$(slots_rc agterm 'agtermctl() { printf "{\"ok\":false}\n"; }')"
-# The honest empty answer: a valid tree in which our workspace holds no sessions.
-ok "agterm: a valid tree with no sessions is empty, rc 0" "|0" \
-   "$(slots_rc agterm 'agtermctl() { printf "{\"ok\":true,\"result\":{\"tree\":{\"workspaces\":[{\"name\":\"t14ws\",\"sessions\":[]}]}}}\n"; }')"
-ok "agterm: sessions are still enumerated" "7,8|0" \
-   "$(slots_rc agterm 'agtermctl() { printf "{\"ok\":true,\"result\":{\"tree\":{\"workspaces\":[{\"name\":\"t14ws\",\"sessions\":[{\"id\":\"a\",\"name\":\"ship-7\"},{\"id\":\"b\",\"name\":\"ship-8\"}]}]}}}\n"; }')"
+r=$(slots_rc agterm "$AT_BADSHAPE")
+ok "agterm: a malformed tree is a failure too" "|1" "$r"
+# The honest empty answer: a valid tree in which our workspace holds no sessions. THIS is the check
+# the brace-expansion bug silently inverted — a mangled fake also yields rc 1, so the two negative
+# checks above would have passed vacuously had their fakes carried a comma too.
+r=$(slots_rc agterm "$AT_EMPTY")
+ok "agterm: a valid tree with no sessions is empty, rc 0" "|0" "$r"
+r=$(slots_rc agterm "$AT_TWO")
+ok "agterm: sessions are still enumerated" "7,8|0" "$r"
 
 # tmux: a server that cannot be reached fails; a session that is simply absent is honestly empty,
 # because a tmux session dying takes its children with it.
-ok "tmux: an unreachable server is a failure" "|1" \
-   "$(slots_rc tmux 'tmux() { echo "error connecting to server" >&2; return 1; }')"
-ok "tmux: an absent session is honestly empty" "|0" \
-   "$(slots_rc tmux 'tmux() { echo "can'\''t find session: t14ex" >&2; return 1; }')"
+r=$(slots_rc tmux "$TM_DEAD")
+ok "tmux: an unreachable server is a failure" "|1" "$r"
+r=$(slots_rc tmux "$TM_ABSENT")
+ok "tmux: an absent session is honestly empty" "|0" "$r"
 
 # --------------------------------------------- 3./4. THE REPORT, EXECUTED
 # The rig is t13-wait.sh's: exported shell functions shadow `git`, `tmux` and `gh`, which works
 # where a fake binary on PATH does not, because shipyard-lib.sh prepends the system PATH.
 FAKE_ROOT="$T14TMP/repo"; FAKE_GIT="$T14TMP/gitdir"; MB="$FAKE_GIT/ship-escalations"
+FLAKY="$T14TMP/flaky-calls"
 mkdir -p "$FAKE_ROOT/.claude/worktrees/ship-41/.pipeline-state" "$MB"
-export FAKE_ROOT FAKE_GIT
+export FAKE_ROOT FAKE_GIT FLAKY
 git() {
   case "${1:-} ${2:-}" in
     "rev-parse --show-toplevel")  printf '%s\n' "$FAKE_ROOT"; return 0 ;;
@@ -148,6 +169,13 @@ tmux() {
       case "${TMUX_MODE:-empty}" in
         down) echo "error connecting to server" >&2; return 1 ;;
         live) case "$*" in *window_index*) printf '1 ship-41\n' ;; *) printf 'ship-41\n' ;; esac ;;
+        flaky)
+          # Answer the FIRST call (the pre-loop enumeration) and fail every one after it, which is
+          # a socket dying while the tick is in its slow per-slot work. The counter lives in a file
+          # because each call runs in its own subshell.
+          n=$(cat "$FLAKY" 2>/dev/null); n=$(( ${n:-0} + 1 )); printf '%s\n' "$n" >"$FLAKY"
+          if [ "$n" = 1 ]; then printf 'ship-41\n'; return 0; fi
+          echo "error connecting to server" >&2; return 1 ;;
       esac
       return 0 ;;
     has-session)  [ "${TMUX_MODE:-empty}" = live ] && return 0; return 1 ;;
@@ -160,6 +188,7 @@ export -f git tmux gh
 
 run_report() { # <tmux-mode> [args...]; prints the report, then a last line "rc=<n>"
   local mode="$1" out rc=0; shift
+  : >"$FLAKY"    # the flaky counter is per-run, never carried between cases
   out=$( TMUX_MODE="$mode" SHIPYARD_BACKEND=tmux SHIPYARD_SESSION=t14ex \
          bash "$REPORT" "$@" 2>/dev/null ) || rc=$?
   printf '%s\nrc=%s\n' "$out" "$rc"
@@ -193,6 +222,13 @@ ok "4a: pinned elsewhere -> NOT exit 0"    1 "$(rc_of "$out")"
 ok "4a: ...raises the block"               1 "$(printf '%s' "$out" | grep -c '🛑 NO SIGNAL')"
 ok "4a: ...naming the fleet's backend"     1 "$(printf '%s' "$out" | grep -c 'this fleet was launched on agterm')"
 ok "4a: ...and never claims completion"    0 "$(printf '%s' "$out" | grep -c 'no live ship terminals')"
+# The block's CLASS-SELECTED remedy is its only actionable content, and nothing pinned it: with the
+# class hardcoded, or the whole `case` deleted, every check above stayed green while an `elsewhere`
+# tick told the operator to go and check a socket that is working perfectly.
+ok "4a: ...and prescribes the pin, not a socket check" 1 \
+   "$(printf '%s' "$out" | grep -c 'SHIPYARD_BACKEND=agterm')"
+ok "4a: ...and does NOT prescribe the unreachable remedy" 0 \
+   "$(printf '%s' "$out" | grep -c 'agtermctl version')"
 
 # 4b. The backend could not be asked at all. The container pin agrees here, so this is the half a
 #     pinned backend would NOT have caught — the socket answers `version` and fails on `tree`.
@@ -202,6 +238,10 @@ ok "4b: unreachable -> NOT exit 0"         1 "$(rc_of "$out")"
 ok "4b: ...raises the block"               1 "$(printf '%s' "$out" | grep -c '🛑 NO SIGNAL')"
 ok "4b: ...saying the backend did not answer" 1 \
    "$(printf '%s' "$out" | grep -c 'did not answer when asked which terminals exist')"
+ok "4b: ...and prescribes the socket check, not the pin" 1 \
+   "$(printf '%s' "$out" | grep -c 'agtermctl version')"
+ok "4b: ...and offers the second cause, whose socket answers fine" 1 \
+   "$(printf '%s' "$out" | grep -c 'agtermctl tree --json')"
 
 # 4c. THE SECOND ROUTE. Named slots skip the discovery branch entirely, render every row as
 #     `⛔ no terminal`, count nothing in flight and reach the tail — an identical false completion
@@ -210,6 +250,33 @@ out=$(run_report down 41 42)
 ok "4c: named slots, unreachable -> NOT exit 0" 1 "$(rc_of "$out")"
 ok "4c: ...raises the block"                    1 "$(printf '%s' "$out" | grep -c '🛑 NO SIGNAL')"
 ok "4c: ...and does NOT print monitor stopped"  0 \
+   "$(printf '%s' "$out" | grep -c 'monitor stopped')"
+ok "4c: ...and says so where the count used to go" 1 \
+   "$(printf '%s' "$out" | grep -c 'cannot tell what is in flight')"
+
+# 4c2. THE SAME ROUTE, THE OTHER CLASS — and this one is the incident's own shape. 4a proves the
+#      pin disagreement only at the DISCOVERY exit; the documented Step 2 loop passes slot numbers
+#      (`--only-changed <slot> ...`), so the named-slot tail is the PRODUCTION route and was pinned
+#      for `unreachable` alone. Measured gap: narrowing the tail guard to `[ "$ENUM_RC" != 0 ]` —
+#      i.e. dropping the pin half of corroboration — left the whole suite green while a tmux-
+#      resolved tick over an agterm fleet printed "monitor stopped" and exited 0. That is #61
+#      verbatim, through the very route the operator actually runs.
+rm -f "$MB"/container-*; : > "$MB/container-agterm"
+out=$(run_report empty 41 42)
+ok "4c2: named slots, pinned elsewhere -> NOT exit 0" 1 "$(rc_of "$out")"
+ok "4c2: ...raises the block"                         1 "$(printf '%s' "$out" | grep -c '🛑 NO SIGNAL')"
+ok "4c2: ...and does NOT print monitor stopped"       0 \
+   "$(printf '%s' "$out" | grep -c 'monitor stopped')"
+
+# 4c3. CORROBORATION IS RE-ASKED, NOT SAMPLED ONCE. The row loop is the slow part of a tick, so a
+#      backend that answers the enumeration and dies during it used to leave the pre-loop status
+#      stale and reassuring: the tick enumerated a live slot, failed every addr lookup, rendered
+#      `⛔ no terminal`, counted nothing in flight and exited 0 — #61 by a timing route. `flaky`
+#      serves the first list-windows and fails afterwards, which is exactly that shape.
+rm -f "$MB"/container-*; : > "$MB/container-tmux"
+out=$(run_report flaky)
+ok "4c3: a backend that dies mid-tick -> NOT exit 0"  1 "$(rc_of "$out")"
+ok "4c3: ...and does NOT print monitor stopped"       0 \
    "$(printf '%s' "$out" | grep -c 'monitor stopped')"
 
 # 4d. --only-changed must not swallow it, for the reason the STALLED block bypasses the filter:
