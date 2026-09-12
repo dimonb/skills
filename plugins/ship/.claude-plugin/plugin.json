@@ -1,6 +1,6 @@
 {
   "name": "ship",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Drive one change end-to-end through a repo's pipeline — issue, spec, implementation, its own review passes, hand-off or merge — on GitHub or GitLab. Self-driven: every review pass runs as read-only subagents with adversarial verification, and nothing waits on an external reviewer.",
   "author": {
     "name": "dimonb",
