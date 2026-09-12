@@ -127,10 +127,20 @@ resolve_room() { # honours --room, then $COUNCIL_ROOM, then the only room there 
 # --room r` both work. Requiring it first is the kind of wart every participant trips on
 # once, and the error it produces ("unknown verb --room") points at the wrong thing.
 ROOM_NAME=""; ARGS=(); VERB=""
+
+# Both value-taking arms check for their operand before shifting past it, and the check is
+# not decoration. `${2:-}` suppresses the unbound-variable abort that `set -u` gives every
+# other option arm in this skill, and `shift 2` with one positional left FAILS and shifts
+# nothing — so `$#` never falls and this loop spins at 100% CPU, printing nothing, forever.
+# `council.sh status --room` and `council.sh verdict --me` are supervisor commands run
+# unattended, where a silent infinite hang is indistinguishable from a wedged room. Same
+# shape, same fix, as `relaunch --cwd` in lib/up.sh.
 while [ $# -gt 0 ]; do
   case "$1" in
-    --room) ROOM_NAME="${2:-}"; shift 2 ;;
-    --me)   COUNCIL_ME="${2:-}"; export COUNCIL_ME; shift 2 ;;
+    --room) [ $# -ge 2 ] || { echo "council: --room needs a room name" >&2; exit 2; }
+            ROOM_NAME="$2"; shift 2 ;;
+    --me)   [ $# -ge 2 ] || { echo "council: --me needs a peer name" >&2; exit 2; }
+            COUNCIL_ME="$2"; export COUNCIL_ME; shift 2 ;;
     *)      if [ -z "$VERB" ]; then VERB="$1"; else ARGS+=("$1"); fi; shift ;;
   esac
 done
