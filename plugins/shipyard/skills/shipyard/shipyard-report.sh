@@ -39,10 +39,10 @@
 #    module this file now imports its marker from could not work.);
 #  * the whole report is buffered and printed in ONE block so Monitor batches it
 #    into a single notification;
-#  * the MR iid of a text slot is read out of ship's own state
-#    (`.pipeline-state/MR-<iid>.json` inside the worktree), and when that file says nothing —
-#    a child that never wrote one — out of the FORGE, by the slot worktree's branch. Only
-#    when neither can answer is there none, and the slot counts as in-flight;
+#  * a slot's MR iid is read out of ship's own state (`.pipeline-state/*.json` inside the
+#    worktree), and when that file says nothing — a child that never wrote one — out of the
+#    FORGE, by the slot worktree's branch. Only when neither can answer is there none, and the
+#    slot counts as in-flight;
 #  * open escalations are appended, so a question raised between fast-monitor
 #    ticks still shows up here;
 #  * a motionless slot is asked WHY before the stall clock is consulted (shipyard_wait_state in
@@ -251,7 +251,6 @@ fi
 # a report which always dies mid-loop re-announces the gap every tick; that is noisy, honest, and
 # true (nothing IS being watched), which is the right way round.
 
-# iid: numeric slot is the iid; otherwise read it from .pipeline-state.
 # Which forge origin points at. The report used to assume GitLab everywhere and ran
 # `glab mr view` against a GitHub remote, where it fails silently — see mr_state().
 forge() {

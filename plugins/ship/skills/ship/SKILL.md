@@ -230,11 +230,17 @@ disagree, **the repo's law wins** — say so and follow it.
 
 ### 2.8 Write the state file — the last act of discovery, and a real step
 
-Create `.pipeline-state/<KEY>.json` (§4) now, with what §2.1–§2.7 just answered. **Four fields
-are what a supervisor's status table reads, and it reads them from this file and from nowhere
-else: `issue`, `pr_number`, `state`, `phase`.** Write those the moment each is known — the
-rest of §4's schema is ship's own memory for a re-wake and can be filled in as it arrives, so
-do not treat the size of that document as the size of this step.
+Create `.pipeline-state/<KEY>.json` (§4) now, with what §2.1–§2.7 just answered. **A
+supervisor's status table is built from two fields of this file: the PR/MR number as
+`pr_number`, and the stage as `state`** (a reader may accept `phase` in its place). Write each
+the moment it is known — the rest of §4's schema is ship's own memory for a re-wake and can be
+filled in as it arrives, so do not treat the size of that document as the size of this step.
+
+The two are not equally recoverable, and the asymmetry is why this step matters. A supervisor
+that can reach the forge may find the **number** by your branch. The **stage** it cannot: no
+forge knows whether you are at `apply` or at `impl-review`, and the only trace of one outside
+this session is whichever stage a review record has already been posted for (§5.9), which lags
+the stage you are in. So an unrecorded stage is one nobody can see for as long as it lasts.
 
 **Why this is a numbered step and not a clause.** It used to be one subordinate clause in §2's
 preamble, justified by a benefit — *so a scheduled re-wake does not have to re-derive it* —
@@ -246,8 +252,10 @@ the PR column read `no MR yet` and the stage `—` from launch to merge, over op
 mergeable pull requests, for their entire lives. **The file is written for a reader who is not
 you.**
 
-Then keep `state` current: **every transition in §7 records it** before moving on. A stage the
-file does not name is a stage nobody outside this session can see.
+Then keep `state` current: **§7's transitions record it** as they go. One of them deliberately
+does not — the hand-off out of §7.F into §7.G: `ready-to-merge` is recorded when §7.G *ends*,
+because a supervisor reads that record as the change having become a person's move, and
+stamping it on entry would report a run still working through the merge gate as finished.
 
 ---
 
@@ -892,9 +900,9 @@ checklist after a merge. Neither is automated; skipping it makes the board drift
    issue reference in the form §7.A settled on.
 6. Verify both the issue and the PR/MR are assigned to us.
 7. `record state=spec-review` (or `record state=apply` in a no-spec repo), with the PR/MR
-   number from step 5 — that number reaches a supervisor through the state file and no other
-   way. Nothing to wait for — do not schedule
-   a re-wake here.
+   number from step 5 — that number is how a supervisor learns which PR/MR this slot is
+   without having to go and ask the forge for it. Nothing to wait for — do not schedule a
+   re-wake here.
 
 > Idempotency: before step 3, re-scan linked PRs/MRs and the state file. If one already
 > exists, do NOT create another.

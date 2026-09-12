@@ -101,7 +101,8 @@ _syg_pr_known() { [ -n "${SYG_IID:-}" ]; }
 # at `launched` from launch to merge, and the `completed` glyph never fires at all. The cost was
 # glyph-only, as predicted (the in-flight count reads a live terminal, not this phase) — but it was
 # reached, so do not read this node's ordering as free. slot_iid()'s forge fallback is what makes
-# the iid arrive without the child's cooperation; the stage has no such second source.
+# the iid arrive without the child's cooperation; SYG_STAGE gets no such fallback, so a slot whose
+# child records no stage still concludes on the forge state alone and never on `ready-to-merge`.
 _syg_concluded() {
   case "${SYG_MR_STATE:-}" in merged|closed) return 0 ;; esac
   [ "${SYG_STAGE:-}" = ready-to-merge ]

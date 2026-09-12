@@ -12,22 +12,29 @@
 #   1. a slot with NO state file gets its number from the forge;
 #   2. the forge is the LAST resort — a slot whose state file answers never reaches it, so the
 #      fallback cannot override a child that did its job, and costs no call when it did;
-#   3. the base branch is never asked about;
+#   3. the base branch is never asked about, and neither is a worktree that has not branched yet;
 #   4. only a NUMBER is an answer. An unauthenticated or misdirected CLI prints prose on stdout,
 #      and an iid of `error: …` would be carried into mr_state() and rendered as a PR that is not
-#      there — the failure being fixed, in a new disguise.
+#      there — the failure being fixed, in a new disguise;
+#   5. the query asks for a PR/MR in ANY state. `--state all` is not a detail: a merged PR whose
+#      terminal is still up must keep its number, or the column blanks at the exact moment the
+#      slot graph needs `merged` to conclude. Review measured `--state open` shipping 9/9 green
+#      here before this case existed, which is #124's own disguise reinstated by one word.
 #
 # The rig is t13-wait.sh's: exported shell functions shadow `git`, `tmux` and `gh`, which works
 # where a fake binary on PATH does not because shipyard-lib.sh prepends the system PATH over
 # anything a test puts in front. Cost: the report sleeps 3s per slot for its motion diff, so one
-# four-slot run is ~12s — which is why this suite is in `make test`, not the per-commit gate.
+# five-slot run is ~15s — which is why this suite is in `make test`, not the per-commit gate.
 #
 # WHAT A GREEN RUN DOES NOT PROVE, stated so it is not read as more than it is. The `gh` fake
 # honours `--jq` by piping its canned JSON through real jq, so the filter in shipyard-report.sh is
 # genuinely exercised — but nothing here proves the `--json`/`--state`/`--limit` flags are spelled
 # the way the real CLI wants them, and nothing here calls a real forge. A flag typo ships green.
 # The GitLab branch of the fallback is not exercised at all: this rig is GitHub-only, because the
-# forge is derived from the origin remote and one report run cannot be both.
+# forge is derived from the origin remote and one report run cannot be both. That gap covers the
+# `glab mr list --source-branch` call AND the `return` slot_iid()'s GitLab shortcut now needs —
+# without it a numeric GitLab slot would print the slot and then fall through, concatenating two
+# numbers into an iid that is neither. Delete that `return` and every suite here stays green.
 set -uo pipefail
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SKILL_DIR="$(cd "$DIR/.." && pwd)"
@@ -48,11 +55,16 @@ FAKE_ROOT="$T15TMP/repo"; FAKE_GIT="$T15TMP/gitdir"; GH_CALLS="$T15TMP/gh-calls"
 mkdir -p "$FAKE_ROOT" "$FAKE_GIT/ship-escalations"
 : > "$GH_CALLS"
 
-# 51: no state file, on its own branch        -> the forge answers 777.
-# 52: a state file that answers 902           -> the forge is never asked.
+# 51: no state file, on its own branch          -> the forge answers 777.
+# 52: a state file that answers 902             -> the forge is never asked.
 # 53: no state file, sitting on the base branch -> nothing to ask about.
-# 54: no state file, and a CLI answering prose -> no number, so no iid.
-for s in 51 52 53 54; do mkdir -p "$FAKE_ROOT/.claude/worktrees/ship-$s/.pipeline-state"; done
+# 54: no state file, and a CLI answering prose  -> no number, so no iid.
+# 55: no state file, detached HEAD (never branched) -> nothing to ask about either. This slot
+#     exists because the fake's fallback arm below is otherwise UNREACHABLE: every other slot
+#     matches an explicit arm, so a `*) printf 'HEAD'` fixture commented as if it covered the
+#     detached case would have covered nothing, and deleting the guard it stands for shipped
+#     green. A fixture that reads as coverage and is not is worse than an admitted gap.
+for s in 51 52 53 54 55; do mkdir -p "$FAKE_ROOT/.claude/worktrees/ship-$s/.pipeline-state"; done
 printf '{"pr_number":902,"state":"impl-review"}\n' \
   >"$FAKE_ROOT/.claude/worktrees/ship-52/.pipeline-state/PR-902.json"
 export FAKE_ROOT FAKE_GIT GH_CALLS
@@ -71,7 +83,7 @@ git() {
         *ship-52) printf 'feat/bravo\n' ;;
         *ship-53) printf 'main\n' ;;        # the base branch itself
         *ship-54) printf 'feat/delta\n' ;;
-        *)        printf 'HEAD\n' ;;        # a worktree that has not branched yet
+        *)        printf 'HEAD\n' ;;        # slot 55: a worktree that has not branched yet
       esac
       return 0 ;;
   esac
@@ -80,7 +92,7 @@ git() {
 
 tmux() {
   case "${1:-}" in
-    list-windows) printf '1 ship-51\n2 ship-52\n3 ship-53\n4 ship-54\n'; return 0 ;;
+    list-windows) printf '1 ship-51\n2 ship-52\n3 ship-53\n4 ship-54\n5 ship-55\n'; return 0 ;;
     has-session)  return 0 ;;
     capture-pane) printf '⏺ working\n'; return 0 ;;
   esac
@@ -117,7 +129,7 @@ export -f git tmux gh
 
 printf '%s\n' "$(date +%s)" >"$FAKE_GIT/ship-escalations/report-tick"
 out=$(SHIPYARD_STALL_SECS=100000 SHIPYARD_BACKEND=tmux SHIPYARD_SESSION=t15ex \
-        bash "$REPORT" 51 52 53 54 2>/dev/null)
+        bash "$REPORT" 51 52 53 54 55 2>/dev/null)
 
 # 1 — the whole point: a child that wrote nothing still gets its PR number.
 ok "51: the forge supplies the number no state file held" 1 \
@@ -146,6 +158,31 @@ ok "54: ...and prose is not taken for an iid"       1 \
    "$(printf '%s' "$out" | grep -c '^| 54 | — .*no MR yet')"
 ok "54: ...with no error text rendered as a PR"     0 \
    "$(printf '%s' "$out" | grep -c 'could not resolve to a Repository')"
+
+# 5 — a worktree that has not branched yet. `rev-parse --abbrev-ref HEAD` answers the literal
+# `HEAD` when detached, and `--head HEAD` is a question with no useful answer asked once per tick.
+ok "55: a detached HEAD is never asked about"       0 \
+   "$(grep -c -- '--head HEAD' "$GH_CALLS")"
+ok "55: ...and the column says so honestly"         1 \
+   "$(printf '%s' "$out" | grep -c '^| 55 | — .*no MR yet')"
+
+# 6 — the flags themselves. The call log holds the whole argv, so the three that carry meaning are
+# pinned here rather than left to the fake, which answers on `--head` alone and would keep
+# reporting green through a silent change to any of them.
+#
+# Each asserts that NO logged call LACKS the flag, rather than counting the calls that carry it:
+# the number of queries this rig makes is an artefact of how many slots reach the forge, so a
+# count would have to be re-tuned every time a case is added and would pass for the wrong reason
+# if one call quietly stopped happening.
+ok "every query asks for a PR in ANY state"         0 \
+   "$(grep -v -- '--state all' "$GH_CALLS" | grep -c .)"
+ok "...and for the number field"                    0 \
+   "$(grep -v -- '--json number' "$GH_CALLS" | grep -c .)"
+ok "...and takes only the first"                    0 \
+   "$(grep -v -- '--limit 1' "$GH_CALLS" | grep -c .)"
+# ...and the log is non-empty, so the three checks above cannot pass vacuously over no calls.
+ok "the log they read is not empty"                 2 \
+   "$(grep -c . "$GH_CALLS")"
 
 unset -f git tmux gh
 if [ "$FAILURES" -eq 0 ]; then

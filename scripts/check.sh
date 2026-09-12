@@ -341,11 +341,17 @@ if [ -f "$core" ]; then
   # `done` is included here, unlike the handler arm above: a terminal state is exactly the one a
   # supervisor most needs to see recorded.
   #
-  # WHAT THIS IS, stated because a green gate is otherwise read as coverage: a DOCS-CONSISTENCY
-  # check over the core's own prose, NOT a runtime guarantee that any run wrote any file. It
-  # asserts that the instruction exists at every transition; whether a child obeys it is not
-  # checkable from here, and nothing in this repo can check it. The half of #124 that holds
-  # regardless of what a child does is shipyard-report.sh's forge fallback, not this arm.
+  # WHAT THIS IS, stated because a green gate is otherwise read as coverage, and stated narrowly
+  # because the first version of this comment overstated it and two review axes proved the
+  # overstatement by mutation. It is a DOCS-CONSISTENCY check over the core's own prose, and it
+  # asserts ONLY that each enum state is recorded SOMEWHERE in the core — one unanchored match per
+  # state NAME, not one per transition. A state recorded on one path and not on another still
+  # passes: `done`, `needs-human`, `ready-to-merge` and `apply` each have more than one transition
+  # site, so deleting the instruction from one of them is green here. Which individual transitions
+  # carry it is judgement, not gate; a positional arm would be new machinery and is not worth it
+  # for prose whose sections move. And NOTHING here is a runtime guarantee that any run wrote any
+  # file — whether a child obeys the instruction is not checkable from this repo at all. The half
+  # of #124 that holds regardless of what a child does is shipyard-report.sh's forge fallback.
   for st in $states; do
     grep -qF -- "record state=$st" "$core" \
       || fail "state '$st' is in the enum but $core never says \`record state=$st\`"
