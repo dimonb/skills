@@ -173,27 +173,6 @@ shipyard_container_kind() {
   esac
 }
 
-# --- agterm internals ----------------------------------------------------------
-# One compact JSON object per session in our workspace. Stays in shipyard: the driver resolves ONE
-# session by name (drv_target); enumerating every session in the container is shipyard's own need
-# (shipyard_slots), with no driver twin.
-_shipyard_at_sessions() {
-  local tree
-  tree=$(agtermctl tree --json 2>/dev/null) || return 1
-  printf '%s' "$tree" | jq -c --arg ws "$(shipyard_container)" '
-    if .ok != true or (.result.tree.workspaces | type) != "array"
-      or (all(.result.tree.workspaces[];
-        type == "object" and (.name | type) == "string"
-        and (.sessions | type) == "array"
-        and all(.sessions[];
-          type == "object" and (.id | type) == "string" and (.id | length) > 0
-          and (.name | type) == "string")) | not)
-    then error("invalid agterm tree")
-    else .result.tree.workspaces[] | select(.name == $ws) | .sessions[]
-    end
-  ' 2>/dev/null
-}
-
 # --- the API every other script uses -------------------------------------------
 # The shared ops delegate; the session-name template `ship-<slot>` is resolved here and handed to
 # the driver, which re-derives the opaque backend handle from it on every call.
@@ -285,17 +264,24 @@ shipyard_peek_hint() {
 # `pipefail`: an ambient option in the caller decided whether a failed enumeration was
 # distinguishable from an empty container. Capture it explicitly instead, so no later caller
 # inherits the wrong answer by forgetting an option it never knew it needed.
+#
+# THE BACKEND MECHANICS ARE NO LONGER HERE. Both arms moved into `drv_sessions` in shared/driver
+# when `council say` became a second caller that had to tell an empty container from an
+# unanswered one (#141); what stays is shipyard's own `ship-<slot>` template, which is the half
+# the driver deliberately does not know. The status contract above is `drv_sessions`' now and is
+# passed through unchanged.
 shipyard_slots() {
-  local raw
+  local raw rc=0
+  # The unusable-backend arm is answered HERE rather than let through to the driver's, purely so
+  # the operator keeps reading about `SHIPYARD_BACKEND` and shipyard's own install hints. The
+  # driver would refuse just as correctly, in the driver's words.
   case "$(shipyard_backend)" in
-    agterm)
-      # Non-zero on a dead control socket AND on a tree that fails the shape assertion inside
-      # _shipyard_at_sessions; empty output with rc 0 when the workspace simply holds no sessions.
-      raw=$(_shipyard_at_sessions) || return 1
-      printf '%s' "$raw" | jq -r '.name // empty' 2>/dev/null | sed -n -E 's/^ship-(.+)$/\1/p' ;;
-    tmux)   _shipyard_tmux_slots ;;
+    agterm|tmux) ;;
     *) _shipyard_no_backend; return 1 ;;
   esac
+  raw=$(drv_sessions) || rc=$?
+  [ "$rc" = 0 ] || return 1
+  printf '%s\n' "$raw" | sed -n -E 's/^ship-(.+)$/\1/p'
 }
 
 # shipyard_backend_pinned_elsewhere — echoes the backend(s) this fleet was actually launched on,
@@ -309,34 +295,21 @@ shipyard_slots() {
 # that whole ordering. That is a cost argument, not an impossibility: the mailbox derives from
 # `git rev-parse --git-common-dir` and could be computed earlier.
 #
-# THE SEAM, stated because this file now spells a path the driver owns. `_drv_pin_file` names only
-# the CURRENT backend, so it cannot answer "which pins exist"; both sites here therefore write
-# `container-<b>` themselves, duplicating the driver's template. A rename in the driver would make
-# this read nothing and fail OPEN — back to the incident, silently. The right home is a
-# `drv_pins_present` in shared/driver, vendored into both plugins; it is not there yet because
-# council, checked rather than assumed, has no empty-answer conclusion to protect (its verdict is
-# computed from the room's on-disk log, and `council say` already refuses per peer), so the shared
-# module would have exactly one consumer today. Move it the moment that stops being true.
+# THE SEAM THIS USED TO NAME IS NOW CLOSED. This function spelled `container-<b>` itself, which
+# duplicated a template the driver owns — so a rename there would have made it read nothing and
+# fail OPEN, silently, back to the incident. It named `drv_pins_present` in shared/driver as the
+# right home and deferred on the explicit grounds that council had no empty-answer conclusion to
+# protect, with the trigger "Move it the moment that stops being true". #141 is that moment:
+# `council say` refuses a peer with a confident negative drawn from the same unanswerable
+# question. The implementation is `drv_pins_elsewhere` in shared/driver, vendored into both
+# plugins; this stays as shipyard's NAME for it, because a released surface with four call sites
+# is worth a one-line seam and because the answer it gives is unchanged.
 #
 # WHY IT MATTERS. `SHIPYARD_BACKEND=auto` decides per PROCESS by probing the agterm control socket,
 # so a socket that blips for one tick resolves tmux for that tick — and a tmux session named after
 # the repo holds no ship windows, correctly and uselessly. Nothing is wrong with either answer;
 # what was wrong was reading "I looked somewhere else and found nothing" as "there is nothing".
-shipyard_backend_pinned_elsewhere() {
-  local d b f now any="" found=""
-  d="${DRV_CONTAINER_PIN_DIR:-}"
-  [ -n "$d" ] && [ -d "$d" ] || return 1
-  now=$(shipyard_backend)
-  for b in agterm tmux; do
-    f="$d/container-$b"
-    [ -f "$f" ] || continue
-    any="${any:+$any and }$b"
-    [ "$b" = "$now" ] && found=1
-  done
-  [ -n "$any" ] || return 1        # nothing was ever launched from this mailbox — no disagreement
-  [ -n "$found" ] && return 1      # the resolved backend is one of them — no disagreement
-  printf '%s' "$any"
-}
+shipyard_backend_pinned_elsewhere() { drv_pins_elsewhere; }
 
 # shipyard_signal_class [<enum-rc>] — MAY AN ABSENCE BE BELIEVED?
 #
@@ -346,45 +319,55 @@ shipyard_backend_pinned_elsewhere() {
 #   unreachable  the backend did not answer when asked which terminals exist.
 #   elsewhere    it answered, but this fleet was launched on a DIFFERENT backend (the pin says so).
 #
-# The two facts are the ones `shipyard-report.sh` already corroborates its empty answer with, and
-# they are read here through the same two functions — `shipyard_slots`' exit status and
-# `shipyard_backend_pinned_elsewhere`. Nothing new is probed and no second record is invented: the
-# per-slot callers were the level of the skill that still had no way to ask.
+# The verdict itself is `drv_absence_class` in shared/driver, and this is shipyard's name for it.
+# What stays HERE is the one thing the driver must not do: supply the enumeration. Both facts it
+# rests on are the driver's own — `drv_sessions`' exit status and the container pin's name — but
+# WHICH enumeration a caller's answer came from is the caller's knowledge, so the probe below is
+# shipyard's and the driver never re-probes. `council say` is the second caller; two answers to
+# one question is the defect AGENTS.md says the shared engine exists to remove.
 #
-# WHY IT IS A PARAMETER. A caller that has already enumerated must classify the status of the list
-# it ACTED ON, not of a second enumeration that could disagree with it, so it captures the rc once
-# and passes it in. `shipyard_absence_report` below does exactly that — it needs the list itself for
-# the per-slot contradiction check, so it enumerates once and hands the status down.
+# WHY IT IS AN OPTIONAL PARAMETER, AND WHY BOTH MODES MUST SURVIVE. A caller that has already
+# enumerated must classify the status of the list it ACTED ON, not of a second enumeration that
+# could disagree with it, so it captures the rc once and passes it in — `shipyard-report.sh` and
+# `shipyard_absence_report` both do exactly that. A caller holding no list (`shipyard-tell.sh`,
+# `shipyard-compact.sh`, through the report below) has nothing to preserve and may probe, which is
+# what the argument-less mode is. Dropping the parameter would silently reintroduce the
+# disagreement on the callers that pass one.
 #
 # THE DUPLICATION, STATED RATHER THAN HIDDEN. `shipyard-report.sh` asks this same question about the
 # FLEET, in its own `fleet_signal` — same two facts, same two classes, near-identical strings, added
 # by #130. This function SUBSUMES it exactly: `shipyard_signal_class "$ENUM_RC"` is that function.
 # The swap is not made here because report.sh is being edited on another branch and this change is
 # fenced out of that file; it is assigned to that branch's rebase, and it is a deletion plus a
-# one-line call — no signature change. Two answers to one question is the defect AGENTS.md says the
-# shared engine exists to remove, so this note stands until the second one is gone.
+# one-line call — no signature change. That note stands until the second one is gone.
 #
 # NOT USED AS EVIDENCE: the slot's worktree. A worktree outlives its terminal by design — that is
 # the state of every child whose terminal was killed but not torn down — so reading its presence as
 # "the child may still be alive" would raise the alarm on the commonest healthy case, which
 # AGENTS.md names as costing more than the bug it guards. The per-slot launch record that WOULD
 # carry that evidence belongs with the pin-staleness work, filed separately.
+#
+# AND WHY IT RE-SPELLS TWO OF THE SENTENCES. The CLASS is decided once, in the driver; the WHY is
+# operator-facing prose in this skill's own vocabulary — a fleet, a slot, a child — which the
+# driver cannot speak without being told, and council must not inherit. `shipyard-report.sh`
+# renders this `why` verbatim inside its `🛑 NO SIGNAL` block, so the wording is a released
+# surface with a test on it, not an internal detail. Overriding it here keeps the decision in one
+# place and the words where they belong; the `unreachable` sentence needs no override because it
+# names only the backend, which both skills say the same way.
 shipyard_signal_class() {
-  local rc="${1:-}" pe TAB
+  local rc="${1:-}" list="${2:-}" name="${3:-}" sig crc=0 TAB
   TAB=$(printf '\t')
   if [ -z "$rc" ]; then rc=0; shipyard_slots >/dev/null 2>&1 || rc=$?; fi
-  if [ "$rc" != 0 ]; then
-    printf 'unreachable%sthe %s backend did not answer when asked which terminals exist' \
-      "$TAB" "$(shipyard_backend)"
-    return 1
-  fi
-  pe=$(shipyard_backend_pinned_elsewhere) || pe=""
-  if [ -n "$pe" ]; then
-    printf 'elsewhere%sthis run resolved %s, but this fleet was launched on %s' \
-      "$TAB" "$(shipyard_backend)" "$pe"
-    return 1
-  fi
-  return 0
+  sig=$(drv_absence_class "$rc" "$list" "$name") || crc=$?
+  case "${sig%%"$TAB"*}" in
+    # Re-asked rather than parsed back out of the driver's sentence, for the reason the
+    # `elsewhere` remedy in `shipyard_absence_report` already gives: reading two file names again
+    # costs nothing, and recovering a value from prose couples this to that sentence's wording.
+    elsewhere) sig="elsewhere${TAB}this run resolved $(shipyard_backend), but this fleet was launched on $(drv_pins_elsewhere)" ;;
+    listed)    sig="listed${TAB}the $(shipyard_backend) backend answered and still lists $name, so it is the per-slot lookup that failed, not the child that ended" ;;
+  esac
+  printf '%s' "$sig"
+  return "$crc"
 }
 
 # shipyard_absence_report <slot> — say, on stderr, why that slot has no terminal.
@@ -400,34 +383,24 @@ shipyard_signal_class() {
 # the slot down or relaunch it, against a child that is mid-review and alive in the other backend.
 # An unanswerable question must never produce a confident negative.
 shipyard_absence_report() {
-  local slot="$1" list s sig class why pin rc=0 erc=0 found="" TAB
+  local slot="$1" list sig class why pin rc=0 erc=0 TAB
   TAB=$(printf '\t')
   # ONE enumeration, and KEEP ITS ANSWER — not just its status. The status alone cannot see the
   # narrowest blip, and that blip is the one that ends in a teardown: `drv_target` makes its OWN
-  # backend call (tmux asks for `#{window_index} #{window_name}`, `shipyard_slots` for
+  # backend call (tmux asks for `#{window_index} #{window_name}`, `drv_sessions` for
   # `#{window_name}`; agterm reads the tree twice), and it swallows stderr and status, so a
   # transient failure there is indistinguishable from "not found". If THAT call blips while the
   # enumeration answers, both facts below agree and a slot the backend has just listed is called
   # gone. `shipyard-report.sh` guards the same contradiction one level up — "the only honest
   # reading of 'still enumerated, but I rendered it gone' is that the lookup failed" — and its
-  # `blip` fixture exists because that shape happened. This is the per-slot form of it.
-  list=$(shipyard_slots 2>/dev/null) || erc=$?
-  sig=$(shipyard_signal_class "$erc") || rc=$?
-  # Matched by READING the list, never `printf … | grep -q`: grep exits on the first match, printf
-  # takes SIGPIPE, and under `set -o pipefail` — which shipyard-tell.sh sets — the pipeline then
-  # reports 141 on the very case that matched. `shipyard_slots` prints the BARE slot (it strips the
-  # `ship-` prefix), so the comparison is against `$slot`, not `ship-$slot`.
-  if [ "$rc" = 0 ]; then
-    while IFS= read -r s; do
-      [ "$s" = "$slot" ] && { found=1; break; }
-    done <<EOF
-$list
-EOF
-    if [ -n "$found" ]; then
-      sig="listed${TAB}the $(shipyard_backend) backend answered and still lists ship-$slot, so it is the per-slot lookup that failed, not the child that ended"
-      rc=1
-    fi
-  fi
+  # `blip` fixture exists because that shape happened. This is the per-slot form of it, and it is
+  # the classifier's `listed` arm rather than a loop here, so the two cannot drift.
+  #
+  # Enumerated through `drv_sessions` and not `shipyard_slots` because the comparison wants the
+  # FULL session name: `shipyard_slots` strips the `ship-` prefix, and the diagnostic names the
+  # terminal the operator would go and look at.
+  list=$(drv_sessions 2>/dev/null) || erc=$?
+  sig=$(shipyard_signal_class "$erc" "$list" "ship-$slot") || rc=$?
   if [ "$rc" = 0 ]; then
     echo "error: no live terminal \`ship-$slot\` in $(shipyard_container_kind) \`$(shipyard_container)\`." >&2
     echo "       the $(shipyard_backend) backend answered and does not have it, so the child is gone." >&2
@@ -460,18 +433,6 @@ EOF
       echo "       anything: the backend says the slot is there." >&2 ;;
   esac
   return 1
-}
-
-_shipyard_tmux_slots() {
-  local out
-  if out=$(tmux list-windows -t "$(shipyard_container)" -F '#{window_name}' 2>&1); then
-    printf '%s\n' "$out" | sed -E 's/[-*]$//' | sed -n -E 's/^ship-(.+)$/\1/p'
-    return 0
-  fi
-  case "$out" in
-    *'no server running'*|*"can't find session"*|*'session not found'*|*'no such session'*) return 0 ;;
-    *) return 1 ;;
-  esac
 }
 
 # shipyard_esc <slot> — Escape, i.e. CLEAR the input box. Never send this mid-turn: Escape

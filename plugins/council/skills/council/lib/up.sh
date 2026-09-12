@@ -509,28 +509,192 @@ council_rooms() {
   done
 }
 
+# Why a seat has no terminal — council's words for `drv_absence_class`'s verdict, and its exit
+# mapping. The driver DECIDES (one implementation, shared with shipyard); this speaks, because the
+# vocabulary — a room, a seat, `relaunch` — is council's and the driver must not learn it.
+#
+# Returns 3 when the absence is CORROBORATED: the backend answered and does not have that session,
+# so the seat really is gone and `relaunch` is the right move. Returns 4 when it is UNRESOLVED, in
+# which case `relaunch` is the WRONG move — it kills a live agent mid-turn along with its context,
+# which is why an unanswerable question must never produce a confident negative here.
+_council_say_absence() { # <peer>
+  local peer="$1" name list sig class why pin erc=0 rc=0 TAB
+  TAB=$(printf '\t')
+  name=$(ct_name "$peer")
+  # ONE enumeration, and keep its ANSWER as well as its status. The status alone cannot see the
+  # narrowest blip: `drv_target` makes its OWN backend call and swallows both stderr and status,
+  # so it can fail while the enumeration answers — and then a seat the backend has just listed
+  # would be called gone.
+  list=$(ct_sessions 2>/dev/null) || erc=$?
+  sig=$(ct_absence_class "$erc" "$list" "$name") || rc=$?
+  if [ "$rc" = 0 ]; then
+    echo "council say: participant '$peer' has no live terminal." >&2
+    echo "             the $(ct_backend) backend answered and does not have \`$name\`, so that" >&2
+    echo "             seat is gone. Put it back up with:  council.sh relaunch $peer" >&2
+    return 3
+  fi
+  class=${sig%%"$TAB"*}; why=${sig#*"$TAB"}
+  echo "council say: cannot tell whether '$peer' is alive, so nothing was sent." >&2
+  echo "             $why." >&2
+  echo "             Not finding its terminal is not the same as finding it is gone, so do NOT" >&2
+  echo "             \`relaunch\` on this answer: that kills a live agent mid-turn and takes its" >&2
+  echo "             context with it." >&2
+  case "$class" in
+    unreachable)
+      echo "             If the backend is simply down, start it and re-run; nothing was lost." >&2
+      echo "               agterm: check the app is running and answering \`agtermctl version\`." >&2
+      echo "               tmux:   check \`tmux ls\`." >&2 ;;
+    elsewhere)
+      echo "             \`COUNCIL_BACKEND=auto\` decides per PROCESS, so one failed socket probe" >&2
+      echo "             sends this run to the other backend, where this room's container is" >&2
+      echo "             empty for entirely correct reasons." >&2
+      pin=$(ct_pins_elsewhere) || pin=""
+      [ -n "$pin" ] && echo "             Pin it for this shell and re-run: COUNCIL_BACKEND=$pin" >&2 ;;
+    listed)
+      echo "             A transient lookup failure is the likeliest cause, so re-run — it usually" >&2
+      echo "             goes through. If it keeps failing, open that terminal by hand before" >&2
+      echo "             concluding anything: the backend says the seat is there." >&2 ;;
+  esac
+  return 4
+}
+
 # The out-of-band channel: the room reaches a participant that is IN recv; this reaches one
 # that is busy working. Flattened to one line — a literal newline submits early.
+#
+# `say` MUST ESTABLISH WHAT IT CLAIMS. It used to claim three things it had not, each filed
+# separately and each landing on this same line, so they are answered together:
+#
+#   * THAT THERE IS SUCH A SEAT (#29). It went straight to the terminal lookup, so a mistyped name
+#     came back as "no live terminal" — which reads as *that seat died*. The supervisor then did
+#     what the docs say to do about a dead seat and ran `relaunch`, and only that verb told the
+#     truth: the diagnosis arrived one verb late, from the command that was not the problem.
+#   * THAT THE TERMINAL IS REALLY GONE (#141). `COUNCIL_BACKEND=auto` decides per PROCESS by
+#     probing the agterm control socket, so one failed probe resolves the other backend, where
+#     this room's seats correctly are not — and a LIVE participant was reported as having no
+#     terminal, ending again at `relaunch`.
+#   * THAT THE MESSAGE WENT (#117) — see the delivery block below.
+#
+# None of the three is answered locally. The roster read is `c_peers`; the absence verdict is the
+# driver's `drv_absence_class`; the delivery verdict is the adapters' `adp_delivery_verdict`. Two
+# implementations of one question is the defect the shared engine exists to remove, and each of
+# these already had its first implementation somewhere else in the tree.
 council_say() {
   local peer="${1:?council say: to whom}"; shift
   local text; case "${1:-}" in @*) text=$(cat "${1#@}") ;; *) text="$*" ;; esac
   [ -n "$text" ] || { echo "council say: empty message" >&2; return 2; }
+
+  # --- is there such a seat at all? (#29) --------------------------------------------------
+  # `c_peers`, NOT the `jq -e '.order | index($p)'` this was first proposed as: on a STRING
+  # `.order` that idiom does SUBSTRING matching and succeeds, which is the trap `council_relaunch`
+  # documents at length. `c_peers` refuses a non-array roster outright and says so on stderr.
+  local -a roster=(); local q
+  while IFS= read -r q; do [ -n "$q" ] && roster+=("$q"); done < <(c_peers)
+  [ "${#roster[@]}" -ge 1 ] \
+    || { echo "council say: this room's roster has no usable participant list" >&2; return 2; }
+  local names found=0
+  names=$(printf '%s, ' "${roster[@]}"); names=${names%, }
+  for q in "${roster[@]}"; do [ "$q" = "$peer" ] && { found=1; break; }; done
+  [ "$found" = 1 ] \
+    || { echo "council say: '$peer' is not in this room (roster: $names)" >&2; return 2; }
+
   . "$SKILL/lib/term.sh"
   local one; one=$(printf '[supervisor] %s' "$text" | tr '\n' ' ')
-  # Confirm by counting our own marker in the pane, not by diffing its last lines: an agent
-  # that is mid-turn shows the queued message ABOVE the prompt, so a tail diff reports
-  # "unconfirmed" for a message that plainly arrived. The marker can still scroll out of a
-  # busy pane, so this says "sent" rather than pretending to certainty.
-  local nb na full
-  nb=$(ct_capture "$peer" 2>/dev/null | grep -c '\[supervisor\]')
-  ct_type "$peer" "$one" || { echo "council say: participant '$peer' has no live terminal" >&2; return 3; }
-  sleep 0.3; ct_submit "$peer"; sleep 1.5
-  full=$(ct_capture "$peer" 2>/dev/null); na=$(printf '%s' "$full" | grep -c '\[supervisor\]')
-  if [ "$na" -gt "$nb" ]; then
-    printf '%s\n' "$full" | grep -q 'to be submitted after' && echo "queued (the participant is busy; it lands on the next turn boundary)" || echo "delivered"
-  else
-    echo "sent, but the pane shows no confirmation — look at the terminal of that participant"
-  fi
+
+  # --- did a turn actually start? (#117) ---------------------------------------------------
+  # What this replaced COUNTED OUR OWN MARKER in the capture, before and after. It could not
+  # answer the question it was asked: the caller TYPES `[supervisor] …` into the seat's box and
+  # the capture INCLUDES the box, so the count rose whether or not the submit took — and a message
+  # left sitting unsent reported as `delivered`, while the room waited on a peer that never heard
+  # anything. That is the forgery AGENTS.md carries as a standing rule: any predicate that reads a
+  # child's screen is forgeable by a child whose work IS that predicate, so the read must be
+  # ANCHORED per line and never a bare substring over the capture.
+  #
+  # The anchored read and the verdict are `adp_turn_state` and `adp_delivery_verdict` in
+  # shared/adapters, vendored beside this file and already in scope (the top of this file sources
+  # it). They also hold BOTH observed queued hints; the local `to be submitted after` this
+  # replaced was the incomplete one, matching only the kind that renders the hint as a service
+  # line and blind to the kind that renders it as the composer placeholder. This loop only
+  # SAMPLES — the rule, and what each verdict does and does not rule out, stay there.
+  #
+  # The pre-send sample is what lets a turn seen LATER count as one our submit started, and what
+  # stops a queued hint left over from an earlier `say` being read as being about this one.
+  local -a states=("$(adp_turn_state "$(ct_capture "$peer" 2>/dev/null)")")
+
+  ct_type "$peer" "$one" || { _council_say_absence "$peer"; return $?; }
+  sleep 0.3
+  # A failed submit is the one case where the text is DEFINITELY sitting in the box, so it is
+  # reported as that rather than folded into the sampled verdict below.
+  ct_submit "$peer" || {
+    echo "council say: typed into '$peer' but could not submit, so the text is sitting UNSENT in" >&2
+    echo "             its input box. Look before re-sending — a second say types another copy" >&2
+    echo "             onto the first." >&2
+    return 6
+  }
+
+  # POLLED, not slept once: the residual case is a turn that starts AND finishes between two
+  # samples, and the sampling rate is the only thing that sets how often a real delivery still
+  # reads `unconfirmed`. A single `sleep 1.5` misses a one-second turn completely.
+  #
+  # Both knobs are VALIDATED rather than just defaulted, because an unusable value fails open in
+  # the worst way: a non-numeric window makes the deadline arithmetic empty, `[ … -lt "" ]` errors,
+  # and the loop breaks after ONE sample — exactly the single-sleep behaviour the poll replaces,
+  # announced only by a stray error on stderr.
+  local secs interval deadline verdict
+  case "${COUNCIL_SAY_CONFIRM_SECS:-10}" in
+    ''|*[!0-9]*) echo "council say: COUNCIL_SAY_CONFIRM_SECS is not a whole number — using 10" >&2
+                 secs=10 ;;
+    *)           secs=${COUNCIL_SAY_CONFIRM_SECS:-10}
+                 [ "${#secs}" -le 9 ] || secs=10 ;;
+  esac
+  # The interval must contain at least one digit and be a plain decimal: a bare `.` makes `sleep`
+  # error every iteration and `0` makes it a no-op, and either turns the bounded poll into a spin
+  # that re-captures as fast as it can fork.
+  case "${COUNCIL_SAY_CONFIRM_INTERVAL:-0.5}" in
+    *[!0-9.]*|*.*.*|.|0|0.|0.0|.0)
+      echo "council say: COUNCIL_SAY_CONFIRM_INTERVAL is not a positive number — using 0.5" >&2
+      interval=0.5 ;;
+    *) interval=${COUNCIL_SAY_CONFIRM_INTERVAL:-0.5} ;;
+  esac
+
+  deadline=$(( $(date +%s) + secs ))
+  while :; do
+    states+=("$(adp_turn_state "$(ct_capture "$peer" 2>/dev/null)")")
+    verdict=$(adp_delivery_verdict "${states[@]}")
+    [ "$verdict" = unconfirmed ] || break
+    [ "$(date +%s)" -lt "$deadline" ] || break
+    sleep "$interval"
+  done
+
+  # A run-length census of what was ACTUALLY sampled, pre-send state first. Naming the evidence
+  # cannot go stale the way an enumeration of possible causes does.
+  local sampled="" _prev="" _run=0 _s
+  for _s in "${states[@]}"; do
+    if [ "$_s" = "$_prev" ]; then _run=$((_run + 1)); continue; fi
+    if [ -n "$_prev" ]; then
+      if [ "$_run" -gt 1 ]; then sampled="$sampled,$_prev x$_run"; else sampled="$sampled,$_prev"; fi
+    fi
+    _prev="$_s"; _run=1
+  done
+  if [ "$_run" -gt 1 ]; then sampled="$sampled,$_prev x$_run"; else sampled="$sampled,$_prev"; fi
+  sampled=${sampled#,}
+
+  case "$verdict" in
+    delivered) echo "delivered"; return 0 ;;
+    queued)    echo "queued (the participant is busy; it lands on the next turn boundary)"; return 0 ;;
+    unconfirmed)
+      echo "council say: typed and submitted to '$peer', but no turn was seen to start within" >&2
+      echo "             ${secs}s and the participant never said it had queued it. Sampled: $sampled." >&2
+      echo "             THE TEXT MAY BE SITTING UNSENT IN ITS INPUT BOX. Look before re-sending —" >&2
+      echo "             a second say types another copy onto the first. This is NOT proof it went" >&2
+      echo "             nowhere: see adp_delivery_verdict in shared/adapters for what the verdict" >&2
+      echo "             does and does not rule out." >&2
+      return 6 ;;
+    *) # Only reachable if the shared adapters did not load, which leaves the verdict empty.
+       # Never report that as success: an unverified message exiting 0 is this whole path's defect.
+       echo "council say: could not read a delivery verdict for '$peer' (got '${verdict:-<empty>}')." >&2
+       echo "             the shared turn-state module may be missing — reinstall the plugin." >&2
+       return 1 ;;
+  esac
 }
 
 # The two files a participant is launched with. Both are generated from the roster and the

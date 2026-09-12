@@ -60,3 +60,16 @@ ct_type()          { _ct_pin_dir; drv_tell   "$(ct_name "$1")" "$2"; }
 ct_submit()        { _ct_pin_dir; drv_submit "$(ct_name "$1")"; }
 ct_kill()          { _ct_pin_dir; drv_kill   "$(ct_name "$1")"; }
 ct_focus()         { _ct_pin_dir; drv_focus  "$(ct_name "$1")"; }
+# The two absence verbs, added when `council say` had to stop reporting a live participant as
+# having no terminal (#141). `ct_sessions` enumerates the room's container — its EXIT STATUS is
+# the fact that matters, "the backend answered", which an empty list does not settle — and
+# `ct_absence_class` is the verdict drawn from that status plus the container pin. Both are
+# `_ct_pin_dir`-first like every other container verb, because the pin is what stops a call made
+# from another workspace naming an empty container.
+ct_sessions()      { _ct_pin_dir; drv_sessions; }
+ct_absence_class() { _ct_pin_dir; drv_absence_class "$1" "${2:-}" "${3:-}"; }
+# Needed as its own verb and not as a bare `drv_pins_elsewhere` at the call site: the class above
+# is read through a command substitution, so the `_ct_pin_dir` inside it runs in a subshell and
+# never reaches the caller's shell. A remedy line that asked the driver directly would find no pin
+# directory, return 1, and print the one thing the operator needs without a value in it.
+ct_pins_elsewhere() { _ct_pin_dir; drv_pins_elsewhere; }
