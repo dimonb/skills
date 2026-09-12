@@ -40,8 +40,9 @@
 #  * the whole report is buffered and printed in ONE block so Monitor batches it
 #    into a single notification;
 #  * the MR iid of a text slot is read out of ship's own state
-#    (`.pipeline-state/MR-<iid>.json` inside the worktree) — before the MR exists
-#    there is none, and the slot counts as in-flight;
+#    (`.pipeline-state/MR-<iid>.json` inside the worktree), and when that file says nothing —
+#    a child that never wrote one — out of the FORGE, by the slot worktree's branch. Only
+#    when neither can answer is there none, and the slot counts as in-flight;
 #  * open escalations are appended, so a question raised between fast-monitor
 #    ticks still shows up here;
 #  * a motionless slot is asked WHY before the stall clock is consulted (shipyard_wait_state in
@@ -80,6 +81,11 @@ DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 . "$DIR/shipyard-ctx.sh"
 
 ROOT=$(git rev-parse --show-toplevel 2>/dev/null || pwd)
+# Resolved ONCE, here, because slot_iid_forge() below runs inside a $( ) per slot and could never
+# keep a cache of its own. Empty is a legitimate answer (no origin/HEAD ref, or a fake git in the
+# test rig); the one caller treats empty as "no base branch to exclude" and asks the forge anyway.
+DEFAULT_BRANCH=$(git -C "$ROOT" symbolic-ref --quiet --short refs/remotes/origin/HEAD 2>/dev/null \
+  | sed 's#^origin/##')
 shipyard_backend_check || exit 1
 CONTAINER=$(shipyard_container)
 KIND=$(shipyard_container_kind)
@@ -255,6 +261,46 @@ forge() {
   esac
 }
 
+# Ask the FORGE which PR/MR has this slot's branch as its head. The fallback that needs no
+# cooperation from the child, and the reason it exists: every source above is ship's own state
+# file, and a child that never wrote one leaves this column blank for the whole life of the
+# change — measured, three changes in a row, `no MR yet` from launch to merge over open,
+# reviewed, mergeable pull requests (#124). The forge always knows; the child need not.
+#
+# It also unblocks the SLOT GRAPH, which is not obvious from here. shipyard-slot-graph.sh's first
+# node completes on `_syg_pr_known`, so with no iid a slot can never leave `launched` — and its
+# comment reasons that the divergence is unreachable "because ship records the PR number when it
+# opens the PR", which is exactly the assumption #124 falsified. With the column blind, the
+# `completed` glyph could never fire for any state-file-less child either.
+#
+# COST: one forge call per slot per tick, and only for a slot no state file could answer for.
+# ORDER: last. Every cheaper and more exact source wins first, GitLab's slot-is-the-iid rule
+# included — this is a fallback, never a substitute.
+slot_iid_forge() {
+  local slot="$1" wt br v
+  wt="$ROOT/.claude/worktrees/ship-$slot"
+  [ -d "$wt" ] || return 0
+  br=$(git -C "$wt" rev-parse --abbrev-ref HEAD 2>/dev/null)
+  # No branch, a detached HEAD (a child that has not branched yet), or the base branch itself:
+  # there is no question to ask, and asking one about the base branch invites a wrong answer.
+  case "$br" in ''|HEAD) return 0 ;; esac
+  [ -n "$DEFAULT_BRANCH" ] && [ "$br" = "$DEFAULT_BRANCH" ] && return 0
+  if [ "$(forge)" = github ]; then
+    # Same subshell-cd and token guard as mr_state(), for the same reasons documented there.
+    # `--state all`, not `open`: a merged PR whose terminal is still up must keep its number, or
+    # the column would go blank again at the exact moment the graph needs `merged` to conclude.
+    v=$( (cd "$ROOT" 2>/dev/null && unset GITHUB_TOKEN \
+      && gh pr list --head "$br" --state all --limit 1 --json number --jq '.[0].number // empty') 2>/dev/null)
+  else
+    v=$(OAUTH_TOKEN= glab mr list --source-branch "$br" -F json 2>/dev/null | jq -r '.[0].iid // empty')
+  fi
+  # ONLY a number is an answer. A CLI that is unauthenticated, rate-limited or pointed at the
+  # wrong forge prints prose, a usage line or an error on stdout, and an iid of `error:` would be
+  # carried into mr_state() and rendered as a PR that does not exist.
+  case "$v" in ''|*[!0-9]*) return 0 ;; esac
+  printf '%s' "$v"
+}
+
 # The MR/PR number for a slot, or empty when the change has not opened one yet.
 #
 # A NUMERIC SLOT IS NOT AUTOMATICALLY THE MR NUMBER. On GitLab it is (the slot comes
@@ -277,7 +323,8 @@ slot_iid() {
     return
   fi
   # Only GitLab may fall back to the slot itself.
-  if [[ "$slot" =~ ^[0-9]+$ ]] && [ "$(forge)" = gitlab ]; then printf '%s' "$slot"; fi
+  if [[ "$slot" =~ ^[0-9]+$ ]] && [ "$(forge)" = gitlab ]; then printf '%s' "$slot"; return; fi
+  slot_iid_forge "$slot"
 }
 
 # opened | merged | closed | ? — normalised across both forges.
