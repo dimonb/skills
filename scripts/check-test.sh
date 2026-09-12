@@ -275,6 +275,14 @@ perl -pi -e 's{"state": "need-issue\|issue-ready\|}{"state": "need-issue|issue-r
 expect_fail "enum state with no §7 handler"
 git checkout -- "$CORE"
 
+# 6c — a state the core enters but never tells the run to RECORD, which is how a stage becomes
+# invisible to the supervisor's table (#124). `archive` is the fixture because it occurs exactly
+# once; the arm is pinned by message because the enum-derivation arm above it reds on the same
+# file and would otherwise substitute for it.
+perl -pi -e 's/record state=archive/state=archive/' "$CORE"
+expect_fail "enum state never recorded" 'never says `record state=archive`'
+git checkout -- "$CORE"
+
 # 7 — the leak check: ONE probe per structural pattern, so a typo in any single alternative
 # cannot ship silently. The probe file is UNTRACKED on purpose: that is the state a leak is
 # in when `make check` runs just before `git add`. Every fixture is invented.

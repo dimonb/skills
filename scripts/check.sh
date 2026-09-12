@@ -333,6 +333,23 @@ if [ -f "$core" ]; then
     grep -qF -- "### 7." "$core" && grep -qE "^### 7\.[A-Z] — \`$st\`" "$core" \
       || fail "state '$st' is in the enum but has no '### 7.x — \`$st\`' handler in $core"
   done
+
+  # ...and no state may be entered without being RECORDED. The supervisor's status table reads a
+  # slot's stage from ship's state file and from nowhere else, so a transition the core does not
+  # tell the run to record is a stage that is invisible from outside for as long as it lasts —
+  # measured over three consecutive changes, whose stage column read `—` from launch to merge.
+  # `done` is included here, unlike the handler arm above: a terminal state is exactly the one a
+  # supervisor most needs to see recorded.
+  #
+  # WHAT THIS IS, stated because a green gate is otherwise read as coverage: a DOCS-CONSISTENCY
+  # check over the core's own prose, NOT a runtime guarantee that any run wrote any file. It
+  # asserts that the instruction exists at every transition; whether a child obeys it is not
+  # checkable from here, and nothing in this repo can check it. The half of #124 that holds
+  # regardless of what a child does is shipyard-report.sh's forge fallback, not this arm.
+  for st in $states; do
+    grep -qF -- "record state=$st" "$core" \
+      || fail "state '$st' is in the enum but $core never says \`record state=$st\`"
+  done
 fi
 
 # ------------------------------------------------- 7. non-generic strings (leak check)
