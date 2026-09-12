@@ -116,7 +116,14 @@ fi
 # exit 6, UNCONFIRMED: the compaction itself succeeded and the resume was typed and submitted, but
 # no turn was seen to start, so the child may be sitting there with the brief unsent in its box.
 # That is exactly the state a compaction is supposed to end, so surfacing it beats reporting
-# success. tell.sh prints what to look at; 6 does not collide with 2/3/4/5 above.
+# success. tell.sh prints what to look at.
+#
+# THAT INHERITANCE GIVES 6 AND 7 TWO SOURCES EACH, and for 7 the two need opposite responses: from
+# the pre-check it means nothing happened, from here it means the compaction SUCCEEDED and only the
+# resume did not resolve — leaving the idle child this script exists to prevent. The caller tells
+# them apart by whether `compacting ship-<slot>…` was printed; SKILL.md's Step 5 spells it out.
+# (No list of which codes are free: an enumeration in a comment is a latent defect, and this one
+# was already stale.)
 if [ -n "$RESUME_FILE" ]; then
   exec bash "$DIR/shipyard-tell.sh" "$SLOT" "@$RESUME_FILE"
 elif [ -n "$RESUME_TEXT" ]; then

@@ -206,6 +206,16 @@ tmux() {
           n=$(cat "$FLAKY" 2>/dev/null); n=$(( ${n:-0} + 1 )); printf '%s\n' "$n" >"$FLAKY"
           if [ "$n" = 2 ]; then echo "error connecting to server" >&2; return 1; fi
           case "$*" in *window_index*) printf '1 ship-41\n' ;; *) printf 'ship-41\n' ;; esac ;;
+        halfblind)
+          # The per-slot form of `blip`, and it needs no call counter because the two questions have
+          # DIFFERENT SHAPES: drv_target asks with `#{window_index} #{window_name}` and
+          # shipyard_slots with `#{window_name}` alone, so failing only the former reproduces a
+          # per-slot lookup failing while the enumeration answers — deterministically, whatever
+          # order the calls happen in.
+          case "$*" in
+            *window_index*) echo "error connecting to server" >&2; return 1 ;;
+            *)              printf 'ship-41\n' ;;
+          esac ;;
       esac
       return 0 ;;
     has-session)  [ "${TMUX_MODE:-empty}" = live ] && return 0; return 1 ;;
@@ -418,6 +428,8 @@ ok "5b: ...and warning off the teardown"         yes "$(has "$out" 'do NOT tear'
 # instruction the operator cannot follow without reading the source.
 ok "5b: ...with the pin to set"                  yes "$(has "$out" 'SHIPYARD_BACKEND=agterm')"
 
+ok "5b: ...and not the OTHER class's remedy"     no  "$(has "$out" 'agtermctl version')"
+
 # 5c. The other half: the backend did not answer at all. No pin disagreement here, so this case
 #     fails if reachability is ever dropped in favour of the pin check alone.
 rm -f "$MB"/container-*; : > "$MB/container-tmux"
@@ -425,6 +437,29 @@ out=$(run_script "$TELL" down)
 ok "5c: unreachable backend -> exit 7"           7   "$(rc_of "$out")"
 ok "5c: ...and refuses to call the child gone"   no  "$(has "$out" 'the child is gone')"
 ok "5c: ...naming what went unanswered"          yes "$(has "$out" 'did not answer when asked')"
+# THE CLASS-SELECTED REMEDY IS THE ONLY ACTIONABLE CONTENT, and asserting the class alone leaves
+# its whole `case` arm deletable with the suite green — the lines above all print BEFORE the case.
+# 4a/4b pin their remedies in both directions for exactly this reason; 5b pinned its counterpart
+# and this one did not, so the arm an operator with a dead backend depends on was unguarded.
+ok "5c: ...and prescribes the backend check"     yes "$(has "$out" 'agtermctl version')"
+ok "5c: ...and not the OTHER class's remedy"     no  "$(has "$out" 'SHIPYARD_BACKEND=agterm')"
+
+# 5e. THE NARROWEST BLIP, and the one that survived the first version of this fix: `drv_target`
+#     makes its OWN backend call, so it can fail while the enumeration answers — and then both
+#     corroborating facts agree and a slot the backend HAS JUST LISTED is called gone, at exit 3,
+#     which Step 4 sends to recovery. Keeping the enumeration's ANSWER and not merely its status is
+#     what catches it; `shipyard-report.sh` guards the same contradiction one level up (4c4), and
+#     this is its per-slot twin. Reproduced against the pre-fix code as exit 3 + "the child is gone".
+rm -f "$MB"/container-*; : > "$MB/container-tmux"
+out=$(run_script "$TELL" halfblind)
+ok "5e: listed but unresolvable -> exit 7"       7   "$(rc_of "$out")"
+ok "5e: ...and refuses to call the child gone"   no  "$(has "$out" 'the child is gone')"
+ok "5e: ...naming the contradiction"             yes "$(has "$out" 'still lists ship-41')"
+# The fixture must really be half-blind, or 5e silently degrades into a duplicate of 5c: a fake
+# that failed BOTH forms would also yield rc 7, from `unreachable`, while looking like this case.
+ok "5e: ...from the listed class, not unreachable" no "$(has "$out" 'did not answer when asked')"
+out=$(run_script "$COMPACT" halfblind)
+ok "5e: compact reaches it too -> exit 7"        7   "$(rc_of "$out")"
 
 # 5d. `shipyard-compact.sh` reaches the same refusal through its own exit mapping — a separate line
 #     of code making the identical claim, which is why it is asserted separately rather than assumed
@@ -437,6 +472,49 @@ rm -f "$MB"/container-*; : > "$MB/container-agterm"
 out=$(run_script "$COMPACT" empty)
 ok "5d: compact, pinned elsewhere -> exit 7"     7   "$(rc_of "$out")"
 ok "5d: ...and refuses to call the child gone"   no  "$(has "$out" 'the child is gone')"
+
+# 5f. THE CALLER THAT BRANCHES ON THE EXIT, which had no executed test of any kind. `answer.sh`
+#     shells out to tell.sh and splits its status three ways (0 / 6 / else). A new code landing in
+#     that `else` is not a wording problem: the arm stamps `.status="answered"`, and `.status` is
+#     what the branch gate tests, so a CONSUMED record answered during a blip stops being routed
+#     through the terminal at all. Following exit 7's own remedy — clear the backend, re-run — then
+#     delivers NOTHING to a live child while printing a ~5s pickup. Measured end to end before the
+#     fix; the pair below is that measurement, and it is why the arm returns before the write.
+ANSWER="$SKILL_DIR/shipyard-answer.sh"
+REC="$MB/41-9.json"
+new_record() {  # a `decision` the child has already consumed — the case SKILL.md Step 4 names
+  printf '%s\n' '{"id":"41-9","slot":"41","kind":"decision","text":"t","status":"done","answer":null}' >"$REC"
+}
+run_answer() {  # <tmux-mode> -> combined output, then "rc=<n>"
+  local mode="$1" out rc=0
+  out=$( TMUX_MODE="$mode" SHIPYARD_BACKEND=tmux SHIPYARD_SESSION=t14ex \
+         bash "$ANSWER" 41-9 "the decision" 2>&1 ) || rc=$?
+  printf '%s\nrc=%s\n' "$out" "$rc"
+}
+status_of() { jq -r '.status' "$REC" 2>/dev/null; }
+
+rm -f "$MB"/container-*; : > "$MB/container-agterm"      # pinned elsewhere -> tell.sh exits 7
+new_record
+out=$(run_answer empty)
+ok "5f: answer.sh surfaces the unresolved slot as 7"  7      "$(rc_of "$out")"
+# `nobody is going to read this` and not `could not be reached`: the latter is WRAPPED across two
+# echo calls (`...and could` / `not be reached, so...`), so a single-line grep for it can never
+# match and the check would pass with the whole arm deleted. Caught by mutating the arm out — which
+# is the only thing that distinguishes a guard from a decoration.
+ok "5f: ...and does NOT claim nobody will read it"   no      "$(has "$out" 'nobody is going to read this')"
+# THE LOAD-BEARING ONE. If the record is stamped `answered` here, the re-run below cannot work —
+# and nothing in the output would say so.
+ok "5f: ...leaving the record untouched for the re-run" done "$(status_of)"
+
+# The remedy actually working is the property, not just the refusal being printed: same command,
+# backend question cleared, child live -> it must reach the terminal. Without 5f's first half this
+# check passes vacuously (a fresh record would route through anyway), so the two are one case.
+rm -f "$MB"/container-*; : > "$MB/container-tmux"
+rm -f "$MB"/directive-41-*.json "$MB"/directive-41-*.txt
+out=$(run_answer live)
+ok "5f: ...and the re-run then reaches the child"     0      "$(rc_of "$out")"
+ok "5f: ...having really sent a directive"            yes    "$(ls "$MB"/directive-41-*.json >/dev/null 2>&1 && printf yes || printf no)"
+rm -f "$REC" "$MB"/directive-41-*.json "$MB"/directive-41-*.txt
 rm -f "$MB"/container-*
 
 if [ "$FAILURES" -eq 0 ]; then

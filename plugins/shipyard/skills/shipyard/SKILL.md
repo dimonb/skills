@@ -579,8 +579,8 @@ has to say which question was actually answered before it may be read as a death
 
 | exit | what was established | what to do |
 |---|---|---|
-| **3** | the backend **answered** and has no terminal for that slot — the child really is gone | teardown or a fresh session, as usual |
-| **7** | there is no terminal **on the backend this run resolved**, and that backend either did not answer at all or is not the one this fleet was launched on | **nothing about the slot.** Fix the backend or pin it, then re-ask |
+| **3** | the backend **answered**, does **not** list that slot, and is the one this fleet was launched on — the child is gone | recover the way Step 5 says: a FRESH session on the SAME worktree plus a handoff file. Teardown only after the merge (Step 6) |
+| **7** | the slot could not be **resolved**, for one of three reasons the refusal names — the backend did not answer; it is not the one this fleet was launched on; or it **still lists the slot**, so the per-slot lookup is what failed | **nothing about the slot.** Clear the backend question, then re-ask |
 
 Exit 7 is the same refusal as the report's `🛑 NO SIGNAL` block, one level down: that one
 declines to read an empty fleet as a drained one, this one declines to read an unresolvable
@@ -588,6 +588,19 @@ slot as a dead child. **Never tear a slot down or relaunch it on an exit 7** —
 blip the child is alive and mid-review in the other backend, and teardown takes its worktree
 with it. The refusal names the class it saw and the one command that clears it
 (`SHIPYARD_BACKEND=<the pinned backend>`, or starting the backend back up).
+
+Three limits, because a guarantee is worth only what it actually covers:
+
+* **A dead agterm socket surfaces as exit 1, not 7.** `shipyard_backend_check` runs first and
+  refuses there, with its own message naming the socket and the remedy. On agterm, 7's
+  unreachable class is the narrower case of a socket that answers `version` while the tree call
+  fails or fails the shape assertion. On tmux the precheck only tests that tmux is installed, so
+  an unreachable server does reach 7.
+* **The pin half is a *disagreement* check.** A mailbox that has launched on both backends holds
+  both pins, and a pin deleted by hand (the escape hatch above) holds none — in either state
+  there is nothing to disagree with, and that half is silent. Exit 3 then rests on the other two.
+* **Exit 3 is a snapshot, like every other backend read.** It is the best answer the two
+  available facts support, not a proof the process is dead.
 
 `shipyard-compact.sh` splits the same absence the same way, and for the same reason.
 
@@ -883,9 +896,19 @@ more than its last notice reported, so nothing is lost. **`/clear` is never the 
 it throws away exactly what you are trying to keep.
 
 Exit 7 means the slot could not be *resolved*, which is not the same as having no child: the
-backend did not answer, or this process resolved a different backend from the one the fleet was
-launched on. It is the same split `shipyard-tell.sh` makes (Step 4), and it carries the same
-instruction — **change nothing about the slot**, clear the backend question, re-run.
+backend did not answer, it is not the one this fleet was launched on, or it still lists the slot
+and only the per-slot lookup failed. It is the same split `shipyard-tell.sh` makes (Step 4) — and,
+exactly like exit 6, **it has two sources, which need opposite responses.** Tell them apart by
+whether `compacting ship-<slot>…` was printed:
+
+* **before it** — the pre-check refused and *nothing happened*. Clear the backend question and
+  re-run the whole command; it is safe and it is the right one.
+* **after it** — the compaction SUCCEEDED and only the `exec`'d resume failed to resolve (a new
+  process, which re-probes the backend on its own). The child is compacted, context-empty and
+  **idle**, which is the state this script exists to prevent. Do **not** re-compact. Clear the
+  backend question and send the resume by itself: `shipyard-tell.sh <slot> "<the resume brief>"`.
+
+In both cases, change nothing else about the slot.
 
 If you drive the terminal by hand instead, three facts that each cost a wrong diagnosis:
 
