@@ -94,10 +94,15 @@ for bad in '0.5' '1e400'; do
   fi
 done
 
-# --- 5b2. the other two c_int_field call sites ----------------------------------
-# The helper being right is not the same as every caller routing through it. Reverting either
-# of these two call sites on its own left the whole suite green, which is the same
-# zero-coverage shape that let the first version of the quorum gate ship unasserted.
+# --- 5b2. two more c_int_field call sites: round_quorum and turns_budget ---------
+# The helper being right is not the same as every caller routing through it. Reverting any one
+# of these call sites on its own left the whole suite green, which is the same zero-coverage
+# shape that let the first version of the quorum gate ship unasserted.
+#
+# This section names the two it covers rather than quantifying over the rest, because it does
+# NOT cover every other caller: `turn_deadline_ms` is 5b3 below, and `created_ms` (c_room_age_s,
+# and through it c_floor_held_ms) is asserted nowhere in this file. A reader adding a caller
+# should look, not trust a heading.
 fresh
 jq '.mode = "roundtable" | .round_quorum = 1.5' \
   "$R/roster.json" > "$R/roster.next" && mv "$R/roster.next" "$R/roster.json"
@@ -115,6 +120,29 @@ for bad in '2.5' '1e400'; do
   got=$(bash "$CLI" verdict --json 2>/dev/null | jq -r .budget)
   if [ "$got" = 30 ]; then echo "ok   a non-integer turns_budget ($bad) fell back to the default"
   else echo "FAIL a non-integer turns_budget ($bad) was believed: budget=$got"; fail=1; fi
+done
+
+# --- 5b3. floor's deadline_ms is a roster number too -----------------------------
+# protocol/_channel.md tells a participant to compare `held_ms` against this field before it
+# writes a `skip`, so a crafted value feeds a decision and not only a display. It never reaches
+# `$(( ))`, so the failure here is belief rather than execution: a string, a fraction or a
+# payload must come back as the default and not as the room's limit.
+#
+# The honest case is asserted FIRST and it is the half that matters: mkroom writes 3000 and the
+# fallback is 180000, so a v_floor that printed a constant would sail through every crafted
+# value below while telling every participant the wrong deadline.
+fresh
+got=$(bash "$CLI" floor 2>/dev/null | sed -n 's/.*deadline_ms=\([^ ]*\).*/\1/p')
+if [ "$got" = 3000 ]; then echo "ok   floor reports the room's own turn_deadline_ms"
+else echo "FAIL floor did not read turn_deadline_ms: deadline_ms='$got'"; fail=1; fi
+
+for bad in '"3000"' '0.5' '1e400' '"OPTIND[$(id)]"'; do
+  fresh
+  jq --argjson d "$bad" '.turn_deadline_ms = $d' \
+    "$R/roster.json" > "$R/roster.next" && mv "$R/roster.next" "$R/roster.json"
+  got=$(bash "$CLI" floor 2>/dev/null | sed -n 's/.*deadline_ms=\([^ ]*\).*/\1/p')
+  if [ "$got" = 180000 ]; then echo "ok   a non-integer turn_deadline_ms ($bad) fell back to the default"
+  else echo "FAIL a non-integer turn_deadline_ms ($bad) was believed: deadline_ms='$got'"; fail=1; fi
 done
 
 # --- 5c. a wrong-typed round_quorum leaves no diagnostic on the floor path -------

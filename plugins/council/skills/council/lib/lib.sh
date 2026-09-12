@@ -523,6 +523,11 @@ c_send() {
     # stops being turn-taking. (Every message after the first such slip reads as
     # out-of-turn: caught exactly that way, by t3, once the check became slow enough to
     # widen the window.) `skip` is exempt: it is by definition spoken for somebody else.
+    #
+    # The exemption is the WHOLE of what the code says about `skip`. "Only the next peer in
+    # order, and only once the holder is past `turn_deadline_ms`" is protocol — stated in
+    # protocol/_channel.md, which every participant is handed, and in SKILL.md — and nothing
+    # here checks either half. Do not read this line as enforcing them.
     if [ "$act" != skip ] && [ "$(c_floor_at "$turn")" != "$ME" ]; then
       echo "council: the floor is no longer yours (turn $turn belongs to $(c_floor_at "$turn")) — drain your inbox and wait for your turn" >&2
       return 6
@@ -1136,6 +1141,36 @@ c_last_turn_ms() {
                         | if length == 0 then 0 else (max_by(.lamport).sent_ms) end')
   case "$ms" in ''|*[!0-9]*) ms=0 ;; esac
   printf '%s' "$ms"
+}
+
+# How long the current holder has had the floor, in milliseconds. `floor` prints this number and
+# `status` renders it in seconds; both ask here rather than each deriving it, because they are one
+# question and two answers to it would drift.
+#
+# Anchored on the last turn-consuming message, and on the room's creation when there is none. That
+# second anchor is not a nicety. Barrier positions and `--hand` messages are stamped `turn: null`,
+# so a room whose first turn nobody has taken yet has no turn to measure from, and answering 0
+# there made the floor look permanently fresh: protocol/_channel.md gates `skip` on this number,
+# so a stuck FIRST holder could never be skipped — and that is the likeliest seat to be stuck,
+# since an agent's permission prompt fires on its first command. `status` was blind by the same
+# route: no turn, no age, no STALL, on the one display a supervisor is told to watch.
+#
+# NOT applied while the opening barrier is open, and that exemption is the whole safety of it.
+# During a roundtable round every position is `turn: null` BY DESIGN, no turn is owed, and the
+# round may legitimately run to `round_deadline_ms` (default 600000) or to twice that — so
+# anchoring on creation there would climb past `status`'s 900s STALL threshold on a healthy room.
+# An alarm that fires on the healthy path costs more than the freeze it was added for.
+#
+# The direction check c_room_age_s's header demands: wherever this changes an answer, the previous
+# answer was 0 — no age, so no alarm — which means a peer-written `created_ms` can only ADD an
+# alarm here, never remove one. A room too old to record `created_ms` keeps 0 and its previous
+# behaviour exactly.
+c_floor_held_ms() {
+  local last
+  last=$(c_last_turn_ms)
+  if [ "$last" = 0 ] && ! c_round_open; then last=$(c_int_field created_ms 0); fi
+  [ "$last" = 0 ] && { printf '0'; return; }
+  printf '%s' $(( $(c_ms) - last ))
 }
 
 # How long this room has existed, in seconds — or NOTHING, which means "this room cannot say".

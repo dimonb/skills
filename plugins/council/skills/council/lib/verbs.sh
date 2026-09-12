@@ -104,8 +104,34 @@ v_recv() { # [--timeout N] [--peek] [--until-floor]
   return 4
 }
 
+# `deadline_ms` is here because protocol/_channel.md tells a participant to compare it against
+# `held_ms` before writing a `skip`, and that participant is told to reach the room through the
+# command and never by path — so a rule it can only check by opening roster.json is a rule it
+# cannot check at all.
+#
+# The fallback is a second copy of the number `up` writes, kept in step by nothing — the same
+# shape as c_barrier's `round_deadline_ms 600000` and v_verdict's `turns_budget 30`, and filed as
+# a rule rather than three pairs of lines. It is reached by any roster `up` did not write as
+# written: one assembled by hand, one whose field a peer has since overwritten with something
+# that is not an integer, and one that cannot be read at all (a state `floor` still answers in,
+# at exit 0 — SKILL.md says so).
+#
+# The barrier branch prints no deadline on purpose: an open round has no floor holder to be
+# overdue, and `skip` has nothing to consume there.
+#
+# roster.json is writable by every participant, so this number is peer-written like `created_ms`
+# and `turns_budget`. Printing it grants no reach that was not already there: c_send exempts
+# `skip` from the floor check outright, so a seat that wanted to skip out of turn never needed
+# the field — the restriction is protocol rather than a check (see c_send). What the field does
+# is let an HONEST seat apply the rule.
+#
+# c_int_field keeps a crafted value out of the arithmetic. It does NOT keep every crafted value
+# off this line: an all-digit integer at or above 2^63 passes the digit gate and wraps through
+# `$((10#$v))`, so a peer can still make this field print a negative number and read as "already
+# overdue" to an honest seat. That is c_int_field's to fix, for all of its callers at once, and
+# it is filed rather than patched here.
 v_floor() {
-  local t f last age
+  local t f age
   if c_round_open; then
     printf 'round=0 (barrier) posted=%s/%s waiting=%s conflicts=%s\n' \
       "$(c_round0 | wc -l | tr -d ' ')" "$(c_npeers)" \
@@ -113,10 +139,10 @@ v_floor() {
       "$(c_conflicts)"
     return 0
   fi
-  t=$(c_turns); f=$(c_floor_at "$t"); last=$(c_last_turn_ms)
-  age=$(( $(c_ms) - last )); [ "$last" = 0 ] && age=0
-  printf 'turns=%s floor=%s next=%s held_ms=%s conflicts=%s\n' \
-    "$t" "$f" "$(c_floor_at $((t+1)))" "$age" "$(c_conflicts)"
+  t=$(c_turns); f=$(c_floor_at "$t"); age=$(c_floor_held_ms)
+  printf 'turns=%s floor=%s next=%s held_ms=%s deadline_ms=%s conflicts=%s\n' \
+    "$t" "$f" "$(c_floor_at $((t+1)))" "$age" "$(c_int_field turn_deadline_ms 180000)" \
+    "$(c_conflicts)"
 }
 
 # The four verbs a PARTICIPANT reads the room with all go through c_visible, so an open
@@ -318,7 +344,7 @@ v_verdict() {
 }
 
 v_status() {
-  local j verd g t floor last held conf room_age alarms="" phase
+  local j verd g t floor held conf room_age alarms="" phase
   j=$(v_verdict --json); verd=$(printf '%s' "$j" | jq -r '.verdict // empty' 2>/dev/null)
   # Which phase of the turn cycle the room is in, from the declared flow graph via the shared
   # guard (c_phase -> flow_phase over lib/room-graph.sh). This is the supervisor's "where is this
@@ -338,8 +364,8 @@ v_status() {
   # is told to watch — so the emptiness gets an alarm of its own rather than a blank field.
   [ -n "$verd" ] && [ -n "$g" ] \
     || alarms="$alarms 🛑 this room's state could not be computed — the lines above are incomplete (the error above says what could not be read)"
-  t=$(c_turns); floor=$(c_floor_at "$t"); last=$(c_last_turn_ms)
-  held=$([ "$last" = 0 ] && echo 0 || echo $(( ($(c_ms) - last) / 1000 )))
+  t=$(c_turns); floor=$(c_floor_at "$t")
+  held=$(( $(c_floor_held_ms) / 1000 ))
   conf=$(c_conflicts)
   printf '=== council %s ===\n' "$(basename "$ROOM")"
   c_round_open && floor="— (barrier)"
