@@ -334,9 +334,14 @@ sessions_of() { # <VAR=VAL>... -> "<names comma-joined>|<rc>"
 printf 'ship-7\nship-8\nhuman-work\n' >"$TMP/win-three.txt"
 ok "tmux: the container's sessions, rc 0" "ship-7,ship-8,human-work|0" \
    "$(sessions_of _DRV_BE=tmux DRV_CONTAINER_OVERRIDE=proj "FAKE_TMUX_WINDOWS=$TMP/win-three.txt")"
-# tmux marks the active/last window with a trailing `*` or `-`; those are display, not name.
+# A trailing `-` or `*` is stripped. Stated as the BEHAVIOUR, not as a claim about tmux: an
+# earlier version of this case said "tmux marks the active/last window with a trailing `*` or `-`"
+# and built its fixture from that premise, which a real tmux refutes — `-F '#{window_name}'` emits
+# the name alone (a window named `agent-` comes back verbatim), and the markers belong to
+# `#{window_flags}`. The strip survives only because `drv_target` applies the same one, so the two
+# must agree; this case pins that agreement and nothing more.
 printf 'ship-7*\nship-8-\n' >"$TMP/win-marked.txt"
-ok "tmux: the active/last markers are stripped" "ship-7,ship-8|0" \
+ok "tmux: a trailing -/* is stripped, as drv_target also does" "ship-7,ship-8|0" \
    "$(sessions_of _DRV_BE=tmux DRV_CONTAINER_OVERRIDE=proj "FAKE_TMUX_WINDOWS=$TMP/win-marked.txt")"
 : >"$TMP/win-none.txt"
 ok "tmux: a reachable but empty container is an ANSWER" "|0" \

@@ -79,7 +79,7 @@ export COUNCIL_ROOM="$ROOM" ROOM="$ROOM"
 # so anything it set in a variable would die with that subshell — which is also exactly why
 # `ct_pins_elsewhere` had to become its own verb in the real term.sh.
 SHADOW="$ROOT/shadow"; mkdir -p "$SHADOW/lib"
-PANES="$ROOT/panes"; mkdir -p "$PANES"      # PANES/<n> is the n-th capture; PANES/last after that
+PANES="$ROOT/panes"; mkdir -p "$PANES"      # PANES/pre before the send; then PANES/<n>, then PANES/last
 NCALLS="$ROOT/capture-n"                    # how many captures have been taken
 TYPED="$ROOT/typed"                         # what ct_type was handed
 PINS="$ROOT/pins"; mkdir -p "$PINS"         # the container pins drv_pins_elsewhere reads
@@ -95,12 +95,21 @@ DRV_BACKEND=tmux
 _ct_pin_dir() { DRV_CONTAINER_PIN_DIR="$PINS"; }
 ct_name()    { printf 'council-demo-%s' "\$1"; }
 ct_backend() { printf 'tmux'; }
-# Successive calls walk PANES/1, PANES/2, … and then stay on PANES/last, so a case scripts the
-# screen as a SEQUENCE: what was there before the send, and what each poll then saw.
+# PHASE-AWARE, and that is the whole point of the marker file. Before anything is typed this
+# serves PANES/pre; afterwards it walks PANES/1, PANES/2, … and then stays on PANES/last. A
+# call-index-only version could not see the pre-send sample at all: deleting that sample merely
+# shifted the whole sequence by one, so every case still read the same screens in the same order
+# and all 46 checks stayed green while `delivered` lost the `seen_idle` observation it requires.
+# Keyed on the phase rather than the count, dropping it changes which screen the first sample
+# reads, which is what case 3h below asserts.
 ct_capture() {
   local n f
-  n=\$(cat "$NCALLS" 2>/dev/null); n=\$(( \${n:-0} + 1 )); printf '%s\n' "\$n" >"$NCALLS"
-  f="$PANES/\$n"; [ -f "\$f" ] || f="$PANES/last"
+  if [ -f "$TYPED" ]; then
+    n=\$(cat "$NCALLS" 2>/dev/null); n=\$(( \${n:-0} + 1 )); printf '%s\n' "\$n" >"$NCALLS"
+    f="$PANES/\$n"; [ -f "\$f" ] || f="$PANES/last"
+  else
+    f="$PANES/pre"
+  fi
   cat "\$f" 2>/dev/null
 }
 ct_type()   { [ "\${FAKE_TYPE_RC:-0}" = 0 ] || return "\$FAKE_TYPE_RC"; printf '%s\n' "\$2" >>"$TYPED"; }
@@ -136,7 +145,7 @@ QUEUED=$'some earlier output\n❯ Press up to edit queued messages\n'"$FOOTER_ID
 # A seat whose box holds text nobody submitted: idle, with a footer, and the draft in between.
 draft() { printf 'some earlier output\n❯ %s\n%s\n' "$1" "$FOOTER_IDLE"; }
 
-pane() { printf '%s\n' "$1" >"$PANES/$2"; }     # <screen> <index-or-last>
+pane() { printf '%s\n' "$1" >"$PANES/$2"; }     # <screen> pre|<index>|last
 
 # Run `council_say` against a freshly scripted terminal. Every case is its own subshell: `c_peers`
 # memoises the roster per shell, and the fakes' counters must not carry over.
@@ -165,7 +174,7 @@ ok "...and nothing was typed anywhere"         ""  "$(cat "$TYPED" 2>/dev/null)"
 # The first peer in the roster must not be rejected. The fix was first proposed as
 # `jq -e '.order | index($p)'`, which is truthy-on-0 by luck and SUBSTRING-matching on a string
 # `.order` by accident; `c_peers` is used instead, and this case is what would catch a relapse.
-reset; : >"$PINS/container-tmux"; pane "$IDLE" 1; pane "$RUNNING" last
+reset; : >"$PINS/container-tmux"; pane "$IDLE" pre; pane "$RUNNING" last
 out=$(run_say claude 'hello')
 ok "the FIRST roster entry is not rejected"    no  "$(has "$out" 'is not in this room')"
 
@@ -229,7 +238,7 @@ printf '\n── the delivery verdict ──\n'
 #     the text is sitting in its box — which is what the capture shows, marker and all. The old
 #     read counted `[supervisor]` and found one more than before, so it printed `delivered`.
 reset; : >"$PINS/container-tmux"
-pane "$IDLE" 1
+pane "$IDLE" pre
 draft '[supervisor] hello' >"$PANES/last"
 out=$(run_say codex 'hello')
 ok "3a: text left in the box is NOT delivered" 6   "$(rc_of "$out")"
@@ -244,7 +253,7 @@ ok "3a: ...and reports the states it sampled"  yes "$(has "$out" 'Sampled: idle'
 #     standing rule in AGENTS.md — any predicate that reads a child's screen is forgeable by a
 #     child whose work IS that predicate — and it is why the read is anchored per line.
 reset; : >"$PINS/container-tmux"
-pane "$IDLE" 1
+pane "$IDLE" pre
 draft '[supervisor] watch the footer flip to esc to interrupt before you carry on' >"$PANES/last"
 out=$(run_say codex 'watch the footer flip to esc to interrupt before you carry on')
 ok "3b: a marker inside the BOX confirms nothing" 6 "$(rc_of "$out")"
@@ -253,7 +262,7 @@ ok "3b: ...and still warns about the box"      yes "$(has "$out" 'MAY BE SITTING
 # 3c. A REAL DELIVERY: idle before, a turn running after. Both positive verdicts need the evidence
 #     ABSENT and then PRESENT, so this is what a genuine send looks like.
 reset; : >"$PINS/container-tmux"
-pane "$IDLE" 1; pane "$RUNNING" last
+pane "$IDLE" pre; pane "$RUNNING" last
 out=$(run_say codex 'hello')
 ok "3c: idle then running -> delivered"        0   "$(rc_of "$out")"
 ok "3c: ...and says delivered"                 yes "$(has "$out" '^delivered$')"
@@ -261,7 +270,7 @@ ok "3c: ...and says delivered"                 yes "$(has "$out" '^delivered$')"
 # 3d. A BUSY SEAT that queues the message. The hint must appear AFTER a non-queued observation, or
 #     a hint left over from an earlier `say` would decide this one.
 reset; : >"$PINS/container-tmux"
-pane "$IDLE" 1; pane "$QUEUED" last
+pane "$IDLE" pre; pane "$QUEUED" last
 out=$(run_say codex 'hello')
 ok "3d: idle then queued -> queued, exit 0"    0   "$(rc_of "$out")"
 ok "3d: ...and says it lands next turn"        yes "$(has "$out" 'next turn boundary')"
@@ -269,13 +278,13 @@ ok "3d: ...and says it lands next turn"        yes "$(has "$out" 'next turn boun
 # 3e. A seat that was ALREADY mid-turn when we typed cannot yield `delivered` from the turn marker
 #     alone — the turn we can see is not evidence that our submit started one.
 reset; : >"$PINS/container-tmux"
-pane "$RUNNING" 1; pane "$RUNNING" last
+pane "$RUNNING" pre; pane "$RUNNING" last
 out=$( COUNCIL_SAY_CONFIRM_SECS=0 run_say codex 'hello' )
 ok "3e: running before and after -> unconfirmed" 6 "$(rc_of "$out")"
 
 # 3f. A SUBMIT THAT FAILED is the one case where the text is DEFINITELY in the box, so it is said
 #     outright rather than folded into the sampled verdict.
-reset; : >"$PINS/container-tmux"; pane "$IDLE" 1; pane "$IDLE" last
+reset; : >"$PINS/container-tmux"; pane "$IDLE" pre; pane "$IDLE" last
 out=$( FAKE_SUBMIT_RC=1 run_say codex 'hello' )
 ok "3f: a failed submit -> exit 6"             6   "$(rc_of "$out")"
 ok "3f: ...and says the text is unsent"        yes "$(has "$out" 'sitting UNSENT')"
@@ -283,24 +292,74 @@ ok "3f: ...and never says delivered"           no  "$(has "$out" 'delivered')"
 
 # 3g. The message really is flattened to one line and carries its prefix. A literal newline would
 #     submit the message early, which is why the flatten exists at all.
-reset; : >"$PINS/container-tmux"; pane "$IDLE" 1; pane "$RUNNING" last
+reset; : >"$PINS/container-tmux"; pane "$IDLE" pre; pane "$RUNNING" last
 run_say codex "$(printf 'first line\nsecond line')" >/dev/null
 ok "3g: the typed text is ONE line"            1   "$(wc -l <"$TYPED" | tr -d ' ')"
 ok "3g: ...carrying the supervisor prefix"     yes "$(has "$(cat "$TYPED")" '^\[supervisor\] first line second line$')"
 
+# 3h. THE PRE-SEND SAMPLE IS LOAD-BEARING, and nothing used to notice it was gone. `delivered`
+#     requires an IDLE observation before a running one, and the pre-send sample is what usually
+#     supplies it — so deleting that line makes a genuine fast send start reading `unconfirmed`,
+#     the alarm-on-the-healthy-path direction. Every post-send screen here is RUNNING, so the only
+#     possible source of `seen_idle` is the pre-send sample: with it, `delivered`; without it, the
+#     first sample is already `running` and the verdict can never be better than `unconfirmed`.
+reset; : >"$PINS/container-tmux"
+pane "$IDLE" pre; pane "$RUNNING" 1; pane "$RUNNING" last
+out=$( COUNCIL_SAY_CONFIRM_SECS=0 run_say codex 'hello' )
+ok "3h: only the pre-send sample can supply idle" 0 "$(rc_of "$out")"
+ok "3h: ...so the verdict is delivered"        yes "$(has "$out" '^delivered$')"
+
 # ============================================================ 4. THE KNOBS FAIL CLOSED
 printf '\n── the poll knobs ──\n'
+# EVERY CASE HERE KEEPS THE SEAT IDLE THROUGHOUT, so the poll must really iterate to its deadline.
+# The first version of this section put a RUNNING screen in the first post-send capture, which
+# broke the loop on its first sample whatever the knobs said — so it asserted only that a message
+# was printed, and could not have caught either of the two defects below.
+#
 # An unusable window must not break the loop after one sample. That is the single-sleep behaviour
 # the poll replaced, and it would be announced only by a stray `integer expression expected` on
 # stderr — so it must fall back to the documented default instead.
-reset; : >"$PINS/container-tmux"; pane "$IDLE" 1; pane "$RUNNING" last
+reset; : >"$PINS/container-tmux"; pane "$IDLE" pre; pane "$RUNNING" last
 out=$( COUNCIL_SAY_CONFIRM_SECS=nonsense run_say codex 'hello' )
 ok "4: a non-numeric window falls back"        0   "$(rc_of "$out")"
 ok "4: ...and says which value it used"        yes "$(has "$out" 'using 10')"
 ok "4: ...and does not leak a shell error"     no  "$(has "$out" 'integer expression')"
-reset; : >"$PINS/container-tmux"; pane "$IDLE" 1; pane "$RUNNING" last
+
+# 4b. A LEADING ZERO. `08` passes an all-digits test and then makes `$(( … + secs ))` an
+#     INVALID-OCTAL expansion error, which aborts the shell — AFTER the message has been typed and
+#     submitted. The operator got a raw bash error, no verdict at all, and an invitation to
+#     re-send a second copy onto the first: the precise harm this whole file exists to prevent,
+#     reintroduced by the guard written to prevent it. Normalised to base ten rather than refused,
+#     because a leading zero is a typo with an obvious intent.
+reset; : >"$PINS/container-tmux"; pane "$IDLE" pre; pane "$IDLE" last
+out=$( COUNCIL_SAY_CONFIRM_SECS=08 run_say codex 'hello' )
+ok "4b: a leading zero does not abort"         6   "$(rc_of "$out")"
+ok "4b: ...leaking no arithmetic error"        no  "$(has "$out" 'value too great for base')"
+# The window value reaches the verdict message, which is how we know 08 was read as 8 and not as
+# the default 10 — the fallback would be indistinguishable from a correct parse otherwise.
+ok "4b: ...and still reaches a verdict"        yes "$(has "$out" 'no turn was seen to start')"
+ok "4b: ...having read 08 as eight seconds"    yes "$(has "$out" '^ *8s and the participant')"
+# The window that is too long to compute with must announce its fallback, not truncate in silence.
+reset; : >"$PINS/container-tmux"; pane "$IDLE" pre; pane "$RUNNING" last
+out=$( COUNCIL_SAY_CONFIRM_SECS=99999999999 run_say codex 'hello' )
+ok "4b: an implausible window says so"         yes "$(has "$out" 'implausibly large')"
+
+# 4c. EVERY SPELLING OF ZERO, not the four the first version listed. `sleep 00` is a no-op, so a
+#     spelling that slips through turns the bounded poll into a fork storm — measured at 74
+#     captures in two seconds against 4. Testing for a non-zero digit is what covers them all at
+#     once; these cases exist so the next reader cannot "fix" it back into an enumeration.
+reset; : >"$PINS/container-tmux"; pane "$IDLE" pre; pane "$RUNNING" last
 out=$( COUNCIL_SAY_CONFIRM_INTERVAL=0 run_say codex 'hello' )
-ok "4: a zero interval falls back"             yes "$(has "$out" 'using 0.5')"
+ok "4c: a zero interval falls back"            yes "$(has "$out" 'using 0.5')"
+for z in 00 000 0.00 .00 000.000 .; do
+  reset; : >"$PINS/container-tmux"; pane "$IDLE" pre; pane "$RUNNING" last
+  out=$( COUNCIL_SAY_CONFIRM_INTERVAL="$z" run_say codex 'hello' )
+  ok "4c: [$z] falls back too"                 yes "$(has "$out" 'using 0.5')"
+done
+# ...and a legitimate value is NOT rejected, or the guard would be useless in the other direction.
+reset; : >"$PINS/container-tmux"; pane "$IDLE" pre; pane "$RUNNING" last
+out=$( COUNCIL_SAY_CONFIRM_INTERVAL=0.05 run_say codex 'hello' )
+ok "4c: a small but positive interval is kept" no  "$(has "$out" 'using 0.5')"
 
 # --- done -------------------------------------------------------------------------------------
 printf '\n'

@@ -366,6 +366,13 @@ drv_sessions() {
       # server that cannot be reached is unanswered, while a session that is simply not there is
       # an honest empty answer — a tmux session dying takes its children with it, so "no such
       # session" really does mean the container holds nothing.
+      # The trailing-marker strip mirrors `drv_target`'s `gsub(/[-*]$/,"",$2)` and is kept only so
+      # the two agree. It is NOT what its name suggests: `-F '#{window_name}'` emits the name
+      # alone, and the active/last markers come from `#{window_flags}` or from the default format
+      # — checked against a real tmux, where a window genuinely named `agent-` came back verbatim.
+      # So this can only ever rewrite a legal name ending in `-` or `*`, which council admits
+      # (`_plain_name` allows `-`). Harmless today because `drv_target` is wrong in the same
+      # direction; removing both together is filed, and neither may be removed alone.
       if out=$(tmux list-windows -t "$container" -F '#{window_name}' 2>&1); then
         printf '%s\n' "$out" | sed -E 's/[-*]$//'
         return 0
@@ -428,6 +435,13 @@ drv_pins_elsewhere() {
 # established nothing, and defaulting the other way would make a forgotten argument grant the
 # corroboration this whole section exists to withhold — failing open, silently, which is the
 # incident itself.
+#
+# `<enum-output>` AND `<session-name>` SHARE A NAMESPACE THAT NOTHING CHECKS. They are compared
+# for exact equality, so a caller must spell both the same way — full session names on both sides,
+# or its own bare keys on both sides. Feeding `drv_sessions`' full names against a bare key
+# matches nothing and turns the arm off SILENTLY, which is worse than not having it: the caller
+# then believes an absence that was never corroborated. There is no assertion that can catch a
+# mismatch, because both spellings are legitimate; this sentence is the whole guard.
 #
 # THE `listed` ARM IS THE NARROWEST BLIP AND THE ONE THAT SURVIVES A STATUS-ONLY CHECK.
 # `drv_target` makes its OWN backend call, separate from the enumeration and swallowing both

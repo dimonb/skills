@@ -498,16 +498,17 @@ code.
 ### What `say` establishes, and what each answer means
 
 `say` reports only what it has established, so its exit code **is** meaningful — unlike the
-`codex queue` channel above. There are four answers and each names a different next move:
+`codex queue` channel above. Each answer names a different next move:
 
 | exit | answer | what it means |
 |---|---|---|
 | 0 | `delivered` | a turn was seen to start that was not running before the send. |
 | 0 | `queued` | the participant's own client said it has taken the message for the next turn. |
-| 2 | not in this room | the name is not in the roster. The message went **nowhere**; fix the name. |
+| 1 | could not read a verdict | the shared turn-state module did not load. Nothing was established; the plugin install is broken. |
+| 2 | nothing to send, or no such seat | an empty message, a roster that cannot be read, or a name that is not in it. The message went **nowhere**; fix the argument. |
 | 3 | has no live terminal | the backend answered and does not have that seat. It really is gone — `council.sh relaunch <peer>`. |
 | 4 | cannot tell whether it is alive | the question went unanswered. **Do not `relaunch`** — that kills a live agent mid-turn and takes its context with it. The message names which of `unreachable`, `elsewhere` or `listed` applies, and the remedy for that one. |
-| 6 | typed, but no turn observed | the text **may be sitting unsent in the seat's input box**. Look before re-sending — a second `say` types another copy onto the first. |
+| 6 | typed, but no turn observed | the text **may be sitting unsent in the seat's input box**. Look before re-sending — a second `say` types another copy onto the first. Also the answer when the submit itself failed, where the text is definitely in the box. |
 
 Exit 6 is not proof the message went nowhere: a turn that starts *and finishes* between two
 samples looks identical, and so does a participant that was mid-turn for the whole window whose
@@ -516,8 +517,11 @@ cheap and visible, believing a false confirmation is neither. `adp_delivery_verd
 `shared/adapters/agent-adapters.sh` defines each verdict and what it does and does not rule out.
 
 The confirmation window defaults to 10 s, sampled every 0.5 s; `COUNCIL_SAY_CONFIRM_SECS` and
-`COUNCIL_SAY_CONFIRM_INTERVAL` override them, and an unusable value falls back to the default
-with a note on stderr rather than silently collapsing the poll to one sample.
+`COUNCIL_SAY_CONFIRM_INTERVAL` override them. An unusable value falls back to the default and
+says so on stderr rather than silently collapsing the poll to one sample — "unusable" meaning
+anything that is not a whole number (window) or a plain positive decimal (interval), including
+every spelling of zero. A leading zero is normalised rather than refused, so `08` is eight
+seconds; it is not read as octal.
 
 ## Modes: turn-taking, and the opening barrier
 

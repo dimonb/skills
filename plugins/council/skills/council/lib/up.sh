@@ -639,22 +639,48 @@ council_say() {
   # the worst way: a non-numeric window makes the deadline arithmetic empty, `[ … -lt "" ]` errors,
   # and the loop breaks after ONE sample — exactly the single-sleep behaviour the poll replaces,
   # announced only by a stray error on stderr.
+  #
+  # EACH ARM TESTS A SHAPE, NEVER A LIST OF BAD SPELLINGS. The first version of both enumerated
+  # instances and both had holes: `08` passed the window's all-digits test and then made
+  # `$(( … + secs ))` an INVALID-OCTAL error, which aborts the shell — after the message had been
+  # typed and submitted, so the operator got a raw bash error, no verdict, and an invitation to
+  # re-send a second copy onto the first; and the interval's `0|0.|0.0|.0` list missed `00`,
+  # `000`, `0.00` and `.00`, each of which makes `sleep` a no-op and the bounded poll a fork storm
+  # (measured: 74 captures in two seconds against 4). Both are the same defect, and the repo's rule
+  # for it is to remove the enumerable shape rather than to correct the instance.
   local secs interval deadline verdict
   case "${COUNCIL_SAY_CONFIRM_SECS:-10}" in
-    ''|*[!0-9]*) echo "council say: COUNCIL_SAY_CONFIRM_SECS is not a whole number — using 10" >&2
-                 secs=10 ;;
-    *)           secs=${COUNCIL_SAY_CONFIRM_SECS:-10}
-                 [ "${#secs}" -le 9 ] || secs=10 ;;
+    ''|*[!0-9]*)
+      echo "council say: COUNCIL_SAY_CONFIRM_SECS is not a whole number — using 10" >&2
+      secs=10 ;;
+    *)
+      secs=${COUNCIL_SAY_CONFIRM_SECS:-10}
+      # The length cap comes FIRST and announces itself: a value that overflows the arithmetic
+      # below would error exactly like the octal case, and a silent truncation would contradict
+      # what this skill's docs promise about an unusable value.
+      if [ "${#secs}" -gt 9 ]; then
+        echo "council say: COUNCIL_SAY_CONFIRM_SECS is implausibly large — using 10" >&2
+        secs=10
+      else
+        # `10#` forces base ten, so `08` means eight seconds instead of aborting the shell. Done
+        # by normalising rather than by rejecting: a leading zero is a typo with an obvious
+        # intent, and honouring it is friendlier than refusing it.
+        secs=$((10#$secs))
+      fi ;;
   esac
-  # The interval must contain at least one digit and be a plain decimal: a bare `.` makes `sleep`
-  # error every iteration and `0` makes it a no-op, and either turns the bounded poll into a spin
-  # that re-captures as fast as it can fork.
+  # The interval must be a plain decimal with at least one NON-ZERO digit: a bare `.` makes
+  # `sleep` error every iteration and any spelling of zero makes it a no-op, and either turns the
+  # bounded poll into a spin that re-captures as fast as it can fork. Testing for a non-zero digit
+  # is what covers every spelling of zero at once, however many zeros and dots it is written with.
   case "${COUNCIL_SAY_CONFIRM_INTERVAL:-0.5}" in
-    *[!0-9.]*|*.*.*|.|0|0.|0.0|.0)
-      echo "council say: COUNCIL_SAY_CONFIRM_INTERVAL is not a positive number — using 0.5" >&2
-      interval=0.5 ;;
-    *) interval=${COUNCIL_SAY_CONFIRM_INTERVAL:-0.5} ;;
+    *[!0-9.]*|*.*.*) interval="" ;;                                  # not a plain decimal
+    *[1-9]*)         interval=${COUNCIL_SAY_CONFIRM_INTERVAL:-0.5} ;; # has a non-zero digit
+    *)               interval="" ;;                                   # every spelling of zero, and `.`
   esac
+  if [ -z "$interval" ]; then
+    echo "council say: COUNCIL_SAY_CONFIRM_INTERVAL is not a positive number — using 0.5" >&2
+    interval=0.5
+  fi
 
   deadline=$(( $(date +%s) + secs ))
   while :; do

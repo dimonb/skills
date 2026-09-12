@@ -37,10 +37,13 @@
 # worst possible lie for a monitor.
 #
 # What STAYS in shipyard, because the shared driver has no twin for it: the backend precheck
-# (shipyard_backend_check), the slot enumeration (shipyard_slots and its helpers), the Escape key
-# (shipyard_esc), the sidebar note / desktop notify / empty-workspace prune, the container
-# kind/unpin, and the report-facing shipyard_slot_addr / shipyard_where / shipyard_peek_hint. Only
-# the shared backend ops move.
+# (shipyard_backend_check), the Escape key (shipyard_esc), the sidebar note / desktop notify /
+# empty-workspace prune, the container kind/unpin, and the report-facing shipyard_slot_addr /
+# shipyard_where / shipyard_peek_hint. Only the shared backend ops move.
+#
+# `shipyard_slots` was on that list until #141 gave council the same question. Its backend
+# mechanics are now `drv_sessions`, and what stays here is shipyard's `ship-<slot>` template —
+# the same split every other op already has, and the reason its two private helpers are gone.
 
 # --- map shipyard's knobs onto the driver's, then source it --------------------------------
 # The driver resolves and caches the backend ONCE, at source time, so DRV_BACKEND must already
@@ -243,8 +246,9 @@ shipyard_peek_hint() {
   esac
 }
 
-# shipyard_slots — every slot that currently has a terminal. No driver twin (the driver resolves
-# one session by name; enumerating them is shipyard's own).
+# shipyard_slots — every slot that currently has a terminal. The enumeration itself is the
+# driver's `drv_sessions`; what is shipyard's, and what stays here, is the `ship-<slot>` template
+# it filters by.
 #
 # THE EXIT STATUS IS PART OF THE CONTRACT, and it carries the one distinction this change is about:
 # rc 0 means the container ANSWERED (its slot list follows, possibly empty), non-zero means it did
@@ -279,7 +283,16 @@ shipyard_slots() {
     agterm|tmux) ;;
     *) _shipyard_no_backend; return 1 ;;
   esac
-  raw=$(drv_sessions) || rc=$?
+  # THE CONTAINER IS PASSED, NOT LEFT TO THE DRIVER. `drv_sessions` would resolve it through
+  # `drv_container`, which knows nothing of shipyard's `_SHIPYARD_CONTAINER` memo — so the
+  # enumeration would ask about a name that every other shipyard verb, including the diagnostic
+  # that reports its result, resolves differently. The deleted arms both asked
+  # `$(shipyard_container)`; this keeps that exactly. It also keeps the memo's whole point: without
+  # it the report's poll loop re-reads the pin file every tick, and on an unpinned agterm fleet
+  # re-queries `agtermctl tree` — where a single blipped workspace lookup makes the derivation fall
+  # back to the repo stem, and the backend then answers rc 0 about a workspace that is not the
+  # fleet's. That answer is corroborated by construction, so no classifier can catch it.
+  raw=$(drv_sessions "$(shipyard_container)") || rc=$?
   [ "$rc" = 0 ] || return 1
   printf '%s\n' "$raw" | sed -n -E 's/^ship-(.+)$/\1/p'
 }
@@ -289,11 +302,7 @@ shipyard_slots() {
 #
 # There is no separate backend pin file to maintain. The driver's container pin is already named
 # `container-<backend>`, so the set of pin files present IS the record of which backends this
-# mailbox has launched a fleet on. Reading that name keeps one fact in one place, and it needs
-# nothing from the driver's backend resolution — which is cached at source time, before shipyard's
-# pin directory is set (shipyard-lib.sh, at the end), so a pin consulted there would have to move
-# that whole ordering. That is a cost argument, not an impossibility: the mailbox derives from
-# `git rev-parse --git-common-dir` and could be computed earlier.
+# mailbox has launched a fleet on. Reading that name keeps one fact in one place.
 #
 # THE SEAM THIS USED TO NAME IS NOW CLOSED. This function spelled `container-<b>` itself, which
 # duplicated a template the driver owns — so a rename there would have made it read nothing and
@@ -311,13 +320,24 @@ shipyard_slots() {
 # what was wrong was reading "I looked somewhere else and found nothing" as "there is nothing".
 shipyard_backend_pinned_elsewhere() { drv_pins_elsewhere; }
 
-# shipyard_signal_class [<enum-rc>] — MAY AN ABSENCE BE BELIEVED?
+# shipyard_signal_class [<enum-rc> [<enum-output> <slot-session-name>]] — MAY AN ABSENCE BE
+# BELIEVED?
 #
 # Echoes "<class><TAB><why>" and returns 1 when it may not: the question was not answered, so any
 # negative drawn from it would be a guess. Echoes nothing and returns 0 when it may.
 #
 #   unreachable  the backend did not answer when asked which terminals exist.
 #   elsewhere    it answered, but this fleet was launched on a DIFFERENT backend (the pin says so).
+#   listed       it answered AND still lists this very slot, so it is the per-slot lookup that
+#                failed, not the child that ended. Needs the last two arguments; a caller that
+#                passes only a status can never get this class.
+#
+# THE LAST TWO ARGUMENTS SHARE A NAMESPACE AND NOTHING CHECKS IT. `<enum-output>` and
+# `<slot-session-name>` are compared for exact equality, so they must be spelled the same way.
+# `shipyard_absence_report` passes FULL session names on both sides (`drv_sessions`' output and
+# `ship-<slot>`); a caller holding bare slots from `shipyard_slots` must pass a bare slot as the
+# name. Mixing the two matches nothing and turns the arm off silently, which is the failure mode
+# this paragraph exists to prevent — there is no assertion that would catch it.
 #
 # The verdict itself is `drv_absence_class` in shared/driver, and this is shipyard's name for it.
 # What stays HERE is the one thing the driver must not do: supply the enumeration. Both facts it
@@ -326,20 +346,28 @@ shipyard_backend_pinned_elsewhere() { drv_pins_elsewhere; }
 # shipyard's and the driver never re-probes. `council say` is the second caller; two answers to
 # one question is the defect AGENTS.md says the shared engine exists to remove.
 #
-# WHY IT IS AN OPTIONAL PARAMETER, AND WHY BOTH MODES MUST SURVIVE. A caller that has already
-# enumerated must classify the status of the list it ACTED ON, not of a second enumeration that
-# could disagree with it, so it captures the rc once and passes it in — `shipyard-report.sh` and
-# `shipyard_absence_report` both do exactly that. A caller holding no list (`shipyard-tell.sh`,
-# `shipyard-compact.sh`, through the report below) has nothing to preserve and may probe, which is
-# what the argument-less mode is. Dropping the parameter would silently reintroduce the
-# disagreement on the callers that pass one.
+# WHY THE STATUS IS A PARAMETER. A caller that has already enumerated must classify the status of
+# the list it ACTED ON, not of a second enumeration that could disagree with it, so it captures
+# the rc once and passes it in. Who actually does what, rather than an absolute: `shipyard-report.sh`
+# passes a status alone (it classifies the list it PRINTED); `shipyard_absence_report` passes all
+# three (it needs the list for the `listed` arm anyway). `shipyard-tell.sh` and
+# `shipyard-compact.sh` reach this only THROUGH `shipyard_absence_report`, so they pass three too.
 #
-# THE DUPLICATION, STATED RATHER THAN HIDDEN. `shipyard-report.sh` asks this same question about the
-# FLEET, in its own `fleet_signal` — same two facts, same two classes, near-identical strings, added
-# by #130. This function SUBSUMES it exactly: `shipyard_signal_class "$ENUM_RC"` is that function.
-# The swap is not made here because report.sh is being edited on another branch and this change is
-# fenced out of that file; it is assigned to that branch's rebase, and it is a deletion plus a
-# one-line call — no signature change. That note stands until the second one is gone.
+# So NO caller uses the argument-less mode today. It is kept as a fail-closed default, not for a
+# caller: the driver treats an EMPTY status as `unreachable`, so a status-less call there would
+# refuse everything, and probing here is the honest answer for a caller that genuinely holds no
+# list. Stated plainly because an earlier version of this paragraph named tell and compact as its
+# users, which would have invited a later agent to add a bare call in exactly the two scripts that
+# already hold a list — reintroducing the disagreement the parameter exists to prevent.
+#
+# THE DUPLICATION, RESTATED AGAINST THE TREE AS IT IS. `shipyard-report.sh` used to carry its own
+# `fleet_signal`; #137 deleted it, and both of that file's call sites now come here (its own line
+# 156 records the deletion). What survives there is narrower: an open-coded per-slot "still listed"
+# contradiction check, which is exactly this function's `listed` arm spelled a second time — and it
+# labels that verdict `unreachable`, so the operator is sent to check a socket that demonstrably
+# answered. Folding it in is not a one-line swap, because that loop matches BARE slots and this
+# function's callers here pass full session names (see the namespace note above), so it is filed
+# rather than done here.
 #
 # NOT USED AS EVIDENCE: the slot's worktree. A worktree outlives its terminal by design — that is
 # the state of every child whose terminal was killed but not torn down — so reading its presence as
@@ -363,7 +391,7 @@ shipyard_signal_class() {
     # Re-asked rather than parsed back out of the driver's sentence, for the reason the
     # `elsewhere` remedy in `shipyard_absence_report` already gives: reading two file names again
     # costs nothing, and recovering a value from prose couples this to that sentence's wording.
-    elsewhere) sig="elsewhere${TAB}this run resolved $(shipyard_backend), but this fleet was launched on $(drv_pins_elsewhere)" ;;
+    elsewhere) sig="elsewhere${TAB}this run resolved $(shipyard_backend), but this fleet was launched on $(shipyard_backend_pinned_elsewhere)" ;;
     listed)    sig="listed${TAB}the $(shipyard_backend) backend answered and still lists $name, so it is the per-slot lookup that failed, not the child that ended" ;;
   esac
   printf '%s' "$sig"
@@ -398,8 +426,10 @@ shipyard_absence_report() {
   #
   # Enumerated through `drv_sessions` and not `shipyard_slots` because the comparison wants the
   # FULL session name: `shipyard_slots` strips the `ship-` prefix, and the diagnostic names the
-  # terminal the operator would go and look at.
-  list=$(drv_sessions 2>/dev/null) || erc=$?
+  # terminal the operator would go and look at. The container is passed for the reason
+  # `shipyard_slots` gives — the message below names `$(shipyard_container)`, so the enumeration
+  # must have asked about that same container or the two sentences are about different places.
+  list=$(drv_sessions "$(shipyard_container)" 2>/dev/null) || erc=$?
   sig=$(shipyard_signal_class "$erc" "$list" "ship-$slot") || rc=$?
   if [ "$rc" = 0 ]; then
     echo "error: no live terminal \`ship-$slot\` in $(shipyard_container_kind) \`$(shipyard_container)\`." >&2
