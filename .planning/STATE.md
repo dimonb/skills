@@ -134,6 +134,35 @@ earlier rounds** — including a guard added in round 1 that was wrong twice and
 reverted to the rule already there. Third time today a change improved by *removing* what its
 author added rather than by adding another guard.
 
+## ▶ COUNCIL — the next goal, and its finish line
+
+`ship` and `shipyard` are validated by ten changes driven through them; `council` by nothing. It
+ships in the same marketplace and carries 18 of the repo's open issues. The goal now is the same
+test applied to it: **what blocks USING it**, not what would make it ideal.
+
+Triaged against the tree rather than by reading the issue list back, because an issue's age says
+nothing about whether it is still true:
+
+| # | what | evidence |
+|---|---|---|
+| **#28** | a dangling `--room`/`--me` spins forever | **reproduced**: both documented forms, zero output, rc 124 under a 5s timeout, 100% CPU |
+| **#117** | `say` reports success for a message left unsubmitted in the seat's box | the twin of shipyard's #51; `up.sh:526` confirms only that keystrokes were injected |
+| **#36** | participants are never told `skip` exists | **grepped**: absent from `protocol/_channel.md` and every scenario — the only documents a participant receives |
+| **#17** | a blocked participant is indistinguishable from a thinking one | the README says the trust prompt "looks, from the room, exactly like a wedged session", and the two need opposite fixes |
+| **#24** | `decide`'s announcement can be refused and the room never learns it closed | **read**: `verbs.sh:664` sends with `>/dev/null` and never reads the status |
+
+The shape of the list is worth noting: three of the five are the same defect family the fleet just
+spent two days on — **a verb that reports success without establishing it** (#117, #24), and **a
+state nobody can distinguish from its opposite** (#17). #117 in particular is not a blank page:
+the fix lives in `shared/adapters` *because* council was identified as the second consumer while
+#116 was in review, so adopting it is the work, not writing it.
+
+**Deliberately below the line, and why:** #66's remainder — `overrule` is gated on nothing, so any
+non-author can close an objection — is a *correctness* hole in the thesis that "the outcome is
+computed", not a usability one, and its obvious fix was tried and reverted once already. #48
+(a decided room leaves its terminals running), #21 (no monitor protocol), #67, #29, #30, #34, #39,
+#40 and the test issues stay below it too.
+
 ## 🚢 RELEASED (2026-09-12) — `ship` 0.2.0 · `shipyard` 0.5.0 · `council` 0.3.0
 
 Issue **#144** → PR **#145** → `add5b83`. Both manifests per plugin moved together; nothing gates
