@@ -19,7 +19,12 @@
 #      the supervisor tears children down one at a time, so the last teardown leaving zero
 #      terminals is how a healthy run ENDS. A fix that made "found nothing" suspicious in general
 #      would make every finished fleet monitor itself forever — a worse bug than the one being
-#      closed, and silent in the opposite direction.
+#      closed, and silent in the opposite direction;
+#   4. THE SAME DISTINCTION PER SLOT (section 5). `shipyard-tell.sh` and `shipyard-compact.sh` read
+#      one slot's missing terminal as a dead child, which is the same inference over the same two
+#      facts — so they classify through the same function, and each maps the answer onto its own
+#      exit (3 gone, 7 unresolved). A supervisor told "gone" tears the slot down, so this door out
+#      of the defect ends in a destructive act rather than in silence.
 #
 # Section 4 executes the real script, for the reason t13-wait.sh measured: `grep -Fc` over source
 # lines asserts that a line exists and nothing about reachability or branch bodies, and six of
@@ -366,6 +371,73 @@ run_report live --only-changed 41 >/dev/null
 out=$(run_report live --only-changed 41)
 ok "4e2: a standing disagreement re-announces on every tick" 1 \
    "$(printf '%s' "$out" | grep -c 'but this fleet was launched on `agterm`')"
+
+# --------------------------------------------- 5. THE SAME QUESTION, ONE SLOT AT A TIME
+# PROVENANCE. `shipyard-tell.sh` and `shipyard-compact.sh` resolve ONE slot's terminal and, finding
+# none, both said "the child is gone" — the inference section 4 refuses one level up, reached
+# through a different door. `shipyard_target` resolves against whatever backend THIS process picked,
+# and `auto` picks per process, so during a socket blip the fact established is "no terminal on the
+# backend I resolved". A supervisor told its child died tears the slot down or relaunches it, and
+# teardown takes the worktree with it — so this one ends in a destructive action rather than in
+# silence.
+#
+# Executed, not grepped, for t13-wait.sh's reason: a `grep -Fc` over source lines asserts that a
+# line exists and nothing about which branch reaches it.
+#
+# The three classes are already unit-tested above (sections 1 and 2 own the two facts they rest on);
+# what sections 5a-5d add is that each script MAPS them onto a distinct exit and distinct words.
+TELL="$SKILL_DIR/shipyard-tell.sh"
+COMPACT="$SKILL_DIR/shipyard-compact.sh"
+
+run_script() { # <script> <tmux-mode> -> combined output, then a last line "rc=<n>"
+  local script="$1" mode="$2" out rc=0
+  out=$( TMUX_MODE="$mode" SHIPYARD_BACKEND=tmux SHIPYARD_SESSION=t14ex \
+         bash "$script" 41 "a directive" 2>&1 ) || rc=$?
+  printf '%s\nrc=%s\n' "$out" "$rc"
+}
+
+# 5a. THE CORROBORATED ABSENCE STILL READS AS A DEATH, and it is checked first for section 3's
+#     reason: a fix that simply stopped saying "gone" would pass every case below while removing
+#     the answer an operator needs on the commonest path — a child that really was torn down.
+rm -f "$MB"/container-*; : > "$MB/container-tmux"
+out=$(run_script "$TELL" empty)
+ok "5a: backend answered, slot absent -> exit 3" 3   "$(rc_of "$out")"
+ok "5a: ...and says the child is gone"           yes "$(has "$out" 'the child is gone')"
+ok "5a: ...naming the backend that answered"     yes "$(has "$out" 'the tmux backend answered')"
+
+# 5b. THE INCIDENT, per slot: the fleet is on agterm, this run resolved tmux, and the tmux
+#     container is empty for entirely correct reasons. The backend ANSWERED, so section 2's half of
+#     corroboration is satisfied and only the pin can catch this one.
+rm -f "$MB"/container-*; : > "$MB/container-agterm"
+out=$(run_script "$TELL" empty)
+ok "5b: pinned elsewhere -> exit 7, not 3"       7   "$(rc_of "$out")"
+ok "5b: ...and refuses to call the child gone"   no  "$(has "$out" 'the child is gone')"
+ok "5b: ...saying instead that it cannot tell"   yes "$(has "$out" 'cannot tell whether')"
+ok "5b: ...and warning off the teardown"         yes "$(has "$out" 'do NOT tear')"
+# The remedy must name the backend to pin, not just that one exists: "pin it" with no value is an
+# instruction the operator cannot follow without reading the source.
+ok "5b: ...with the pin to set"                  yes "$(has "$out" 'SHIPYARD_BACKEND=agterm')"
+
+# 5c. The other half: the backend did not answer at all. No pin disagreement here, so this case
+#     fails if reachability is ever dropped in favour of the pin check alone.
+rm -f "$MB"/container-*; : > "$MB/container-tmux"
+out=$(run_script "$TELL" down)
+ok "5c: unreachable backend -> exit 7"           7   "$(rc_of "$out")"
+ok "5c: ...and refuses to call the child gone"   no  "$(has "$out" 'the child is gone')"
+ok "5c: ...naming what went unanswered"          yes "$(has "$out" 'did not answer when asked')"
+
+# 5d. `shipyard-compact.sh` reaches the same refusal through its own exit mapping — a separate line
+#     of code making the identical claim, which is why it is asserted separately rather than assumed
+#     from the shared helper. Both directions, because a split that holds in one is not a split.
+rm -f "$MB"/container-*; : > "$MB/container-tmux"
+out=$(run_script "$COMPACT" empty)
+ok "5d: compact, corroborated absence -> exit 3" 3   "$(rc_of "$out")"
+ok "5d: ...and says the child is gone"           yes "$(has "$out" 'the child is gone')"
+rm -f "$MB"/container-*; : > "$MB/container-agterm"
+out=$(run_script "$COMPACT" empty)
+ok "5d: compact, pinned elsewhere -> exit 7"     7   "$(rc_of "$out")"
+ok "5d: ...and refuses to call the child gone"   no  "$(has "$out" 'the child is gone')"
+rm -f "$MB"/container-*
 
 if [ "$FAILURES" -eq 0 ]; then
   printf 't14-signal: %d checks, all passed\n' "$CHECKS"; exit 0

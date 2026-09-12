@@ -570,7 +570,26 @@ it to one line (a literal newline would submit early), sends it, and then **conf
 from the child's TURN STATE, polled** — never from a before/after screen diff. A long directive
 is written to the `.txt` and the child is told to read that file. An escalation id is
 accepted and resolves to its slot, so you can answer the notice you were just shown with
-the id you were shown. Exit 3 = no live terminal for that slot (the child is gone).
+the id you were shown.
+
+**Exit 3 and exit 7 are both "no terminal", and only one of them is news about the child.**
+`shipyard_target` resolves against whatever backend *this process* picked, and
+`SHIPYARD_BACKEND=auto` picks per process by probing the agterm control socket — so an absence
+has to say which question was actually answered before it may be read as a death:
+
+| exit | what was established | what to do |
+|---|---|---|
+| **3** | the backend **answered** and has no terminal for that slot — the child really is gone | teardown or a fresh session, as usual |
+| **7** | there is no terminal **on the backend this run resolved**, and that backend either did not answer at all or is not the one this fleet was launched on | **nothing about the slot.** Fix the backend or pin it, then re-ask |
+
+Exit 7 is the same refusal as the report's `🛑 NO SIGNAL` block, one level down: that one
+declines to read an empty fleet as a drained one, this one declines to read an unresolvable
+slot as a dead child. **Never tear a slot down or relaunch it on an exit 7** — during a socket
+blip the child is alive and mid-review in the other backend, and teardown takes its worktree
+with it. The refusal names the class it saw and the one command that clears it
+(`SHIPYARD_BACKEND=<the pinned backend>`, or starting the backend back up).
+
+`shipyard-compact.sh` splits the same absence the same way, and for the same reason.
 
 | verdict | what was observed | exit |
 |---|---|---|
@@ -862,6 +881,11 @@ the SAME worktree plus a written handoff file. Check `git status` and
 `git log origin/<default-branch>..HEAD` there first — a stalled child has usually committed and pushed
 more than its last notice reported, so nothing is lost. **`/clear` is never the answer** —
 it throws away exactly what you are trying to keep.
+
+Exit 7 means the slot could not be *resolved*, which is not the same as having no child: the
+backend did not answer, or this process resolved a different backend from the one the fleet was
+launched on. It is the same split `shipyard-tell.sh` makes (Step 4), and it carries the same
+instruction — **change nothing about the slot**, clear the backend question, re-run.
 
 If you drive the terminal by hand instead, three facts that each cost a wrong diagnosis:
 

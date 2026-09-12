@@ -32,8 +32,11 @@ done
 [ -n "$SLOT" ] || { echo "usage: shipyard-compact.sh <slot> [--resume-file <path>|--resume <text>|--no-resume]" >&2; exit 2; }
 
 shipyard_backend_check || exit 1
-T=$(shipyard_where "$SLOT") || {
-  echo "error: no live terminal \`ship-$SLOT\` in $(shipyard_container_kind) \`$(shipyard_container)\`" >&2; exit 3; }
+# Exit 3 means the backend answered and does not have this slot — the child is gone. Exit 7 means
+# the question could not be answered at all (the backend was unreachable, or this process resolved
+# a different one from the fleet's pin) and the child's fate is UNKNOWN. Reporting the second as
+# the first tells a supervisor its work died; see shipyard_absence_report in shipyard-backend.sh.
+T=$(shipyard_where "$SLOT") || { shipyard_absence_report "$SLOT" || exit 7; exit 3; }
 
 pane() { shipyard_capture "$SLOT"; }
 
