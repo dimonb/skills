@@ -306,6 +306,179 @@ drv_signal() {
   return 0
 }
 
+# --- MAY AN ABSENCE BE BELIEVED? -----------------------------------------------
+# Every caller of `drv_target` eventually finds nothing, and the question it must answer next is
+# not "is this session there" but "did I actually get to ask". `DRV_BACKEND=auto` decides per
+# PROCESS by probing the agterm control socket, so one blipped probe sends a whole run to the
+# other backend, where the caller's container is empty for entirely correct reasons — and the
+# honest fact established is "no session on the backend I resolved", never "it ended".
+#
+# This matters because of what callers DO with a negative. shipyard's supervisor tears a slot down
+# or relaunches it, which takes the worktree with it; council's documented next move for a seat
+# with no terminal is `relaunch`, which kills an agent mid-turn along with its context. An
+# unanswerable question must never produce a confident negative that ends in a destructive act.
+#
+# The three functions below are the evidence and the verdict. They live HERE, in the driver,
+# because every fact they read is the driver's own — which backend this process resolved, what the
+# container answered, which backends the pin directory records. Both skills asked this question
+# before this module did, each in its own words; `shipyard-backend.sh` named `shared/driver` as
+# the right home in a comment and deferred on the explicit grounds that council had no
+# empty-answer conclusion to protect, with the note "Move it the moment that stops being true".
+# `council say` refusing a peer per #141 is that moment, and two answers to one question is the
+# defect the shared engine exists to remove.
+
+# drv_sessions [<container>] — the session names in the container, one per line.
+#
+# THE EXIT STATUS IS A SECOND FACT, AND IT IS THE POINT. 0 means THE BACKEND ANSWERED — an empty
+# list is a real answer, a container that genuinely holds nothing — and 1 means it did not, so a
+# caller can tell "there is nothing there" from "I could not ask". Callers filter the names to
+# their own prefix themselves; the naming template belongs to the caller, exactly as it does for
+# `drv_target`.
+#
+# Never write this as a bare pipeline whose status is the last stage's. The agterm arm's status
+# used to be `sed`'s, i.e. 0 whichever way the tree call went, and it only worked because both
+# callers happened to set `pipefail`; `shared/driver/tests` now runs these cases without it.
+drv_sessions() {
+  local container="${1:-}" tree out
+  [ -n "$container" ] || container=$(drv_container) || return 1
+  case "$(drv_backend)" in
+    agterm)
+      tree=$(agtermctl tree --json 2>/dev/null) || return 1
+      # The shape assertion is not defensive noise: a tree that parses but is not the tree this
+      # expects yields an empty selection, which is indistinguishable from an empty container and
+      # is exactly the "answered" side of the fact above. `error()` makes jq exit non-zero so the
+      # malformed case reads as unanswered.
+      printf '%s' "$tree" | jq -r --arg ws "$container" '
+        if .ok != true or (.result.tree.workspaces | type) != "array"
+          or (all(.result.tree.workspaces[];
+            type == "object" and (.name | type) == "string"
+            and (.sessions | type) == "array"
+            and all(.sessions[];
+              type == "object" and (.id | type) == "string" and (.id | length) > 0
+              and (.name | type) == "string")) | not)
+        then error("invalid agterm tree")
+        else .result.tree.workspaces[] | select(.name == $ws) | .sessions[]? | .name
+        end
+      ' 2>/dev/null || return 1
+      return 0 ;;
+    tmux)
+      # stderr is CAPTURED rather than dropped, because the two failures must be told apart: a
+      # server that cannot be reached is unanswered, while a session that is simply not there is
+      # an honest empty answer — a tmux session dying takes its children with it, so "no such
+      # session" really does mean the container holds nothing.
+      # The trailing-marker strip mirrors `drv_target`'s `gsub(/[-*]$/,"",$2)` and is kept only so
+      # the two agree. It is NOT what its name suggests: `-F '#{window_name}'` emits the name
+      # alone, and the active/last markers come from `#{window_flags}` or from the default format
+      # — checked against a real tmux, where a window genuinely named `agent-` came back verbatim.
+      # So this can only ever rewrite a legal name ending in `-` or `*`, which council admits
+      # (`_plain_name` allows `-`). Harmless today because `drv_target` is wrong in the same
+      # direction; removing both together is filed, and neither may be removed alone.
+      if out=$(tmux list-windows -t "$container" -F '#{window_name}' 2>&1); then
+        printf '%s\n' "$out" | sed -E 's/[-*]$//'
+        return 0
+      fi
+      case "$out" in
+        *'no server running'*|*"can't find session"*|*'session not found'*|*'no such session'*) return 0 ;;
+        *) return 1 ;;
+      esac ;;
+    *) _drv_no_backend; return 1 ;;
+  esac
+}
+
+# drv_pins_elsewhere — echoes the backend(s) this caller's pin directory records, and returns 0
+# ONLY when a pin exists and NONE of them is the backend this process resolved.
+#
+# There is no separate backend pin file to maintain. The container pin is already named
+# `container-<backend>`, so the SET of pin files present IS the record of which backends this
+# caller has launched on. That is why this belongs beside `_drv_pin_file` rather than in either
+# skill: `_drv_pin_file` names only the CURRENT backend and so cannot answer "which pins exist",
+# and a caller that spells `container-<b>` for itself duplicates a template this file owns — a
+# rename here would then make that caller read nothing and fail OPEN, silently, which is the
+# incident this whole section exists to prevent.
+#
+# Both pins present is NOT a disagreement: this caller has launched on each, so neither choice is
+# looking in the wrong place. Reporting one there would alarm on a legitimate history and teach
+# the operator to ignore the block.
+drv_pins_elsewhere() {
+  local d b f now any="" found=""
+  d="${DRV_CONTAINER_PIN_DIR:-}"
+  [ -n "$d" ] && [ -d "$d" ] || return 1
+  now=$(drv_backend)
+  for b in agterm tmux; do
+    f="$d/container-$b"
+    [ -f "$f" ] || continue
+    any="${any:+$any and }$b"
+    [ "$b" = "$now" ] && found=1
+  done
+  [ -n "$any" ] || return 1        # nothing was ever launched from here — no disagreement
+  [ -n "$found" ] && return 1      # the resolved backend is one of them — no disagreement
+  printf '%s' "$any"
+}
+
+# drv_absence_class <enum-rc> [<enum-output> <session-name>] — the verdict.
+#
+# Echoes "<class><TAB><why>" and returns 1 when the absence may NOT be believed. Echoes nothing
+# and returns 0 when it may, so a caller branches on the status and only parses on the refusal.
+#
+#   unreachable  the backend did not answer when asked which sessions exist.
+#   elsewhere    it answered, but this caller launched on a DIFFERENT backend (the pin says so).
+#   listed       it answered AND still lists this very session, so it is the per-session lookup
+#                that failed, not the session that ended.
+#
+# WHY THE ENUMERATION COMES IN AS PARAMETERS. A caller that has already enumerated must classify
+# the list it ACTED ON, not a second enumeration that could disagree with it — so it captures the
+# status once and passes it in. A caller that holds no list may probe and pass the status alone;
+# the probe stays with the caller because only the caller knows which enumeration its own answer
+# came from, and re-probing here would silently reintroduce the disagreement.
+#
+# AN EMPTY STATUS IS `unreachable`, NOT `answered`. A caller that establishes nothing has
+# established nothing, and defaulting the other way would make a forgotten argument grant the
+# corroboration this whole section exists to withhold — failing open, silently, which is the
+# incident itself.
+#
+# `<enum-output>` AND `<session-name>` SHARE A NAMESPACE THAT NOTHING CHECKS. They are compared
+# for exact equality, so a caller must spell both the same way — full session names on both sides,
+# or its own bare keys on both sides. Feeding `drv_sessions`' full names against a bare key
+# matches nothing and turns the arm off SILENTLY, which is worse than not having it: the caller
+# then believes an absence that was never corroborated. There is no assertion that can catch a
+# mismatch, because both spellings are legitimate; this sentence is the whole guard.
+#
+# THE `listed` ARM IS THE NARROWEST BLIP AND THE ONE THAT SURVIVES A STATUS-ONLY CHECK.
+# `drv_target` makes its OWN backend call, separate from the enumeration and swallowing both
+# stderr and status, so it can fail while the enumeration answers — and then both of the other
+# facts agree and a session the backend has JUST LISTED is called gone. Keeping the enumeration's
+# ANSWER and not merely its status is what catches it. The arm is skipped when a caller passes no
+# list, which is the honest reading: no evidence, no contradiction.
+drv_absence_class() {
+  local rc="${1:-}" list="${2:-}" name="${3:-}" pe s TAB
+  TAB=$(printf '\t')
+  if [ -z "$rc" ] || [ "$rc" != 0 ]; then
+    printf 'unreachable%sthe %s backend did not answer when asked which terminals exist' \
+      "$TAB" "$(drv_backend)"
+    return 1
+  fi
+  pe=$(drv_pins_elsewhere) || pe=""
+  if [ -n "$pe" ]; then
+    printf 'elsewhere%sthis run resolved %s, but these sessions were launched on %s' \
+      "$TAB" "$(drv_backend)" "$pe"
+    return 1
+  fi
+  if [ -n "$name" ] && [ -n "$list" ]; then
+    # Matched by READING the list, never `printf … | grep -q`: grep exits on the first match,
+    # printf takes SIGPIPE, and under `set -o pipefail` the pipeline then reports 141 on the very
+    # case that matched.
+    while IFS= read -r s; do
+      [ "$s" = "$name" ] || continue
+      printf 'listed%sthe %s backend answered and still lists %s, so it is the per-session lookup that failed, not the session that ended' \
+        "$TAB" "$(drv_backend)" "$name"
+      return 1
+    done <<EOF
+$list
+EOF
+  fi
+  return 0
+}
+
 # Resolve the backend ONCE, here in the sourcing shell. Every dispatch asks via
 # `case "$(drv_backend)"`, which runs in a subshell — so a resolution made there is thrown away,
 # and without this line `auto` would ping the agterm socket again on every single call. Failure
