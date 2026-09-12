@@ -134,6 +134,56 @@ earlier rounds** — including a guard added in round 1 that was wrong twice and
 reverted to the rule already there. Third time today a change improved by *removing* what its
 author added rather than by adding another guard.
 
+## 🚢 RELEASED (2026-09-12) — `ship` 0.2.0 · `shipyard` 0.5.0 · `council` 0.3.0
+
+Issue **#144** → PR **#145** → `add5b83`. Both manifests per plugin moved together; nothing gates
+that yet, which is #20.
+
+**Why it was needed, stated narrowly because I first stated it too broadly.** I claimed that
+anyone who had installed the plugin was running August code. That is wrong for a **fresh** install:
+`marketplace add` clones the default branch, so a new user already received current content under
+the stale number — verified by installing from the public repo and finding a merge from that same
+afternoon inside a copy declaring `0.4.0`. The frozen case is only an **existing** install, whose
+cache is keyed by the declared version, so `update` compares a number that had not moved, does
+nothing, and reports success.
+
+**Not `1.0.0`, deliberately.** The Codex runtime path has never been driven end to end, and
+`council` carries 18 of the repo's open issues, one labelled security. A minor bump claims what was
+earned; `1.0.0` would claim what was not.
+
+### Installation — verified by running it, in both CLIs, for the first time
+
+The README has promised these commands since August and nobody had executed them. Both marketplaces
+add from the public repo, all plugins install, the skills land in the cache, and teardown is clean.
+`shipyard` installs and reports **0.5.0**, and the cached copy carries every fleet fix — checked by
+symbol, not by trust: the anchored turn read (#116), the teardown gate script (#118), the wait
+classifier (#123), the absence classifier and its `tell`/`compact` wrapper with exit 7 (#137), and
+the forge iid fallback (#138).
+
+Two things the run established that no amount of reading would have:
+
+* **Claude Code resolves the declared dependency.** Installing `shipyard` alone pulled `ship` with
+  it (`+ 1 dependency: ship`), and uninstalling offered to prune it again. The manifest field works.
+* **Codex does not, exactly as documented.** `codex plugin add shipyard@dimonb-skills` succeeded
+  and left `ship` as `not installed`. This is not a defect to file — `plugins/shipyard/README.md`
+  says precisely this, and the README's install block lists all three plugins explicitly, so a
+  reader who follows it is fine. Observed behaviour matched documented behaviour, which is the
+  outcome worth recording.
+
+**One correction to my own method, worth keeping.** My first content check reported a fix ABSENT
+from `shipyard-tell.sh`. The probe was wrong, not the code: `tell` and `compact` do not call the
+classifier directly, they call `shipyard_absence_report`, which classifies and prints the
+operator's next move, and they exit **7** for "could not resolve" rather than the corroborated
+"gone" of 3. Grepping for the symbol I expected rather than the one the code uses would have been
+a false alarm reported as a finding.
+
+### Still unexercised, and it is the honest boundary of this release
+
+Installation on Codex is verified; **running** a change through Codex is not. No Codex child has
+been driven end to end, so every claim about that path remains prose. `council` is likewise
+installed-and-untouched: I have validated `ship` and `shipyard` by driving ten changes through
+them across two days, and `council` by nothing at all.
+
 ## ✅ THE FLEET IS USABLE — the four blockers are closed
 
 | PR | merge | what it fixes |
