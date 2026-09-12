@@ -1,6 +1,6 @@
 {
   "name": "shipyard",
-  "version": "0.4.0",
+  "version": "0.5.0",
   "description": "Run the repo's ship skill in background terminals, using the same agent runtime as the parent session, with fleet monitoring, escalations, and automatic Codex parent continuity after transient model-capacity stops. Requires the ship skill; it launches nothing else.",
   "author": {
     "name": "dimonb",
