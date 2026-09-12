@@ -91,11 +91,18 @@ _syg_pr_known() { [ -n "${SYG_IID:-}" ]; }
 # attention, and its escalation overlay shows that), and behaviour is preserved.
 #
 # One deliberate refinement of the FULL glyph path (not this predicate alone): `concluded` sits
-# behind the `launched` node, so the `completed` verdict now also requires a known PR/MR number. The
-# old glyph had no such precondition, but the divergence is unreachable by construction — ship
-# records the PR number when it opens the PR, well before `stage=ready-to-merge`, and slot_stage and
-# slot_iid read the same state file — so a `ready-to-merge` slot always has a known iid. If it ever
-# occurred it is glyph-only (`active` vs `completed`), never affecting the in-flight count.
+# behind the `launched` node, so the `completed` verdict now also requires a known PR/MR number.
+#
+# THAT PRECONDITION WAS ARGUED UNREACHABLE, AND IT WAS NOT (#124). The argument ran: ship records
+# the PR number when it opens the PR, well before `stage=ready-to-merge`, and slot_stage and
+# slot_iid read the same state file — so a `ready-to-merge` slot always has a known iid. Both
+# halves are true and the conclusion still failed, because the premise under them is that the
+# state file EXISTS. Where a child never wrote one, both facts are missing together: the slot sits
+# at `launched` from launch to merge, and the `completed` glyph never fires at all. The cost was
+# glyph-only, as predicted (the in-flight count reads a live terminal, not this phase) — but it was
+# reached, so do not read this node's ordering as free. slot_iid()'s forge fallback is what makes
+# the iid arrive without the child's cooperation; SYG_STAGE gets no such fallback, so a slot whose
+# child records no stage still concludes on the forge state alone and never on `ready-to-merge`.
 _syg_concluded() {
   case "${SYG_MR_STATE:-}" in merged|closed) return 0 ;; esac
   [ "${SYG_STAGE:-}" = ready-to-merge ]

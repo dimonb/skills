@@ -275,6 +275,29 @@ perl -pi -e 's{"state": "need-issue\|issue-ready\|}{"state": "need-issue|issue-r
 expect_fail "enum state with no §7 handler"
 git checkout -- "$CORE"
 
+# 6c — a state the core enters but never tells the run to RECORD, which is how a stage becomes
+# invisible to the supervisor's table (#124). `archive` is the fixture because it occurs exactly
+# once; the arm is pinned by message because the enum-derivation arm above it reds on the same
+# file and would otherwise substitute for it.
+perl -pi -e 's/record state=archive/state=archive/' "$CORE"
+expect_fail "enum state never recorded" 'never says `record state=archive`'
+git checkout -- "$CORE"
+
+# 6d — the kill test for 6c's ANCHOR, which 6c itself cannot provide: `archive` is a prefix of
+# nothing, so dropping the arm's trailing backtick leaves 6c passing. This adds a state that IS a
+# prefix of a recorded one (`spec` before `spec-review`) and records none of it. Unanchored, the
+# grep finds `record state=spec-review` and the gate goes green over a state nothing records;
+# anchored, it reds.
+#
+# The `### 7.Z` handler is what keeps this probe pointed at ONE arm. Without it 6b's neighbouring
+# no-handler arm reds too, and a probe that fires two arms proves neither — the first version of
+# this probe renamed an existing heading to `7.CC`, which that arm's `^### 7\.[A-Z] — ` regex
+# rejects, so it reported `caught` off the wrong assertion.
+perl -pi -e 's{"state": "need-issue\|issue-ready\|}{"state": "need-issue|issue-ready|spec|}' "$CORE"
+perl -pi -e 's{^## 8\. }{### 7.Z — `spec`\n\nA probe handler, so only the recording arm can red.\n\n## 8. }' "$CORE"
+expect_fail "enum state satisfied only by a longer name" 'never says `record state=spec`'
+git checkout -- "$CORE"
+
 # 7 — the leak check: ONE probe per structural pattern, so a typo in any single alternative
 # cannot ship silently. The probe file is UNTRACKED on purpose: that is the state a leak is
 # in when `make check` runs just before `git add`. Every fixture is invented.

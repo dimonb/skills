@@ -39,9 +39,10 @@
 #    module this file now imports its marker from could not work.);
 #  * the whole report is buffered and printed in ONE block so Monitor batches it
 #    into a single notification;
-#  * the MR iid of a text slot is read out of ship's own state
-#    (`.pipeline-state/MR-<iid>.json` inside the worktree) — before the MR exists
-#    there is none, and the slot counts as in-flight;
+#  * a slot's MR iid is read out of ship's own state (`.pipeline-state/*.json` inside the
+#    worktree), and when that file says nothing — a child that never wrote one — out of the
+#    FORGE, by the slot worktree's branch. Only when neither can answer is there none, and the
+#    slot counts as in-flight;
 #  * open escalations are appended, so a question raised between fast-monitor
 #    ticks still shows up here;
 #  * a motionless slot is asked WHY before the stall clock is consulted (shipyard_wait_state in
@@ -54,8 +55,8 @@
 #    exit 1 = work is still open, OR this run could not tell. Those two share an exit code on
 #    purpose: the loop's only decision is whether to keep watching, and the answer to "I do not
 #    know" is the same as the answer to "yes" — keep watching. Only a CORROBORATED empty answer
-#    exits 0 (see the fleet_signal block below); an unreachable backend, or one that disagrees
-#    with the fleet's own container pin, raises 🛑 NO SIGNAL and keeps the monitor alive.
+#    exits 0 (see the shipyard_signal_class calls below); an unreachable backend, or one that
+#    disagrees with the fleet's own container pin, raises 🛑 NO SIGNAL and keeps the monitor alive.
 #
 # Env:
 #   SHIPYARD_BACKEND    agterm (default) | tmux | auto
@@ -80,6 +81,11 @@ DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 . "$DIR/shipyard-ctx.sh"
 
 ROOT=$(git rev-parse --show-toplevel 2>/dev/null || pwd)
+# Resolved ONCE, here, because slot_iid_forge() below runs inside a $( ) per slot and could never
+# keep a cache of its own. Empty is a legitimate answer (no origin/HEAD ref, or a fake git in the
+# test rig); the one caller treats empty as "no base branch to exclude" and asks the forge anyway.
+DEFAULT_BRANCH=$(git -C "$ROOT" symbolic-ref --quiet --short refs/remotes/origin/HEAD 2>/dev/null \
+  | sed 's#^origin/##')
 shipyard_backend_check || exit 1
 CONTAINER=$(shipyard_container)
 KIND=$(shipyard_container_kind)
@@ -145,22 +151,15 @@ EOF
 fi
 
 TAB=$(printf '\t')
-# fleet_signal — "<class><TAB><why>" and rc 1 when an empty answer may NOT be read as completion;
-# nothing and rc 0 when it may. A pure reader of the two facts above, so it can be asked at both
-# exit-0 sites without re-probing anything.
-fleet_signal() {
-  if [ "$ENUM_RC" != 0 ]; then
-    printf 'unreachable%sthe %s backend did not answer when asked which terminals exist' \
-      "$TAB" "$(shipyard_backend)"
-    return 1
-  fi
-  if [ -n "$PINNED_ELSEWHERE" ]; then
-    printf 'elsewhere%sthis tick resolved %s, but this fleet was launched on %s' \
-      "$TAB" "$(shipyard_backend)" "$PINNED_ELSEWHERE"
-    return 1
-  fi
-  return 0
-}
+# "May an absence be believed?" is `shipyard_signal_class` in shipyard-backend.sh — same two facts
+# (did enumeration answer; does the pin name another backend), same two classes, one implementation.
+# This file used to carry its own `fleet_signal` saying exactly that; #137 added the shared one and
+# named this deletion as owed to this branch, because two answers to one question is the defect the
+# shared engine exists to remove.
+#
+# ALWAYS pass the CAPTURED rc. The function probes for itself when called with no argument, and
+# that is the wrong thing here: this script must classify the status of the list it PRINTED, not of
+# a second enumeration taken later that could disagree with it. The parameter exists for this.
 
 # The loud refusal, printed wherever an empty answer would otherwise have ended the watch. Modelled
 # on the STALLED block deliberately: an operator who has learned that a 🛑 heading means "read this
@@ -245,7 +244,6 @@ fi
 # a report which always dies mid-loop re-announces the gap every tick; that is noisy, honest, and
 # true (nothing IS being watched), which is the right way round.
 
-# iid: numeric slot is the iid; otherwise read it from .pipeline-state.
 # Which forge origin points at. The report used to assume GitLab everywhere and ran
 # `glab mr view` against a GitHub remote, where it fails silently — see mr_state().
 forge() {
@@ -255,29 +253,102 @@ forge() {
   esac
 }
 
+# Ask the FORGE which PR/MR has this slot's branch as its head. The fallback that needs no
+# cooperation from the child, and the reason it exists: every source above is ship's own state
+# file, and a child that writes one late — or not at all — leaves this column blank for exactly
+# the part of the run where supervision matters. Measured (#124): a slot reading `no MR yet` over
+# a PR that had been open for over an hour with two completed review rounds, and a second that
+# wrote the file only once its PR already existed. The forge always knows; the child need not.
+#
+# It also unblocks the SLOT GRAPH, which is not obvious from here. shipyard-slot-graph.sh's first
+# node completes on `_syg_pr_known`, so with no iid a slot can never leave `launched` — and its
+# comment reasons that the divergence is unreachable "because ship records the PR number when it
+# opens the PR", which is exactly the assumption #124 falsified. With the column blind, the
+# `completed` glyph could never fire for any state-file-less child either.
+#
+# COST: one forge call per slot per tick, and only for a slot no state file could answer for.
+# ORDER: last. Every cheaper source wins first — including GitLab's slot-is-the-iid rule, which is
+# a heuristic rather than an exact answer (see slot_iid). This is a fallback, never a substitute.
+slot_iid_forge() {
+  local slot="$1" wt physical br v
+  wt="$ROOT/.claude/worktrees/ship-$slot"
+  [ -d "$wt" ] || return 0
+  # A DIRECTORY IS NOT A WORKTREE, and the difference is a wrong answer rather than a blank. Git
+  # discovery walks UP, so `rev-parse` inside a stray `.claude/worktrees/ship-*` — an interrupted
+  # `worktree add`, a `remove` that failed on a dirty tree, or a bare `.pipeline-state/` — succeeds
+  # and returns the SUPERVISOR's own branch. The supervisor is on a feature branch (AGENTS.md
+  # forbids working on main), so the base-branch guard below cannot mask it and the slot would
+  # render the supervisor's own PR, then take its `merged` as the child concluding. shipyard-down-
+  # gate.sh records this same walk-up as measured; this is its registration check, the one
+  # shipyard_agent_prepare_worktree already uses.
+  physical=$(cd "$wt" 2>/dev/null && pwd -P) || return 0
+  git -C "$ROOT" worktree list --porcelain | grep -Fqx "worktree $physical" || return 0
+  br=$(git -C "$wt" rev-parse --abbrev-ref HEAD 2>/dev/null)
+  # No branch, a detached HEAD (a child that has not branched yet), or the base branch itself:
+  # there is no question to ask, and asking one about the base branch invites a wrong answer.
+  case "$br" in ''|HEAD) return 0 ;; esac
+  [ -n "$DEFAULT_BRANCH" ] && [ "$br" = "$DEFAULT_BRANCH" ] && return 0
+  # BOTH arms ask the same question, and the two CLIs spell it differently in ways that are easy to
+  # get backwards. Verified against the installed clients rather than reasoned about:
+  #   * state — `gh` defaults to OPEN and takes `--state all`; `glab` also defaults to opened, and
+  #     `-A/--all` is its opt-in (`glab mr list --help`, 1.90). Merged must be included or a merged
+  #     change whose terminal is still up loses its number at the exact moment the graph needs
+  #     `merged` to conclude — #124's own symptom, reintroduced.
+  #   * count — `--limit 1` and `-P 1`. glab's per-page default is 30, i.e. 30 records fetched to
+  #     read one integer.
+  #   * cwd — both run inside the same subshell `cd "$ROOT"` as mr_state(), so each resolves the
+  #     project from the remote rather than from wherever the monitor was started.
+  #   * stderr — the redirect wraps the whole pipeline, jq included, so a non-JSON banner cannot
+  #     put `parse error:` outside the single buffered block this report promises.
+  if [ "$(forge)" = github ]; then
+    v=$( (cd "$ROOT" 2>/dev/null && unset GITHUB_TOKEN \
+      && gh pr list --head "$br" --state all --limit 1 --json number --jq '.[0].number // empty') 2>/dev/null)
+  else
+    v=$( (cd "$ROOT" 2>/dev/null \
+      && OAUTH_TOKEN= glab mr list --source-branch "$br" --all -P 1 -F json | jq -r '.[0].iid // empty') 2>/dev/null)
+  fi
+  printf '%s' "$v"
+}
+
 # The MR/PR number for a slot, or empty when the change has not opened one yet.
 #
-# A NUMERIC SLOT IS NOT AUTOMATICALLY THE MR NUMBER. On GitLab it is (the slot comes
-# from an MR iid). On GitHub `/shipyard` is normally started from an ISSUE, so the slot is an
-# issue number and the PR does not exist yet and will get a DIFFERENT number. Returning
-# the slot there labelled a live issue as a PR, and then the state lookup for that
-# non-existent PR came back "?" — which mr_state()/inflight took for "finished", so the
-# monitor declared the run over about a minute after it started.
+# A NUMERIC SLOT IS NOT AUTOMATICALLY THE MR NUMBER. On GitHub `/shipyard` is normally started
+# from an ISSUE, so the slot is an issue number and the PR does not exist yet and will get a
+# DIFFERENT number. Returning the slot there labelled a live issue as a PR, and then the state
+# lookup for that non-existent PR came back "?" — which mr_state()/inflight took for "finished",
+# so the monitor declared the run over about a minute after it started.
+#
+# The GitLab arm below is a HEURISTIC, not the exception that proves the rule, and `#N` breaks it:
+# shipyard-launch.sh maps both `!42` and `#42` to slot 42, and its own comment says `#N` is the
+# issue form on GitLab too — so a `#N`-launched GitLab slot returns an ISSUE number here, exactly
+# the GitHub defect above. It is left as it stands because narrowing it to the `!N` spelling is a
+# behaviour change on a path nothing here tests (t15's rig is GitHub-only); filed rather than
+# guessed at. Do not read the arm as exact.
+#
+# ONLY A NUMBER IS AN ANSWER, and that test lives HERE, at the single exit, rather than in the arm
+# that happens to have prompted it. Every arm can yield junk: `.pr_number` is hand-authored JSON
+# (§2.8 of ship now has a child write it at DISCOVERY, before any PR exists, so `"TBD"`/`"pending"`
+# is a plausible value where the field used to be written by a run that already held the integer);
+# `sed` passes non-matching input through, so an `MR-<slug>.json` basename returns the slug; and a
+# CLI that is unauthenticated or pointed at the wrong forge can put prose on stdout. Any of those
+# renders as `!<junk>`, makes mr_state() answer `?` forever, and — being non-empty — satisfies
+# `_syg_pr_known`, advancing the graph for a slot that has no PR. Guarding one arm of four is the
+# enumerable shape that comes back; guarding the exit also lets a junk state-file value fall
+# THROUGH to the forge, which is the arm most likely to hold the real number.
 slot_iid() {
-  local slot="$1" sd f v
+  local slot="$1" sd f v=""
   sd="$ROOT/.claude/worktrees/ship-$slot/.pipeline-state"
   f=$(ls -1 "$sd"/*.json 2>/dev/null | tail -1)
-  if [ -n "$f" ]; then
-    v=$(jq -r '.pr_number // .pr // .iid // .mr_iid // empty' "$f" 2>/dev/null)
-    [ -n "$v" ] && { printf '%s' "$v"; return; }
-  fi
+  [ -n "$f" ] && v=$(jq -r '.pr_number // .pr // .iid // .mr_iid // empty' "$f" 2>/dev/null)
+  case "$v" in ''|*[!0-9]*) v="" ;; *) printf '%s' "$v"; return ;; esac
   f=$(ls -1 "$sd"/MR-*.json 2>/dev/null | tail -1)
-  if [ -n "$f" ]; then
-    basename "$f" | sed -E 's/^MR-([0-9]+)\.json$/\1/'
-    return
-  fi
+  [ -n "$f" ] && v=$(basename "$f" | sed -E 's/^MR-([0-9]+)\.json$/\1/')
+  case "$v" in ''|*[!0-9]*) v="" ;; *) printf '%s' "$v"; return ;; esac
   # Only GitLab may fall back to the slot itself.
-  if [[ "$slot" =~ ^[0-9]+$ ]] && [ "$(forge)" = gitlab ]; then printf '%s' "$slot"; fi
+  if [[ "$slot" =~ ^[0-9]+$ ]] && [ "$(forge)" = gitlab ]; then printf '%s' "$slot"; return; fi
+  v=$(slot_iid_forge "$slot")
+  case "$v" in ''|*[!0-9]*) return 0 ;; esac
+  printf '%s' "$v"
 }
 
 # opened | merged | closed | ? — normalised across both forges.
@@ -345,10 +416,10 @@ status_line() {
 
 if [ ${#SLOTS[@]} -eq 0 ]; then
   # The FIRST of the two exits this script has, and the one the incident came through: discovery
-  # mode found no terminals. Whether that ends the watch is now fleet_signal's call, not the
-  # emptiness's own.
+  # mode found no terminals. Whether that ends the watch is shipyard_signal_class's call, not the
+  # emptiness's own. ENUM_RC is the status of the enumeration this branch is acting on.
   NOSIG=""; NOSIG_RC=0
-  NOSIG=$(fleet_signal) || NOSIG_RC=$?
+  NOSIG=$(shipyard_signal_class "$ENUM_RC") || NOSIG_RC=$?
   {
     echo "### ship status — $(date '+%H:%M:%S %Z')"
     echo
@@ -448,7 +519,7 @@ for slot in "${SLOTS[@]}"; do
   # that was mid implementation, and took the STALL detector down with it, so the
   # supervisor got two green signals while the session sat with an unsubmitted line
   # in its box. Teardown is the supervisor's act; the absence of a terminal is the
-  # honest end signal — but only once CORROBORATED, which is the fleet_signal block
+  # honest end signal — but only once CORROBORATED, which is the shipyard_signal_class block
   # above: an absence nobody could verify is not an end signal at all, and reading it
   # as one is #61. (A dead terminal never reaches here — it `continue`s above — so
   # this counts live sessions only, and the monitor still exits once every terminal
@@ -581,7 +652,7 @@ TERMINAL=0
 # last teardown leaving zero terminals IS the designed end of a run. "Slots were named, therefore
 # finding none is suspicious" would make that termination unreachable and every finished fleet
 # would monitor itself forever. Teardown and unreachability are told apart by the backend having
-# ANSWERED, which is what fleet_signal asks.
+# ANSWERED, which is what shipyard_signal_class asks.
 NOSIG=""; NOSIG_RC=0
 if [ "$TERMINAL" = 1 ]; then
   # RE-ASK, rather than trust the sample taken before the loop. The row loop is the slow part of a
@@ -594,7 +665,9 @@ if [ "$TERMINAL" = 1 ]; then
   # extra enumeration is charged only on the tick that would otherwise END supervision.
   ENUM_RC=0
   RECHECK=$(shipyard_slots 2>/dev/null) || ENUM_RC=$?
-  NOSIG=$(fleet_signal) || NOSIG_RC=$?
+  # The RE-checked rc, passed explicitly: this late test must classify the enumeration it just
+  # took, which is the whole point of taking a second one here.
+  NOSIG=$(shipyard_signal_class "$ENUM_RC") || NOSIG_RC=$?
   [ "$NOSIG_RC" = 0 ] || TERMINAL=0
   # KEEP THE ANSWER, not just the status. A blip that fails the row loop's lookups and recovers
   # before this point returns rc 0 — corroborated — while listing the very slot the tick has just

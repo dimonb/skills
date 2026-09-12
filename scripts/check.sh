@@ -333,6 +333,36 @@ if [ -f "$core" ]; then
     grep -qF -- "### 7." "$core" && grep -qE "^### 7\.[A-Z] — \`$st\`" "$core" \
       || fail "state '$st' is in the enum but has no '### 7.x — \`$st\`' handler in $core"
   done
+
+  # ...and no state may be entered without being RECORDED. The supervisor's status table reads a
+  # slot's stage from ship's state file and from nowhere else, so a transition the core does not
+  # tell the run to record is a stage that is invisible from outside for as long as it lasts —
+  # measured: a change whose stage column read `—` across its whole review, because its run wrote
+  # the state file late, which is what the instruction is for.
+  # `done` is included here, unlike the handler arm above: a terminal state is exactly the one a
+  # supervisor most needs to see recorded.
+  #
+  # WHAT THIS IS, stated because a green gate is otherwise read as coverage, and stated narrowly
+  # because the first version of this comment overstated it and two review axes proved the
+  # overstatement by mutation. It is a DOCS-CONSISTENCY check over the core's own prose, and it
+  # asserts ONLY that each enum state is recorded SOMEWHERE in the core — one unanchored match per
+  # state NAME, not one per transition. A state recorded on one path and not on another still
+  # passes: `done`, `needs-human`, `ready-to-merge` and `apply` each have more than one transition
+  # site, so deleting the instruction from one of them is green here. Which individual transitions
+  # carry it is judgement, not gate; a positional arm would be new machinery and is not worth it
+  # for prose whose sections move. And NOTHING here is a runtime guarantee that any run wrote any
+  # file — whether a child obeys the instruction is not checkable from this repo at all. The half
+  # of #124 that holds regardless of what a child does is shipyard-report.sh's forge fallback.
+  # The trailing backtick is ANCHORING, not decoration: `grep -F` matches a substring, so an
+  # unterminated `record state=spec` is satisfied by `record state=spec-review` — the same prefix
+  # hole the sibling handler arm above anchors against, and with the same consequence, a state
+  # nothing records passing green. No current enum name prefixes another, so this is a guard
+  # against the enum the repo has not written yet; `spec` is check-test probe 6b's own fixture.
+  # Every one of the core's record sites is backtick-terminated, so one character closes it.
+  for st in $states; do
+    grep -qF -- "record state=$st\`" "$core" \
+      || fail "state '$st' is in the enum but $core never says \`record state=$st\`"
+  done
 fi
 
 # ------------------------------------------------- 7. non-generic strings (leak check)

@@ -110,10 +110,12 @@ Optional flags: `merge`, `no-merge`, `no-create`, `effort <level>`, `max-rounds 
 
 ## 2. Discovery — learn the repo before touching it
 
-Run this ONCE per run, before anything else, and write every answer into the state file
-(§4) so a scheduled re-wake does not have to re-derive it. **Shell environment does not
-persist between tool calls**, so the forge env guard from the reference file must be
-re-applied in *every* block that calls the forge CLI.
+Run this ONCE per run, before anything else. **§2.8 then writes every answer into the state
+file (§4), and that step is not optional.** It is the last act of discovery and the first
+thing a supervisor can see; a run that skips it is invisible from outside for its whole life
+(§2.8 says what that costs). **Shell environment does not persist between tool calls**, so
+the forge env guard from the reference file must be re-applied in *every* block that calls
+the forge CLI.
 
 ### 2.1 Forge, host and repo coordinates
 
@@ -226,6 +228,42 @@ commit granularity and message style, protected branches, assignment discipline,
 language, attribution rules, anything about labels. Where this skill and the repo's law
 disagree, **the repo's law wins** — say so and follow it.
 
+### 2.8 Write the state file — the last act of discovery, and a real step
+
+Create `.pipeline-state/<KEY>.json` (§4) now, with what §2.1–§2.7 just answered. **A
+supervisor's status table is built from two fields of this file: the PR/MR number as
+`pr_number`, and the stage as `state`** (a reader may accept `phase` in its place). Write each
+the moment it is known — the rest of §4's schema is ship's own memory for a re-wake and can be
+filled in as it arrives, so do not treat the size of that document as the size of this step.
+
+The two are not equally recoverable, and the asymmetry is why this step matters. A supervisor
+that can reach the forge may find the **number** by your branch. The **stage** it cannot: no
+forge knows whether you are at `apply` or at `impl-review`, and the only trace of one outside
+this session is whichever stage a review record has already been posted for (§5.9), which lags
+the stage you are in. So an unrecorded stage is one nobody can see for as long as it lasts.
+
+**Why this is a numbered step, and why WHEN matters as much as whether.** It used to be one
+subordinate clause in §2's preamble, justified by a benefit — *so a scheduled re-wake does not
+have to re-derive it* — which a run that never expects to re-wake reads as inapplicable to it,
+and skips. What was measured was not a file that never appears but one that **appears late, or
+not at all**: of two runs looked at directly, one had written nothing while its PR had been open
+for over an hour with two review rounds behind it, and the other wrote the file only once its PR
+already existed — satisfying the letter of this step at the one moment it no longer helps.
+Nothing noticed either, because the only party that could is the run itself, which already knows
+its own PR number and stage and so never reads the file it did not write. What it cost the
+supervisor was the instrument: the PR column read `no MR yet` and the stage `—` across the whole
+review of an open, reviewed, mergeable pull request. **So write it at discovery, before there is
+a PR to put in it** — a file that arrives at PR-creation time has already missed the window this
+step exists for. **And it is written for a reader who is not you.**
+
+Then keep `state` current: **§7's transitions record it** as they go, with one deliberate
+exception — **no entry into §7.G records anything**, whether it comes from §7.F or, in a no-spec
+repo, straight from §7.E. `ready-to-merge` is stamped when §7.G *ends*. A supervisor reads that
+record as the change having become a person's move: it can conclude the change, paint it
+finished, and switch off the watchdog that would otherwise notice a wedged run. Stamping it on
+the way in advertises a run still working through the final checks and the §10 merge gate as
+done, which is worse than not recording at all.
+
 ---
 
 ## 3. Resolve the entry point & detect current state
@@ -235,7 +273,7 @@ disagree, **the repo's law wins** — say so and follow it.
 1. `--help`/`-h`/`help` → §0.
 2. `#N` / issue URL → issue path (§3.2).
 3. `pr N` / `mr N` / `!N` / PR-MR URL → PR/MR path (§3.3).
-4. Free text → `need-issue` (§7.A); the text is the description.
+4. Free text → `need-issue` (§7.A), `record state=need-issue`; the text is the description.
 5. No argument → current branch (§3.4).
 6. Bare number → ambiguous; ask. Do not guess.
 
@@ -249,7 +287,7 @@ number. One query alone misses links the other finds.
   a duplicate.
 - A **branch** exists but no PR/MR → check it out and continue from whatever stage its tree
   implies.
-- **Nothing** linked → `issue-ready` (§7.B).
+- **Nothing** linked → `issue-ready` (§7.B), `record state=issue-ready`.
 
 Assignment: if the issue is unassigned or already ours, claim it before any local work. If
 it is assigned to **someone else**, STOP and clarify — do not take over another person's
@@ -262,7 +300,7 @@ flag, source and target branch, author, head sha, labels, mergeability, and chec
 status.
 
 - Not open (merged/closed) → report and stop; do not resurrect. If a state file exists, this
-  is the loop's terminal state: stop the watch, set `state=done`, schedule nothing more.
+  is the loop's terminal state: stop the watch, `record state=done`, schedule nothing more.
 - Author is not `$ME` → this PR/MR belongs to someone else. `ship` drives **our own** work;
   if asked to advance somebody else's, clarify first.
 - Otherwise claim the assignee (idempotent) so the board shows who is shipping it.
@@ -318,12 +356,19 @@ Ask the forge for an open PR/MR whose source branch is the current one.
 
 ## 4. State file
 
+**This section is a schema, and a schema is not an instruction — §2.8 is the instruction, and
+`record state=<name>` at each §7 transition is the rest of it.** What follows describes the
+shape of a file that only exists if someone writes it, so read it as the format of a step you
+have already been told to take, never as an optional appendix. The `state` field in particular
+is read by a party outside this session on a fixed cadence; nothing else reports it.
+
 Path: `.pipeline-state/<KEY>.json`, git-ignored (add `.pipeline-state/` to `.gitignore` if
 missing). `<KEY>` is `ISSUE-<n>` when an issue is known, else `PR-<n>` / `MR-<n>`, else
 `CHANGE-<slug>` before anything is opened; migrate the file when the better key appears.
 
 **Re-entrancy:** if `phase == "working"` and it started less than 10 minutes ago, another
-run is in flight — exit.
+run is in flight — exit. (That guard reads this file, so a run that never wrote one always
+passes it — the absent file does not fail safe, it fails open.)
 
 ```json
 {
@@ -643,7 +688,7 @@ round 3: …
   already live.
 - **Non-convergence** — round `max-rounds` still has confirmed blockers: do **not** hand off
   as ready, do **not** loosen the bar, do **not** take a fourth round, and never reclassify a
-  finding to get past the gate. Write them to the ledger as open, set `state=needs-human`,
+  finding to get past the gate. Write them to the ledger as open, `record state=needs-human`,
   post ONE record listing them (file:line, failure scenario, why unfixed), **leave the
   enforced blocker of §5.9**, stop scheduling re-wakes, and report. Nothing external will
   change this state, so polling is pointless — a human re-runs `ship` after deciding.
@@ -793,7 +838,7 @@ terminal state.
 On each wake, in order:
 
 1. **Enforce bounds FIRST.** Load state. If the PR/MR is merged or closed → stop the watch,
-   schedule nothing, set `state=done`, stop. If `state == needs-human` → do not schedule;
+   schedule nothing, `record state=done`, stop. If `state == needs-human` → do not schedule;
    report and stop. If `iteration >= max_iterations` or `now > deadline`: with
    `soft_bounds`, post ONE nudge (guarded by `bound_nudge_sent`) and keep going; **by
    default, stop** — post one comment saying the loop ended on a bound and that manual
@@ -802,7 +847,8 @@ On each wake, in order:
    threads, comments, checks.
 3. Re-detect the driver state (§3.3) against the ledger (§5.10).
 4. Dispatch to the §7 handler. A handler is either a **work burst** or a short **wait**.
-5. Persist state. Schedule the next re-wake only if not terminal.
+5. Persist state — the file, not just this session's memory (§2.8). Schedule the next re-wake
+   only if not terminal.
 
 > **Autonomy boundary:** human prompts — confirming a brand-new issue or change, clarifying a
 > foreign assignee or PR/MR, resolving a genuinely ambiguous input — happen only in the
@@ -860,8 +906,10 @@ checklist after a merge. Neither is automated; skipping it makes the board drift
    assigned to `$ME`, carrying the same labels as the issue, body from a **file**, and the
    issue reference in the form §7.A settled on.
 6. Verify both the issue and the PR/MR are assigned to us.
-7. `state=spec-review` (or `apply` in a no-spec repo). Nothing to wait for — do not schedule
-   a re-wake here.
+7. `record state=spec-review` (or `record state=apply` in a no-spec repo), with the PR/MR
+   number from step 5 — that number is how a supervisor learns which PR/MR this slot is
+   without having to go and ask the forge for it. Nothing to wait for — do not schedule a
+   re-wake here.
 
 > Idempotency: before step 3, re-scan linked PRs/MRs and the state file. If one already
 > exists, do NOT create another.
@@ -877,7 +925,7 @@ Skipped entirely in a no-spec repo.
 4. Scoped rounds (§5.7) until a round returns no confirmed blocker, or escalate at
    `max-rounds`.
 5. Post the record (§5.9). Record the clean verdict.
-6. `state=apply` → §7.D.
+6. `record state=apply` → §7.D.
 
 This stage is WORK, not a wait. If you find yourself scheduling a re-wake from it, you have
 mis-read the state.
@@ -897,7 +945,7 @@ mis-read the state.
 5. Commit — one logical change per commit, in the repo's message style. Push.
 6. In a no-spec repo, this is where the PR/MR gets opened if it does not exist yet (§7.B
    steps 5–6).
-7. `state=impl-review` → §7.E.
+7. `record state=impl-review`, with the PR/MR number if step 6 opened it → §7.E.
 
 ### 7.E — `impl-review` (work burst, subagents)
 
@@ -912,7 +960,9 @@ mis-read the state.
 5. Scoped rounds (§5.7) until clean, or escalate at `max-rounds` → `needs-human`.
 6. Post the stage record plus the batched optional comment (§5.9). Record the clean verdict
    and any sweep.
-7. `state=archive` (spec-engine repo) or `ready-to-merge` → §7.F / §7.G.
+7. `record state=archive` → §7.F in a spec-engine repo; in a no-spec repo go straight to §7.G
+   and record NOTHING here — see §2.8: `ready-to-merge` is stamped when §7.G ends, never on the
+   way in, because a supervisor reads it as the change having become a person's move.
 
 CI must be green before §7.G, but **a red check is a fix to make, not a review to wait on** —
 treat it as another blocking finding in the current round.
@@ -938,19 +988,21 @@ Run the repo's own final-push checklist, then the merge gate (§10).
 
 **Where policy says `no-merge` (the default): STOP here and hand over.** Post a record of the
 end state — what was reviewed, at which heads, how many rounds, checks green, anything
-deliberately deferred — and end the loop with `state=ready-to-merge`. Say what is *holding*,
+deliberately deferred — and end the loop with `record state=ready-to-merge`. That last record
+is the one a supervisor reads to know the change is waiting on a person rather than still
+working. Say what is *holding*,
 not that everything is fine: "holding for the go-ahead" is the status. Do not phrase it in a
 way that invites someone to read a clean self-review as an approval.
 
 **Where policy says `merge`** and the gate fully passes: merge with the strategy the repo
 uses, delete the source branch if that is the convention, verify the issue closed (close it
-explicitly if the reference did not do it), then `state=done`, stop the watch, schedule
+explicitly if the reference did not do it), then `record state=done`, stop the watch, schedule
 nothing more.
 
 If the forge refuses the merge because the **project** requires approvals, do NOT attempt to
 self-approve or work around it — and do NOT sit there polling. That is a project-configuration
 gate that only a person can clear, so it is the same terminal path as any blocker ship will
-not fix: report it, post one comment asking for the approval, set `state=needs-human`, and
+not fix: report it, post one comment asking for the approval, `record state=needs-human`, and
 schedule nothing more. Polling an approval that reviewer-equals-author can never produce is
 the infinite wait §10 exists to rule out, and it presents as a healthy green board.
 
@@ -988,7 +1040,7 @@ and that is the one review input that outranks everything in §5.
   replied to, can otherwise block forever. Start a grace window at the reply
   (`external_threads_grace`). If it is still open after ~15 wakes with no activity from the
   other person, stop polling: post ONE comment ("fixed in `<sha>`, awaiting <user> to
-  resolve"), set `state=needs-human`, and report.
+  resolve"), `record state=needs-human`, and report.
 
 Threads and comments authored by `$ME` are our own records and never block anything.
 

@@ -284,8 +284,14 @@ so do not plan on driving it from here.
 
 `<SKILL>/shipyard-report.sh [<slot> ...]` builds the report:
 * running-vs-idle from a snapshot DIFF (two captures 3s apart), not spinner glyphs;
-* the MR/PR number of a text slot is read from `.pipeline-state/*.json` inside the
-  worktree — before it exists the column says `no MR yet`;
+* the MR/PR number of a slot is read from `.pipeline-state/*.json` inside the worktree, and
+  when that file cannot answer — a child that has not written one — from the **forge**, by the
+  slot worktree's own branch; only when neither can answer does the column say `no MR yet`. The
+  one slot that skips the forge is a numeric GitLab one, where the slot already IS the iid;
+  a numeric GitHub slot is an issue number, so it goes through both sources like any other.
+  The stage column gets no such fallback: no forge knows whether a child is at `apply` or
+  `impl-review`, so a `—` there means the child has not recorded a stage, and `ship` §2.8 is
+  what makes it do so;
 * `MR state / stage` — forge state plus ship's own pipeline stage;
 * `esc` — open escalations for that slot, and the full escalation block is appended
   under the table;
