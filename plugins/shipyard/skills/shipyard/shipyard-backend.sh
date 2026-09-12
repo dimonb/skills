@@ -224,7 +224,16 @@ shipyard_kill()    { drv_kill "ship-$1"; }
 shipyard_focus()   { drv_focus "ship-$1"; }
 
 # shipyard_slot_addr <slot> — the SHORT column value for the report ("win" on tmux, the
-# session-id prefix on agterm). Empty + exit 1 when the slot is gone. No driver twin.
+# session-id prefix on agterm). Empty + exit 1 when the slot has no terminal ON THE BACKEND THIS
+# RUN RESOLVED, which is not the same fact as the child being gone — `shipyard_absence_report`
+# tells the two apart, and `shipyard-tell.sh` and `shipyard-compact.sh` ask it before they say
+# anything to a human.
+#
+# THEY ARE NOT THE ONLY CALLERS THAT SPEAK. `shipyard-down.sh` renders this failure as `gone` in
+# its `--list` TERMINAL column, and on the teardown path skips the kill and removes the worktree
+# anyway; it asks nothing. That is the remaining instance in this skill, out of scope here and
+# filed on its own — named for the same reason the admission-gate caller is named below, so a
+# later reader does not take this paragraph as a claim that the sweep is finished. No driver twin.
 shipyard_slot_addr() {
   local t; t=$(shipyard_target "$1") || return 1
   case "$(shipyard_backend)" in
@@ -327,6 +336,130 @@ shipyard_backend_pinned_elsewhere() {
   [ -n "$any" ] || return 1        # nothing was ever launched from this mailbox — no disagreement
   [ -n "$found" ] && return 1      # the resolved backend is one of them — no disagreement
   printf '%s' "$any"
+}
+
+# shipyard_signal_class [<enum-rc>] — MAY AN ABSENCE BE BELIEVED?
+#
+# Echoes "<class><TAB><why>" and returns 1 when it may not: the question was not answered, so any
+# negative drawn from it would be a guess. Echoes nothing and returns 0 when it may.
+#
+#   unreachable  the backend did not answer when asked which terminals exist.
+#   elsewhere    it answered, but this fleet was launched on a DIFFERENT backend (the pin says so).
+#
+# The two facts are the ones `shipyard-report.sh` already corroborates its empty answer with, and
+# they are read here through the same two functions — `shipyard_slots`' exit status and
+# `shipyard_backend_pinned_elsewhere`. Nothing new is probed and no second record is invented: the
+# per-slot callers were the level of the skill that still had no way to ask.
+#
+# WHY IT IS A PARAMETER. A caller that has already enumerated must classify the status of the list
+# it ACTED ON, not of a second enumeration that could disagree with it, so it captures the rc once
+# and passes it in. `shipyard_absence_report` below does exactly that — it needs the list itself for
+# the per-slot contradiction check, so it enumerates once and hands the status down.
+#
+# THE DUPLICATION, STATED RATHER THAN HIDDEN. `shipyard-report.sh` asks this same question about the
+# FLEET, in its own `fleet_signal` — same two facts, same two classes, near-identical strings, added
+# by #130. This function SUBSUMES it exactly: `shipyard_signal_class "$ENUM_RC"` is that function.
+# The swap is not made here because report.sh is being edited on another branch and this change is
+# fenced out of that file; it is assigned to that branch's rebase, and it is a deletion plus a
+# one-line call — no signature change. Two answers to one question is the defect AGENTS.md says the
+# shared engine exists to remove, so this note stands until the second one is gone.
+#
+# NOT USED AS EVIDENCE: the slot's worktree. A worktree outlives its terminal by design — that is
+# the state of every child whose terminal was killed but not torn down — so reading its presence as
+# "the child may still be alive" would raise the alarm on the commonest healthy case, which
+# AGENTS.md names as costing more than the bug it guards. The per-slot launch record that WOULD
+# carry that evidence belongs with the pin-staleness work, filed separately.
+shipyard_signal_class() {
+  local rc="${1:-}" pe TAB
+  TAB=$(printf '\t')
+  if [ -z "$rc" ]; then rc=0; shipyard_slots >/dev/null 2>&1 || rc=$?; fi
+  if [ "$rc" != 0 ]; then
+    printf 'unreachable%sthe %s backend did not answer when asked which terminals exist' \
+      "$TAB" "$(shipyard_backend)"
+    return 1
+  fi
+  pe=$(shipyard_backend_pinned_elsewhere) || pe=""
+  if [ -n "$pe" ]; then
+    printf 'elsewhere%sthis run resolved %s, but this fleet was launched on %s' \
+      "$TAB" "$(shipyard_backend)" "$pe"
+    return 1
+  fi
+  return 0
+}
+
+# shipyard_absence_report <slot> — say, on stderr, why that slot has no terminal.
+#
+# Returns 0 when the absence is CORROBORATED (the backend answered and does not have it — the
+# child really is gone) and 1 when it is UNRESOLVED. Callers map that onto their own exit codes;
+# it is one function rather than a paragraph in each script so the two cannot drift apart.
+#
+# THE DEFECT IT CLOSES. `shipyard_target` resolves against whatever backend THIS process picked,
+# and `SHIPYARD_BACKEND=auto` picks per process by probing the agterm control socket. During a blip
+# the honest answer is "no terminal on the backend I resolved", not "the child is gone" — and the
+# supervising agent acts on what it is told, so the reasonable next moves after "gone" are to tear
+# the slot down or relaunch it, against a child that is mid-review and alive in the other backend.
+# An unanswerable question must never produce a confident negative.
+shipyard_absence_report() {
+  local slot="$1" list s sig class why pin rc=0 erc=0 found="" TAB
+  TAB=$(printf '\t')
+  # ONE enumeration, and KEEP ITS ANSWER — not just its status. The status alone cannot see the
+  # narrowest blip, and that blip is the one that ends in a teardown: `drv_target` makes its OWN
+  # backend call (tmux asks for `#{window_index} #{window_name}`, `shipyard_slots` for
+  # `#{window_name}`; agterm reads the tree twice), and it swallows stderr and status, so a
+  # transient failure there is indistinguishable from "not found". If THAT call blips while the
+  # enumeration answers, both facts below agree and a slot the backend has just listed is called
+  # gone. `shipyard-report.sh` guards the same contradiction one level up — "the only honest
+  # reading of 'still enumerated, but I rendered it gone' is that the lookup failed" — and its
+  # `blip` fixture exists because that shape happened. This is the per-slot form of it.
+  list=$(shipyard_slots 2>/dev/null) || erc=$?
+  sig=$(shipyard_signal_class "$erc") || rc=$?
+  # Matched by READING the list, never `printf … | grep -q`: grep exits on the first match, printf
+  # takes SIGPIPE, and under `set -o pipefail` — which shipyard-tell.sh sets — the pipeline then
+  # reports 141 on the very case that matched. `shipyard_slots` prints the BARE slot (it strips the
+  # `ship-` prefix), so the comparison is against `$slot`, not `ship-$slot`.
+  if [ "$rc" = 0 ]; then
+    while IFS= read -r s; do
+      [ "$s" = "$slot" ] && { found=1; break; }
+    done <<EOF
+$list
+EOF
+    if [ -n "$found" ]; then
+      sig="listed${TAB}the $(shipyard_backend) backend answered and still lists ship-$slot, so it is the per-slot lookup that failed, not the child that ended"
+      rc=1
+    fi
+  fi
+  if [ "$rc" = 0 ]; then
+    echo "error: no live terminal \`ship-$slot\` in $(shipyard_container_kind) \`$(shipyard_container)\`." >&2
+    echo "       the $(shipyard_backend) backend answered and does not have it, so the child is gone." >&2
+    return 0
+  fi
+  class=${sig%%$TAB*}; why=${sig#*$TAB}
+  echo "error: cannot tell whether \`ship-$slot\` is alive, so nothing was sent." >&2
+  echo "       $why." >&2
+  echo "       Not finding its terminal is therefore not the same as finding it is gone: do NOT tear" >&2
+  echo "       this slot down or relaunch it on this answer. The report's \`🛑 NO SIGNAL\` block" >&2
+  echo "       refuses the same inference one level up, and means the same thing here." >&2
+  case "$class" in
+    unreachable)
+      echo "       If the backend is simply down, start it and re-run; nothing was lost." >&2
+      echo "         agterm: check the app is running and answering \`agtermctl version\`." >&2
+      echo "         tmux:   check \`tmux ls\`." >&2 ;;
+    elsewhere)
+      # Asked a second time rather than parsed back out of the message above: re-reading two file names costs
+      # nothing, and recovering a value from prose couples this arm to that sentence's wording.
+      pin=$(shipyard_backend_pinned_elsewhere) || pin=""
+      echo "       \`SHIPYARD_BACKEND=auto\` decides per PROCESS, so one failed socket probe sends this" >&2
+      echo "       run to the other backend, where this repo's container is empty for entirely" >&2
+      echo "       correct reasons." >&2
+      [ -n "$pin" ] && echo "       Pin it for this shell and re-run: SHIPYARD_BACKEND=$pin" >&2 ;;
+    listed)
+      # No peek hint here: shipyard_peek_hint resolves through the very lookup that just failed, so
+      # it would print its own "no live terminal" refusal instead of a command to paste.
+      echo "       A transient lookup failure is the likeliest cause, so re-run — it usually goes" >&2
+      echo "       through. If it keeps failing, open the terminal by hand before concluding" >&2
+      echo "       anything: the backend says the slot is there." >&2 ;;
+  esac
+  return 1
 }
 
 _shipyard_tmux_slots() {

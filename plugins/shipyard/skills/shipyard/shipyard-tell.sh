@@ -25,9 +25,16 @@
 #
 # Exit: 0 delivered or queued (the child took it), 6 UNCONFIRMED — it was typed and submitted
 #       but no turn was seen to start, so it may be sitting unsent in the input box and wants
-#       your eyes, 3 no live terminal for that slot, 2 usage error, 1 mailbox/backend failure.
+#       your eyes, 3 the backend answered, does not list that slot, and is the one this fleet was
+#       launched on (the child IS gone), 7 UNRESOLVED — the slot could not be resolved, because
+#       the backend did not answer, or is not the one this fleet was launched on, or still lists
+#       the slot (so the per-slot lookup is what failed), leaving whether the child is alive
+#       UNKNOWN, 2 usage error, 1 mailbox/backend failure — which is also where a dead agterm
+#       control socket lands, since the backend precheck refuses before any of this runs.
 #       6 rather than 0 on purpose: an `unconfirmed` that exits 0 is a note nobody has to
-#       notice, which is the same defect class as the false `delivered` it replaced.
+#       notice, which is the same defect class as the false `delivered` it replaced. 7 rather
+#       than 3 for the same reason one level along: 3 tells a supervisor the child died, and the
+#       reasonable response to that is teardown or relaunch — against work that may be running.
 set -o pipefail
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=shipyard-lib.sh
@@ -77,9 +84,13 @@ if [ -f "$MB/$TARGET.json" ]; then
 fi
 
 shipyard_backend_check || exit 1
+# An absence is not a death. `shipyard_where` resolves against the backend THIS process picked, and
+# `auto` picks per process — so the refusal has to say which of the two it actually established
+# (shipyard_absence_report classifies it and prints the operator's next move). 3 stays the
+# corroborated "gone"; 7 is the one that must never be acted on as a teardown.
 WHERE=$(shipyard_where "$SLOT") || {
-  echo "error: no live terminal \`ship-$SLOT\` in $(shipyard_container_kind) \`$(shipyard_container)\` — nothing to tell." >&2
-  echo "       the child is gone; if this was an answer, the record keeps it but no one will read it." >&2
+  shipyard_absence_report "$SLOT" || exit 7
+  echo "       nothing to tell; if this was an answer, the record keeps it but no one will read it." >&2
   exit 3
 }
 

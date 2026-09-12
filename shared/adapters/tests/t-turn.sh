@@ -29,14 +29,15 @@
 # control socket and no repo: it sources the module and calls it.
 #
 # WHAT IS NOT COVERED, so a green run is never read as more than it is:
-#   * No end-to-end run of the CALLERS — and the gap is wider than one mapping: NO test in this
-#     repo references `shipyard-tell.sh`, `shipyard-answer.sh`, `shipyard-compact.sh` or
-#     `shipyard-report.sh`, so everything those scripts do with these functions is asserted by
-#     nothing. That includes the `unconfirmed` -> exit 6 mapping, the knob validation, the sampled
-#     census, the empty-verdict arm, the reply path's closing message, and the three-state mid-turn
-#     guard. Those scripts source a lib that prepends the system PATH, so a faked backend CLI
-#     cannot stay authoritative; driving a whole one needs the exported-shell-function rig the
-#     shipyard continuity suite already uses — feasible, deliberately deferred, and tracked.
+#   * NOTHING ANYWHERE ASSERTS WHAT THE CALLERS DO WITH THESE FUNCTIONS. Specifically unguarded:
+#     the `unconfirmed` -> exit 6 mapping, the knob validation, the sampled census, the
+#     empty-verdict arm, the reply path's closing message, and the three-state mid-turn guard.
+#     Stated as the property rather than as a list of script names on purpose — the list version
+#     said no test referenced those scripts at all, and went stale twice without anything saying
+#     so. The rig it called deferred now exists: the shipyard suite drives whole caller scripts
+#     over exported shell functions (a faked backend CLI cannot stay authoritative, because those
+#     scripts source a lib that prepends the system PATH). It is used for paths that exit before
+#     any turn-state read, so none of the properties above is reached by it.
 #   * Whether either kind ever renders its queued hint somewhere OTHER than the place captured
 #     here. Both observed placements are covered by a fixture and an assertion; a third placement,
 #     if one exists, would read as not-queued and fall to the alarm path.

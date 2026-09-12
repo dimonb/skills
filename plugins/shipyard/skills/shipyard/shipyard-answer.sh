@@ -85,9 +85,28 @@ if [ "$KIND" = "notice" ] || [ "$ST" = "done" ]; then
     # the text may be sitting unsent in the child's input box. That is not "could not reach the
     # child" — it is "may not have been read yet", and it is the case where also writing the
     # answer onto the record is worth the belt: if the directive never started a turn, the record
-    # is the only copy left. Anything else non-zero really is a failure to reach it.
+    # is the only copy left.
+    #
+    # EXIT 7 IS NEITHER, AND IT MUST NOT REACH THE WRITE BELOW. It means the slot could not be
+    # RESOLVED — the backend did not answer, or this process resolved a different one from the
+    # fleet's pin — so nothing was sent, nothing was recorded by tell.sh, and nothing is known
+    # about the child. Two reasons it returns here instead of falling through:
+    #   * the closing line would say "could not be reached ... nobody is going to read this",
+    #     which is a confident negative drawn from a question that was never answered — the very
+    #     inference the exit code exists to stop;
+    #   * the write stamps `.status="answered"`, and on a CONSUMED record that is what the status
+    #     gate above tests. So the remedy the refusal prints — clear the backend, re-ask — would
+    #     then skip this branch entirely and report a ~5s pickup on a record the child does not
+    #     poll. Leaving the record untouched keeps the re-run working, and loses nothing: on a 7
+    #     tell.sh wrote no directive either.
     bash "$DIR/shipyard-tell.sh" "$ID" "$ANS"; TELL_RC=$?
     [ "$TELL_RC" = 0 ] && exit 0
+    if [ "$TELL_RC" = 7 ]; then
+      echo "warning: nothing was sent and $ID was left untouched — the slot could not be resolved" >&2
+      echo "         (see above). This is NOT evidence the child is gone. Clear the backend" >&2
+      echo "         question and run the same command again; it re-delivers from here." >&2
+      exit 7
+    fi
     if [ "$TELL_RC" = 6 ]; then
       WINDOW=unconfirmed
       echo "warning: the directive was sent but NOT confirmed (see above) — also recording the answer on $ID" >&2
