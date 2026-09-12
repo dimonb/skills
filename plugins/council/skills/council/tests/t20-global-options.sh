@@ -38,7 +38,12 @@ run_capped() { # <seconds> <cmd>...
   local o="$R/.out"
   ( cd "$R/repo" && "$@" ) >"$o" 2>&1 &
   local p=$!
-  ( sleep "$secs"; kill -9 "$p" 2>/dev/null ) &
+  # The watchdog's fds are detached on purpose. Killing `$w` below reaps the subshell but not
+  # the `sleep` it forked, which reparents to init — and an orphan that INHERITED this test's
+  # stdout holds the pipe open, so `t20 … | tail` stalls for the full cap after the test has
+  # printed its result. Detached, the orphan is harmless: it holds nothing and exits within
+  # `$secs`. (t13-relaunch.sh carries this same pattern; left alone, it is not this change.)
+  ( sleep "$secs"; kill -9 "$p" 2>/dev/null ) </dev/null >/dev/null 2>&1 &
   local w=$!
   wait "$p"; local rc=$?
   kill "$w" 2>/dev/null; wait "$w" 2>/dev/null
@@ -63,7 +68,10 @@ if want 2 "status --room with no room name" bash "$CLI" status --room; then
   says 'needs' "the refusal does not say the option wants a value"
 fi
 if want 2 "verdict --me with no peer name" bash "$CLI" verdict --me; then
-  says 'me'    "the refusal does not name --me as the option that was short"
+  # `peer`, NOT `me`: the --room refusal reads "needs a room name", and `grep -i me` matches
+  # the "me" inside "name". An assertion added to catch WHICH option was short must not pass
+  # on the other option's message, or a copy-paste that names the wrong one stays green.
+  says 'peer'  "the refusal does not name --me as the option that was short"
   says 'needs' "the refusal does not say the option wants a value"
 fi
 

@@ -129,12 +129,24 @@ resolve_room() { # honours --room, then $COUNCIL_ROOM, then the only room there 
 ROOM_NAME=""; ARGS=(); VERB=""
 
 # Both value-taking arms check for their operand before shifting past it, and the check is
-# not decoration. `${2:-}` suppresses the unbound-variable abort that `set -u` gives every
-# other option arm in this skill, and `shift 2` with one positional left FAILS and shifts
-# nothing — so `$#` never falls and this loop spins at 100% CPU, printing nothing, forever.
-# `council.sh status --room` and `council.sh verdict --me` are supervisor commands run
-# unattended, where a silent infinite hang is indistinguishable from a wedged room. Same
-# shape, same fix, as `relaunch --cwd` in lib/up.sh.
+# not decoration. `${2:-}` DEFAULTS the absent value away, which suppresses the
+# unbound-variable abort `set -u` would otherwise raise, and `shift 2` with one positional
+# left FAILS and shifts nothing — so `$#` never falls and this loop spins at 100% CPU,
+# printing nothing, forever. `council.sh status --room` and `council.sh verdict --me` are
+# supervisor commands run unattended, where a silent infinite hang is indistinguishable from
+# the wedged room it was supposed to be reporting on.
+#
+# THE RULE, which is the part worth carrying to the next value-taking arm anyone writes: an
+# arm is safe when an absent operand ABORTS, and unsafe when it is DEFAULTED AWAY. The other
+# arms in this skill are safe for two different reasons, and THIS change fixes neither —
+# they were already fine:
+#   * `relaunch --cwd` (lib/up.sh) and `flow_node` (lib/flow.sh) carry this same explicit
+#     check, added before this one;
+#   * the arms that read a bare `"$2"` — `council_up`'s in lib/up.sh, `c_send`'s in
+#     lib/lib.sh, `v_recv`'s in lib/verbs.sh — abort under `set -u` before `shift 2` runs.
+# The second group is safe by SPELLING rather than by design: it holds only until someone
+# meets one of those `$2: unbound variable` messages in a log and tidies it away with a
+# default, which is precisely how this loop came to spin.
 while [ $# -gt 0 ]; do
   case "$1" in
     --room) [ $# -ge 2 ] || { echo "council: --room needs a room name" >&2; exit 2; }
