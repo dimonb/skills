@@ -104,6 +104,22 @@ v_recv() { # [--timeout N] [--peek] [--until-floor]
   return 4
 }
 
+# `deadline_ms` is here because protocol/_channel.md tells a participant to compare it against
+# `held_ms` before writing a `skip`, and that participant is told to reach the room through the
+# command and never by path — so a rule it can only check by opening roster.json is a rule it
+# cannot check at all. `up` writes the field into every roster it creates, so the fallback below
+# is reached only by a room assembled by hand; it is a second copy of that number, kept in step
+# by nothing, exactly as c_barrier's `round_deadline_ms 600000` already is.
+#
+# The barrier branch prints no deadline on purpose: an open round has no floor holder to be
+# overdue, and `skip` has nothing to consume there.
+#
+# roster.json is writable by every participant, so this number is peer-written like `created_ms`
+# and `turns_budget`. Printing it grants no reach that was not already there: c_send exempts
+# `skip` from the floor check outright, so a seat that wanted to skip out of turn never needed
+# the field — the restriction is protocol rather than a check (see c_send). What the field does
+# is let an HONEST seat apply the rule, and c_int_field keeps a crafted value out of the
+# arithmetic and off this line.
 v_floor() {
   local t f last age
   if c_round_open; then
@@ -115,8 +131,9 @@ v_floor() {
   fi
   t=$(c_turns); f=$(c_floor_at "$t"); last=$(c_last_turn_ms)
   age=$(( $(c_ms) - last )); [ "$last" = 0 ] && age=0
-  printf 'turns=%s floor=%s next=%s held_ms=%s conflicts=%s\n' \
-    "$t" "$f" "$(c_floor_at $((t+1)))" "$age" "$(c_conflicts)"
+  printf 'turns=%s floor=%s next=%s held_ms=%s deadline_ms=%s conflicts=%s\n' \
+    "$t" "$f" "$(c_floor_at $((t+1)))" "$age" "$(c_int_field turn_deadline_ms 180000)" \
+    "$(c_conflicts)"
 }
 
 # The four verbs a PARTICIPANT reads the room with all go through c_visible, so an open

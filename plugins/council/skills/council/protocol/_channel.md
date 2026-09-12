@@ -19,6 +19,8 @@ barrier does not withhold from a supervisor.
     council.sh recv --timeout 150                 just wait for new messages
     council.sh send --act <act> --refs '["id"]' "text"
     council.sh status                             whose turn, what is on the table, what is open
+    council.sh floor                              who holds the floor, who is next, how long,
+                                                  and this room's limit on a turn
     council.sh claims                             the objection graph
     council.sh decision                           the record (exit 1 = not written yet, not an error)
     council.sh transcript                         everything you may see, in order (an open
@@ -111,6 +113,14 @@ If `send` returned **exit 6**, the floor moved while you were composing. That is
 breakage: drain your inbox (`recv`), read what was said, and wait for your turn. Sending the
 same text again without reading the new messages is the worst thing you can do.
 
+**A seat that has gone quiet does not freeze the room.** `council.sh floor` prints who holds
+it, `next=` (who follows them), `held_ms` (how long they have held it) and the room's
+`deadline_ms`. Once `held_ms` is past `deadline_ms` **and `next=` is you — only then, and only
+you** — `send --act skip "<holder> overdue"` consumes the missing turn and the room moves on.
+That is its whole purpose: it is not a way to hurry a seat that is thinking, and not an answer
+to one you disagree with. A skip spends a turn nobody spoke in, so a room that reaches for it
+is a room arguing with fewer voices.
+
 **Stop when the room has written its record** — `council.sh decision` prints it and exits 0.
 That is the single stop signal. Do **not** stop on seeing a message with `act: decide`: that
 only says somebody ran the verb, and it is neither necessary nor sufficient. A stray `decide`
@@ -129,7 +139,8 @@ amendment (a reference to an objection CLOSES it) · `object --refs '["<id>"]'` 
 (it must reference a concrete id, or there is nothing to close it against) · `support` ·
 `concede --refs '["<id>"]'` — "I yield" (from the author of an objection it drops the
 objection; from the author of a proposal it drops the proposal) · `withdraw` · `msg` ·
-`notice`.
+`notice` · `skip` — consume the turn of a holder who is past the deadline, and only if `floor`
+says `next=` is you (above).
 
 The room becomes **ready to decide** once no objection is open and a full lap has passed in
 which nobody added a proposal, an amendment or an objection. It does not close itself: closing

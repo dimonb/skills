@@ -523,6 +523,11 @@ c_send() {
     # stops being turn-taking. (Every message after the first such slip reads as
     # out-of-turn: caught exactly that way, by t3, once the check became slow enough to
     # widen the window.) `skip` is exempt: it is by definition spoken for somebody else.
+    #
+    # The exemption is the WHOLE of what the code says about `skip`. "Only the next peer in
+    # order, and only once the holder is past `turn_deadline_ms`" is protocol — stated in
+    # protocol/_channel.md, which every participant is handed, and in SKILL.md — and nothing
+    # here checks either half. Do not read this line as enforcing them.
     if [ "$act" != skip ] && [ "$(c_floor_at "$turn")" != "$ME" ]; then
       echo "council: the floor is no longer yours (turn $turn belongs to $(c_floor_at "$turn")) — drain your inbox and wait for your turn" >&2
       return 6

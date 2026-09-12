@@ -64,7 +64,8 @@ council.sh <verb> [options]
   Participant (inside a room)
     recv    [--timeout N] [--peek] [--until-floor]     exit 4 = timeout, call again
     send    --act <act> [--refs '["id"]'] [--hand] "<text>"
-    floor                                              who holds it and for how long
+    floor                                              who holds it, who is next, how long,
+                                                       and the room's turn deadline
     protocol                                           your own role and the channel rules
     agenda                                             the question — read this first
     decision                                           the record, once the room has closed
@@ -82,7 +83,7 @@ council.sh <verb> [options]
     say     <peer> "<text>"        speak to a participant out of band, in its terminal
 
   Common options: --room <name> --me <peer>
-  Acts: propose amend object support concede withdraw overrule msg notice decide done
+  Acts: propose amend object support concede withdraw overrule msg notice clarify skip decide
 
 `decision` returns 1 while the room is still open — that is a status, not a failure.
 
