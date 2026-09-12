@@ -322,3 +322,14 @@ it. Say in the change which parts you verified by running and which you reasoned
   instructions, so a stale copy of a command, a flag, or a state name is not a documentation
   bug — it is a defect that makes an agent do the wrong thing confidently. Prefer pointing at
   the authoritative place over copying from it.
+* **Never write an absolute — "only", "the one place", "from nowhere else" — without grepping
+  the tree for it first.** This has now been the same defect three times in two days, and always
+  with the same authorship: the change that *adds* the second path is the one that writes the
+  sentence claiming there is none. While you are making something the primary source it feels
+  like the sole one, and the sentence records the feeling rather than the tree. The cost is not
+  cosmetic — a later agent reads the absolute as an invariant and "fixes" whatever contradicts
+  it. All three instances were caught by a reviewer; the gate cannot see any of them. So: state
+  the scope instead of the absolute — which consumer reads which value from where, and what the
+  fallback is — so a reader who adds a third source is corrected by the sentence rather than
+  misled by it. If an absolute is genuinely true and load-bearing, name the guard that keeps it
+  true, or say plainly that nothing does.
