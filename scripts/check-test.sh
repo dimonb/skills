@@ -287,10 +287,14 @@ git checkout -- "$CORE"
 # nothing, so dropping the arm's trailing backtick leaves 6c passing. This adds a state that IS a
 # prefix of a recorded one (`spec` before `spec-review`) and records none of it. Unanchored, the
 # grep finds `record state=spec-review` and the gate goes green over a state nothing records;
-# anchored, it reds. The enum edit also gives `spec` a §7 handler, so 6b's neighbouring arm cannot
-# substitute for this one.
+# anchored, it reds.
+#
+# The `### 7.Z` handler is what keeps this probe pointed at ONE arm. Without it 6b's neighbouring
+# no-handler arm reds too, and a probe that fires two arms proves neither — the first version of
+# this probe renamed an existing heading to `7.CC`, which that arm's `^### 7\.[A-Z] — ` regex
+# rejects, so it reported `caught` off the wrong assertion.
 perl -pi -e 's{"state": "need-issue\|issue-ready\|}{"state": "need-issue|issue-ready|spec|}' "$CORE"
-perl -pi -e 's{^### 7\.C — `spec-review`}{### 7.C — `spec`\n\nPlaceholder handler for the probe.\n\n### 7.CC — `spec-review`}' "$CORE"
+perl -pi -e 's{^## 8\. }{### 7.Z — `spec`\n\nA probe handler, so only the recording arm can red.\n\n## 8. }' "$CORE"
 expect_fail "enum state satisfied only by a longer name" 'never says `record state=spec`'
 git checkout -- "$CORE"
 
