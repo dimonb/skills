@@ -242,20 +242,27 @@ forge knows whether you are at `apply` or at `impl-review`, and the only trace o
 this session is whichever stage a review record has already been posted for (§5.9), which lags
 the stage you are in. So an unrecorded stage is one nobody can see for as long as it lasts.
 
-**Why this is a numbered step and not a clause.** It used to be one subordinate clause in §2's
-preamble, justified by a benefit — *so a scheduled re-wake does not have to re-derive it* —
-which a run that never expects to re-wake reads as inapplicable to it, and skips. Measured:
-three consecutive runs wrote no state file at all, and nothing noticed, because the only party
-that could notice is the run itself, which already knows its own PR number and stage and so
-never reads the file it did not write. What it cost the supervisor was the whole instrument:
-the PR column read `no MR yet` and the stage `—` from launch to merge, over open, reviewed,
-mergeable pull requests, for their entire lives. **The file is written for a reader who is not
-you.**
+**Why this is a numbered step, and why WHEN matters as much as whether.** It used to be one
+subordinate clause in §2's preamble, justified by a benefit — *so a scheduled re-wake does not
+have to re-derive it* — which a run that never expects to re-wake reads as inapplicable to it,
+and skips. What was measured was not a file that never appears but one that **appears late, or
+not at all**: of two runs looked at directly, one had written nothing while its PR had been open
+for over an hour with two review rounds behind it, and the other wrote the file only once its PR
+already existed — satisfying the letter of this step at the one moment it no longer helps.
+Nothing noticed either, because the only party that could is the run itself, which already knows
+its own PR number and stage and so never reads the file it did not write. What it cost the
+supervisor was the instrument: the PR column read `no MR yet` and the stage `—` across the whole
+review of an open, reviewed, mergeable pull request. **So write it at discovery, before there is
+a PR to put in it** — a file that arrives at PR-creation time has already missed the window this
+step exists for. **And it is written for a reader who is not you.**
 
-Then keep `state` current: **§7's transitions record it** as they go. One of them deliberately
-does not — the hand-off out of §7.F into §7.G: `ready-to-merge` is recorded when §7.G *ends*,
-because a supervisor reads that record as the change having become a person's move, and
-stamping it on entry would report a run still working through the merge gate as finished.
+Then keep `state` current: **§7's transitions record it** as they go, with one deliberate
+exception — **no entry into §7.G records anything**, whether it comes from §7.F or, in a no-spec
+repo, straight from §7.E. `ready-to-merge` is stamped when §7.G *ends*. A supervisor reads that
+record as the change having become a person's move: it can conclude the change, paint it
+finished, and switch off the watchdog that would otherwise notice a wedged run. Stamping it on
+the way in advertises a run still working through the final checks and the §10 merge gate as
+done, which is worse than not recording at all.
 
 ---
 
@@ -953,7 +960,9 @@ mis-read the state.
 5. Scoped rounds (§5.7) until clean, or escalate at `max-rounds` → `needs-human`.
 6. Post the stage record plus the batched optional comment (§5.9). Record the clean verdict
    and any sweep.
-7. `record state=archive` (spec-engine repo) or `record state=ready-to-merge` → §7.F / §7.G.
+7. `record state=archive` → §7.F in a spec-engine repo; in a no-spec repo go straight to §7.G
+   and record NOTHING here — see §2.8: `ready-to-merge` is stamped when §7.G ends, never on the
+   way in, because a supervisor reads it as the change having become a person's move.
 
 CI must be green before §7.G, but **a red check is a fix to make, not a review to wait on** —
 treat it as another blocking finding in the current round.

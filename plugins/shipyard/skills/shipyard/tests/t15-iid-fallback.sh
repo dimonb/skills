@@ -2,20 +2,29 @@
 # t15-iid-fallback.sh — the PR/MR column when ship's state file cannot answer (#124).
 #
 # PROVENANCE. `slot_iid()` read the number from `.pipeline-state/*.json` and from nowhere else, and
-# three consecutive children wrote no state file at all. The column therefore read `no MR yet`, and
-# the stage `—`, from launch to merge over open, reviewed, mergeable pull requests — for a whole
-# day of supervision, which was spent reading panes and querying the forge by hand instead. The
-# fallback asks the forge which PR/MR has the slot worktree's branch as its head, which needs no
-# cooperation from the child.
+# children write that file late or not at all: one slot read `no MR yet` over a PR that had been
+# open for more than an hour with two completed review rounds, and another wrote the file only once
+# its PR already existed. The column, and the stage beside it, were therefore blank across exactly
+# the part of a run where supervision matters — a day of it spent reading panes and querying the
+# forge by hand instead. The fallback asks the forge which PR/MR has the slot worktree's branch as
+# its head, which needs no cooperation from the child.
 #
 # WHAT THIS FILE PINS, and every case is a kill test for one line:
 #   1. a slot with NO state file gets its number from the forge;
 #   2. the forge is the LAST resort — a slot whose state file answers never reaches it, so the
 #      fallback cannot override a child that did its job, and costs no call when it did;
 #   3. the base branch is never asked about, and neither is a worktree that has not branched yet;
-#   4. only a NUMBER is an answer. An unauthenticated or misdirected CLI prints prose on stdout,
-#      and an iid of `error: …` would be carried into mr_state() and rendered as a PR that is not
-#      there — the failure being fixed, in a new disguise;
+#   4. only a NUMBER is an answer — tested on the forge arm, though the guard itself sits at
+#      slot_iid()'s single exit so it covers the hand-authored state file and the MR-*.json
+#      basename too. An iid of `error: …` would be carried into mr_state() and rendered as a PR
+#      that is not there, and being non-empty it satisfies the slot graph's `_syg_pr_known` —
+#      the failure being fixed, in a new disguise. NOTE what this case does NOT evidence: the
+#      fixture puts prose inside valid JSON, in the `number` field, which is a belief about how a
+#      CLI fails rather than an observation. A real `gh` that cannot authenticate writes to
+#      stderr and exits non-zero with empty stdout, which the `''` arm would catch anyway;
+#   4b. an unregistered directory under `.claude/worktrees/` is not a worktree. The only case
+#      here whose failure is a WRONG answer rather than a blank: git discovery walks up and
+#      returns the supervisor's own branch, so the slot would render the supervisor's own PR;
 #   5. the query asks for a PR/MR in ANY state. `--state all` is not a detail: a merged PR whose
 #      terminal is still up must keep its number, or the column blanks at the exact moment the
 #      slot graph needs `merged` to conclude. Review measured `--state open` shipping 9/9 green
@@ -64,10 +73,23 @@ mkdir -p "$FAKE_ROOT" "$FAKE_GIT/ship-escalations"
 #     matches an explicit arm, so a `*) printf 'HEAD'` fixture commented as if it covered the
 #     detached case would have covered nothing, and deleting the guard it stands for shipped
 #     green. A fixture that reads as coverage and is not is worse than an admitted gap.
-for s in 51 52 53 54 55; do mkdir -p "$FAKE_ROOT/.claude/worktrees/ship-$s/.pipeline-state"; done
+# 56: a DIRECTORY that is not a registered worktree -> the one case whose failure is a wrong
+#     answer rather than a blank. Git discovery walks up, so `rev-parse` there returns the
+#     SUPERVISOR's branch; this fixture gives that branch a PR (555) so a regression renders the
+#     supervisor's own change as the slot's instead of merely blanking the column.
+for s in 51 52 53 54 55 56; do mkdir -p "$FAKE_ROOT/.claude/worktrees/ship-$s/.pipeline-state"; done
+# The registered set: every slot EXCEPT 56. Physical paths, because the guard compares against
+# `pwd -P` and $TMPDIR is a symlink on macOS — a logical path here would make the guard reject
+# every slot and the suite would pass for the wrong reason (measured: it reds 4 checks).
+WT_LIST=""
+for s in 51 52 53 54 55; do
+  p=$(cd "$FAKE_ROOT/.claude/worktrees/ship-$s" && pwd -P)
+  WT_LIST="${WT_LIST}worktree $p
+"
+done
 printf '{"pr_number":902,"state":"impl-review"}\n' \
   >"$FAKE_ROOT/.claude/worktrees/ship-52/.pipeline-state/PR-902.json"
-export FAKE_ROOT FAKE_GIT GH_CALLS
+export FAKE_ROOT FAKE_GIT GH_CALLS WT_LIST
 
 git() {
   local dir=""
@@ -77,13 +99,17 @@ git() {
     "rev-parse --git-common-dir") printf '%s\n' "$FAKE_GIT";  return 0 ;;
     "remote get-url origin")      printf 'https://github.com/example/example.git\n'; return 0 ;;
     "symbolic-ref --quiet --short refs/remotes/origin/HEAD") printf 'origin/main\n'; return 0 ;;
+    "worktree list --porcelain")  printf '%s' "$WT_LIST"; return 0 ;;
     "rev-parse --abbrev-ref HEAD")
       case "$dir" in
         *ship-51) printf 'feat/alpha\n' ;;
         *ship-52) printf 'feat/bravo\n' ;;
         *ship-53) printf 'main\n' ;;        # the base branch itself
         *ship-54) printf 'feat/delta\n' ;;
-        *)        printf 'HEAD\n' ;;        # slot 55: a worktree that has not branched yet
+        *ship-55) printf 'HEAD\n' ;;        # a worktree that has not branched yet
+        # Slot 56 and anything else: git walked UP and answered with the SUPERVISOR's branch,
+        # which is what a stray directory really produces. Never reached if the guard holds.
+        *)        printf 'feat/supervisors-own-branch\n' ;;
       esac
       return 0 ;;
   esac
@@ -92,7 +118,7 @@ git() {
 
 tmux() {
   case "${1:-}" in
-    list-windows) printf '1 ship-51\n2 ship-52\n3 ship-53\n4 ship-54\n5 ship-55\n'; return 0 ;;
+    list-windows) printf '1 ship-51\n2 ship-52\n3 ship-53\n4 ship-54\n5 ship-55\n6 ship-56\n'; return 0 ;;
     has-session)  return 0 ;;
     capture-pane) printf '⏺ working\n'; return 0 ;;
   esac
@@ -117,6 +143,9 @@ gh() {
         # A real CLI that cannot authenticate or is pointed at the wrong repository answers with
         # prose, not a number. Shaped as JSON so it survives the --jq the caller really runs.
         *"--head feat/delta"*) out='[{"number":"error: could not resolve to a Repository"}]' ;;
+        # The supervisor's own branch HAS a PR. That is what makes slot 56 a wrong-answer test
+        # rather than a blank-column one: without the registration guard the row renders `!555`.
+        *"--head feat/supervisors-own-branch"*) out='[{"number":555}]' ;;
         *) out='[]' ;;
       esac ;;
     *"pr view"*) printf 'OPEN\n'; return 0 ;;
@@ -129,7 +158,7 @@ export -f git tmux gh
 
 printf '%s\n' "$(date +%s)" >"$FAKE_GIT/ship-escalations/report-tick"
 out=$(SHIPYARD_STALL_SECS=100000 SHIPYARD_BACKEND=tmux SHIPYARD_SESSION=t15ex \
-        bash "$REPORT" 51 52 53 54 55 2>/dev/null)
+        bash "$REPORT" 51 52 53 54 55 56 2>/dev/null)
 
 # 1 — the whole point: a child that wrote nothing still gets its PR number.
 ok "51: the forge supplies the number no state file held" 1 \
@@ -166,7 +195,16 @@ ok "55: a detached HEAD is never asked about"       0 \
 ok "55: ...and the column says so honestly"         1 \
    "$(printf '%s' "$out" | grep -c '^| 55 | — .*no MR yet')"
 
-# 6 — the flags themselves. The call log holds the whole argv, so the three that carry meaning are
+# 6 — a directory under .claude/worktrees/ that git never registered. The ONLY case here whose
+# failure is a wrong answer rather than a blank column, so it is asserted three ways.
+ok "56: an unregistered directory is never asked about" 0 \
+   "$(grep -c -- '--head feat/supervisors-own-branch' "$GH_CALLS")"
+ok "56: ...so the supervisor's own PR is not shown as the slot's" 0 \
+   "$(printf '%s' "$out" | grep -c '^| 56 | !555 |')"
+ok "56: ...and the column says so honestly"         1 \
+   "$(printf '%s' "$out" | grep -c '^| 56 | — .*no MR yet')"
+
+# 7 — the flags themselves. The call log holds the whole argv, so the three that carry meaning are
 # pinned here rather than left to the fake, which answers on `--head` alone and would keep
 # reporting green through a silent change to any of them.
 #

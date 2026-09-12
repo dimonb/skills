@@ -283,6 +283,17 @@ perl -pi -e 's/record state=archive/state=archive/' "$CORE"
 expect_fail "enum state never recorded" 'never says `record state=archive`'
 git checkout -- "$CORE"
 
+# 6d — the kill test for 6c's ANCHOR, which 6c itself cannot provide: `archive` is a prefix of
+# nothing, so dropping the arm's trailing backtick leaves 6c passing. This adds a state that IS a
+# prefix of a recorded one (`spec` before `spec-review`) and records none of it. Unanchored, the
+# grep finds `record state=spec-review` and the gate goes green over a state nothing records;
+# anchored, it reds. The enum edit also gives `spec` a §7 handler, so 6b's neighbouring arm cannot
+# substitute for this one.
+perl -pi -e 's{"state": "need-issue\|issue-ready\|}{"state": "need-issue|issue-ready|spec|}' "$CORE"
+perl -pi -e 's{^### 7\.C — `spec-review`}{### 7.C — `spec`\n\nPlaceholder handler for the probe.\n\n### 7.CC — `spec-review`}' "$CORE"
+expect_fail "enum state satisfied only by a longer name" 'never says `record state=spec`'
+git checkout -- "$CORE"
+
 # 7 — the leak check: ONE probe per structural pattern, so a typo in any single alternative
 # cannot ship silently. The probe file is UNTRACKED on purpose: that is the state a leak is
 # in when `make check` runs just before `git add`. Every fixture is invented.
