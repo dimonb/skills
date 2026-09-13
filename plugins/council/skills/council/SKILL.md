@@ -585,13 +585,20 @@ shape it recognises is an announced **capacity limit**, so the annotation reads 
 a live `rate_limited` banner … if that banner is current the seat resumes by itself, so check the
 terminal before relaunching"*, with the matched line printed as evidence.
 
-> **That sentence can never remove the alarm, and that is deliberate.** Everything the read keys on
-> — the roster's `kind`, the container pin, the pane itself — lives inside the room directory,
-> which is the participant's own writable root (#40). So the rule is: **untrusted evidence may
-> annotate an alarm, never suppress it.** A peer-writable value that changes how a line reads is
-> fine; one that decides whether the line appears is not. An alarm a participant can silence is
-> worse than no alarm, because the supervisor stops looking. The same rule already governs the
-> clock-wrong wording above, for the same reason.
+> **That sentence can never remove the alarm or its push, and that is deliberate.** Everything the
+> read keys on — the roster's `kind`, the container pin, the pane itself — is room state a
+> participant can write, and ["The room is not a trust boundary"](#the-room-is-not-a-trust-boundary)
+> records that no kind is confined at all. So the rule is: **untrusted evidence may annotate an
+> operator-facing signal, never suppress one.** It says *signal*, not *alarm*, because the first
+> draft of this said *alarm*, was applied to the alarm line, and left the mailbox push — the same
+> event's other output — gated on peer-writable state for another round. The test is per output:
+> for each thing a supervisor reads, ask what decides whether it appears.
+>
+> **It does not make this verb unsuppressible, and no rule could.** Every field in the block above
+> is a function of room state, `held` included: a seat that stamps a message in the future clamps
+> the held time to 0 and takes the `STALL` line and its push with it (measured — #165). That is
+> #40's fact, not this read's — what the read adds is annotation only, so it adds no new way to go
+> dark.
 
 A `STALL` also **pushes**: one `notice` into the shared escalation mailbox — the same
 fire-and-forget channel an `unresolved` close uses (`.git/ship-escalations/`, which a shipyard
@@ -605,17 +612,22 @@ something is you:
 while true; do council.sh status --room <name> >/dev/null 2>&1; sleep 300; done &
 ```
 
-The push is latched on the floor holder and the turn count, so polling does not accrue duplicates
-while a room that moves and stalls again notifies afresh. The latch lives in the mailbox, not in
-the room, because a latch inside the room could be pre-written by the very seat the notice is
-about.
+The push is de-duplicated on the floor holder and the turn count, so polling does not accrue
+duplicates while a room that moves and stalls again notifies afresh. **It de-duplicates against the
+mailbox itself, not against a latch file**, and that is the interesting part: nothing confines a
+participant, so a latch anywhere is a file the seat the notice is about could pre-write, and
+pre-writing it is silence. Keying on the mailbox makes suppression **self-revealing** — the only
+way to stop the notice is to put an entry carrying its key into the directory you read. That is
+weaker than preventing suppression, and stronger than pretending to.
 
-This makes `status` the one *reading* verb that also writes: on a stalled room it appends to the
-mailbox and its latch. Participants are told they may read the room with `status`, so a seat that
-does so on a stalled room will push that notice — which is true and harmless, but worth knowing
-before you wonder who wrote it.
+`status` therefore writes, on that one path: a stalled room appends an entry to the mailbox.
+(`recv` already writes too — it advances cursors, even with `--peek` — so this is not the only
+reader with a side effect; the new thing is a write *outside* the room.) Participants are told they
+may read the room with `status`, so a seat that does so on a stalled room will push that notice —
+true and harmless, but worth knowing before you wonder who wrote it.
 
-**The annotation is gated on the agent kind, and answers "no" for most of them.** The anchor that
+**The annotation is gated on the agent kind: available for two of the three council can launch.**
+It is withheld for `agy`, and for any room whose roster records no kind at all. The anchor that
 makes a banner the client's own — column one, where the agent's words cannot reach — is a measured
 property of the two clients this repo has committed pane captures of. A kind with no captured pane
 gets **no annotation**: `status` does not print a claim about a client whose chrome nobody has

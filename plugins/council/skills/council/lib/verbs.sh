@@ -353,17 +353,45 @@ v_verdict() {
 #
 # THE RULE THAT SHAPES ALL OF IT, and the one to keep if everything else here is rewritten:
 #
-#   UNTRUSTED EVIDENCE MAY ANNOTATE AN ALARM, NEVER SUPPRESS IT.
+#   UNTRUSTED EVIDENCE MAY ANNOTATE AN OPERATOR-FACING SIGNAL, NEVER SUPPRESS ONE.
 #
-# A peer-writable value that changes how a line READS is fine; one that decides whether the line
-# APPEARS is not. That is the difference between informing a supervisor and being trusted by one.
-# An alarm a participant can silence is strictly worse than no alarm, because the supervisor stops
-# looking — so the screen read below adds a sentence to the STALL alarm and can never remove it,
-# and the mailbox push fires on exactly the condition it fired on before any of this was read.
+# A peer-writable value that changes how a signal READS is fine; one that decides whether the
+# signal APPEARS is not. That is the difference between informing a supervisor and being trusted by
+# one, and a signal a participant can silence is strictly worse than none, because the supervisor
+# stops looking.
+#
+# IT SAYS *SIGNAL*, NOT *ALARM*, AND THAT WORD COST A ROUND. Written as "never suppress an alarm",
+# it was applied to the alarm line that happened to be in front of the author — and the mailbox
+# PUSH, the second operator-facing output of the same event, stayed gated on peer-writable state
+# for another round. So the test is per OUTPUT, not per feature: for each thing a supervisor reads,
+# ask what decides whether it appears. The enumeration further down does that for this verb.
 #
 # THE PRECEDENT IS IN THIS FILE ALREADY: the `created_ms` paragraph in v_status says the same thing
 # for the clock-wrong wording — the alarm fires on the condition it always did, and the untrusted
 # value can only change how it reads. This is that rule applied to a second untrusted input.
+#
+# WHERE SUPPRESSION CANNOT BE PREVENTED, MAKE IT SELF-REVEALING. That is the stronger form, and it
+# is what `_stall_escalate` does below: nothing confines a participant (SKILL.md, "The room is not
+# a trust boundary", measured for all three kinds), so no file a supervisor writes is out of a
+# seat's reach. Rather than pretend otherwise, the push de-duplicates against the MAILBOX ITSELF,
+# so the only way to suppress a notice is to put something in the directory the supervisor reads.
+# Silencing then costs a visible artefact, which is a property that survives an adversary you
+# cannot lock out. Prefer it to an unreachable-file argument whenever you have the choice.
+#
+# WHAT THIS DOES NOT MAKE TRUE, stated because the rule above reads stronger than the room is.
+# EVERY operator-facing output of this verb is ultimately a function of room state a participant
+# can write, and that is #40's fact rather than this change's defect:
+#   * the status block's fields — roster.json and the lanes, wholesale;
+#   * the STUCK / ready-to-decide / unresolved alarms — the claim graph, i.e. the lanes;
+#   * `status`'s exit code and `rooms`' listing — `board/status` + `board/decision.md`;
+#   * the STALL alarm and its push — `c_floor_held_ms`, hence the last turn's peer-written
+#     `sent_ms` and `created_ms`. A seat that stamps a message in the FUTURE clamps the held time
+#     to 0 and removes the alarm and the push together; measured, and filed as #165. That is a live
+#     counterexample to the rule above, it predates this change, and it is named here rather than
+#     left for a reader to find, because a rule stated absolutely and contradicted by the same file
+#     is worse than a rule stated with its hole.
+# What this change CAN keep true is narrower and worth having: the TERMINAL READ — the one input
+# here that is not room state — is annotation-only, so it adds no new way to go dark.
 #
 # WHY IT HAD TO BE THIS WAY ROUND, stated as what was actually checked rather than as a claim about
 # every possible design. An earlier draft let a recognised capacity banner REPLACE the alarm. Every
@@ -415,10 +443,14 @@ _floor_screen() {
   # source is therefore deferred to here, after the guard, so a room with no pin costs neither.
   for f in "$ROOM"/state/container-*; do [ -f "$f" ] && pinned=1; done
   [ "$pinned" = 1 ] || return 1
-  # Sourced on demand, once. Definitions made by a source inside a function are global, so the
-  # `command -v` above is also the guard against sourcing twice. A caller with no $SKILL, or a
-  # term.sh that will not load, gets no capture rather than an error — the same way v_decide
-  # treats policy.sh.
+  # Sourced on demand, PER INVOCATION — not once, whatever the `command -v` looks like it buys.
+  # This function's only call site is `screen=$(_floor_screen "$peer")`, i.e. a command
+  # substitution, so everything it defines dies with that subshell and the next call re-sources.
+  # That is fine while there is one call per `status`, and it is the reason this guard cannot be
+  # read as a cache: a future caller that loops the read would pay the backend resolution every
+  # time, and should hoist the source into v_status, outside the substitution, where the guard
+  # would actually bite. A caller with no $SKILL, or a term.sh that will not load, gets no capture
+  # rather than an error — the same way v_decide treats policy.sh.
   if ! command -v ct_capture >/dev/null 2>&1; then
     [ -n "${SKILL:-}" ] && [ -f "$SKILL/lib/term.sh" ] || return 1
     . "$SKILL/lib/term.sh" || return 1
@@ -481,21 +513,34 @@ _floor_wait_state() {
 # documents a watch loop for an operator who wants one; until #21 has an answer, that loop is the
 # trigger.
 #
-# IT FIRES ON THE SAME CONDITION THE ALARM DOES, explained or not. An earlier draft pushed only for
-# an unexplained stall, which made a peer-writable value decide whether a person was woken — the
-# suppression the block header forbids. What the classification changes is the notice's WORDING,
-# never its existence.
+# IT FIRES WHENEVER THE ALARM DOES, in either of its wordings and explained or not. Two earlier
+# drafts got this wrong in the same way and it is the mistake worth naming: the first pushed only
+# for an UNEXPLAINED stall, so the screen read decided whether a person was woken; the second still
+# skipped the clock-wrong arm, so a peer writing `created_ms` did. Both times the alarm had been
+# fixed and the push — the same event's second operator-facing output — had not, because the alarm
+# was the one being looked at. What the classification changes is this notice's WORDING, never its
+# existence.
 #
-# LATCHED ON THE FLOOR HOLDER AND THE TURN COUNT, so polling `status` does not accrue N notices for
-# one stall, while a room that moves and then stalls again notifies afresh. THE LATCH LIVES IN THE
-# MAILBOX, not in the room: the room directory is the participant's own writable root (#40), so a
-# latch there could be pre-written by the seat the notice is about, and that is this function's
-# version of silencing the alarm. The mailbox is outside every participant's granted directory.
-# Residual, since the latch is a file like any other: a caller whose mailbox cannot be written at
-# all pushes nothing, and one whose latch write fails re-notifies on the next poll — noisy rather
-# than silent, which is the direction to fail in.
+# DE-DUPLICATED AGAINST THE MAILBOX ITSELF, keyed on the floor holder and the turn count, so
+# polling `status` does not accrue N notices for one stall while a room that moves and stalls again
+# notifies afresh. The key is carried inside the notice text as `[stall:<peer>:<turns>]`.
+#
+# THAT IS THE POINT OF IT, and it is why there is no latch file. Nothing confines a participant —
+# SKILL.md's "The room is not a trust boundary" records all three kinds writing outside the repo
+# entirely — so a latch anywhere, in the room or in the mailbox, is a file the seat the notice is
+# about can pre-write, and pre-writing it is silence. De-duplicating against the mailbox makes
+# suppression SELF-REVEALING instead: the only way to stop this notice is to put an entry carrying
+# its key into the very directory the supervisor reads. That is weaker than preventing suppression
+# and stronger than pretending to — it is the property to reach for whenever the adversary cannot
+# be locked out.
+#
+# Two residuals, named rather than left to be found. A CLOSED room returns early, and a closure is
+# two files inside the room (`board/status`, `board/decision.md`), so a seat can forge one and stop
+# the push — but a forged closure also makes every other reader report the room decided, which is
+# the larger, pre-existing lie (#66) rather than something this gate adds. And a mailbox that
+# cannot be resolved or written pushes nothing at all.
 _stall_escalate() {
-  local peer="${1:-}" turns="${2:-}" held="${3:-}" note="${4:-}" latch mark room who where mb
+  local peer="${1:-}" turns="${2:-}" held="${3:-}" note="${4:-}" key room who where mb
   command -v policy_escalate >/dev/null 2>&1 || return 0
   command -v policy_mailbox_dir >/dev/null 2>&1 || return 0
   # A closed room's floor is nobody's problem, and `decide` has already escalated the one closure
@@ -503,13 +548,16 @@ _stall_escalate() {
   [ -z "$(c_recorded_status)" ] || return 0
   mb=$(policy_mailbox_dir) || return 0
   room=$(basename "$ROOM")
-  latch="$mb/.council-$room.stall-latch"
-  mark="$peer $turns"
-  [ "$(cat "$latch" 2>/dev/null || true)" = "$mark" ] && return 0
+  key="[stall:$peer:$turns]"
+  # -F so a room or peer name carrying a regex character is matched literally, -l so nothing is
+  # read further than the first hit. With no entries yet the glob stays literal, grep fails on the
+  # missing file, and we push — the right way round: a de-duplication check that cannot read its
+  # own history must repeat a notice, never skip one.
+  grep -lF "$key" "$mb"/council-"$room"-*.json >/dev/null 2>&1 && return 0
   # During an open barrier round the caller's `$floor` is a LABEL, not a seat — nobody holds the
   # floor and the room is waiting on everyone — so the notice must not name it as a participant.
   # A real seat is named; anything else degrades to the room, and the terminal to look at becomes
-  # every terminal. The label is still a fine latch key: it is stable for as long as the round is.
+  # every terminal. The label is still a fine de-duplication key: it is stable while the round is.
   #
   # Captured and matched rather than piped into `grep -q`, for the reason ship's own guidance gives
   # about this exact shape: `-q` exits on the first hit, the writer takes a SIGPIPE, and under
@@ -526,11 +574,22 @@ _stall_escalate() {
   # ("  has been held for 7200s"). An unnamed floor is exactly the input the fallback is for.
   [ -n "$peer" ] || { who="the room's floor"; where="every participant's terminal"; }
   mkdir -p "$mb" 2>/dev/null || true
+  # The annotation goes LAST, after council's own remedies, and the quote is delimited. Spliced
+  # mid-sentence it ran straight into this skill's instructions with nothing marking where the
+  # participant-authored half ended — and the whole reason it is quoted at all is that a seat
+  # chooses its text. On the console the evidence is last for the same reason.
+  #
+  # Built OUTSIDE the argument, not with a `${note:+…}` inside it: an apostrophe in the alternate
+  # text ends the surrounding double-quoted word as far as bash's parser is concerned, and the
+  # whole file then fails to parse. It cost a round here; the plain `if` cannot do that.
+  local ctx="turn $turns; go and look at $where. A permission or first-launch trust prompt is answered IN PLACE; council.sh relaunch is only for a seat that is genuinely dead, and it discards everything that seat has read."
+  if [ -n "$note" ]; then
+    ctx="$ctx Quoted from the pane, not a verdict: <<$note>>"
+  fi
   policy_escalate notice "council-$room" \
-    "council room '$room': $who has been held for ${held}s — the room has stopped" \
-    "turn $turns; go and look at $where. ${note:+$note }A permission or first-launch trust prompt is answered IN PLACE; council.sh relaunch is only for a seat that is genuinely dead, and it discards everything that seat has read." \
+    "council room '$room': $who has been held for ${held}s — the room has stopped $key" \
+    "$ctx" \
     >/dev/null 2>&1 || return 0
-  printf '%s' "$mark" > "$latch" 2>/dev/null || true
 }
 
 v_status() {
@@ -620,6 +679,9 @@ v_status() {
   if [ "$held" -gt "${COUNCIL_STALL_SECS:-900}" ]; then
     if [ -n "$room_age" ] && [ "$held" -gt "$room_age" ]; then
       alarms="$alarms 🛑 STALL: the floor has been held for ${held}s, which is longer than this room has existed (${room_age}s) — one seat's clock is wrong, so check every terminal rather than trusting the figure"
+      # No terminal read on this arm: `held` is not a trustworthy number here, so nothing about a
+      # seat should be concluded from it, and the threshold-first ordering the paragraph above
+      # insists on stays exactly as it was. The PUSH still happens — see below.
     else
       # ONE alarm, on exactly the condition it always fired on, and then — where the seat's own
       # client announced something this check recognises — one more sentence QUOTING that. The
@@ -633,18 +695,26 @@ v_status() {
       # seat, because the two likeliest causes need opposite remedies and only one of them is
       # `relaunch`. It now names both remedies and says which case each belongs to.
       #
-      # "nothing this check recognises" rather than "nothing on its terminal": the only shape this
-      # recognises is an announced capacity wait, so on the commonest wedge the terminal says
-      # exactly why and this code cannot read it. Saying otherwise would tell a supervisor
-      # something untrue about the pane it is about to look at.
+      # The recognition clause is CONDITIONAL, and that is not tidiness. Printed unconditionally it
+      # said "nothing this check recognises explains it" in the same line as the annotation this
+      # very check had just produced — the alarm denying and asserting the same fact, on the one
+      # path the feature exists for. It is worded this way rather than "nothing on its terminal"
+      # because the only shape recognised is an announced capacity wait, so on the commonest wedge
+      # the terminal says exactly why and this code cannot read it.
       wait_ev=$(_floor_wait_state "$floor") || wait_ev=""
-      alarms="$alarms 🛑 STALL: $floor has held the floor for ${held}s and nothing this check recognises explains it — go and look at it. A seat sitting on a permission or first-launch trust prompt needs that prompt ANSWERED IN PLACE; council.sh relaunch is only for a seat that is genuinely dead, and it discards everything that seat has read."
+      alarms="$alarms 🛑 STALL: $floor has held the floor for ${held}s — the room has stopped; go and look at it. A seat sitting on a permission or first-launch trust prompt needs that prompt ANSWERED IN PLACE; council.sh relaunch is only for a seat that is genuinely dead, and it discards everything that seat has read."
       if [ -n "$wait_ev" ]; then
         wait_note="⏳ its pane carries a live ${wait_ev%%	*} banner: $(policy_park_advice) If that banner is current the seat resumes by itself, so check the terminal before relaunching — this is a quote from a pane, not a verdict. Evidence: ${wait_ev#*	}"
         alarms="$alarms $wait_note"
+      else
+        alarms="$alarms Nothing this check recognises explains it; only an announced capacity wait is recognised today."
       fi
-      _stall_escalate "$floor" "$t" "$held" "$wait_note"
     fi
+    # OUTSIDE the wording branches, deliberately. Both of them are the same alarm — this room has
+    # stopped — and the push is that alarm's second operator-facing output, for the supervisor who
+    # is not at the console. Nesting it under one wording is how a peer-written `created_ms`, which
+    # only chooses between the two, came to decide whether anyone was woken.
+    _stall_escalate "$floor" "$t" "$held" "$wait_note"
   fi
   printf 'alarms:%s\n' "${alarms:- —}"
   printf 'last messages:\n'

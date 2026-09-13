@@ -512,6 +512,12 @@ adp_delivery_verdict() {
 # One glyph passes the chrome test today. Both admitted kinds put their own words behind a DIFFERENT
 # column-one glyph — one an assistant bullet, one a service bullet — so neither can reach column
 # one behind the warning glyph, and indentation covers tool output and every wrapped continuation.
+# READ THAT SENTENCE WITH `adp_wait_anchored`'s HEADER, which states what the two captures actually
+# show and does not claim the same strength for both: the assistant-bullet half is a capture of
+# that client's own prose, while the service-bullet half is evidenced by the client's service line
+# plus this repo's own recorded defect of one carrying its prose — no committed capture holds an
+# assistant turn for that kind. The conclusion stands; the evidence behind its two halves differs,
+# and reading the strong form alone is how the service bullet got into the allow-list once already.
 # That is why the allow-list below has exactly one entry and why the service bullet was REMOVED
 # from it rather than narrowed: a bullet line is authored content, and no amount of phrase-pinning
 # makes authored content trustworthy.

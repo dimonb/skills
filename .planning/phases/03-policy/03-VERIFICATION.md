@@ -41,16 +41,27 @@ the container pin, the pane itself — lives in the room directory, which is the
 writable root (#40), and two reviewers reproduced the consequence: a seat silencing the
 supervisor's alarm about itself, one of them end to end on a real capture with an honest roster. So:
 
-> Untrusted evidence may ANNOTATE an alarm, never SUPPRESS it. A peer-writable value that changes
-> how a line reads is fine; one that decides whether the line appears is not.
+> Untrusted evidence may ANNOTATE an operator-facing signal, never SUPPRESS one. A peer-writable
+> value that changes how a signal reads is fine; one that decides whether the signal appears is not.
 
-That is now the shape of council's read, and `policy_dispose` is what turns the class into the
-wording. It is the rule any later consumer of a screen-derived class should inherit.
+It says *signal*, not *alarm*, and that word cost a round: stated as "alarm" it was applied to the
+alarm line, and the mailbox push — the same event's other operator-facing output — stayed gated on
+peer-writable state until a second review round. The test is per **output**.
+
+Where suppression cannot be prevented, the rule's stronger form is to make it **self-revealing**:
+council's push de-duplicates against the mailbox rather than a latch file, so silencing it costs an
+entry in the directory the supervisor reads. Nothing confines a participant (SKILL.md, "The room is
+not a trust boundary"), so that property is worth more here than any unreachable-file argument.
+
+Both are what a later consumer of a screen-derived class should inherit; `policy_dispose` is what
+turns the class into the wording.
 
 **Still open, and not this change's:**
 
-* `context_full` disposes to `compact`, and council has no compaction path — a ceiling falls
-  through to STALL, whose only remedy is a relaunch that discards the seat's context. **#161**
+* `context_full` disposes to `compact`, and council has no **wired** compaction path — a ceiling
+  falls through to STALL, whose only automated remedy is a relaunch that discards the seat's
+  context. (A supervisor can still type `/compact` by hand through `council.sh say`, over the same
+  driver `shipyard-compact.sh` uses; what is missing is the compact-and-resume wiring.) **#161**
   (shipyard's `ctx_*` readers and its compact-and-resume script have no council caller). Routing
   through `policy_dispose` rather than testing classes directly is what makes that arrival a single
   arm when someone takes it.

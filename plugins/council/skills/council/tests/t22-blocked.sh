@@ -94,6 +94,12 @@ ok "...carrying policy's park advice"        1 "$(printf '%s' "$out" | grep -c '
 # Presented as a quote to be checked, never as a verdict to be believed — because the pane it came
 # from is one the seat itself can author.
 ok "...labelled a quote, not a verdict"      1 "$(printf '%s' "$out" | grep -c 'not a verdict')"
+# And the alarm does not deny what it just said. Printed unconditionally, the recognition clause
+# made one line read "nothing this check recognises explains it … its pane carries a live
+# rate_limited banner" — the same output asserting and denying the same fact, on the one path the
+# feature exists for, with the suite green because it only ever asserted each sentence separately.
+ok "...without denying its own annotation"   0 \
+   "$(printf '%s' "$out" | grep -c 'Nothing this check recognises')"
 # The annotation travels with the notice, so the person woken at 3am gets the same evidence as the
 # person reading the console.
 body=$(cat "$(ls "$POLICY_MAILBOX_DIR"/council-t22a-*.json | head -1)")
@@ -153,7 +159,7 @@ ok "...and says a prompt is answered in place" 1 "$(printf '%s' "$out" | grep -c
 ok "...and scopes relaunch to a dead seat"   1 "$(printf '%s' "$out" | grep -c 'only for a seat that is genuinely dead')"
 # It claims only what it checked. The commonest wedge puts the reason on the terminal in plain
 # words this code cannot read, so "nothing on its terminal says why" would be false.
-ok "...claiming only what it checked"        1 "$(printf '%s' "$out" | grep -c 'nothing this check recognises')"
+ok "...claiming only what it checked"        1 "$(printf '%s' "$out" | grep -c 'Nothing this check recognises')"
 
 # --- 5. the push: a stall reaches the shared mailbox, once ---------------------------------
 ok "a stall pushes a notice"                 1 "$(notices t22g)"
@@ -174,30 +180,46 @@ ROOM="$R7" raw_msg alpha 1 1 1 msg '[]' "still here" >/dev/null
 COUNCIL_ROOM="$R7" COUNCIL_WAIT_SCREEN_FILE="$QUIET" bash "$CLI" status >/dev/null 2>&1
 ok "a room that moved and stalled again notifies" 2 "$(notices t22g)"
 
-# THE LATCH LIVES OUTSIDE THE ROOM, because a latch inside it is a file the seat the notice is
-# about can pre-write — which is the same silencing by another route. The room directory is the
-# participant's writable root; the mailbox is not.
+# THERE IS NO LATCH FILE, and that is the point. Nothing confines a participant — SKILL.md's "The
+# room is not a trust boundary" measured all three kinds writing outside the repo entirely — so a
+# latch anywhere is a file the seat the notice is about could pre-write, and pre-writing it is
+# silence. The push de-duplicates against the MAILBOX instead, which makes suppression
+# self-revealing: the only way to stop the notice is to leave an entry where the supervisor looks.
 R7B="$COUNCIL_TEST_ROOT/t22j"; stalled_room "$R7B" claude alpha beta
 mkdir -p "$R7B/state"; printf '%s' 'alpha 0' > "$R7B/state/stall-notified"
+printf '%s' 'alpha 0' > "$POLICY_MAILBOX_DIR/.council-t22j.stall-latch" 2>/dev/null
 COUNCIL_ROOM="$R7B" COUNCIL_WAIT_SCREEN_FILE="$QUIET" bash "$CLI" status >/dev/null 2>&1
-ok "a latch planted in the room suppresses nothing" 1 "$(notices t22j)"
+ok "a planted latch file suppresses nothing"  1 "$(notices t22j)"
+# And the de-duplication key really is what stops the second notice, not the clock: an entry
+# carrying the key is enough, and it is an entry the supervisor can see.
+ok "...and the key is carried in the notice"  1 \
+   "$(grep -lF '[stall:alpha:0]' "$POLICY_MAILBOX_DIR"/council-t22j-*.json 2>/dev/null | wc -l | tr -d ' ')"
 
 # --- 6. a CLOSED room is nobody's emergency ------------------------------------------------
 # Its floor stops meaning anything the moment the record is written, and `decide` has already
-# escalated the one closure that needs a person.
+# escalated the one closure that needs a person. RESIDUAL, asserted here so it is not mistaken for
+# a property: the record is two files inside the room, so a seat can forge one and stop the push.
+# A forged closure also makes every other reader report the room decided, which is the larger
+# pre-existing lie (#66) rather than something this gate adds.
 R8="$COUNCIL_TEST_ROOT/t22h"; stalled_room "$R8" claude alpha beta
 mkdir -p "$R8/board"; printf 'decided' > "$R8/board/status"
 printf '# decision\n\nstatus: **decided**\n' > "$R8/board/decision.md"
-COUNCIL_ROOM="$R8" COUNCIL_WAIT_SCREEN_FILE="$QUIET" bash "$CLI" status >/dev/null 2>&1
+out=$(COUNCIL_ROOM="$R8" COUNCIL_WAIT_SCREEN_FILE="$QUIET" bash "$CLI" status 2>&1)
 ok "a closed room pushes nothing"            0 "$(notices t22h)"
+# The alarm is NOT withheld, so the forgery is visible rather than silent.
+ok "...but still prints its alarm"           1 "$(printf '%s' "$out" | grep -c '🛑 STALL')"
 
-# --- 7. the clock-wrong arm still wins, and the annotation never reaches it -----------------
+# --- 7. the clock-wrong arm keeps its wording — and still pushes ---------------------------
 # `held > room_age` means the held figure came from a wrong clock, so nothing about that seat
-# should be concluded from it — including a screen read that only happens because the figure
-# tripped a threshold. v_status's own header says the threshold is tested FIRST and the
-# impossible-value case only chooses the wording; this pins that the new sentence did not sneak
-# in front of it. Built by leaving `created_ms` at now while the floor's age comes from a lane
-# message stamped two hours ago, so held > room_age.
+# should be concluded from it, and the screen read does not run on this arm. v_status's header
+# says the threshold is tested FIRST and the impossible-value case only chooses the WORDING.
+#
+# THE NOTICE COUNT IS HALF THIS CASE, and its absence was the defect a reviewer found: the first
+# version of this test built exactly this room, asserted the wording, and asserted nothing about
+# the push — while `_stall_escalate` sat inside the other branch. So `created_ms`, a field every
+# participant can write and which only chooses between two wordings, decided whether a person was
+# woken, and this test pinned that loss as correct. A case that builds an attack must assert every
+# output the attack can reach.
 R9="$COUNCIL_TEST_ROOT/t22k"; stalled_room "$R9" claude alpha beta
 old_ms=$(( 10#${EPOCHREALTIME/./} / 1000 - 7200000 ))
 jq --argjson cms "$(( 10#${EPOCHREALTIME/./} / 1000 ))" '.created_ms = $cms' \
@@ -211,6 +233,29 @@ printf '1' > "$R9/state/alpha.seq"
 out=$(COUNCIL_ROOM="$R9" COUNCIL_WAIT_SCREEN_FILE="$BANNER" bash "$CLI" status 2>&1)
 ok "an impossible held time keeps its own wording" 1 "$(printf '%s' "$out" | grep -c 'clock is wrong')"
 ok "...and the annotation does not reach it"       0 "$(printf '%s' "$out" | grep -c 'its pane carries')"
+ok "...and the push happens anyway"                1 "$(notices t22k)"
+
+# --- 8. an unnamed floor degrades the notice instead of naming an empty seat ----------------
+# With no floor holder and an unreadable roster, both sides of the membership test are empty and
+# the member arm used to match, so the notice read "council room 'x':  has been held for 7200s".
+R10="$COUNCIL_TEST_ROOT/t22l"; stalled_room "$R10" claude alpha beta
+jq '.order = ["al pha", "beta"]' "$R10/roster.json" > "$R10/r.tmp" && mv "$R10/r.tmp" "$R10/roster.json"
+COUNCIL_ROOM="$R10" COUNCIL_WAIT_SCREEN_FILE="$QUIET" bash "$CLI" status >/dev/null 2>&1
+body=$(cat "$(ls "$POLICY_MAILBOX_DIR"/council-t22l-*.json 2>/dev/null | head -1)" 2>/dev/null)
+ok "an unnamed floor degrades to the room"   0 \
+   "$(printf '%s' "$body" | grep -qF "the room's floor has been held"; echo $?)"
+
+# --- 9. the real capture path, with no seam ------------------------------------------------
+# Every case above replaces the capture. This one does not: a pinned container makes _floor_screen
+# take its production path, sourcing term.sh and calling ct_capture for real. Whatever the backend
+# answers — and on a machine with none it answers nothing — the alarm and the push must both still
+# happen, because the read can only ever annotate.
+R11="$COUNCIL_TEST_ROOT/t22m"; stalled_room "$R11" claude alpha beta
+printf 'no-such-container\n' > "$R11/state/container-tmux"
+printf 'no-such-container\n' > "$R11/state/container-agterm"
+out=$(COUNCIL_ROOM="$R11" bash "$CLI" status 2>&1)
+ok "the real capture path still alarms"      1 "$(printf '%s' "$out" | grep -c '🛑 STALL')"
+ok "...and still pushes"                     1 "$(notices t22m)"
 
 printf '\n'
 if [ "$FAILURES" -eq 0 ]; then echo "t22 PASS ($CHECKS checks)"; else echo "t22 FAIL ($FAILURES/$CHECKS)"; exit 1; fi
