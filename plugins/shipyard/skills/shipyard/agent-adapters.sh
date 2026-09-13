@@ -38,7 +38,7 @@
 # sourcing anything, so it constrains nothing; shipyard is the binding caller.
 
 # A version marker, bumped when the body changes, so sync + the drift gate stay easy to prove.
-_ADP_VERSION=2
+_ADP_VERSION=3
 
 # --- the kinds -----------------------------------------------------------------
 # One per line, sorted, so a caller can `paste -sd, -` them into a message.
@@ -631,4 +631,39 @@ adp_wait_class() {
   done <<<"$screen"
   [ -n "$hit_cls" ] || return 1
   printf '%s\t%s' "$hit_cls" "$hit_line"
+}
+
+# adp_wait_anchored <kind> — 0 when THIS kind's column-one chrome has been CAPTURED, so a banner
+# matched above can be trusted to be the client's own and not the agent's words; 1 otherwise.
+#
+# adp_wait_class reads a screen and never asks whose it is. That is sound for a caller whose
+# admission set is exactly the kinds the anchor was derived from, and unsound for one whose set is
+# wider — which is the case the moment a caller admits a kind nobody has captured a pane of.
+#
+# THE ALLOW-LIST ABOVE RESTS ON A MEASURED PROPERTY OF TWO CLIENTS, and only two:
+# fixtures/pane-claude-running.txt and fixtures/pane-codex-running.txt show each putting its own
+# prose behind a DIFFERENT column-one glyph, which is what makes column one behind the warning
+# glyph unreachable by the agent. fixtures/panes.notes lists every capture this repo holds; no
+# third kind has one. For a kind with no captured pane we do not know where its client puts the
+# agent's own words, and "nobody has looked" is not evidence of a fence — it is the absence of one.
+#
+# It lives HERE because it is the per-kind half of the same question the allow-list answers: which
+# client renders what is this module's knowledge, not a supervisor's.
+#
+# THE CALLER THAT NEEDS IT TODAY IS THE ONE WITH THE WIDER SET, and that is a seam worth naming
+# rather than plumbing. council admits every kind `adp_kinds` lists, so it gates on this before
+# letting a banner clear its own room alarm. shipyard's admission set (`shipyard_agent_kinds`) is
+# exactly the two evidenced kinds, so the gate would change nothing there today — and making
+# `shipyard_wait_state` carry a kind it does not currently hold, to reach a call whose answer is
+# always 0, is the plumbing this repo's law tells you not to buy. The day either admission set
+# widens, the gate is already here and that caller passes the kind it already knows.
+#
+# THE COST OF ANSWERING 1 IS ONLY THE EXEMPTION, which is the safe direction the rest of this
+# section is biased towards: an unanchored kind falls through to the caller's existing stall path,
+# i.e. to today's behaviour for every kind. Widen it by CAPTURING a pane of that kind, committing
+# it beside the others, and adding the label below — never by reasoning that a client nobody
+# captured probably renders like the ones that were. That inference is precisely what put the
+# service bullet in the allow-list above, and it had to be taken back out.
+adp_wait_anchored() {
+  case "${1:-}" in claude|codex) return 0 ;; *) return 1 ;; esac
 }

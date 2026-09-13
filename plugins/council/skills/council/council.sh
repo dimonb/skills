@@ -185,7 +185,15 @@ case "$VERB" in
   transcript) . "$SKILL/lib/verbs.sh"; v_transcript ;;
   claims) . "$SKILL/lib/verbs.sh"; v_claims "$@" ;;
   verdict) . "$SKILL/lib/verbs.sh"; v_verdict "$@" ;;
-  status) . "$SKILL/lib/verbs.sh"; v_status ;;
+  # `status` is the only READING verb that needs a terminal. It asks a seat holding the floor too
+  # long WHY, through the two shared modules that already answer that for shipyard — lib/policy.sh
+  # for the disposition and the operator sentence, lib/agent-adapters.sh for what a client renders
+  # and which kinds that read is evidenced for — and lib/term.sh for the capture itself. All three
+  # are sourced here rather than inside v_status so the file stays a set of definitions; the
+  # helpers test `command -v` for each, so a caller that sources only verbs.sh degrades to the
+  # plain stall alarm instead of erroring.
+  status) . "$SKILL/lib/verbs.sh"; . "$SKILL/lib/policy.sh"; . "$SKILL/lib/agent-adapters.sh"
+          . "$SKILL/lib/term.sh"; v_status ;;
   decide) need_me; . "$SKILL/lib/verbs.sh"; . "$SKILL/lib/policy.sh"; v_decide "$@" ;;
   say)    . "$SKILL/lib/up.sh"; council_say "$@" ;;
   relaunch) . "$SKILL/lib/up.sh"; council_relaunch "$@" ;;

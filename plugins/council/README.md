@@ -58,7 +58,14 @@ room. That flag applies only to sessions this skill starts.
 What still stops a room is the **first launch in a directory the agent has not seen**: both
 Codex and Antigravity ask you to trust it, and the blanket flag does not answer that one.
 Until you do, the participant holds the floor and looks, from the room, exactly like a wedged
-session. Answer it once per directory.
+session. Answer it once per directory — **in place**. Relaunching that seat only asks the same
+question again, with everything it has read thrown away.
+
+`council.sh status` will not confuse the two for you, but it no longer guesses either. Before it
+raises `🛑 STALL` it asks the seat's own terminal why it is not moving; a client that announced a
+capacity limit becomes `⏳ WAITING` — leave it, it resumes by itself — and anything unexplained
+stays a `STALL` and pushes one notice into the shared escalation mailbox, so a room that stops
+while nobody is watching says so.
 
 Nothing here edits an agent's settings file for you.
 

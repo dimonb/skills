@@ -343,8 +343,143 @@ v_verdict() {
   case "$v" in decided|unresolved) return 0 ;; stuck) return 2 ;; *) return 1 ;; esac
 }
 
+# --- WHY a seat that holds the floor is not moving ----------------------------------------------
+# THE DEFECT THESE THREE HELPERS CLOSE. `status` could say "the floor has been held for 626s"; it
+# could not say why, so it guessed — "it may be sitting on a permission prompt" — and a supervisor
+# had to go and capture the terminal by hand to find out. The two commonest reasons need OPPOSITE
+# remedies: a seat parked on a capacity limit resumes on its own and must be LEFT ALONE, while a
+# seat on a first-launch trust prompt needs that prompt answered IN PLACE. `council.sh relaunch`
+# is the remedy for neither, and it throws away the seat's reading of the whole argument.
+#
+# NOTHING HERE IS COUNCIL'S OWN KNOWLEDGE, which is why it is three short functions rather than a
+# classifier. Three modules already answer the three parts, and shipyard's stall watchdog asks the
+# same question through the same two of them (`shipyard_wait_state`):
+#   * shared/adapters (`adp_wait_class`) owns what a client RENDERS, and returns a class from the
+#     driver's AgentSignal vocabulary; `adp_wait_anchored` owns whether that read is evidenced for
+#     the kind in question, which matters here and not in shipyard because council admits a wider
+#     set of kinds than the two whose panes have been captured;
+#   * shared/policy (`policy_dispose`) owns what to DO with such a class — `park` is a self-healing
+#     wait — and `policy_park_advice` owns the sentence a person is shown about one.
+# Nothing here re-derives any of that, and in particular nothing here reads a time out of a banner:
+# ESC-03 in the policy module records why that number is always in the past.
+#
+# THE BIAS IS DELIBERATE AND IT IS NOT SHIPYARD'S. A shape this MISSES falls through to the STALL
+# alarm, i.e. to today's behaviour. A shape it matched too LOOSELY would tell a supervisor to leave
+# a genuinely wedged seat alone — so every gate below is a reason to give up rather than a reason
+# to clear, and the one screen-reading step is anchored on client chrome (see agent-adapters.sh,
+# and AGENTS.md for why a substring over a capture is forgeable by an agent whose work IS that
+# predicate — a council seat arguing about this very feature is exactly such an agent).
+
+# _floor_screen <peer> — the seat's visible screen, or nothing and rc 1.
+_floor_screen() {
+  local peer="${1:-}" f pinned=0
+  [ -n "$peer" ] || return 1
+  # A TEST SEAM, and the only one: it replaces the CAPTURE, never the classification or the
+  # disposition below, so a test still exercises the real anchor and the real policy table. It is
+  # read from the environment of whoever runs `status`, which is the supervisor's own process — a
+  # participant cannot reach it, and it can only ever hand this function a screen, which the
+  # chrome anchor then judges exactly as it judges a captured one.
+  if [ -n "${COUNCIL_WAIT_SCREEN_FILE:-}" ] && [ -f "$COUNCIL_WAIT_SCREEN_FILE" ]; then
+    cat "$COUNCIL_WAIT_SCREEN_FILE"; return 0
+  fi
+  # A room with no pinned container was never LAUNCHED by this skill, so it has no terminals to
+  # read and there is nothing to ask. The guard is what keeps `status` from shelling out to a
+  # terminal backend for every room that has none — the test rooms, and a room built by hand.
+  for f in "$ROOM"/state/container-*; do [ -f "$f" ] && pinned=1; done
+  [ "$pinned" = 1 ] || return 1
+  # term.sh is sourced by council.sh only for the verbs that need a terminal. A caller that did
+  # not source it gets no capture rather than an error, the same way v_decide treats policy.sh.
+  command -v ct_capture >/dev/null 2>&1 || return 1
+  ct_capture "$peer" 2>/dev/null
+}
+
+# _floor_wait_state <peer> — "<class><TAB><the line that said so>" and rc 0 when this seat's own
+# client announces a wait that heals itself; nothing and rc 1 for every other answer, including
+# every answer we are not entitled to give.
+_floor_wait_state() {
+  local peer="${1:-}" kind screen ev cls
+  [ -n "$peer" ] || return 1
+  # Both shared modules are sourced by council.sh for this verb. Absent either, give up quietly:
+  # the STALL alarm is unchanged by that, and a supervisor is never told a pass ran that did not.
+  command -v adp_wait_class >/dev/null 2>&1 || return 1
+  command -v adp_wait_anchored >/dev/null 2>&1 || return 1
+  command -v policy_dispose >/dev/null 2>&1 || return 1
+  # The kind comes from the roster, which is where `relaunch` already reads it. `.peers` is absent
+  # in a room built without it (the test helper's rooms, and any room made before `up` wrote the
+  # field), and an unknown kind is unanchored by definition — both end the read here.
+  kind=$(jq -r --arg p "$peer" '.peers[]? | select(.name==$p) | .kind // empty' \
+           "$ROOM/roster.json" 2>/dev/null | head -1)
+  [ -n "$kind" ] || return 1
+  adp_wait_anchored "$kind" || return 1
+  screen=$(_floor_screen "$peer") || return 1
+  [ -n "$screen" ] || return 1
+  ev=$(adp_wait_class "$screen" 2>/dev/null)   # "<class><TAB><the line that said so>", or empty
+  cls=${ev%%	*}
+  ev=${ev#*	}
+  # The emptiness test IS the check: adp_wait_class printing nothing is how it says "no class",
+  # and its own exit status is lost to the command substitution.
+  [ -n "$cls" ] || return 1
+  # Routed through policy rather than tested as a class here, so a class added to the adapter
+  # later arrives with the shared disposition already attached and lands on the STALL path unless
+  # someone deliberately writes an arm for it. `park` is the only self-healing disposition there
+  # is; `compact` and every `escalate` are a person's move and belong in the alarm, not out of it.
+  case "$(policy_dispose "$cls" 2>/dev/null)" in
+    park*) printf '%s\t%s' "$cls" "$ev"; return 0 ;;
+  esac
+  return 1
+}
+
+# _stall_escalate <peer> <turns> <held-seconds> — push one notice into the shared mailbox for a
+# stall nothing explained. Best-effort: it can never fail the status block that called it.
+#
+# THE HALF OF THE ISSUE THE ALARM ABOVE CANNOT DO. `status` is a symptom readout and it requires
+# someone to be looking; a room that stops at 3am stays stopped. This is the same fire-and-forget
+# channel `decide` already uses for a room that closed unresolved (ESC-04), so a council stall
+# surfaces in the one directory shipyard's parent reporter already reads, alongside ship's.
+#
+# It fires ONLY on the unexplained stall, never on a parked seat: a wait that heals itself is not
+# something to wake a person for, and that distinction is policy_dispose's, one level up.
+#
+# LATCHED ON THE FLOOR HOLDER AND THE TURN COUNT, so polling `status` cannot accrue N notices for
+# one stall, while a room that moves and then stalls again notifies afresh. THE RESIDUAL, stated
+# because the latch file lives in a room directory every participant can write: a peer could
+# pre-write it and suppress the REPEAT notice. It cannot suppress the alarm — that is recomputed
+# from the log on every call and printed either way — and this is the same class of exposure as
+# every other peer-writable field in the room (c_floor_held_ms's header enumerates them).
+_stall_escalate() {
+  local peer="${1:-}" turns="${2:-}" held="${3:-}" latch mark room who where
+  command -v policy_escalate >/dev/null 2>&1 || return 0
+  # A closed room's floor is nobody's problem, and `decide` has already escalated the one closure
+  # that needs a person. Only a LIVE room can be stalled.
+  [ -z "$(c_recorded_status)" ] || return 0
+  latch="$ROOM/state/stall-notified"
+  mark="$peer $turns"
+  [ "$(cat "$latch" 2>/dev/null || true)" = "$mark" ] && return 0
+  room=$(basename "$ROOM")
+  # During an open barrier round the caller's `$floor` is a LABEL, not a seat — nobody holds the
+  # floor and the room is waiting on everyone — so the notice must not name it as a participant.
+  # A real seat is named; anything else degrades to the room, and the terminal to look at becomes
+  # every terminal. The label is still a fine latch key: it is stable for as long as the round is.
+  #
+  # Captured and matched rather than piped into `grep -q`, for the reason ship's own guidance gives
+  # about this exact shape: `-q` exits on the first hit, the writer takes a SIGPIPE, and under
+  # `pipefail` the pipeline's status is then the writer's — so a present peer intermittently reads
+  # as absent. Here that would only downgrade the wording, which is precisely the kind of rare,
+  # harmless-looking misreport nobody ever tracks down.
+  local roster; roster=$(c_peers)
+  case $'\n'"$roster"$'\n' in
+    *$'\n'"$peer"$'\n'*) who="$peer"; where="$peer's terminal" ;;
+    *)                   who="the room's floor"; where="every participant's terminal" ;;
+  esac
+  policy_escalate notice "council-$room" \
+    "council room '$room': $who has been held for ${held}s and no client gives a reason — the room has stopped and nothing else will say so" \
+    "turn $turns; go and look at $where. A permission or first-launch trust prompt is answered IN PLACE; council.sh relaunch is only for a seat that is genuinely dead, and it discards everything that seat has read." \
+    >/dev/null 2>&1 || return 0
+  printf '%s' "$mark" > "$latch" 2>/dev/null || true
+}
+
 v_status() {
-  local j verd g t floor held conf room_age alarms="" phase
+  local j verd g t floor held conf room_age alarms="" phase wait_ev
   j=$(v_verdict --json); verd=$(printf '%s' "$j" | jq -r '.verdict // empty' 2>/dev/null)
   # Which phase of the turn cycle the room is in, from the declared flow graph via the shared
   # guard (c_phase -> flow_phase over lib/room-graph.sh). This is the supervisor's "where is this
@@ -430,8 +565,24 @@ v_status() {
   if [ "$held" -gt "${COUNCIL_STALL_SECS:-900}" ]; then
     if [ -n "$room_age" ] && [ "$held" -gt "$room_age" ]; then
       alarms="$alarms 🛑 STALL: the floor has been held for ${held}s, which is longer than this room has existed (${room_age}s) — one seat's clock is wrong, so check every terminal rather than trusting the figure"
+    elif wait_ev=$(_floor_wait_state "$floor"); then
+      # The seat's own client said why it cannot move, and policy says the wait heals itself. This
+      # REPLACES the STALL line rather than joining it: two alarms about one seat, one saying leave
+      # it alone and one saying go and look, is the pair an operator learns to ignore. The class
+      # and the deciding line are both printed, so the verdict can be checked rather than trusted —
+      # which matters most for the case the adapter's staleness rule cannot fully rule out, a
+      # banner that is live by its test and that the operator can see is old.
+      #
+      # Deliberately NOT reached from the clock-wrong branch above: there `held` is not a
+      # trustworthy number, so nothing about that seat should be concluded from it, and the
+      # threshold-first ordering that branch's header insists on stays exactly as it was.
+      alarms="$alarms ⏳ WAITING: $floor has held the floor for ${held}s and its own client says why — ${wait_ev%%	*}: $(policy_park_advice) Do NOT relaunch this seat; relaunching is the remedy for a wedge, and it would discard its reading of the whole argument to cure a wait that clears itself. Evidence: ${wait_ev#*	}"
     else
-      alarms="$alarms 🛑 STALL: $floor has held the floor for ${held}s — check its terminal, it may be sitting on a permission prompt"
+      # Nothing explained it. The alarm no longer GUESSES a cause — the guess it used to make was
+      # right often enough to be believed and wrong often enough to cost a seat, because the two
+      # likeliest causes need opposite remedies and only one of them is `relaunch`.
+      alarms="$alarms 🛑 STALL: $floor has held the floor for ${held}s and nothing on its terminal says why — go and look at it. A seat sitting on a permission or first-launch trust prompt needs that prompt ANSWERED IN PLACE; council.sh relaunch is only for a seat that is genuinely dead, and it discards everything that seat has read."
+      _stall_escalate "$floor" "$t" "$held"
     fi
   fi
   printf 'alarms:%s\n' "${alarms:- —}"

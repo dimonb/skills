@@ -140,8 +140,12 @@ shipyard_wait_state() {
     park*)
       shown="$cls"
       [ "$cls" = rate_limited ] && shown=rate-limited
+      # The sentence about the wait ITSELF is policy's (policy_park_advice) — council's room alarm
+      # has to tell an operator the same thing, and one rule said twice drifts. What stays here is
+      # shipyard's own remedy clause: compaction is the wrong move for a child that is merely
+      # parked, and refusing it is the property t13 asserts over every action line this file emits.
       printf 'wait\t%s\t⏳ %s\t%s' "$cls" "$shown" \
-        "a stated, self-healing wait — it resumes on its own. Do not nudge and do NOT compact. The banner states when the window RAN OUT, not when it resumes, so re-probe the agent's own usage view if you need a time. Evidence: ${ev}"
+        "$(policy_park_advice) Do not nudge and do NOT compact. Evidence: ${ev}"
       return 0 ;;
   esac
   # Every OTHER disposition is deliberately unanswered here, and the list is not hypothetical:

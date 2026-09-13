@@ -487,7 +487,9 @@ rule above is about agents that ask per file.
 trust-this-directory prompt** — the blanket flag does not answer that one — and until it is
 answered the participant holds the floor while looking, from the room, exactly like a wedged
 session. `up` prints the caveat for each adapter; `status` flags a long-held floor. Answer it
-once per directory.
+once per directory — **in place**, never with `relaunch`, which would only produce the same
+prompt again with the seat's reading of the argument thrown away. `status`'s `STALL` line says
+so, because this is the distinction it used to guess at.
 
 `codex queue --thread` looks like a native way to wake a busy Codex participant. It is
 not: it accepts the message, prints `Queued message …`, returns 0 — and delivered it
@@ -568,6 +570,36 @@ should be believed; the diagnostic on stderr says what could not be read, and
 `council.sh decision` still prints the record if the room had already closed).
 A `STALL` whose held time is longer than the room has existed says so in the same alarm: one
 seat's clock is wrong, so the figure cannot be trusted even though the stall is real.
+
+**`STALL` and `WAITING` are different things and need opposite moves.** Before raising `STALL`,
+`status` asks the floor holder's own terminal *why* it is not moving, through the shared modules
+shipyard's stall watchdog already uses: `adp_wait_class` (`shared/adapters`) reads the class the
+client itself announced, and `policy_dispose` (`shared/policy`) says what that class means.
+
+* **`⏳ WAITING`** — the seat's client announced a capacity limit and policy says the wait heals
+  itself. It resumes on its own; **do not relaunch it**, which would throw away its reading of the
+  whole argument to cure something that clears by itself. The class and the exact line that bought
+  the exemption are both printed, so the verdict can be checked rather than taken on trust.
+* **`🛑 STALL`** — nothing on the terminal explained it, which is the only case that is an
+  emergency. Go and look at the seat. A permission or first-launch trust prompt is answered **in
+  place**; `council.sh relaunch` is for a seat that is genuinely dead, and it discards everything
+  that seat has read. The alarm no longer guesses between the two.
+
+Only `STALL` **pushes**. It writes one `notice` into the shared escalation mailbox — the same
+fire-and-forget channel an `unresolved` close uses (`.git/ship-escalations/`, which shipyard's
+parent reporter already reads), so a room that stops at 3am says so instead of waiting to be
+polled. It is latched on the floor holder and the turn count, so polling `status` cannot accrue
+duplicates while a room that moves and stalls again notifies afresh.
+
+**The screen read is gated on the agent kind, and answers "no" for most of them.** The anchor that
+makes a banner trustworthy — it is the client's chrome, in column one, where the agent's own words
+cannot reach — is a measured property of the two clients this repo has committed pane captures of.
+A kind with no captured pane gets **no exemption**: it falls through to `STALL`, which is what
+every kind did before. Widening that list means capturing a pane of the kind and committing it
+(`shared/adapters/tests/fixtures/`), never reasoning that a client probably renders like its
+neighbours. The bias is deliberate and it is the one this repo's law asks for: a missed exemption
+costs an extra look at a healthy seat, while a wrong one tells a supervisor to leave a dead room
+alone.
 It exits **0 when the room is finished** and 1 while it is open — with one caveat
 worth knowing: a room whose
 turn budget ran out reports `unresolved` and exits 0 before anyone has written a record, so
