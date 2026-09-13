@@ -571,36 +571,59 @@ should be believed; the diagnostic on stderr says what could not be read, and
 A `STALL` whose held time is longer than the room has existed says so in the same alarm: one
 seat's clock is wrong, so the figure cannot be trusted even though the stall is real.
 
-**`STALL` and `WAITING` are different things and need opposite moves.** Before raising `STALL`,
-`status` asks the floor holder's own terminal *why* it is not moving, through the shared modules
-shipyard's stall watchdog already uses: `adp_wait_class` (`shared/adapters`) reads the class the
-client itself announced, and `policy_dispose` (`shared/policy`) says what that class means.
+**A `STALL` says which remedy goes with which cause, and quotes the terminal where it can.** The
+alarm used to guess — *"it may be sitting on a permission prompt"* — and the guess mattered because
+the two likeliest causes need opposite moves: a seat on a permission or first-launch trust prompt
+needs that prompt answered **in place**, while `council.sh relaunch` is for a seat that is
+genuinely dead and discards everything that seat has read. The alarm now names both and guesses
+between neither.
 
-* **`⏳ WAITING`** — the seat's client announced a capacity limit and policy says the wait heals
-  itself. It resumes on its own; **do not relaunch it**, which would throw away its reading of the
-  whole argument to cure something that clears by itself. The class and the exact line that bought
-  the exemption are both printed, so the verdict can be checked rather than taken on trust.
-* **`🛑 STALL`** — nothing on the terminal explained it, which is the only case that is an
-  emergency. Go and look at the seat. A permission or first-launch trust prompt is answered **in
-  place**; `council.sh relaunch` is for a seat that is genuinely dead, and it discards everything
-  that seat has read. The alarm no longer guesses between the two.
+Where it can, it adds a second sentence quoting the seat's own client, read through the shared
+modules shipyard's stall watchdog already uses: `adp_wait_class` (`shared/adapters`) for the class
+the client announced, `policy_dispose` (`shared/policy`) for what that class means. Today the one
+shape it recognises is an announced **capacity limit**, so the annotation reads *"its pane carries
+a live `rate_limited` banner … if that banner is current the seat resumes by itself, so check the
+terminal before relaunching"*, with the matched line printed as evidence.
 
-Only `STALL` **pushes**. It writes one `notice` into the shared escalation mailbox — the same
-fire-and-forget channel an `unresolved` close uses (`.git/ship-escalations/`, which shipyard's
-parent reporter already reads), so a room that stops at 3am says so instead of waiting to be
-polled. It is latched on the floor holder and the turn count, so polling `status` cannot accrue
-duplicates while a room that moves and stalls again notifies afresh.
+> **That sentence can never remove the alarm, and that is deliberate.** Everything the read keys on
+> — the roster's `kind`, the container pin, the pane itself — lives inside the room directory,
+> which is the participant's own writable root (#40). So the rule is: **untrusted evidence may
+> annotate an alarm, never suppress it.** A peer-writable value that changes how a line reads is
+> fine; one that decides whether the line appears is not. An alarm a participant can silence is
+> worse than no alarm, because the supervisor stops looking. The same rule already governs the
+> clock-wrong wording above, for the same reason.
 
-**The screen read is gated on the agent kind, and answers "no" for most of them.** The anchor that
-makes a banner trustworthy — it is the client's chrome, in column one, where the agent's own words
-cannot reach — is a measured property of the two clients this repo has committed pane captures of.
-A kind with no captured pane gets **no exemption**: it falls through to `STALL`, which is what
-every kind did before. Widening that list means capturing a pane of the kind and committing it
+A `STALL` also **pushes**: one `notice` into the shared escalation mailbox — the same
+fire-and-forget channel an `unresolved` close uses (`.git/ship-escalations/`, which a shipyard
+parent's escalation monitor already polls). What that buys is durability and audience: the alarm
+stops being a line in a console someone has to be reading, and reaches a supervisor who never
+looked at this room. **It does not make the room self-reporting** — something still has to run
+`council.sh status`, and nothing in this repo does so unattended (#21). Until it does, that
+something is you:
+
+```bash
+while true; do council.sh status --room <name> >/dev/null 2>&1; sleep 300; done &
+```
+
+The push is latched on the floor holder and the turn count, so polling does not accrue duplicates
+while a room that moves and stalls again notifies afresh. The latch lives in the mailbox, not in
+the room, because a latch inside the room could be pre-written by the very seat the notice is
+about.
+
+This makes `status` the one *reading* verb that also writes: on a stalled room it appends to the
+mailbox and its latch. Participants are told they may read the room with `status`, so a seat that
+does so on a stalled room will push that notice — which is true and harmless, but worth knowing
+before you wonder who wrote it.
+
+**The annotation is gated on the agent kind, and answers "no" for most of them.** The anchor that
+makes a banner the client's own — column one, where the agent's words cannot reach — is a measured
+property of the two clients this repo has committed pane captures of. A kind with no captured pane
+gets **no annotation**: `status` does not print a claim about a client whose chrome nobody has
+looked at. Widening that list means capturing a pane of the kind and committing it
 (`shared/adapters/tests/fixtures/`), never reasoning that a client probably renders like its
-neighbours. The bias is deliberate and it is the one this repo's law asks for: a missed exemption
-costs an extra look at a healthy seat, while a wrong one tells a supervisor to leave a dead room
-alone.
-It exits **0 when the room is finished** and 1 while it is open — with one caveat
+neighbours.
+
+`status` exits **0 when the room is finished** and 1 while it is open — with one caveat
 worth knowing: a room whose
 turn budget ran out reports `unresolved` and exits 0 before anyone has written a record, so
 `council.sh decision` (exit 0 only with a record) is the signal to trust when you need to know

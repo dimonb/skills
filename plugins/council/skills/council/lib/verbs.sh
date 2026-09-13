@@ -344,16 +344,41 @@ v_verdict() {
 }
 
 # --- WHY a seat that holds the floor is not moving ----------------------------------------------
-# THE DEFECT THESE THREE HELPERS CLOSE. `status` could say "the floor has been held for 626s"; it
-# could not say why, so it guessed — "it may be sitting on a permission prompt" — and a supervisor
-# had to go and capture the terminal by hand to find out. The two commonest reasons need OPPOSITE
-# remedies: a seat parked on a capacity limit resumes on its own and must be LEFT ALONE, while a
-# seat on a first-launch trust prompt needs that prompt answered IN PLACE. `council.sh relaunch`
-# is the remedy for neither, and it throws away the seat's reading of the whole argument.
+# THE DEFECT THESE HELPERS CLOSE. `status` could say "the floor has been held for 626s"; it could
+# not say why, so it guessed — "it may be sitting on a permission prompt" — and a supervisor had to
+# go and capture the terminal by hand to find out. The guess mattered because the two commonest
+# causes need OPPOSITE remedies: a seat parked on a capacity limit resumes on its own, while a seat
+# on a first-launch trust prompt needs that prompt answered IN PLACE. `council.sh relaunch` is the
+# remedy for neither, and it throws away the seat's reading of the whole argument.
 #
-# NOTHING HERE IS COUNCIL'S OWN KNOWLEDGE, which is why it is three short functions rather than a
-# classifier. Three modules already answer the three parts, and shipyard's stall watchdog asks the
-# same question through the same two of them (`shipyard_wait_state`):
+# THE RULE THAT SHAPES ALL OF IT, and the one to keep if everything else here is rewritten:
+#
+#   UNTRUSTED EVIDENCE MAY ANNOTATE AN ALARM, NEVER SUPPRESS IT.
+#
+# A peer-writable value that changes how a line READS is fine; one that decides whether the line
+# APPEARS is not. That is the difference between informing a supervisor and being trusted by one.
+# An alarm a participant can silence is strictly worse than no alarm, because the supervisor stops
+# looking — so the screen read below adds a sentence to the STALL alarm and can never remove it,
+# and the mailbox push fires on exactly the condition it fired on before any of this was read.
+#
+# THE PRECEDENT IS IN THIS FILE ALREADY: the `created_ms` paragraph in v_status says the same thing
+# for the clock-wrong wording — the alarm fires on the condition it always did, and the untrusted
+# value can only change how it reads. This is that rule applied to a second untrusted input.
+#
+# WHY IT HAD TO BE THIS WAY ROUND, stated as what was actually checked rather than as a claim about
+# every possible design. An earlier draft let a recognised capacity banner REPLACE the alarm. Every
+# fact that draft keyed on turns out to sit inside the room directory, which is the participant's
+# own writable root (#40): the roster's `.peers[].kind`, the container pin under `state/`, the
+# launcher script, and the pane itself, whose selection follows the pin. A record written outside
+# the room at launch would not be peer-writable, but that is `up.sh`'s to write. NOT CHECKED:
+# whether either terminal backend can attest a session's identity in a way a participant cannot
+# forge — so this is not a claim that no unforgeable anchor exists, only that none of the four this
+# code can reach today is one. The annotation needs no such anchor, which is why it is the
+# annotation that shipped.
+#
+# NOTHING HERE IS COUNCIL'S OWN KNOWLEDGE. Three modules already answer the three parts, and
+# shipyard's stall watchdog asks the same question through the same two of them
+# (`shipyard_wait_state`):
 #   * shared/adapters (`adp_wait_class`) owns what a client RENDERS, and returns a class from the
 #     driver's AgentSignal vocabulary; `adp_wait_anchored` owns whether that read is evidenced for
 #     the kind in question, which matters here and not in shipyard because council admits a wider
@@ -363,39 +388,54 @@ v_verdict() {
 # Nothing here re-derives any of that, and in particular nothing here reads a time out of a banner:
 # ESC-03 in the policy module records why that number is always in the past.
 #
-# THE BIAS IS DELIBERATE AND IT IS NOT SHIPYARD'S. A shape this MISSES falls through to the STALL
-# alarm, i.e. to today's behaviour. A shape it matched too LOOSELY would tell a supervisor to leave
-# a genuinely wedged seat alone — so every gate below is a reason to give up rather than a reason
-# to clear, and the one screen-reading step is anchored on client chrome (see agent-adapters.sh,
-# and AGENTS.md for why a substring over a capture is forgeable by an agent whose work IS that
-# predicate — a council seat arguing about this very feature is exactly such an agent).
+# WHAT THE GATES ARE FOR, now that none of them can clear an alarm: they keep `status` from
+# PRINTING a claim it has no standing to make. An unanchored kind gets no sentence rather than a
+# sentence about a client whose chrome nobody has captured. The screen read itself is anchored on
+# client chrome (see agent-adapters.sh, and AGENTS.md for why a substring over a capture is
+# forgeable by an agent whose work IS that predicate — a council seat arguing about this very
+# feature is exactly such an agent).
 
 # _floor_screen <peer> — the seat's visible screen, or nothing and rc 1.
 _floor_screen() {
   local peer="${1:-}" f pinned=0
   [ -n "$peer" ] || return 1
-  # A TEST SEAM, and the only one: it replaces the CAPTURE, never the classification or the
-  # disposition below, so a test still exercises the real anchor and the real policy table. It is
-  # read from the environment of whoever runs `status`, which is the supervisor's own process — a
-  # participant cannot reach it, and it can only ever hand this function a screen, which the
-  # chrome anchor then judges exactly as it judges a captured one.
+  # A TEST SEAM: it replaces the CAPTURE, never the classification or the disposition below, so a
+  # test still exercises the real anchor and the real policy table. It is read from the environment
+  # of whichever process runs `status` — usually the supervisor's, but `status` takes no `need_me`
+  # and participants are told they may read the room with it, so a seat running `status` controls
+  # this for ITS OWN invocation. That buys nothing worth having: the result can only ANNOTATE an
+  # alarm, and a seat can already put whatever it likes on its own pane.
   if [ -n "${COUNCIL_WAIT_SCREEN_FILE:-}" ] && [ -f "$COUNCIL_WAIT_SCREEN_FILE" ]; then
     cat "$COUNCIL_WAIT_SCREEN_FILE"; return 0
   fi
   # A room with no pinned container was never LAUNCHED by this skill, so it has no terminals to
-  # read and there is nothing to ask. The guard is what keeps `status` from shelling out to a
-  # terminal backend for every room that has none — the test rooms, and a room built by hand.
+  # read and there is nothing to ask. What the guard saves is the pane CAPTURE — the backend's
+  # tree/list call and its read — for the rooms that have none: the test rooms, and a room built by
+  # hand. It does not save the backend RESOLUTION, which happens once when term.sh is sourced; the
+  # source is therefore deferred to here, after the guard, so a room with no pin costs neither.
   for f in "$ROOM"/state/container-*; do [ -f "$f" ] && pinned=1; done
   [ "$pinned" = 1 ] || return 1
-  # term.sh is sourced by council.sh only for the verbs that need a terminal. A caller that did
-  # not source it gets no capture rather than an error, the same way v_decide treats policy.sh.
-  command -v ct_capture >/dev/null 2>&1 || return 1
+  # Sourced on demand, once. Definitions made by a source inside a function are global, so the
+  # `command -v` above is also the guard against sourcing twice. A caller with no $SKILL, or a
+  # term.sh that will not load, gets no capture rather than an error — the same way v_decide
+  # treats policy.sh.
+  if ! command -v ct_capture >/dev/null 2>&1; then
+    [ -n "${SKILL:-}" ] && [ -f "$SKILL/lib/term.sh" ] || return 1
+    . "$SKILL/lib/term.sh" || return 1
+    command -v ct_capture >/dev/null 2>&1 || return 1
+  fi
   ct_capture "$peer" 2>/dev/null
 }
 
 # _floor_wait_state <peer> — "<class><TAB><the line that said so>" and rc 0 when this seat's own
 # client announces a wait that heals itself; nothing and rc 1 for every other answer, including
 # every answer we are not entitled to give.
+#
+# ITS RESULT IS EVIDENCE, NOT A VERDICT. Every input it reads is peer-writable (the header above
+# enumerates them), so the caller may quote it and must not act on it: it adds a sentence to the
+# STALL alarm and decides nothing about whether that alarm, or its push, happens. Keep it that way
+# round — the moment a caller branches the alarm on this, a seat can silence the supervisor's alarm
+# about itself, which is worse than the blindness this whole block exists to fix.
 _floor_wait_state() {
   local peer="${1:-}" kind screen ev cls
   [ -n "$peer" ] || return 1
@@ -429,33 +469,43 @@ _floor_wait_state() {
   return 1
 }
 
-# _stall_escalate <peer> <turns> <held-seconds> — push one notice into the shared mailbox for a
-# stall nothing explained. Best-effort: it can never fail the status block that called it.
+# _stall_escalate <peer> <turns> <held-seconds> [annotation] — push one notice into the shared
+# mailbox for a stalled room. Best-effort: it can never fail the status block that called it.
 #
-# THE HALF OF THE ISSUE THE ALARM ABOVE CANNOT DO. `status` is a symptom readout and it requires
-# someone to be looking; a room that stops at 3am stays stopped. This is the same fire-and-forget
-# channel `decide` already uses for a room that closed unresolved (ESC-04), so a council stall
-# surfaces in the one directory shipyard's parent reporter already reads, alongside ship's.
+# WHAT IT ADDS THAT THE PRINTED ALARM CANNOT. `status` writes to a console someone has to be
+# reading. This is the same fire-and-forget channel `decide` already uses for a room that closed
+# unresolved (ESC-04), so a council stall lands in the one directory a shipyard parent's escalation
+# monitor already polls, alongside ship's — which means the person who sees it need not be the one
+# who ran `status`. It does NOT make the room self-reporting: something still has to invoke
+# `council.sh status`, and nothing in this repo does so unattended (#21 is that gap). SKILL.md
+# documents a watch loop for an operator who wants one; until #21 has an answer, that loop is the
+# trigger.
 #
-# It fires ONLY on the unexplained stall, never on a parked seat: a wait that heals itself is not
-# something to wake a person for, and that distinction is policy_dispose's, one level up.
+# IT FIRES ON THE SAME CONDITION THE ALARM DOES, explained or not. An earlier draft pushed only for
+# an unexplained stall, which made a peer-writable value decide whether a person was woken — the
+# suppression the block header forbids. What the classification changes is the notice's WORDING,
+# never its existence.
 #
-# LATCHED ON THE FLOOR HOLDER AND THE TURN COUNT, so polling `status` cannot accrue N notices for
-# one stall, while a room that moves and then stalls again notifies afresh. THE RESIDUAL, stated
-# because the latch file lives in a room directory every participant can write: a peer could
-# pre-write it and suppress the REPEAT notice. It cannot suppress the alarm — that is recomputed
-# from the log on every call and printed either way — and this is the same class of exposure as
-# every other peer-writable field in the room (c_floor_held_ms's header enumerates them).
+# LATCHED ON THE FLOOR HOLDER AND THE TURN COUNT, so polling `status` does not accrue N notices for
+# one stall, while a room that moves and then stalls again notifies afresh. THE LATCH LIVES IN THE
+# MAILBOX, not in the room: the room directory is the participant's own writable root (#40), so a
+# latch there could be pre-written by the seat the notice is about, and that is this function's
+# version of silencing the alarm. The mailbox is outside every participant's granted directory.
+# Residual, since the latch is a file like any other: a caller whose mailbox cannot be written at
+# all pushes nothing, and one whose latch write fails re-notifies on the next poll — noisy rather
+# than silent, which is the direction to fail in.
 _stall_escalate() {
-  local peer="${1:-}" turns="${2:-}" held="${3:-}" latch mark room who where
+  local peer="${1:-}" turns="${2:-}" held="${3:-}" note="${4:-}" latch mark room who where mb
   command -v policy_escalate >/dev/null 2>&1 || return 0
+  command -v policy_mailbox_dir >/dev/null 2>&1 || return 0
   # A closed room's floor is nobody's problem, and `decide` has already escalated the one closure
   # that needs a person. Only a LIVE room can be stalled.
   [ -z "$(c_recorded_status)" ] || return 0
-  latch="$ROOM/state/stall-notified"
+  mb=$(policy_mailbox_dir) || return 0
+  room=$(basename "$ROOM")
+  latch="$mb/.council-$room.stall-latch"
   mark="$peer $turns"
   [ "$(cat "$latch" 2>/dev/null || true)" = "$mark" ] && return 0
-  room=$(basename "$ROOM")
   # During an open barrier round the caller's `$floor` is a LABEL, not a seat — nobody holds the
   # floor and the room is waiting on everyone — so the notice must not name it as a participant.
   # A real seat is named; anything else degrades to the room, and the terminal to look at becomes
@@ -471,15 +521,20 @@ _stall_escalate() {
     *$'\n'"$peer"$'\n'*) who="$peer"; where="$peer's terminal" ;;
     *)                   who="the room's floor"; where="every participant's terminal" ;;
   esac
+  # `[ -n "$peer" ]` first: with no floor holder AND an unreadable roster both sides of the `case`
+  # subject are empty, which MATCHES the member pattern and named an empty seat in the notice
+  # ("  has been held for 7200s"). An unnamed floor is exactly the input the fallback is for.
+  [ -n "$peer" ] || { who="the room's floor"; where="every participant's terminal"; }
+  mkdir -p "$mb" 2>/dev/null || true
   policy_escalate notice "council-$room" \
-    "council room '$room': $who has been held for ${held}s and no client gives a reason — the room has stopped and nothing else will say so" \
-    "turn $turns; go and look at $where. A permission or first-launch trust prompt is answered IN PLACE; council.sh relaunch is only for a seat that is genuinely dead, and it discards everything that seat has read." \
+    "council room '$room': $who has been held for ${held}s — the room has stopped" \
+    "turn $turns; go and look at $where. ${note:+$note }A permission or first-launch trust prompt is answered IN PLACE; council.sh relaunch is only for a seat that is genuinely dead, and it discards everything that seat has read." \
     >/dev/null 2>&1 || return 0
   printf '%s' "$mark" > "$latch" 2>/dev/null || true
 }
 
 v_status() {
-  local j verd g t floor held conf room_age alarms="" phase wait_ev
+  local j verd g t floor held conf room_age alarms="" phase wait_ev="" wait_note=""
   j=$(v_verdict --json); verd=$(printf '%s' "$j" | jq -r '.verdict // empty' 2>/dev/null)
   # Which phase of the turn cycle the room is in, from the declared flow graph via the shared
   # guard (c_phase -> flow_phase over lib/room-graph.sh). This is the supervisor's "where is this
@@ -565,24 +620,30 @@ v_status() {
   if [ "$held" -gt "${COUNCIL_STALL_SECS:-900}" ]; then
     if [ -n "$room_age" ] && [ "$held" -gt "$room_age" ]; then
       alarms="$alarms 🛑 STALL: the floor has been held for ${held}s, which is longer than this room has existed (${room_age}s) — one seat's clock is wrong, so check every terminal rather than trusting the figure"
-    elif wait_ev=$(_floor_wait_state "$floor"); then
-      # The seat's own client said why it cannot move, and policy says the wait heals itself. This
-      # REPLACES the STALL line rather than joining it: two alarms about one seat, one saying leave
-      # it alone and one saying go and look, is the pair an operator learns to ignore. The class
-      # and the deciding line are both printed, so the verdict can be checked rather than trusted —
-      # which matters most for the case the adapter's staleness rule cannot fully rule out, a
-      # banner that is live by its test and that the operator can see is old.
-      #
-      # Deliberately NOT reached from the clock-wrong branch above: there `held` is not a
-      # trustworthy number, so nothing about that seat should be concluded from it, and the
-      # threshold-first ordering that branch's header insists on stays exactly as it was.
-      alarms="$alarms ⏳ WAITING: $floor has held the floor for ${held}s and its own client says why — ${wait_ev%%	*}: $(policy_park_advice) Do NOT relaunch this seat; relaunching is the remedy for a wedge, and it would discard its reading of the whole argument to cure a wait that clears itself. Evidence: ${wait_ev#*	}"
     else
-      # Nothing explained it. The alarm no longer GUESSES a cause — the guess it used to make was
-      # right often enough to be believed and wrong often enough to cost a seat, because the two
-      # likeliest causes need opposite remedies and only one of them is `relaunch`.
-      alarms="$alarms 🛑 STALL: $floor has held the floor for ${held}s and nothing on its terminal says why — go and look at it. A seat sitting on a permission or first-launch trust prompt needs that prompt ANSWERED IN PLACE; council.sh relaunch is only for a seat that is genuinely dead, and it discards everything that seat has read."
-      _stall_escalate "$floor" "$t" "$held"
+      # ONE alarm, on exactly the condition it always fired on, and then — where the seat's own
+      # client announced something this check recognises — one more sentence QUOTING that. The
+      # annotation never gates the alarm or the push (the header of _floor_wait_state says why),
+      # so a seat cannot talk its way out of being noticed; the most it can do is change what the
+      # supervisor reads before going to look, which is what `created_ms` can already do to the
+      # clock wording below.
+      #
+      # The alarm no longer GUESSES a cause. The guess it used to make ("it may be sitting on a
+      # permission prompt") was right often enough to be believed and wrong often enough to cost a
+      # seat, because the two likeliest causes need opposite remedies and only one of them is
+      # `relaunch`. It now names both remedies and says which case each belongs to.
+      #
+      # "nothing this check recognises" rather than "nothing on its terminal": the only shape this
+      # recognises is an announced capacity wait, so on the commonest wedge the terminal says
+      # exactly why and this code cannot read it. Saying otherwise would tell a supervisor
+      # something untrue about the pane it is about to look at.
+      wait_ev=$(_floor_wait_state "$floor") || wait_ev=""
+      alarms="$alarms 🛑 STALL: $floor has held the floor for ${held}s and nothing this check recognises explains it — go and look at it. A seat sitting on a permission or first-launch trust prompt needs that prompt ANSWERED IN PLACE; council.sh relaunch is only for a seat that is genuinely dead, and it discards everything that seat has read."
+      if [ -n "$wait_ev" ]; then
+        wait_note="⏳ its pane carries a live ${wait_ev%%	*} banner: $(policy_park_advice) If that banner is current the seat resumes by itself, so check the terminal before relaunching — this is a quote from a pane, not a verdict. Evidence: ${wait_ev#*	}"
+        alarms="$alarms $wait_note"
+      fi
+      _stall_escalate "$floor" "$t" "$held" "$wait_note"
     fi
   fi
   printf 'alarms:%s\n' "${alarms:- —}"

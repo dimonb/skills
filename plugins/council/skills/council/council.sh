@@ -185,15 +185,17 @@ case "$VERB" in
   transcript) . "$SKILL/lib/verbs.sh"; v_transcript ;;
   claims) . "$SKILL/lib/verbs.sh"; v_claims "$@" ;;
   verdict) . "$SKILL/lib/verbs.sh"; v_verdict "$@" ;;
-  # `status` is the only READING verb that needs a terminal. It asks a seat holding the floor too
-  # long WHY, through the two shared modules that already answer that for shipyard — lib/policy.sh
-  # for the disposition and the operator sentence, lib/agent-adapters.sh for what a client renders
-  # and which kinds that read is evidenced for — and lib/term.sh for the capture itself. All three
-  # are sourced here rather than inside v_status so the file stays a set of definitions; the
-  # helpers test `command -v` for each, so a caller that sources only verbs.sh degrades to the
-  # plain stall alarm instead of erroring.
+  # `status` is a reading verb that also WRITES on one path: a floor held past the stall threshold
+  # pushes a latched notice into the shared escalation mailbox (see _stall_escalate). It also asks
+  # such a seat's terminal why it is not moving, through the two shared modules that already answer
+  # that for shipyard — lib/policy.sh for the disposition, the operator sentence and the mailbox,
+  # lib/agent-adapters.sh for what a client renders and which kinds that read is evidenced for.
+  # lib/term.sh, the capture itself, is NOT sourced here: _floor_screen sources it on demand, after
+  # the guard that skips rooms with no terminals, because sourcing it resolves a terminal backend
+  # and every `status` would otherwise pay for that. The helpers test `command -v` for each, so a
+  # caller that sources only verbs.sh degrades to the plain stall alarm instead of erroring.
   status) . "$SKILL/lib/verbs.sh"; . "$SKILL/lib/policy.sh"; . "$SKILL/lib/agent-adapters.sh"
-          . "$SKILL/lib/term.sh"; v_status ;;
+          v_status ;;
   decide) need_me; . "$SKILL/lib/verbs.sh"; . "$SKILL/lib/policy.sh"; v_decide "$@" ;;
   say)    . "$SKILL/lib/up.sh"; council_say "$@" ;;
   relaunch) . "$SKILL/lib/up.sh"; council_relaunch "$@" ;;

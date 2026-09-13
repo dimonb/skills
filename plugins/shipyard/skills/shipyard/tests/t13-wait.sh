@@ -82,6 +82,15 @@ ok "a usage limit is a self-healing wait" "wait/rate_limited/⏳ rate-limited" \
    "$(state3 "$LIMIT" in-review impl-review)"
 ok "model-at-capacity is a self-healing wait" "wait/overloaded/⏳ overloaded" \
    "$(state3 "$CAP" in-review apply)"
+# The two things the action line must TELL a person about a park, both of them ESC-03's and both
+# now coming from `policy_park_advice` in shared/policy rather than from a literal here. Asserted
+# because the call site was otherwise pinned by nothing: the checks below are satisfied by the
+# clause this file still owns ("Do NOT compact"), so dropping `$(policy_park_advice)` from that
+# printf left the row with no explanation at all and every suite green.
+ok "a park says the wait heals itself" 1 \
+   "$(action "$LIMIT" in-review impl-review | grep -c 'self-healing')"
+ok "...and that the banner's time is in the past" 1 \
+   "$(action "$LIMIT" in-review impl-review | grep -c 'RAN OUT')"
 # TWO SCREEN-READ STATES, NOT FIVE. An earlier version also claimed a transport fault ("the turn
 # died, nudge it"), which read well and rested on nothing — no capture shows which glyph a client
 # renders that behind. An exemption that cannot be evidenced is worth less than not having it, so it

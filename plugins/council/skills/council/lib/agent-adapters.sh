@@ -640,27 +640,32 @@ adp_wait_class() {
 # admission set is exactly the kinds the anchor was derived from, and unsound for one whose set is
 # wider — which is the case the moment a caller admits a kind nobody has captured a pane of.
 #
-# THE ALLOW-LIST ABOVE RESTS ON A MEASURED PROPERTY OF TWO CLIENTS, and only two:
-# fixtures/pane-claude-running.txt and fixtures/pane-codex-running.txt show each putting its own
-# prose behind a DIFFERENT column-one glyph, which is what makes column one behind the warning
-# glyph unreachable by the agent. fixtures/panes.notes lists every capture this repo holds; no
-# third kind has one. For a kind with no captured pane we do not know where its client puts the
-# agent's own words, and "nobody has looked" is not evidence of a fence — it is the absence of one.
+# THE ALLOW-LIST ABOVE RESTS ON CAPTURES OF TWO CLIENTS, and only two. Said precisely, because the
+# two captures do not show the same thing: fixtures/pane-claude-running.txt shows that client
+# putting its own ASSISTANT PROSE behind a column-one glyph of its own, with continuations
+# indented; fixtures/pane-codex-running.txt shows the other client's column-one SERVICE line and
+# no assistant turn at all, so for that kind the capture evidences the client's glyph rather than
+# where the agent's words land. fixtures/panes.notes lists every capture this repo holds; no third
+# kind has one. For a kind with no captured pane we do not know where its client puts anything, and
+# "nobody has looked" is not evidence of a fence — it is the absence of one.
 #
 # It lives HERE because it is the per-kind half of the same question the allow-list answers: which
 # client renders what is this module's knowledge, not a supervisor's.
 #
 # THE CALLER THAT NEEDS IT TODAY IS THE ONE WITH THE WIDER SET, and that is a seam worth naming
-# rather than plumbing. council admits every kind `adp_kinds` lists, so it gates on this before
-# letting a banner clear its own room alarm. shipyard's admission set (`shipyard_agent_kinds`) is
-# exactly the two evidenced kinds, so the gate would change nothing there today — and making
-# `shipyard_wait_state` carry a kind it does not currently hold, to reach a call whose answer is
-# always 0, is the plumbing this repo's law tells you not to buy. The day either admission set
-# widens, the gate is already here and that caller passes the kind it already knows.
+# rather than plumbing. council admits every kind `adp_kinds` lists, so it asks this before
+# PRINTING a sentence about what a client's chrome means. shipyard's admission set
+# (`shipyard_agent_kinds`) is exactly the two evidenced kinds, so the gate would change nothing
+# there today — and making `shipyard_wait_state` carry a kind it does not currently hold, to reach
+# a call whose answer is always 0, is the plumbing this repo's law tells you not to buy. The day
+# either admission set widens, the gate is already here and that caller passes the kind it knows.
 #
-# THE COST OF ANSWERING 1 IS ONLY THE EXEMPTION, which is the safe direction the rest of this
-# section is biased towards: an unanchored kind falls through to the caller's existing stall path,
-# i.e. to today's behaviour for every kind. Widen it by CAPTURING a pane of that kind, committing
+# WHAT ANSWERING 1 COSTS DEPENDS ON WHAT THE CALLER DOES WITH A 0, and the two live callers differ
+# — so this is stated as the two cases rather than as one rule. shipyard's read grants an exemption
+# from its stall clock, and there a 1 simply withholds it: the child falls through to the stall
+# path, i.e. to today's behaviour. council's read only ever ANNOTATES an alarm that fires either
+# way, so there a 1 withholds a sentence and nothing else. Neither direction can silence a caller's
+# alarm on a 1, which is the property to preserve. Widen it by CAPTURING a pane of that kind, committing
 # it beside the others, and adding the label below — never by reasoning that a client nobody
 # captured probably renders like the ones that were. That inference is precisely what put the
 # service bullet in the allow-list above, and it had to be taken back out.
