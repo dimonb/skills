@@ -513,6 +513,25 @@ council_rooms() {
   done
 }
 
+# What to DO about `elsewhere`, in one place because two verbs need the same three sentences and
+# `say`'s were here first: the class is the driver's verdict, but the remedy is council's, and a
+# second copy of it is the copy that stops being maintained. `say` prints it under its own
+# refusal, `relaunch` under a harder one — hence the pad, which is the only thing that differs.
+#
+# `ct_pins_elsewhere` and not a bare `drv_pins_elsewhere`: the class above is read through a
+# command substitution, so the `_ct_pin_dir` inside it ran in a subshell and never reached this
+# one. Asking the driver directly here finds no pin directory, returns 1, and — because the line
+# is guarded on a non-empty answer — silently omits the one sentence that names the way out.
+_council_elsewhere_remedy() { # <pad>
+  local pad="$1" pin
+  echo "$pad\`COUNCIL_BACKEND=auto\` decides per PROCESS, so one failed socket probe" >&2
+  echo "${pad}sends this run to the other backend, where this room's container is" >&2
+  echo "${pad}empty for entirely correct reasons." >&2
+  pin=$(ct_pins_elsewhere) || pin=""
+  [ -n "$pin" ] && echo "${pad}Pin it for this shell and re-run: COUNCIL_BACKEND=$pin" >&2
+  return 0
+}
+
 # Why a seat has no terminal — council's words for `drv_absence_class`'s verdict, and its exit
 # mapping. The driver DECIDES (one implementation, shared with shipyard); this speaks, because the
 # vocabulary — a room, a seat, `relaunch` — is council's and the driver must not learn it.
@@ -522,7 +541,7 @@ council_rooms() {
 # which case `relaunch` is the WRONG move — it kills a live agent mid-turn along with its context,
 # which is why an unanswerable question must never produce a confident negative here.
 _council_say_absence() { # <peer>
-  local peer="$1" name list sig class why pin erc=0 rc=0 TAB
+  local peer="$1" name list sig class why erc=0 rc=0 TAB
   TAB=$(printf '\t')
   name=$(ct_name "$peer")
   # ONE enumeration, and keep its ANSWER as well as its status. The status alone cannot see the
@@ -549,11 +568,7 @@ _council_say_absence() { # <peer>
       echo "               agterm: check the app is running and answering \`agtermctl version\`." >&2
       echo "               tmux:   check \`tmux ls\`." >&2 ;;
     elsewhere)
-      echo "             \`COUNCIL_BACKEND=auto\` decides per PROCESS, so one failed socket probe" >&2
-      echo "             sends this run to the other backend, where this room's container is" >&2
-      echo "             empty for entirely correct reasons." >&2
-      pin=$(ct_pins_elsewhere) || pin=""
-      [ -n "$pin" ] && echo "             Pin it for this shell and re-run: COUNCIL_BACKEND=$pin" >&2 ;;
+      _council_elsewhere_remedy "             " ;;
     listed)
       echo "             A transient lookup failure is the likeliest cause, so re-run — it usually" >&2
       echo "             goes through. If it keeps failing, open that terminal by hand before" >&2
@@ -900,6 +915,71 @@ council_relaunch() {
     || { echo "council relaunch: no such directory: $cwd_in" >&2; return 2; }
 
   . "$SKILL/lib/term.sh"
+
+  # THE ABSENCE QUESTION, ASKED BEFORE ANYTHING IS KILLED, WRITTEN OR LAUNCHED — and this verb is
+  # the one that can least afford to get it wrong. `relaunch` closes a seat and starts a fresh
+  # one, so a wrong answer costs a participant's entire reading of the argument, in a room whose
+  # only durable value is that accumulated argument.
+  #
+  # The specific defect (#152). `COUNCIL_BACKEND=auto` resolves per PROCESS by probing the agterm
+  # socket, so a single blipped probe sends this run to the other backend, where this room's
+  # container is empty for entirely correct reasons. `ct_kill` then finds nothing and prints
+  # nothing — which the note below teaches the operator to read as normal — the launcher and
+  # protocol are overwritten under the live seat, and `ct_launch` starts a SECOND agent for the
+  # same peer name on the other backend. Both write the same lane and claim the same seat in the
+  # turn protocol, and no verb can tell them apart.
+  #
+  # The verdict is the driver's `drv_absence_class`, read exactly as `say` reads it (#141, #148) —
+  # one implementation of one question, promoted into the shared driver for that reason. What
+  # differs is the DISPOSITION, because the verbs differ:
+  #
+  #   elsewhere    REFUSE, at exit 4. The pin records that this caller launched on a DIFFERENT
+  #                backend, so the kill cannot reach the live seat and the launch is a guaranteed
+  #                duplicate. The remedy is one environment variable, and nothing this verb does
+  #                is worth doing on the wrong backend first.
+  #   unreachable  WARN and continue. The operator named this seat and asked for it to be
+  #                restarted; a question the backend would not answer is not authority to refuse a
+  #                documented recovery, and a launch that genuinely cannot reach the backend fails
+  #                loudly at `ct_launch` a few lines below rather than duplicating anything.
+  #   listed       WARN and continue. The seat is ALIVE — which is an ordinary reason to be here
+  #                ("killed to pick up new permissions"), so this states what is about to happen
+  #                instead of raising an alarm on the healthy path.
+  #
+  # The `listed` sentence is council's own and deliberately NOT the driver's `$why`, whose tail
+  # clause ("it is the per-session lookup that failed") is `say`'s conclusion, drawn from a
+  # per-session lookup `say` made and this verb never makes. Printing it here would claim
+  # something relaunch has not established, which is the defect #148 closed.
+  local sig class why sname list erc=0 arc=0 TAB
+  TAB=$(printf '\t')
+  sname=$(ct_name "$peer")
+  # ONE enumeration, whose ANSWER is kept as well as its status — the `listed` arm is drawn from
+  # the list, and a status-only check cannot see it.
+  list=$(ct_sessions 2>/dev/null) || erc=$?
+  sig=$(ct_absence_class "$erc" "$list" "$sname") || arc=$?
+  if [ "$arc" != 0 ]; then
+    class=${sig%%"$TAB"*}; why=${sig#*"$TAB"}
+    case "$class" in
+      elsewhere)
+        echo "council relaunch: refusing — $why." >&2
+        echo "                  Starting '$peer' here would leave TWO agents claiming that seat," >&2
+        echo "                  one of them still holding the argument so far, and no verb can" >&2
+        echo "                  tell them apart." >&2
+        _council_elsewhere_remedy "                  "
+        echo "                  If pinning it fails because that backend is really gone, then so is" >&2
+        echo "                  this room's live side: the other seats were in the same container." >&2
+        return 4 ;;
+      listed)
+        echo "council relaunch: note — the $(ct_backend) backend still lists \`$sname\`, so '$peer' is" >&2
+        echo "                  ALIVE. Closing it takes its reading of the argument with it, and the" >&2
+        echo "                  seat that comes back has read none of it. Continuing." >&2 ;;
+      *)
+        echo "council relaunch: note — $why." >&2
+        echo "                  So this cannot tell whether it is restarting a seat that is already" >&2
+        echo "                  gone or killing a live one, and the close below prints nothing" >&2
+        echo "                  either way. Continuing." >&2 ;;
+    esac
+  fi
+
   # A seat can be relaunched after `down`, which killed the keeper along with the terminals.
   # Without it every bell rung at this participant is lost while the room looks healthy.
   _keeper_ensure "$ROOM" "${roster[@]}"

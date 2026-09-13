@@ -349,6 +349,20 @@ council.sh relaunch codex            # closes its terminal if one is still there
 council.sh relaunch codex --cwd DIR  # run it somewhere other than the room's recorded cwd
 ```
 
+### What it establishes before it kills anything
+
+`relaunch` closes a seat and starts a fresh one, so it asks the same question `say` asks — is
+that seat really gone? — from the same shared verdict, before anything is killed, written or
+launched. The three answers that are not a plain corroborated absence:
+
+| class | what it does |
+|---|---|
+| `elsewhere` | **Refuses, exit 4.** The room's pin records that these seats were launched on the *other* backend. `COUNCIL_BACKEND=auto` resolves per process, so one failed socket probe sends a run to the backend where this room's container is empty for entirely correct reasons — the close then reaches nothing, and the launch starts a **second** agent for the same peer name while the live one keeps running. Both write the same lane and claim the same seat, and no verb can tell them apart. The message names the backend to pin. |
+| `unreachable` | Says so and **continues**. A question the backend would not answer is not authority to refuse a documented recovery — but the close prints nothing either way, so it cannot tell you whether it restarted a dead seat or killed a live one. |
+| `listed` | Says the seat is **alive** and **continues**. That is an ordinary reason to be here ("killed to pick up new permissions"); it is a statement of what is about to happen, not a refusal. |
+
+An absence the backend corroborates says nothing at all.
+
 ### What survives the restart, and what does not
 
 **The room survives it completely.** The floor, the lanes and every objection's
@@ -554,7 +568,7 @@ code.
 | 1 | could not read a verdict | the shared turn-state module did not load. Nothing was established; the plugin install is broken. |
 | 2 | nothing to send, or no such seat | no peer given, an empty message, a roster that cannot be read, or a name that is not in it. The message went **nowhere**; fix the argument. |
 | 3 | has no live terminal | the backend answered and does not have that seat. It really is gone — `council.sh relaunch <peer>`. |
-| 4 | cannot tell whether it is alive | the question went unanswered. **Do not `relaunch`** — that kills a live agent mid-turn and takes its context with it. The message names which of `unreachable`, `elsewhere` or `listed` applies, and the remedy for that one. |
+| 4 | cannot tell whether it is alive | the question went unanswered. **Do not `relaunch`** — that kills a live agent mid-turn and takes its context with it. The message names which of `unreachable`, `elsewhere` or `listed` applies, and the remedy for that one. `relaunch` asks the same question itself, so an operator who arrives there by another route is not relying on having read this: on `elsewhere` it refuses outright, and on the other two it says what it cannot tell before it closes anything. |
 | 6 | typed, but no turn observed | the text **may be sitting unsent in the seat's input box**. Look before re-sending — a second `say` types another copy onto the first. Also the answer when the submit itself failed, where the text is definitely in the box. |
 
 Exit 6 is not proof the message went nowhere: a turn that starts *and finishes* between two

@@ -165,6 +165,14 @@ printf '\nINJECTED-PROTOCOL\n'        >> "$ROOM/protocol-claude.md"
 # rather than not at all.
 want 1 "a room with no terminal backend" bash "$CLI" relaunch claude \
   && says 'backend' "the failure does not blame the backend"
+# THE CALL SITE of the absence check (#152), asserted here in the SHIPPED verb because t23 calls
+# `council_relaunch` in-process and so cannot see whether `council.sh` still reaches it. This
+# room's backend cannot answer which terminals exist, which is the `unreachable` class — so the
+# note below is the visible trace of the check running at all, and it disappears if the check
+# stops being called. The disposition of each class is t23's; what is asserted here is only that
+# the shipped path asks the question, and that an unanswered one does not block the recovery
+# (`want 1` above is the launch failing, several steps past this).
+says 'did not answer when asked' "relaunch did not ask whether the seat was really gone"
 # It got that far on the RECORDED cwd, not by falling through the missing-cwd branch — which
 # would otherwise be an exit-2 path that never reaches regeneration at all.
 no_say 'predates the recorded cwd' "relaunch did not use the cwd the roster recorded"
