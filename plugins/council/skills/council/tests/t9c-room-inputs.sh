@@ -100,9 +100,9 @@ done
 # shape that let the first version of the quorum gate ship unasserted.
 #
 # This section names the two it covers rather than quantifying over the rest, because it does
-# NOT cover every other caller: `turn_deadline_ms` is 5b3 below, and `created_ms` (c_room_age_s,
-# and through it c_floor_held_ms) is asserted nowhere in this file. A reader adding a caller
-# should look, not trust a heading.
+# NOT cover every other caller: `turn_deadline_ms` is 5b3 below, and `created_ms` — read by
+# c_room_age_s and by c_floor_held_ms — is asserted nowhere in this file. A reader adding a
+# caller should look, not trust a heading.
 fresh
 jq '.mode = "roundtable" | .round_quorum = 1.5' \
   "$R/roster.json" > "$R/roster.next" && mv "$R/roster.next" "$R/roster.json"

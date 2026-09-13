@@ -64,8 +64,9 @@ council.sh <verb> [options]
   Participant (inside a room)
     recv    [--timeout N] [--peek] [--until-floor]     exit 4 = timeout, call again
     send    --act <act> [--refs '["id"]'] [--hand] "<text>"
-    floor                                              who holds it, who is next, how long,
-                                                       and the room's turn deadline
+    floor                                              who holds it, who is next, how long it
+                                                       has been held and the room's turn
+                                                       deadline (both in milliseconds)
     protocol                                           your own role and the channel rules
     agenda                                             the question — read this first
     decision                                           the record, once the room has closed

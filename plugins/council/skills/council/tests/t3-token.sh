@@ -84,56 +84,72 @@ echo "turns=$turns skips=$skips conflicts=$conf (c was wedged for most of the ru
 [ "$skips" -gt 0 ] || { echo "FAIL nobody skipped the wedged peer"; fail=1; }
 # a skip is only legal from the peer who is next after the one being skipped
 
-# --- held_ms before the room's first turn: 0, and 0 everywhere ------------------
+# --- the floor's age before the room's first turn -------------------------------
 # The run above wedges c only after six turns, so it never exercises turn 0. Barrier positions
-# and `--hand` messages are stamped `turn: null`, so before anybody has taken a turn there is
-# no turn to measure from, and c_floor_held_ms answers 0 — deliberately, because the thing a
-# caller wants there (when the current holder RECEIVED the floor) is in no message and in no
-# file. protocol/_channel.md tells participants what that 0 means and hands them their own
-# wait to time the holder with instead.
+# and `--hand` messages carry `turn: null`, so before the first turn there is no turn to
+# measure from and c_floor_held_ms answers from the room's shape instead: in token mode the
+# floor is order[0] from the instant the room was created, so `created_ms` is that instant
+# exactly; in roundtable it is not recoverable on every path, so the answer is 0.
 #
-# These cases exist because the conservative answer was once replaced with a proxy anchored on
-# `created_ms`, which charged the whole opening round to the first post-barrier holder: on the
-# shipped `debate` defaults that reported a healthy seat as hundreds of seconds overdue the
-# instant it got the floor, which protocol/_channel.md turns into a licence to consume its
-# turn. Every case below is a room shape in which SOME proxy reads non-zero, so a future
-# attempt to plug the 0 reds here rather than in a live room.
-zero_held() { # <label> <room>
-  local fl held sh
-  fl=$(COUNCIL_ROOM="$2" bash "$CLI" floor 2>/dev/null)
-  held=$(printf '%s' "$fl" | sed -n 's/.*held_ms=\([^ ]*\).*/\1/p')
-  sh=$(COUNCIL_ROOM="$2" bash "$CLI" status 2>/dev/null | sed -n 's/.*(held \([0-9-]*\)s).*/\1/p')
-  # `floor` prints no held_ms during an open barrier round; only `status` is asserted there.
-  if [ -n "$held" ] && [ "$held" != 0 ]; then
-    echo "FAIL $1: floor reported held_ms=$held before the room's first turn"; fail=1
-  elif [ "${sh:-x}" != 0 ]; then
-    echo "FAIL $1: status reported held ${sh}s before the room's first turn"; fail=1
-  else
-    echo "ok   $1: held is 0 before the first turn (floor and status agree)"
-  fi
+# Both halves are asserted, and both have shipped wrong. Answering 0 everywhere reinstates the
+# freeze in the two shipped token scenarios; anchoring roundtable on `created_ms` charges the
+# whole opening round to the first post-barrier holder, which reported a HEALTHY seat as
+# hundreds of seconds overdue the instant it got the floor.
+#
+# `held` must be PRESENT wherever `floor` prints it: an absent field defaulting to a passing
+# value let an earlier version of these cases stay green with `held_ms` deleted from the printf
+# altogether — the one number every participant is told to gate a skip on.
+held_of() { # <room> -- the held_ms floor prints, or the empty string if it prints none
+  COUNCIL_ROOM="$1" bash "$CLI" floor 2>/dev/null | sed -n 's/.*held_ms=\([^ ]*\).*/\1/p'
+}
+status_held_of() { # <room> -- the held figure status renders, in seconds
+  COUNCIL_ROOM="$1" bash "$CLI" status 2>/dev/null | sed -n 's/.*(held \([0-9-]*\)s).*/\1/p'
+}
+# <label> <room> -- floor must print held_ms, and it must be 0; status must agree.
+held_is_zero() {
+  local held sh; held=$(held_of "$2"); sh=$(status_held_of "$2")
+  if [ -z "$held" ]; then echo "FAIL $1: floor printed no held_ms at all"; fail=1
+  elif [ "$held" != 0 ]; then echo "FAIL $1: floor reported held_ms=$held, wanted 0"; fail=1
+  elif [ "${sh:-x}" != 0 ]; then echo "FAIL $1: status reported held ${sh}s, wanted 0"; fail=1
+  else echo "ok   $1: held is 0 (floor and status agree)"; fi
 }
 
-# An old room, no turns: `created_ms` is far in the past. A created_ms anchor reads ~4s here.
-R2="$COUNCIL_TEST_ROOT/t3-no-turn-old-room"; rm -rf "$R2"
+# A token room with no turns yet: the floor has been a's since the room was created, so the age
+# is known and must be reported. created_ms is 4s back, past this room's 3000ms deadline.
+R2="$COUNCIL_TEST_ROOT/t3-token-no-turn"; rm -rf "$R2"
 mkroom "$R2" a b c
 jq --argjson cms "$(( 10#${EPOCHREALTIME/./} / 1000 - 4000 ))" '.created_ms = $cms' \
   "$R2/roster.json" > "$R2/r.tmp" && mv "$R2/r.tmp" "$R2/roster.json"
-zero_held "a token room with no turns yet" "$R2"
+h2=$(held_of "$R2"); s2=$(status_held_of "$R2")
+d2=$(COUNCIL_ROOM="$R2" bash "$CLI" floor | sed -n 's/.*deadline_ms=\([^ ]*\).*/\1/p')
+if [ -z "$h2" ]; then echo "FAIL a token room with no turns: floor printed no held_ms"; fail=1
+elif [ "$h2" -le "$d2" ]; then
+  echo "FAIL a token room with no turns reports held_ms=$h2 (not past $d2), so its first holder can never be skipped"; fail=1
+elif [ "${s2:-0}" -lt 3 ]; then
+  echo "FAIL status reported held ${s2}s for a token room the floor calls ${h2}ms"; fail=1
+else echo "ok   a token room times its first holder from the room ($h2 ms > $d2, status ${s2}s)"; fi
+# ...and the seat floor names as next= can then skip on that basis.
+nx=$(COUNCIL_ROOM="$R2" bash "$CLI" floor | sed -n 's/.*next=\([^ ]*\).*/\1/p')
+ho=$(COUNCIL_ROOM="$R2" bash "$CLI" floor | sed -n 's/.*floor=\([^ ]*\).*/\1/p')
+if COUNCIL_ROOM="$R2" COUNCIL_ME="$nx" bash "$CLI" send --act skip "$ho overdue" >/dev/null 2>&1 \
+   && [ "$(COUNCIL_ROOM="$R2" bash "$CLI" floor | sed -n 's/.*turns=\([0-9]*\).*/\1/p')" = 1 ]; then
+  echo "ok   $nx skipped the wedged first holder $ho and the room moved to turn 1"
+else echo "FAIL the first holder of a token room could not be skipped"; fail=1; fi
 
-# An OPEN barrier round, positions posted. Every position is turn:null by design and the round
-# may legitimately run for minutes.
+# An OPEN roundtable round: every position is turn:null by design and the round may legitimately
+# run for minutes. `floor` prints the barrier line and no held_ms there, so only status is read.
 R3="$COUNCIL_TEST_ROOT/t3-open-barrier"; rm -rf "$R3"
 mkroom "$R3" a b c
 jq --argjson cms "$(( 10#${EPOCHREALTIME/./} / 1000 - 4000 ))" \
    '.mode = "roundtable" | .round_deadline_ms = 600000 | .created_ms = $cms' \
   "$R3/roster.json" > "$R3/r.tmp" && mv "$R3/r.tmp" "$R3/roster.json"
 COUNCIL_ROOM="$R3" COUNCIL_ME=a bash "$CLI" send --act propose "my position" >/dev/null 2>&1
-zero_held "an open barrier round" "$R3"
+s3=$(status_held_of "$R3")
+if [ "${s3:-x}" = 0 ]; then echo "ok   an open barrier round reports held 0s (no false STALL)"
+else echo "FAIL an open barrier round reported held ${s3}s — a healthy room would alarm"; fail=1; fi
 
-# The tick AFTER a long barrier closes — the case that a `! c_round_open` exemption misses and
-# the one that shipped a false skip. All three positions are in, so the round is closed and the
-# floor is real, but nobody has taken a turn: a created_ms anchor reads ~4s and a last-position
-# anchor reads the age of the oldest position.
+# The tick AFTER a roundtable barrier closes — the case a `! c_round_open` exemption misses, and
+# the one that shipped a false skip. All positions in, floor is real, no turn taken yet.
 R4="$COUNCIL_TEST_ROOT/t3-barrier-just-closed"; rm -rf "$R4"
 mkroom "$R4" a b c
 jq --argjson cms "$(( 10#${EPOCHREALTIME/./} / 1000 - 4000 ))" \
@@ -142,28 +158,22 @@ jq --argjson cms "$(( 10#${EPOCHREALTIME/./} / 1000 - 4000 ))" \
 for p in a b c; do
   COUNCIL_ROOM="$R4" COUNCIL_ME="$p" bash "$CLI" send --act propose "position of $p" >/dev/null 2>&1
 done
-zero_held "a barrier that has just closed" "$R4"
-# ...and the seat it names as next= must NOT read the holder as overdue there.
-fl4=$(COUNCIL_ROOM="$R4" bash "$CLI" floor 2>/dev/null)
-h4=$(printf '%s' "$fl4" | sed -n 's/.*held_ms=\([^ ]*\).*/\1/p')
-d4=$(printf '%s' "$fl4" | sed -n 's/.*deadline_ms=\([^ ]*\).*/\1/p')
-if [ "${h4:-0}" -gt "${d4:-0}" ]; then
+held_is_zero "a roundtable barrier that has just closed" "$R4"
+h4=$(held_of "$R4")
+d4=$(COUNCIL_ROOM="$R4" bash "$CLI" floor | sed -n 's/.*deadline_ms=\([^ ]*\).*/\1/p')
+if [ -n "$h4" ] && [ "$h4" -gt "${d4:-0}" ]; then
   echo "FAIL the first post-barrier holder reads as overdue (held_ms=$h4 > $d4) — a healthy seat is skippable"; fail=1
-else
-  echo "ok   the first post-barrier holder does not read as overdue"
-fi
+else echo "ok   the first post-barrier holder does not read as overdue"; fi
 
-# A peer whose clock runs ahead stamps a turn in the future; a floor held for a negative time is
-# not a measurement either, and `status` must not render one.
+# A peer whose clock runs ahead stamps a turn in the future. A floor held for a negative time is
+# not a measurement, and neither verb may render one.
 R5="$COUNCIL_TEST_ROOT/t3-future-turn"; rm -rf "$R5"
 mkroom "$R5" a b c
 COUNCIL_ROOM="$R5" COUNCIL_ME=a bash "$CLI" send --act propose "from a fast clock" >/dev/null 2>&1
 f5=$(ls "$R5"/lane/a/*.json | head -1)
 jq --argjson ms "$(( 10#${EPOCHREALTIME/./} / 1000 + 60000 ))" '.sent_ms = $ms' "$f5" > "$R5/m.tmp" \
   && mv "$R5/m.tmp" "$f5"
-h5=$(COUNCIL_ROOM="$R5" bash "$CLI" floor 2>/dev/null | sed -n 's/.*held_ms=\([^ ]*\).*/\1/p')
-if [ "${h5:-0}" = 0 ]; then echo "ok   a turn stamped in the future reads as held 0, not negative"
-else echo "FAIL a future-stamped turn produced held_ms=$h5"; fail=1; fi
+held_is_zero "a turn stamped in the future" "$R5"
 
 [ "$fail" = 0 ] && echo "t3 PASS" || echo "t3 FAIL"
 exit $fail

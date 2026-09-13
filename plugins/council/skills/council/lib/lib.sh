@@ -1148,30 +1148,42 @@ c_last_turn_ms() {
 # and two answers to it drift. (That drift was real: the two derived it separately, so a change to
 # either was a change to only half of what a room reports about its own floor.)
 #
-# IT IS 0 UNTIL THE ROOM'S FIRST TURN, AND THAT IS THE CONSERVATIVE ANSWER RATHER THAN A GAP TO
-# PLUG. Barrier positions and `--hand` messages are stamped `turn: null`, so before the first turn
-# there is no turn to measure from — and the thing a caller actually wants there, the instant the
-# current holder RECEIVED the floor, is not in the log at all: no message records it, and the
-# barrier's close time is recomputed on demand by c_barrier and never written down.
+# BEFORE THE ROOM'S FIRST TURN THE ANSWER DEPENDS ON THE ROOM'S SHAPE, and this splits on that
+# rather than answering one way for both. Barrier positions and `--hand` messages are stamped
+# `turn: null`, so there is no turn to measure from; what a caller wants instead is the instant the
+# current holder RECEIVED the floor, and whether that is knowable differs:
 #
-# Every anchor that has been tried in its place is a proxy that is wrong in some room shape, and
-# each was wrong in the dangerous direction — reporting a healthy seat as overdue, which
-# protocol/_channel.md turns into a licence to consume its turn. `created_ms` charges the whole
-# opening round to the first post-barrier holder, so on the shipped `debate` scenario every
-# roundtable round longer than `turn_deadline_ms` made its first speaker instantly skippable (and,
-# past 900s, instantly STALLed) — measured at 620s and 950s on the shipped defaults. Exempting the
-# round only while it is OPEN does not save it: the leak is the tick after it closes. The last
-# round-0 position is wrong too, on the path where the round closes by quorum deadline instead.
+#   token mode (`up`'s default; the `freeform` and `review` scenarios) — there is no opening round
+#     at all, c_barrier answers `closed` before anything else runs, and the floor is `order[0]` from
+#     the moment the room is created. So `created_ms` IS the instant that seat received the floor.
+#     It is the fact, not a stand-in for it, and that is why it is used here and not elsewhere: a
+#     reader who finds a creation time being read as a floor time and assumes it must be a proxy
+#     will "fix" this back into the freeze it was added to remove.
 #
-# So this reports 0 and means it: not "held for no time", but "this room has not moved yet, and I
-# cannot tell you how long that has been". protocol/_channel.md says exactly that to participants
-# and gives them their own wait to time the holder with instead, which is a clock the room cannot
-# get wrong. A supervisor-side alarm for a room that has never moved is a different question from
-# this one — it belongs on the room's age, not on the floor's — and is filed rather than smuggled
-# in here.
+#   roundtable (`debate`) — the floor becomes real when the barrier closes, and that instant is
+#     recoverable on one path and not the other: when every seat posts it is the newest round-0
+#     `sent_ms`, but when the round closes on its quorum deadline instead, nothing records it. So
+#     this answers 0 for roundtable on BOTH paths — a deliberate choice not to carry a branch that
+#     would be right only half the time, rather than a claim that the instant is unknowable.
+#
+# The split is "is the answer known", and it is drawn there because the alternative was measured
+# and shipped: anchoring roundtable on `created_ms` charges the whole opening round to the first
+# post-barrier holder, so on the shipped `debate` defaults a HEALTHY seat read as 620s (950s on a
+# longer round) overdue the instant it received the floor — which protocol/_channel.md turns into a
+# licence for the next seat to consume its turn, plus a false STALL. Exempting the round only while
+# it is OPEN does not save it; the leak is the tick after it closes.
+#
+# Where it answers 0 that means "this room has not moved yet, and I cannot tell you how long that
+# has been" rather than "held for no time", and protocol/_channel.md says exactly that to
+# participants, handing the waiting seat its own wait to time the holder with instead. A
+# supervisor-side alarm for a room that has never moved is a different question from this one — it
+# belongs on the room's age, not the floor's — and is filed rather than smuggled in here.
 c_floor_held_ms() {
   local last now
   last=$(c_last_turn_ms)
+  # An unreadable roster makes c_mode print nothing, which takes this branch and is then handed 0
+  # by c_int_field — the same answer that room gave before, and the one c_floor_at gives it too.
+  if [ "$last" = 0 ] && [ "$(c_mode)" != roundtable ]; then last=$(c_int_field created_ms 0); fi
   [ "$last" = 0 ] && { printf '0'; return; }
   # `sent_ms` is written by whichever peer took that turn, so a clock ahead of ours reads as a
   # floor held for a negative time. c_room_age_s refuses the same shape for the same reason; 0
