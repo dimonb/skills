@@ -1,5 +1,59 @@
 # STATE — session memory
 
+## ✅ COUNCIL IS USABLE (2026-09-13) — the finish line is met
+
+The same test the fleet got, applied to the skill that had been validated by nothing. All five
+changes shipped, plus one beyond the line:
+
+| # | what it fixes | merge |
+|---|---|---|
+| **#28** | a dangling `--room`/`--me` spun at 100% CPU, silent, forever | `9f37a15` |
+| **#36** | participants were never told the anti-freeze mechanism exists | `388352e` |
+| **#117 +#141 +#29 +#135** | `say` must establish what it claims | `f6a2716` |
+| **#17** *(part)* | the alarm quotes the seat's own terminal | `d1378e4` |
+| **#24** | `decide` must tell the room it closed — and say so when it could not | `d4701b7` |
+| **#152** | `relaunch` must establish an absence before it destroys a seat | `a595191` |
+
+**Verified by running, on the merged head:** `make check` rc=0, `make test` rc=0 across every
+suite, clean tree, no worktrees left.
+
+### What this bought, in one sentence each
+
+A typo no longer hangs the machine. A wedged seat no longer freezes the room, and the mechanism
+that prevents it now reaches the only people who can use it. `say` no longer reports success for a
+message sitting unsent, nor calls a live participant dead because a socket blipped. `decide` no
+longer announces a record it failed to write, and a closed room releases its seats instead of
+holding three agent sessions idle for up to nine minutes. `relaunch` no longer duplicates a live
+seat on an unanswered question.
+
+### Two things that are NOT closed, stated so nobody reads a green line as more than it is
+
+* **#17 is closed in part.** It distinguishes a capacity park; the other three wedge shapes it
+  names are not told apart, and the remainder is filed. A partial labelled as the whole is worse
+  than not shipping, because the issue closes and the gap stops being visible.
+* **#168's `unreachable` disposition rests on an assumption the suite does not measure** — that a
+  launch which cannot reach the backend fails loudly rather than half-succeeding. The suite stubs
+  the launch. Named in the merge message rather than left implicit.
+
+### What the work itself taught, beyond the code
+
+* **Every change's blocking findings were inside the PREVIOUS round's fix diff**, four and five
+  rounds deep, across six changes. Not noise about any one author: that is where this work's
+  defects live, and it is the argument for the review battery rather than for more care.
+* **Three children died leaving their terminals alive**, and the fleet read them as healthy idle
+  slots — the stall remedy was typed into a shell. Filed as **#172**; it is the last of #17's four
+  shapes, seen from the supervisor's side.
+* **Six test-number collisions** in three days, each because the next free number is computed from
+  a `main` that contains neither branch. Tracked as **#149**; the last one I resolved by hand.
+* The absolutes rule was widened twice, once **by the slot it was written about**, and it still
+  caught a fifth instance the same day.
+
+### The line I would draw next, not drawn
+
+**#161** — a participant at its context ceiling can only be relaunched, which throws away its
+reading of the whole argument. `shipyard` has both halves ready and `council` calls neither. It is
+the only remaining item where the ordinary course of a long room loses work.
+
 ## ▶ RUNNING (2026-09-11) — TWO lanes, and the posture is "working, not ideal"
 
 **Posture change from the owner, and it governs everything below:** working beats ideal, and
