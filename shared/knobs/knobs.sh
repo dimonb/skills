@@ -17,13 +17,17 @@
 # THE TWO DEFECTS THIS EXISTS TO PREVENT, both of which shipped, in both skills, and neither of
 # which the previous validations caught:
 #
-#   * A LEADING ZERO ABORTS THE CALLER. `08` is a run of digits, so an all-digits test admits it —
-#     and then `$(( … + secs ))` reads it as octal, which is not an error bash returns but one it
-#     DIES on: `value too great for base`, mid-expansion, killing a non-interactive shell. Both
-#     callers reach that arithmetic AFTER the message has been typed and submitted, so the operator
-#     gets a raw bash error, no delivery verdict, and a documented next move that types a second
-#     copy onto the first. That is precisely the harm the confirm-poll exists to prevent, in the
-#     code that implements it.
+#   * A LEADING ZERO BREAKS THE POLL. `08` is a run of digits, so an all-digits test admits it —
+#     and then `$(( … + secs ))` reads it as octal and fails with `value too great for base`.
+#     MEASURED, because the first three descriptions of this in the tree were all wrong and each
+#     was written confidently: bash does NOT die on that expansion. At script top level it prints
+#     the error, leaves the assignment EMPTY and carries on — so `shipyard tell` went to
+#     `[ "$(date +%s)" -lt "" ]`, which errors too, breaking the loop after ONE sample: the
+#     single-sleep behaviour the poll exists to replace, restored silently. Inside a FUNCTION the
+#     rest of the function is abandoned, so `council say` returned with no verdict at all. Two
+#     different failures, neither of them a dead shell, and both reached AFTER the message has been
+#     typed and submitted — which is what makes them matter, because the operator's next move is to
+#     re-send, typing a second copy onto the first.
 #
 #   * A ZERO INTERVAL SPINS, AND ZERO HAS MANY SPELLINGS. `sleep 00` returns immediately, so the
 #     bounded poll becomes a fork storm against a live child's terminal — measured at 119 captures
@@ -46,23 +50,36 @@
 # A version marker, bumped when the body changes, so sync + the drift gate stay easy to prove.
 _KNOB_VERSION=1
 
+# AN UNSET KNOB IS NOT AN UNUSABLE ONE, and the difference is the whole reason these return a
+# status. Callers pass `${VAR:-}`, so "the operator set nothing" and "the operator set rubbish"
+# both arrive here as an empty string — and the first version of this module answered 1 to both,
+# which made every caller print a warning on the DEFAULT path: every directive, every hand-off,
+# every resume, complaining about a variable nobody had touched. An alarm on the commonest healthy
+# path is one an operator learns to ignore, which would have cost more than the bug this module
+# fixes. So EMPTY returns the default at status 0 — silently, because nothing is wrong — and only
+# a value the operator actually typed and got wrong returns 1.
+
 # knob_uint <value> <default> — a whole number, for a window in seconds.
 #
-# Echoes the effective value. Exit 0 when the caller's value was used as given, 1 when the default
-# was substituted — so the caller prints its own message naming its own variable, and this file
-# holds no skill's vocabulary.
+# Echoes the effective value. Exit 0 when there is nothing to complain about — the value was used
+# as given, or none was set; exit 1 only when a value WAS set and could not be used. The caller
+# prints its own message naming its own variable, so this file holds no skill's vocabulary.
 #
 # `0` IS VALID and is not a fallback: a window of zero means "take one post-send sample and
-# decide", which is a legitimate setting and one both suites use to keep their poll cases fast.
+# decide", which is a legitimate setting and the one council's `t21-say.sh` poll cases use to stay
+# fast. (Only council's suite sets it today — checked, rather than written as "both".)
 #
-# Unusable is: empty, any non-digit (a typo, a sign, a space, `1e3`, a decimal point), or a run of
-# digits long enough to overflow the arithmetic it feeds — 10+ digits, where no legitimate window
-# lives anyway. The length check comes BEFORE the normalisation, because `$(( 10#… ))` on an
-# oversized value dies exactly like the octal case it is here to prevent.
+# Unusable is: any non-digit (a typo, a sign, a space, `1e3`, a decimal point), or a run of digits
+# too long to be a plausible window — 10+ digits, i.e. over thirty years in seconds. The cap is
+# NOT there to stop an arithmetic failure: `$(( 10#… ))` on a twenty-digit value wraps silently at
+# status 0 rather than erroring, which is measured and is why this sentence no longer claims
+# otherwise. It is there so an implausible value cannot leave the poll running long past anything
+# an operator meant.
 knob_uint() {
   local v="${1:-}" d="${2:-}"
+  [ -n "$v" ] || { printf '%s' "$d"; return 0; }   # nothing set — the default, quietly
   case "$v" in
-    ''|*[!0-9]*) printf '%s' "$d"; return 1 ;;
+    *[!0-9]*) printf '%s' "$d"; return 1 ;;
   esac
   [ "${#v}" -le 9 ] || { printf '%s' "$d"; return 1; }
   # `10#` forces base ten, so `08` is eight rather than a fatal expansion. Normalising rather than
@@ -74,20 +91,24 @@ knob_uint() {
 
 # knob_interval <value> <default> — a decimal, for a sleep between samples.
 #
-# Echoes the effective value. Exit 0 when the caller's value was used as given, 1 when the default
-# was substituted.
+# Echoes the effective value. Exit 0 when there is nothing to complain about — used as given, or
+# none set; exit 1 only when a value WAS set and could not be used.
 #
-# Usable is: digits and at most one `.`, carrying at least one NON-ZERO digit, and short enough
-# for `sleep` to accept. Everything else falls back — which covers a bare `.` (which makes `sleep`
+# Usable is: digits and at most one `.`, carrying at least one NON-ZERO digit, and short enough for
+# `sleep` to accept. Everything else falls back — which covers a bare `.` (which makes `sleep`
 # error every iteration), every spelling of zero (which makes it a no-op), and a value above
 # INT_MAX, which `sleep` refuses outright and which therefore spins AND floods stderr with usage
-# lines that bury the verdict. That last one has a non-zero digit, so the shape test alone does not
-# catch it; it is why the length cap is here too rather than only on the window.
+# lines that bury the verdict. That last one HAS a non-zero digit, so the shape test alone does not
+# catch it; it is why there is a length cap here as well as on the window.
 #
-# The cap is on the DIGIT COUNT, not on the value: this is a decimal string, and comparing it
-# numerically would mean forking or losing the fraction.
+# THE CAP IS ON THE STRING'S LENGTH, dot included, which is coarser than it sounds and is stated
+# plainly rather than as "digits": `0.12345678` is ten characters and gets refused even though
+# 0.12 seconds is a perfectly sensible interval. That is the cost of not forking to compare a
+# decimal numerically, and it is accepted because the values an operator actually wants here are
+# one or two decimal places. Widen it if that ever bites; do not describe it as something it is not.
 knob_interval() {
   local v="${1:-}" d="${2:-}"
+  [ -n "$v" ] || { printf '%s' "$d"; return 0; }   # nothing set — the default, quietly
   case "$v" in
     *[!0-9.]*|*.*.*) printf '%s' "$d"; return 1 ;;   # not a plain decimal
     *[1-9]*)         : ;;                            # has a non-zero digit — the only usable shape

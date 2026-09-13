@@ -9,11 +9,14 @@
 # caller that shipped the defect is here. This file pins the wiring:
 #
 #   * `SHIPYARD_TELL_CONFIRM_SECS=08` passed `_shipyard_admission_uint`'s all-digits test and then
-#     made `DEADLINE=$(( $(date +%s) + CONFIRM_SECS ))` an invalid-octal EXPANSION, which kills a
-#     non-interactive shell. It aborted at that line — AFTER `shipyard_type` and `shipyard_submit`
-#     had already run. So the directive was in flight, the supervisor got a raw bash error and no
-#     delivery verdict, and the documented next move (re-send) types a second copy onto the first.
-#     That is the precise harm the confirm-poll exists to prevent, in the file that implements it.
+#     made `DEADLINE=$(( $(date +%s) + CONFIRM_SECS ))` an invalid-octal EXPANSION. MEASURED
+#     against the pre-fix script, because three earlier descriptions of this said it killed the
+#     shell and none was right: bash prints the error, leaves DEADLINE EMPTY and CONTINUES, so
+#     `[ "$(date +%s)" -lt "" ]` errors too and the loop breaks after ONE sample. A verdict still
+#     prints; what is silently gone is the poll, restored to the single-sleep behaviour it exists
+#     to replace — so a delivered directive reads `unconfirmed` and the supervisor's next move is
+#     to re-send a second copy onto the first. All of it AFTER `shipyard_type` and
+#     `shipyard_submit` have run, which is what makes it matter.
 #   * `SHIPYARD_TELL_CONFIRM_INTERVAL` rejected zero by ENUMERATING `0|0.|0.0|.0`, so `00`, `000`,
 #     `0.00`, `.00` and `000.000` all passed and made `sleep` a no-op — the bounded poll became a
 #     fork storm against a live child's terminal.
@@ -85,8 +88,10 @@ out=$(run_tell SHIPYARD_TELL_CONFIRM_SECS=1 SHIPYARD_TELL_CONFIRM_INTERVAL=0.2)
 ok "a usable window reaches a verdict"      6   "$(rc_of "$out")"
 ok "...reported as unconfirmed"             yes "$(has "$out" 'was typed and submitted, but no turn')"
 
-# THE OCTAL ABORT. Before the fix this killed the shell at the deadline line, so there was no
-# verdict at all and rc was 1. The directive had already been typed and submitted by then.
+# THE OCTAL CASE. Before the fix this left DEADLINE empty, so the poll collapsed to one sample —
+# the verdict still printed, which is exactly why it went unnoticed. Asserting rc and the absence
+# of the raw error is therefore not enough on its own; the window value below is what proves the
+# parse.
 out=$(run_tell SHIPYARD_TELL_CONFIRM_SECS=08 SHIPYARD_TELL_CONFIRM_INTERVAL=0.2)
 ok "a leading zero does not abort"          6   "$(rc_of "$out")"
 ok "...leaking no arithmetic error"         no  "$(has "$out" 'value too great for base')"
@@ -101,6 +106,18 @@ out=$(run_tell SHIPYARD_TELL_CONFIRM_SECS=99999999999 SHIPYARD_TELL_CONFIRM_INTE
 ok "an unusable window says so"             yes "$(has "$out" 'not a usable whole number')"
 ok "...and does not abort"                  6   "$(rc_of "$out")"
 
+# --- the DEFAULT path must be silent ------------------------------------------------------------
+# Callers pass `${VAR:-}`, so "set nothing" and "set rubbish" both reach the module as empty. The
+# first version answered 1 to both, which printed a knob warning on EVERY directive, every
+# `shipyard-answer` hand-off and every `shipyard-compact` resume — about variables nobody had
+# touched. An alarm on the commonest healthy path is one an operator learns to ignore, so this
+# asserts the silence rather than trusting it.
+printf '\n── the default path ──\n'
+out=$(run_tell SHIPYARD_NOTHING_SET=1)
+ok "nothing set: no window warning"         no  "$(has "$out" 'SHIPYARD_TELL_CONFIRM_SECS')"
+ok "nothing set: no interval warning"       no  "$(has "$out" 'SHIPYARD_TELL_CONFIRM_INTERVAL')"
+ok "...and it still reaches a verdict"      6   "$(rc_of "$out")"
+
 # --- the interval -------------------------------------------------------------------------------
 printf '\n── the interval ──\n'
 # THE SPELLINGS THE OLD ENUMERATION MISSED. Two of them, as the smallest set that proves the shape
@@ -109,6 +126,22 @@ for z in 00 0.00; do
   out=$(run_tell SHIPYARD_TELL_CONFIRM_SECS=1 SHIPYARD_TELL_CONFIRM_INTERVAL="$z")
   ok "[$z] falls back"                      yes "$(has "$out" 'not a usable positive number')"
 done
+
+# THE MESSAGE IS NOT THE BEHAVIOUR, and asserting only the message is how this file shipped a hole:
+# a mutation that kept the warning but left `CONFIRM_INTERVAL` on the unusable value passed 12/12
+# here while the poll went from five samples to ninety-three in a two-second window. council's t21
+# had already learned that and this file had not. The script prints a run-length census of what it
+# sampled, so the COUNT is readable without any new plumbing — `Sampled: idle x93` against
+# `Sampled: idle x5`.
+#
+# Two seconds, not one: the deadline compares WHOLE seconds, so a one-second window can expire
+# almost immediately depending on where in the second the send lands, which made the equivalent
+# assertion in t21 flaky until it was widened.
+out=$(run_tell SHIPYARD_TELL_CONFIRM_SECS=2 SHIPYARD_TELL_CONFIRM_INTERVAL=00)
+n=$(printf '%s' "$out" | sed -n 's/.*Sampled: idle x\([0-9]*\).*/\1/p' | tail -1)
+[ -n "$n" ] || n=$(printf '%s' "$out" | grep -c 'Sampled: idle')   # x1 prints without a count
+ok "...and the fallback really slept"       yes "$( [ "${n:-0}" -le 40 ] && printf yes || printf "no ($n samples)" )"
+ok "...having sampled more than once"       yes "$( [ "${n:-0}" -ge 2 ]  && printf yes || printf "no ($n samples)" )"
 # ...and the spelling the old list DID catch still falls back, so the replacement did not narrow it.
 out=$(run_tell SHIPYARD_TELL_CONFIRM_SECS=1 SHIPYARD_TELL_CONFIRM_INTERVAL=0)
 ok "[0] still falls back"                   yes "$(has "$out" 'not a usable positive number')"

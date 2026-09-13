@@ -80,6 +80,7 @@ restore() {
     shared/driver/tests/_probe-unreg.sh plugins/shipyard/skills/shipyard/tests/_probe-unreg.sh \
     shared/flow/tests/_probe-unreg.sh shared/flow/extra.sh \
     shared/adapters/tests/_probe-unreg.sh shared/policy/tests/_probe-unreg.sh \
+    shared/knobs/tests/_probe-unreg.sh \
     2>/dev/null || true
   rmdir docs 2>/dev/null || true
 }
@@ -564,12 +565,22 @@ rm -f shared/adapters/tests/_probe-unreg.sh
 
 # 15f — ...and for the POLICY suite, which is the one that had no gated registration at all: it ran
 # in no automated invocation from the day it landed, so nothing would have noticed a test dropped
-# from its `tests` array either. With 15 through 15e this pins every entry in $GATED_SUITES — so
-# dropping any one of the six from the declaration is caught by the probe that names it.
+# from its `tests` array either.
 printf '#!/usr/bin/env bash\ntrue\n' > shared/policy/tests/_probe-unreg.sh
 expect_fail "policy test on disk but not registered in run-all.sh" \
   "test on disk but not registered in"
 rm -f shared/policy/tests/_probe-unreg.sh
+
+# 15g — ...and for the KNOBS suite. THE POINT OF THE 15* FAMILY, stated once here rather than as a
+# running count in each: every entry in $GATED_SUITES needs its own probe, because the sibling
+# probes all still pass when one suite is dropped from the declaration — so an unprobed entry can
+# stop being registration-gated and nothing says so. An earlier version of 15f claimed the family
+# "pins every entry … any one of the six", which the very next suite to be added made false; say
+# the rule instead of the number, and add a probe whenever $GATED_SUITES grows.
+printf '#!/usr/bin/env bash\ntrue\n' > shared/knobs/tests/_probe-unreg.sh
+expect_fail "knobs test on disk but not registered in run-all.sh" \
+  "test on disk but not registered in"
+rm -f shared/knobs/tests/_probe-unreg.sh
 
 # 16 — and check 10 must say it cannot find the list, rather than comparing the files on disk
 # against an empty set. BOTH assignments are renamed: renaming only `tests=(` leaves the `--full`

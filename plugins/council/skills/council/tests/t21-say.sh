@@ -164,6 +164,15 @@ rc_of() { printf '%s' "$1" | sed -n 's/^rc=//p' | tail -1; }
 printf '\n── the roster check ──\n'
 reset; : >"$PINS/container-tmux"
 out=$(run_say codx 'hello')
+# No peer at all is the same class of caller error, and it used to exit 1 through `${1:?…}` — the
+# code SKILL.md gives to "the plugin install is broken", so a supervising agent that forgot an
+# operand was told to reinstall.
+out=$( SKILL="$SHADOW" council_say 2>&1 ); rc=$?
+ok "no peer at all is refused at exit 2"       2   "$rc"
+ok "...with a usage line, not a bash error"    yes "$(has "$out" 'which participant')"
+
+reset; : >"$PINS/container-tmux"
+out=$(run_say codx 'hello')
 ok "a mistyped peer is refused at exit 2"      2   "$(rc_of "$out")"
 ok "...naming the roster"                      yes "$(has "$out" 'roster: claude, codex')"
 # THE POINT OF THE ISSUE: it must not be reported as a dead terminal, because that sends the
@@ -330,6 +339,16 @@ printf '\n── the poll knobs ──\n'
 # `samples` reads the counter the shadow ct_capture writes; `run_say` must have returned first.
 samples() { cat "$NCALLS" 2>/dev/null || printf 0; }
 
+# THE DEFAULT PATH MUST BE SILENT. `${VAR:-}` makes "set nothing" and "set rubbish" both reach the
+# shared reader as empty, and answering "unusable" to both made `say` complain about two variables
+# nobody had touched on every single call. An alarm on the commonest healthy path is one an
+# operator learns to ignore, which would cost more than the bug the readers fix.
+reset; : >"$PINS/container-tmux"; pane "$IDLE" pre; pane "$RUNNING" last
+out=$(run_say codex 'hello')
+ok "4: nothing set: no window warning"         no  "$(has "$out" 'COUNCIL_SAY_CONFIRM_SECS')"
+ok "4: nothing set: no interval warning"       no  "$(has "$out" 'COUNCIL_SAY_CONFIRM_INTERVAL')"
+ok "4: ...and it still reports delivered"      yes "$(has "$out" '^delivered$')"
+
 # An unusable window must not break the loop after one sample. That is the single-sleep behaviour
 # the poll replaced, and it would be announced only by a stray `integer expression expected` on
 # stderr — so it must fall back to the documented default instead.
@@ -340,10 +359,12 @@ ok "4: ...and says which value it used"        yes "$(has "$out" 'not a usable w
 ok "4: ...and does not leak a shell error"     no  "$(has "$out" 'integer expression')"
 
 # 4b. A LEADING ZERO. `08` passes an all-digits test and then makes `$(( … + secs ))` an
-#     INVALID-OCTAL expansion error, which aborts the shell — AFTER the message has been typed and
-#     submitted. The operator got a raw bash error, no verdict at all, and an invitation to
-#     re-send a second copy onto the first: the precise harm this whole file exists to prevent,
-#     reintroduced by the guard written to prevent it. Normalised to base ten rather than refused,
+#     INVALID-OCTAL expansion error — AFTER the message has been typed and submitted. Bash does not
+#     die on that (three earlier versions of this comment said it did; measured, it does not), but
+#     inside a FUNCTION it abandons the rest of the function, so `council_say` returned with no
+#     verdict at all: a raw bash error and an invitation to re-send a second copy onto the first.
+#     The precise harm this whole file exists to prevent, reintroduced by the guard written to
+#     prevent it. Normalised to base ten rather than refused,
 #     because a leading zero is a typo with an obvious intent.
 reset; : >"$PINS/container-tmux"; pane "$IDLE" pre; pane "$IDLE" last
 out=$( COUNCIL_SAY_CONFIRM_SECS=08 run_say codex 'hello' )
@@ -353,10 +374,11 @@ ok "4b: ...leaking no arithmetic error"        no  "$(has "$out" 'value too grea
 # the default 10 — the fallback would be indistinguishable from a correct parse otherwise.
 ok "4b: ...and still reaches a verdict"        yes "$(has "$out" 'no turn was seen to start')"
 ok "4b: ...having read 08 as eight seconds"    yes "$(has "$out" '^ *8s and the participant')"
-# The window that is too long to compute with must announce its fallback, not truncate in silence
-# — it would otherwise abort the deadline arithmetic exactly like the octal case above. ONE message
-# covers it and the non-numeric case, rather than a per-class enumeration that would go stale the
-# moment `knob_uint` grew a third refusal.
+# An implausibly long window must announce its fallback, not truncate in silence. NOT because the
+# arithmetic would fail — `$(( 10#… ))` wraps silently at status 0, measured — but because a poll
+# left running for centuries is not what anyone typed. ONE message covers this and the non-numeric
+# case, rather than a per-class enumeration that would go stale the moment `knob_uint` grew a
+# third refusal.
 reset; : >"$PINS/container-tmux"; pane "$IDLE" pre; pane "$RUNNING" last
 out=$( COUNCIL_SAY_CONFIRM_SECS=99999999999 run_say codex 'hello' )
 ok "4b: an implausible window says so"         yes "$(has "$out" 'not a usable whole number')"

@@ -144,10 +144,13 @@ fi
 # did, and each hid a defect that shipped:
 #
 #   * the uint helper has no base-ten normalisation, so `SHIPYARD_TELL_CONFIRM_SECS=08` passed its
-#     all-digits test and then made `$(( … + CONFIRM_SECS ))` an invalid-octal EXPANSION — which
-#     kills this shell, AFTER `shipyard_type` and `shipyard_submit` have already run. The
-#     supervisor got a raw bash error, no delivery verdict, and a documented next move that types
-#     a second copy of the directive onto the first;
+#     all-digits test and then made `$(( … + CONFIRM_SECS ))` an invalid-octal EXPANSION. MEASURED
+#     against the pre-fix script rather than assumed — three earlier versions of this sentence said
+#     it killed the shell and none was right: at top level bash prints the error, leaves `DEADLINE`
+#     EMPTY and carries on, so `[ "$(date +%s)" -lt "" ]` errors too and the loop breaks after ONE
+#     sample. The verdict still prints; what is gone is the poll, silently restored to the
+#     single-sleep behaviour it exists to replace — so a delivered directive reads `unconfirmed`,
+#     and the supervisor's next move is to re-send a second copy onto the first;
 #   * the interval's `0|0.|0.0|.0` pattern ENUMERATED zero instead of testing for a non-zero
 #     digit, so `00`, `000`, `0.00`, `.00` and `000.000` all passed and made `sleep` a no-op.
 #

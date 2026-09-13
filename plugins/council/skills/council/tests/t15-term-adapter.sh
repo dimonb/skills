@@ -73,9 +73,11 @@ ok "an unresolvable backend refuses (exit 1)" 1 "$rc"
 # `say` exits 3 "that seat is gone" and sends the operator to `relaunch` on a live agent), left
 # the whole council suite green. So the wiring is asserted here, against the real file, the way
 # this file already asserts ct_name and the container verbs. Note what that does NOT amount to:
-# the OP verbs — ct_capture, ct_type, ct_submit, ct_kill, ct_focus, ct_launch, ct_target — are
-# still driven by no council test at all, so "t15 covers the ct_* delegations" would be too broad
-# a claim to make anywhere.
+# for the OP verbs — ct_capture, ct_type, ct_submit, ct_kill, ct_focus, ct_launch, ct_target —
+# nothing in the council suite asserts the drv_* delegation at all. (Two tests do REACH one:
+# t13-relaunch drives the real ct_launch to prove regeneration happens before the launch, and
+# t16-keeper-canary drives _ct_launch_owned. Neither checks what the driver was handed.) So
+# "t15 covers the ct_* delegations" would be too broad a claim to make anywhere.
 #
 # THE ONE PROPERTY EACH MUST HAVE is `_ct_pin_dir` FIRST. Without it the driver has no pin
 # directory, so `ct_pins_elsewhere` returns 1 — and because `say` guards that remedy with
