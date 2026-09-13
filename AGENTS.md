@@ -333,3 +333,21 @@ it. Say in the change which parts you verified by running and which you reasoned
   fallback is — so a reader who adds a third source is corrected by the sentence rather than
   misled by it. If an absolute is genuinely true and load-bearing, name the guard that keeps it
   true, or say plainly that nothing does.
+* **The same applies to an absolute over a SOLUTION SPACE, and that shape is worse.** "No anchor
+  works", "there is no way to do X", "every approach has this flaw" is a claim about a class of
+  options, not about the tree, so grepping gives no purchase on it — you check it by enumerating
+  the cases and testing each. And the damage lands differently: a tree-claim misleads a later
+  reader, while this one misleads **you, now**, into deleting something that works. Its moment is
+  the **revert justification**, written just after a fix has failed, when a class-wide claim does
+  not feel like an untested universal — it feels like the lesson. That is exactly when it is least
+  examined, by its author and by its reviewer. So **name the cases you actually checked, and the
+  one you did not**: "wrong on both paths I tested" is worth writing, "wrong in every room shape"
+  is not, because it forecloses the case that turns out to be different — and the difference is
+  usually a mode, a flag or a default that makes one branch trivially correct. If the class really
+  is closed, say what closes it. **Both halves of this rule govern reasoning artifacts, not only
+  tracked prose** — code comments, commit messages, PR and issue bodies, review findings. The
+  sentence arguing to remove something is the one most worth checking and the one least likely to
+  be. Measured: a revert justified by such a claim reinstated the very freeze its change existed to
+  fix, in two of three shipped scenarios, and shipped a test pinning the loss as correct. The
+  counterexample was one case branch away, and the sentence had been read and agreed with by both
+  the author and the supervisor before a reviewer caught it. The gate cannot see any of this either.
