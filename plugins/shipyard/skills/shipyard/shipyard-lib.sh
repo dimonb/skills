@@ -28,6 +28,12 @@ export PATH="/opt/homebrew/bin:/opt/local/bin:/usr/local/bin:/usr/bin:/bin:/usr/
 # question answered twice is the defect the shared engine exists to remove.
 # shellcheck source=policy.sh
 . "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/policy.sh"
+# The shared poll-knob readers (shared/knobs/knobs.sh, same vendoring arrangement). `shipyard-tell`
+# and `council say` validate the identical two knobs for the identical bounded poll, and both had
+# the identical two defects — a leading zero that aborted the shell on an octal expansion, and a
+# zero-interval check that enumerated spellings and missed half of them. One module, two callers.
+# shellcheck source=knobs.sh
+. "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/knobs.sh"
 
 # Escalation mailbox. Lives in the SHARED .git (git-common-dir), so the very same
 # path resolves from the main worktree (parent watcher) and from

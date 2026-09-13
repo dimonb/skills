@@ -35,9 +35,12 @@
 # skill, so the code under test is the shipped code.
 #
 # NOT COVERED, so a green run is never read as more than it is: a live terminal on either backend;
-# whether the shipped `ct_*` verbs reach the driver correctly (t15 owns that); and the residual
-# `adp_delivery_verdict` documents — a turn that starts AND finishes between two samples still
-# reads `unconfirmed`, which no test over a scripted screen sequence can distinguish.
+# the residual `adp_delivery_verdict` documents — a turn that starts AND finishes between two
+# samples still reads `unconfirmed`, which no test over a scripted screen sequence can
+# distinguish; and the shipped OP verbs this file shadows (`ct_capture`, `ct_type`, `ct_submit`),
+# which no council test drives. t15 covers the naming, container and ABSENCE verbs against the
+# real `lib/term.sh` — that much and no more, which is worth saying precisely, because the version
+# of this sentence that said "t15 owns that" implied the whole `ct_*` surface.
 #
 # up.sh's baseline is bash >= 5 (it sources the shared modules), so re-exec into one if a stock
 # bash 3.2 started us — the guard council.sh, t15 and t-driver all use.
@@ -99,7 +102,7 @@ ct_backend() { printf 'tmux'; }
 # serves PANES/pre; afterwards it walks PANES/1, PANES/2, … and then stays on PANES/last. A
 # call-index-only version could not see the pre-send sample at all: deleting that sample merely
 # shifted the whole sequence by one, so every case still read the same screens in the same order
-# and all 46 checks stayed green while `delivered` lost the `seen_idle` observation it requires.
+# and all 46 checks stayed green while \`delivered\` lost the \`seen_idle\` observation it requires.
 # Keyed on the phase rather than the count, dropping it changes which screen the first sample
 # reads, which is what case 3h below asserts.
 ct_capture() {
@@ -311,18 +314,29 @@ ok "3h: ...so the verdict is delivered"        yes "$(has "$out" '^delivered$')"
 
 # ============================================================ 4. THE KNOBS FAIL CLOSED
 printf '\n── the poll knobs ──\n'
-# EVERY CASE HERE KEEPS THE SEAT IDLE THROUGHOUT, so the poll must really iterate to its deadline.
-# The first version of this section put a RUNNING screen in the first post-send capture, which
-# broke the loop on its first sample whatever the knobs said — so it asserted only that a message
-# was printed, and could not have caught either of the two defects below.
+# A CASE THAT ASSERTS A MESSAGE ASSERTS ALMOST NOTHING, and this section learned it the hard way.
+# Its first version scripted a RUNNING screen in the first post-send capture, so the loop broke on
+# sample one whatever the knobs said and `sleep` was never reached at all. The fix comment then
+# claimed "every case here keeps the seat idle", which was true of exactly one case — so the claim
+# was reviewed instead of the behaviour, twice. The mutation that settled it: keep the
+# classification and the `using 0.5` note but leave `interval` at the unusable value, and all
+# checks stayed green while the fork storm shipped.
 #
+# So the cases that are ABOUT the poll keep the seat IDLE to the deadline and assert HOW MANY
+# TIMES IT SAMPLED — `$NCALLS` is the fake's own capture counter — with a one-second window to
+# keep the file fast. A no-op `sleep` shows up as a count in the hundreds; the real 0.5s interval
+# is two or three. The cases that are only about a message say so and use a fast fixture.
+#
+# `samples` reads the counter the shadow ct_capture writes; `run_say` must have returned first.
+samples() { cat "$NCALLS" 2>/dev/null || printf 0; }
+
 # An unusable window must not break the loop after one sample. That is the single-sleep behaviour
 # the poll replaced, and it would be announced only by a stray `integer expression expected` on
 # stderr — so it must fall back to the documented default instead.
 reset; : >"$PINS/container-tmux"; pane "$IDLE" pre; pane "$RUNNING" last
 out=$( COUNCIL_SAY_CONFIRM_SECS=nonsense run_say codex 'hello' )
 ok "4: a non-numeric window falls back"        0   "$(rc_of "$out")"
-ok "4: ...and says which value it used"        yes "$(has "$out" 'using 10')"
+ok "4: ...and says which value it used"        yes "$(has "$out" 'not a usable whole number')"
 ok "4: ...and does not leak a shell error"     no  "$(has "$out" 'integer expression')"
 
 # 4b. A LEADING ZERO. `08` passes an all-digits test and then makes `$(( … + secs ))` an
@@ -339,27 +353,48 @@ ok "4b: ...leaking no arithmetic error"        no  "$(has "$out" 'value too grea
 # the default 10 — the fallback would be indistinguishable from a correct parse otherwise.
 ok "4b: ...and still reaches a verdict"        yes "$(has "$out" 'no turn was seen to start')"
 ok "4b: ...having read 08 as eight seconds"    yes "$(has "$out" '^ *8s and the participant')"
-# The window that is too long to compute with must announce its fallback, not truncate in silence.
+# The window that is too long to compute with must announce its fallback, not truncate in silence
+# — it would otherwise abort the deadline arithmetic exactly like the octal case above. ONE message
+# covers it and the non-numeric case, rather than a per-class enumeration that would go stale the
+# moment `knob_uint` grew a third refusal.
 reset; : >"$PINS/container-tmux"; pane "$IDLE" pre; pane "$RUNNING" last
 out=$( COUNCIL_SAY_CONFIRM_SECS=99999999999 run_say codex 'hello' )
-ok "4b: an implausible window says so"         yes "$(has "$out" 'implausibly large')"
+ok "4b: an implausible window says so"         yes "$(has "$out" 'not a usable whole number')"
+ok "4b: ...and does not abort on it"           0   "$(rc_of "$out")"
 
 # 4c. EVERY SPELLING OF ZERO, not the four the first version listed. `sleep 00` is a no-op, so a
-#     spelling that slips through turns the bounded poll into a fork storm — measured at 74
-#     captures in two seconds against 4. Testing for a non-zero digit is what covers them all at
-#     once; these cases exist so the next reader cannot "fix" it back into an enumeration.
-reset; : >"$PINS/container-tmux"; pane "$IDLE" pre; pane "$RUNNING" last
-out=$( COUNCIL_SAY_CONFIRM_INTERVAL=0 run_say codex 'hello' )
-ok "4c: a zero interval falls back"            yes "$(has "$out" 'using 0.5')"
-for z in 00 000 0.00 .00 000.000 .; do
+#     spelling that slips through turns the bounded poll into a fork storm. Testing for a non-zero
+#     digit is what covers them all at once; these cases exist so the next reader cannot "fix" it
+#     back into an enumeration.
+#
+#     The FIRST case holds the seat idle for a whole second and counts the samples, so it fails if
+#     the fallback stops being applied even while the message still prints. The rest only have to
+#     show that the classification reaches them, so they use the fast fixture.
+#     THE WINDOW IS TWO SECONDS AND THAT IS NOT ARBITRARY. The poll's deadline compares WHOLE
+#     seconds (`date +%s`), so a one-second window expires anywhere between instantly and a full
+#     second depending on where in the current second the send lands. At one second this very
+#     assertion was measurably flaky — it killed the mutation on roughly two runs in three — and a
+#     guard that fires two times in three is one an operator learns to ignore. At two seconds the
+#     poll runs for at least a second even in the worst alignment, which is hundreds of samples
+#     with a no-op `sleep` and about five with a real one, so the two cases stop overlapping.
+reset; : >"$PINS/container-tmux"; pane "$IDLE" pre; pane "$IDLE" last
+out=$( COUNCIL_SAY_CONFIRM_SECS=2 COUNCIL_SAY_CONFIRM_INTERVAL=00 run_say codex 'hello' )
+n=$(samples)
+ok "4c: a zero spelling falls back"            yes "$(has "$out" 'not a usable positive number')"
+# The COUNT is the point, not the message: the mutation this kills keeps the note and leaves the
+# poll on the unusable value, which no message assertion can see. A ceiling, not an exact number,
+# because it is a real clock.
+ok "4c: ...and the poll really slept"          yes "$( [ "$n" -le 40 ] && printf yes || printf "no ($n samples)" )"
+ok "4c: ...having sampled more than once"      yes "$( [ "$n" -ge 2 ]  && printf yes || printf "no ($n samples)" )"
+for z in 0 000 0.00 .00 000.000 . 9999999999; do
   reset; : >"$PINS/container-tmux"; pane "$IDLE" pre; pane "$RUNNING" last
   out=$( COUNCIL_SAY_CONFIRM_INTERVAL="$z" run_say codex 'hello' )
-  ok "4c: [$z] falls back too"                 yes "$(has "$out" 'using 0.5')"
+  ok "4c: [$z] falls back too"                 yes "$(has "$out" 'not a usable positive number')"
 done
 # ...and a legitimate value is NOT rejected, or the guard would be useless in the other direction.
 reset; : >"$PINS/container-tmux"; pane "$IDLE" pre; pane "$RUNNING" last
 out=$( COUNCIL_SAY_CONFIRM_INTERVAL=0.05 run_say codex 'hello' )
-ok "4c: a small but positive interval is kept" no  "$(has "$out" 'using 0.5')"
+ok "4c: a small but positive interval is kept" no  "$(has "$out" 'not a usable positive number')"
 
 # --- done -------------------------------------------------------------------------------------
 printf '\n'

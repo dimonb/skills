@@ -71,5 +71,7 @@ ct_absence_class() { _ct_pin_dir; drv_absence_class "$1" "${2:-}" "${3:-}"; }
 # Needed as its own verb and not as a bare `drv_pins_elsewhere` at the call site: the class above
 # is read through a command substitution, so the `_ct_pin_dir` inside it runs in a subshell and
 # never reaches the caller's shell. A remedy line that asked the driver directly would find no pin
-# directory, return 1, and print the one thing the operator needs without a value in it.
+# directory and return 1 — and because `say` guards that line with `[ -n "$pin" ]`, the operator
+# would be told the room is pinned elsewhere and then given NO backend to pin, the line omitted
+# entirely rather than printed empty.
 ct_pins_elsewhere() { _ct_pin_dir; drv_pins_elsewhere; }

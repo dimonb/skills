@@ -72,12 +72,16 @@ ok "an unresolvable backend refuses (exit 1)" 1 "$rc"
 # restores the exact #141 defect (an unreachable backend read as "answered, nothing there", so
 # `say` exits 3 "that seat is gone" and sends the operator to `relaunch` on a live agent), left
 # the whole council suite green. So the wiring is asserted here, against the real file, the way
-# the rest of this file already asserts the other ct_* delegations.
+# this file already asserts ct_name and the container verbs. Note what that does NOT amount to:
+# the OP verbs — ct_capture, ct_type, ct_submit, ct_kill, ct_focus, ct_launch, ct_target — are
+# still driven by no council test at all, so "t15 covers the ct_* delegations" would be too broad
+# a claim to make anywhere.
 #
 # THE ONE PROPERTY EACH MUST HAVE is `_ct_pin_dir` FIRST. Without it the driver has no pin
-# directory: `ct_pins_elsewhere` then returns 1 and `say`'s `elsewhere` remedy prints
-# `COUNCIL_BACKEND=` with no value — an instruction the operator cannot follow, and the exact
-# thing t21's case 2b was written to catch but cannot, because it runs its own copy.
+# directory, so `ct_pins_elsewhere` returns 1 — and because `say` guards that remedy with
+# `[ -n "$pin" ]`, the operator is told the room was launched on another backend and then given NO
+# backend to pin, the line omitted entirely. That is the exact thing t21's case 2b was written to
+# catch but cannot, because it runs its own copy of these verbs.
 #
 # Faked at the drv_* layer, AFTER sourcing term.sh, so the real ct_* bodies run: each fake records
 # what it was handed, including the pin directory the delegation was supposed to set.

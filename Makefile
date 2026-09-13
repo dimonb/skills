@@ -18,6 +18,7 @@ check:
 	@bash shared/flow/tests/run-all.sh
 	@bash shared/adapters/tests/run-all.sh
 	@bash shared/policy/tests/run-all.sh
+	@bash shared/knobs/tests/run-all.sh
 
 # The test suites' fast subsets: driver, flow, adapters, policy, shipyard, and council (without
 # council's slow `--full` load and latency runs). Run by hand to verify a change for real
@@ -29,6 +30,7 @@ test:
 	@bash shared/flow/tests/run-all.sh
 	@bash shared/adapters/tests/run-all.sh
 	@bash shared/policy/tests/run-all.sh
+	@bash shared/knobs/tests/run-all.sh
 	@bash plugins/shipyard/skills/shipyard/tests/run-all.sh
 	@bash plugins/council/skills/council/tests/run-all.sh
 

@@ -8,6 +8,10 @@
 # and the sentence each participant is greeted with — and asks the module for the rest.
 # shellcheck source=agent-adapters.sh
 . "$(dirname "${BASH_SOURCE[0]}")/agent-adapters.sh"
+# Reading `say`'s two poll knobs safely is the same question `shipyard tell` asks, and both got
+# the same two answers wrong the same way — so it is one module, vendored like the rest.
+# shellcheck source=knobs.sh
+. "$(dirname "${BASH_SOURCE[0]}")/knobs.sh"
 
 # A participant name, an adapter kind, a scenario, a role. Bare word only.
 #
@@ -579,7 +583,13 @@ _council_say_absence() { # <peer>
 # implementations of one question is the defect the shared engine exists to remove, and each of
 # these already had its first implementation somewhere else in the tree.
 council_say() {
-  local peer="${1:?council say: to whom}"; shift
+  # An explicit check, not `${1:?…}`. That expansion aborts the shell with a RAW bash message and
+  # status 1 — and 1 is the code this verb's own docs give to "the shared turn-state module did not
+  # load", so a supervising agent that forgot an operand was told its plugin install was broken.
+  # Every other argument error here is exit 2; a missing one is no different. `council.sh` grew the
+  # same fix for `--room` and `--me` in #146.
+  [ "$#" -ge 1 ] || { echo "council say: which participant? (usage: say <peer> \"<text>\")" >&2; return 2; }
+  local peer="$1"; shift
   local text; case "${1:-}" in @*) text=$(cat "${1#@}") ;; *) text="$*" ;; esac
   [ -n "$text" ] || { echo "council say: empty message" >&2; return 2; }
 
@@ -636,51 +646,16 @@ council_say() {
   # reads `unconfirmed`. A single `sleep 1.5` misses a one-second turn completely.
   #
   # Both knobs are VALIDATED rather than just defaulted, because an unusable value fails open in
-  # the worst way: a non-numeric window makes the deadline arithmetic empty, `[ … -lt "" ]` errors,
-  # and the loop breaks after ONE sample — exactly the single-sleep behaviour the poll replaces,
-  # announced only by a stray error on stderr.
-  #
-  # EACH ARM TESTS A SHAPE, NEVER A LIST OF BAD SPELLINGS. The first version of both enumerated
-  # instances and both had holes: `08` passed the window's all-digits test and then made
-  # `$(( … + secs ))` an INVALID-OCTAL error, which aborts the shell — after the message had been
-  # typed and submitted, so the operator got a raw bash error, no verdict, and an invitation to
-  # re-send a second copy onto the first; and the interval's `0|0.|0.0|.0` list missed `00`,
-  # `000`, `0.00` and `.00`, each of which makes `sleep` a no-op and the bounded poll a fork storm
-  # (measured: 74 captures in two seconds against 4). Both are the same defect, and the repo's rule
-  # for it is to remove the enumerable shape rather than to correct the instance.
+  # the worst way: it either aborts this shell after the message has already gone, or turns the
+  # bounded poll into a fork storm. `shared/knobs` holds both rules and the evidence for them —
+  # `shipyard tell` asks the identical question and had the identical two defects, which is why
+  # the answer is one module rather than two copies. What stays HERE is the wording, because
+  # naming the operator's own variable is this skill's business and not the module's.
   local secs interval deadline verdict
-  case "${COUNCIL_SAY_CONFIRM_SECS:-10}" in
-    ''|*[!0-9]*)
-      echo "council say: COUNCIL_SAY_CONFIRM_SECS is not a whole number — using 10" >&2
-      secs=10 ;;
-    *)
-      secs=${COUNCIL_SAY_CONFIRM_SECS:-10}
-      # The length cap comes FIRST and announces itself: a value that overflows the arithmetic
-      # below would error exactly like the octal case, and a silent truncation would contradict
-      # what this skill's docs promise about an unusable value.
-      if [ "${#secs}" -gt 9 ]; then
-        echo "council say: COUNCIL_SAY_CONFIRM_SECS is implausibly large — using 10" >&2
-        secs=10
-      else
-        # `10#` forces base ten, so `08` means eight seconds instead of aborting the shell. Done
-        # by normalising rather than by rejecting: a leading zero is a typo with an obvious
-        # intent, and honouring it is friendlier than refusing it.
-        secs=$((10#$secs))
-      fi ;;
-  esac
-  # The interval must be a plain decimal with at least one NON-ZERO digit: a bare `.` makes
-  # `sleep` error every iteration and any spelling of zero makes it a no-op, and either turns the
-  # bounded poll into a spin that re-captures as fast as it can fork. Testing for a non-zero digit
-  # is what covers every spelling of zero at once, however many zeros and dots it is written with.
-  case "${COUNCIL_SAY_CONFIRM_INTERVAL:-0.5}" in
-    *[!0-9.]*|*.*.*) interval="" ;;                                  # not a plain decimal
-    *[1-9]*)         interval=${COUNCIL_SAY_CONFIRM_INTERVAL:-0.5} ;; # has a non-zero digit
-    *)               interval="" ;;                                   # every spelling of zero, and `.`
-  esac
-  if [ -z "$interval" ]; then
-    echo "council say: COUNCIL_SAY_CONFIRM_INTERVAL is not a positive number — using 0.5" >&2
-    interval=0.5
-  fi
+  secs=$(knob_uint "${COUNCIL_SAY_CONFIRM_SECS:-}" 10) \
+    || echo "council say: COUNCIL_SAY_CONFIRM_SECS is not a usable whole number — using 10" >&2
+  interval=$(knob_interval "${COUNCIL_SAY_CONFIRM_INTERVAL:-}" 0.5) \
+    || echo "council say: COUNCIL_SAY_CONFIRM_INTERVAL is not a usable positive number — using 0.5" >&2
 
   deadline=$(( $(date +%s) + secs ))
   while :; do

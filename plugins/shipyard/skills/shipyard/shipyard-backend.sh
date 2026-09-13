@@ -36,14 +36,17 @@
 # workspace resolves a different container and truthfully reports that there are no children — the
 # worst possible lie for a monitor.
 #
-# What STAYS in shipyard, because the shared driver has no twin for it: the backend precheck
-# (shipyard_backend_check), the Escape key (shipyard_esc), the sidebar note / desktop notify /
-# empty-workspace prune, the container kind/unpin, and the report-facing shipyard_slot_addr /
-# shipyard_where / shipyard_peek_hint. Only the shared backend ops move.
+# WHAT STAYS IN SHIPYARD, as a rule rather than a list, because the list has now gone stale twice
+# and each time it was corrected rather than replaced: **a backend OPERATION delegates to the
+# driver; anything that speaks shipyard's own vocabulary stays here.** So the `ship-<slot>`
+# template, the diagnostics an operator reads, the sidebar and notify calls, the precheck and the
+# Escape key are all this file's; resolving, reading, typing, launching, killing and enumerating
+# are the driver's.
 #
-# `shipyard_slots` was on that list until #141 gave council the same question. Its backend
-# mechanics are now `drv_sessions`, and what stays here is shipyard's `ship-<slot>` template —
-# the same split every other op already has, and the reason its two private helpers are gone.
+# `shipyard_slots` is the worked example. It was named as staying here, with its two private
+# helpers, until #141 gave council the same enumeration question — now its mechanics are
+# `drv_sessions` and what remains is the template it filters by, which is the same split every
+# other op already had.
 
 # --- map shipyard's knobs onto the driver's, then source it --------------------------------
 # The driver resolves and caches the backend ONCE, at source time, so DRV_BACKEND must already
@@ -311,8 +314,10 @@ shipyard_slots() {
 # protect, with the trigger "Move it the moment that stops being true". #141 is that moment:
 # `council say` refuses a peer with a confident negative drawn from the same unanswerable
 # question. The implementation is `drv_pins_elsewhere` in shared/driver, vendored into both
-# plugins; this stays as shipyard's NAME for it, because a released surface with four call sites
-# is worth a one-line seam and because the answer it gives is unchanged.
+# plugins; this stays as shipyard's NAME for it, because a released surface that this skill and
+# its tests already call in several places is worth a one-line seam and because the answer it
+# gives is unchanged. (No count here on purpose: the version of this sentence that said "four"
+# was made false by the very change that wrote it, which added a fifth.)
 #
 # WHY IT MATTERS. `SHIPYARD_BACKEND=auto` decides per PROCESS by probing the agterm control socket,
 # so a socket that blips for one tick resolves tmux for that tick — and a tmux session named after
@@ -361,13 +366,18 @@ shipyard_backend_pinned_elsewhere() { drv_pins_elsewhere; }
 # already hold a list — reintroducing the disagreement the parameter exists to prevent.
 #
 # THE DUPLICATION, RESTATED AGAINST THE TREE AS IT IS. `shipyard-report.sh` used to carry its own
-# `fleet_signal`; #137 deleted it, and both of that file's call sites now come here (its own line
-# 156 records the deletion). What survives there is narrower: an open-coded per-slot "still listed"
-# contradiction check, which is exactly this function's `listed` arm spelled a second time — and it
-# labels that verdict `unreachable`, so the operator is sent to check a socket that demonstrably
-# answered. Folding it in is not a one-line swap, because that loop matches BARE slots and this
-# function's callers here pass full session names (see the namespace note above), so it is filed
-# rather than done here.
+# `fleet_signal`: #137 added the shared function and scheduled the deletion, #138 made it, and both
+# of that file's call sites now come here — its own `fleet_signal` mention records exactly that.
+# What survives there is narrower: an open-coded per-slot "still listed" contradiction check, which
+# is this function's `listed` arm spelled a second time — and it labels that verdict `unreachable`,
+# so the operator is sent to check a socket that demonstrably answered.
+#
+# It is filed rather than folded in here because the obstacle is on report.sh's side, not this
+# one's: `no_signal_block` has arms for `unreachable` and `elsewhere` only — and no default — so a
+# `listed` verdict would print a heading and a reason with no remedy at all. Whoever takes it must
+# also heed the namespace note above: that loop holds BARE slots on both sides, which is
+# legitimate, but mixing them with the full names this file passes would match nothing and turn the
+# guard off silently.
 #
 # NOT USED AS EVIDENCE: the slot's worktree. A worktree outlives its terminal by design — that is
 # the state of every child whose terminal was killed but not torn down — so reading its presence as
