@@ -154,13 +154,16 @@ and nothing here to apply. The round releases itself; wait for it.
 **Stop when the room has written its record** — `council.sh decision` prints it and exits 0.
 That is the single stop signal. Do **not** stop on seeing a message with `act: decide`: that
 only says somebody ran the verb, and it is neither necessary nor sufficient. A stray `decide`
-message closes nothing, and a room genuinely closed with `decide --force` often carries no such
-message at all. Do not use `verdict` as the stop signal either: a room whose turn budget ran out
-reports `unresolved` with exit 0 while no record has been written yet.
+message closes nothing, and a close whose announcement could not be written carries no such
+message at all. **Do take it as a cue**: on seeing one, run `council.sh decision` — if it prints,
+the room is over and you stop. Do not use `verdict` as the stop signal either: a room whose turn
+budget ran out reports `unresolved` with exit 0 while no record has been written yet.
 
-Something urgent can be said out of turn — only `object`, `clarify`, `notice`, with the
-`--hand` flag. It consumes no turn and does not move the floor, but the next speaker is
-obliged to answer it.
+Something urgent can be said out of turn — the only acts **you** may raise that way are
+`object`, `clarify` and `notice`, with the `--hand` flag. It consumes no turn and does not move
+the floor, but the next speaker is obliged to answer it. The room's own close announcement
+arrives `--hand` too; that one is not a raised hand and nobody owes it an answer — it is the cue
+above.
 
 ## Speech acts
 

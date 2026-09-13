@@ -321,12 +321,20 @@ c_lamport() { c_slurp "$ROOM/state/$ME.lamport"; }
 #   every other file, and the old reader passed whatever it held straight through as the
 #   verdict word -- `yes` and `DECIDED` both reached a supervisor as if they were verdicts.
 #
-# The decide MESSAGE is deliberately not part of this. v_decide sends it last, after both
-# files, and that send can legitimately fail -- c_send refuses a sender that does not hold the
-# floor, the ordinary case for `decide --force` on a stuck room, and v_decide does not check
+# The decide MESSAGE is deliberately not part of this, and that holds however reliable the send
+# becomes. v_decide sends it last, after both files, so it can still be missing from a room that
+# closed: the write can fail, and v_decide reports exactly that as exit 4 rather than swallowing
 # it. Requiring the message is what the code did before, and it left a room that had genuinely
 # closed as `unresolved`, record on disk, reporting `deliberating` for ever. So the same reader
 # broke the rule in both directions: closed when it was not, and open when it was.
+#
+# This paragraph used to add that the send "can legitimately fail -- c_send refuses a sender that
+# does not hold the floor ... and v_decide does not check it". BOTH halves are now false and the
+# correction matters, because room-graph.sh sends readers here for the whole account: the
+# announcement goes `--hand`, a branch that precedes c_send's floor check entirely, so no closer is
+# refused for want of the floor; and v_decide does read the status. Left standing, the sentence
+# taught the defect as the contract -- which is how the `return 4` would come to look like dead
+# weight to a later reader.
 c_recorded_status() {
   # -s, not -f: a record of zero bytes is not a record. `v_decide` opens it with `> "$out"`,
   # which CREATES it the instant the redirect opens, so a decide that dies part-way leaves the

@@ -111,6 +111,22 @@ if [ "$(id -u)" = 0 ]; then
 else
   ripe
   outsider=$(not_the_holder)
+  # Both guards matter. Without the -n test an empty $outsider would chmod "$R/lane" itself; and
+  # without the trap, a test killed between the two chmods leaves a mode-500 directory that
+  # `rm -rf` CANNOT remove while it still holds files, so run-all.sh's EXIT trap fails and the
+  # whole run root leaks permanently. The suite's ceiling group-kills a wedged test, so this is a
+  # reachable path rather than a hypothetical one.
+  [ -n "$outsider" ] || { echo "FAIL could not pick a non-holder"; exit 1; }
+  # CHAINED onto _helpers.sh's trap, never replacing it — a bare `trap … EXIT` here would drop
+  # _council_test_cleanup, which is what kills this room's keeper and the test's background jobs.
+  # `( exit $rc )` restores $? before delegating, because _council_test_cleanup opens with
+  # `local rc=$?` and would otherwise report the chmod's status as the test's exit code.
+  _t23_restore_lane() {
+    local rc=$?
+    chmod 700 "$R/lane/$outsider" 2>/dev/null
+    ( exit $rc ); _council_test_cleanup
+  }
+  trap _t23_restore_lane EXIT
   chmod 500 "$R/lane/$outsider" || { echo "FAIL could not make the lane read-only"; exit 1; }
   err="$COUNCIL_TEST_ROOT/t23.err"
   written=$(COUNCIL_ME="$outsider" bash "$CLI" decide 2>"$err"); rc=$?
@@ -133,6 +149,92 @@ else
   [ "$rc2" = 3 ] || { echo "FAIL a re-run after the failed announcement exited $rc2, expected 3"; fail=1; }
   [ "$fail" = 0 ] && echo "announcement fails: exit 4, record printed, status decided, re-run answers 3"
 fi
+
+# --- 2b. a record that could not be written is not reported as a close -----------------
+# The defect one step ABOVE the announcement, and strictly worse than it: the record and
+# board/status were bare redirects whose failure the shell reports to nobody, so `decide` printed
+# the path of a file that does not exist, announced "decision written" to the room, and exited 0 —
+# while every reader still saw the room as open. The room was told a lie about a record that was
+# not there. Exit 1 (not 4): 4 means the record IS written, and the two must never be confused.
+if [ "$(id -u)" = 0 ]; then
+  echo "record unwritable: SKIPPED (running as root — mode bits do not apply)"
+else
+  ripe
+  outsider=$(not_the_holder)
+  [ -n "$outsider" ] || { echo "FAIL could not pick a non-holder"; exit 1; }
+  _t23_restore_board() {
+    local rc=$?
+    chmod 700 "$R/board" 2>/dev/null
+    ( exit $rc ); _council_test_cleanup
+  }
+  trap _t23_restore_board EXIT
+  chmod 500 "$R/board" || { echo "FAIL could not make board/ read-only"; exit 1; }
+  err2="$COUNCIL_TEST_ROOT/t23b.err"
+  out2=$(COUNCIL_ME="$outsider" bash "$CLI" decide 2>"$err2"); rc3=$?
+  chmod 700 "$R/board"
+
+  [ "$rc3" = 1 ] || { echo "FAIL an unwritable record exited $rc3, expected 1"; fail=1; }
+  # No path on stdout: the room is NOT closed, so a caller must not be handed a record to read.
+  [ -z "$out2" ] || { echo "FAIL a record path was printed for a record that was never written: '$out2'"; fail=1; }
+  [ ! -s "$R/board/decision.md" ] || { echo "FAIL a record exists — the write did not actually fail"; fail=1; }
+  # And the room must not have been told a decision was written.
+  [ -z "$(decide_msg)" ] || { echo "FAIL the room was told a decision was written that does not exist"; fail=1; }
+  grep -q 'NOT closed' "$err2" || { echo "FAIL stderr does not say the room is not closed"; fail=1; }
+  # The room is genuinely still live, so the ordinary close still works afterwards.
+  [ "$(verdict1)" = ready-to-decide ] || { echo "FAIL the room did not stay open, got $(verdict1)"; fail=1; }
+  [ "$fail" = 0 ] && echo "record unwritable: exit 1, no path, room untouched and still open"
+
+  # board/status on its OWN, because the fixture above cannot separate the two guards: both files
+  # live in board/, so making that directory unwritable fires the record guard first and leaves the
+  # status guard unexercised — and an unexercised guard is the thing this suite keeps finding. A
+  # writable board/ with a read-only, EMPTY status file reaches it: empty means c_recorded_status
+  # still reads the room as open, so this is a live room whose close gets half-way.
+  ripe
+  outsider=$(not_the_holder)
+  : > "$R/board/status"
+  chmod 400 "$R/board/status" || { echo "FAIL could not make board/status read-only"; exit 1; }
+  err3="$COUNCIL_TEST_ROOT/t23c.err"
+  out3=$(COUNCIL_ME="$outsider" bash "$CLI" decide 2>"$err3"); rc4=$?
+  chmod 600 "$R/board/status"
+  [ "$rc4" = 1 ] || { echo "FAIL an unwritable board/status exited $rc4, expected 1"; fail=1; }
+  [ -z "$out3" ] || { echo "FAIL a record path was printed though the close did not complete: '$out3'"; fail=1; }
+  grep -q 'board/status could not be' "$err3" || { echo "FAIL stderr does not name board/status as what failed"; fail=1; }
+  [ -z "$(decide_msg)" ] || { echo "FAIL the room was told about a close that did not complete"; fail=1; }
+  [ "$fail" = 0 ] && echo "status unwritable: exit 1, no path, the failure is named"
+fi
+
+# --- 3. a closed room releases `recv --until-floor`, and an OPEN one still waits --------
+# The announcement is `--hand`, so it moves no floor — and `recv --until-floor` returns only when
+# the floor becomes yours. Without an explicit release a seat that is not the holder when the room
+# closes waits out its whole --timeout (540 s by default) with the record already on disk, and
+# protocol/_channel.md prescribes exactly that loop, so it is the ordinary path.
+#
+# THE SECOND ASSERTION IS THE LOAD-BEARING ONE. The release can only ever return EARLIER, so the
+# only way to get this wrong is to release too eagerly — which no assertion about a CLOSED room can
+# catch. The open-room case is the one that fails if the predicate is broadened.
+elapsed_ms() { # <start-ms>
+  printf '%s' $(( $(date +%s)*1000 - $1 ))
+}
+ripe
+outsider=$(not_the_holder)
+
+# An open room must still wait: a short timeout, and we require it to have used it up (rc 4).
+t0=$(( $(date +%s) * 1000 ))
+COUNCIL_ME="$outsider" bash "$CLI" recv --until-floor --timeout 2 >/dev/null 2>&1; rc_open=$?
+open_ms=$(elapsed_ms "$t0")
+[ "$rc_open" = 4 ] || { echo "FAIL an OPEN room released --until-floor early (rc $rc_open) — the release is too eager"; fail=1; }
+[ "$open_ms" -ge 1500 ] || { echo "FAIL an OPEN room returned after ${open_ms}ms, so it did not wait"; fail=1; }
+
+# Now close it, and the same call must come back promptly instead of burning its timeout.
+COUNCIL_ME=$(floor_holder) bash "$CLI" decide >/dev/null || { echo "FAIL could not close the room"; fail=1; }
+t1=$(( $(date +%s) * 1000 ))
+COUNCIL_ME="$outsider" bash "$CLI" recv --until-floor --timeout 20 >/dev/null 2>&1; rc_closed=$?
+closed_ms=$(elapsed_ms "$t1")
+[ "$rc_closed" = 0 ] || { echo "FAIL a CLOSED room did not release --until-floor (rc $rc_closed)"; fail=1; }
+[ "$closed_ms" -lt 10000 ] || { echo "FAIL a CLOSED room took ${closed_ms}ms to release — it waited for the timeout"; fail=1; }
+# Plain `recv` is untouched by the release: it already returned on any drained message.
+COUNCIL_ME="$outsider" bash "$CLI" recv --peek >/dev/null 2>&1
+[ "$fail" = 0 ] && echo "until-floor:        open room waits (${open_ms}ms, rc 4), closed room releases (${closed_ms}ms, rc 0)"
 
 [ "$fail" = 0 ] && echo "t23 passed"
 exit $fail

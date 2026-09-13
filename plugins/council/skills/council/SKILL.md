@@ -117,9 +117,10 @@ A participant that goes silent does not freeze the room: once the floor holder i
 **the next participant in order — and only that one** — may write a `skip`, which consumes
 the missing turn and moves on.
 
-Anything urgent can be said out of turn with `--hand`: only `object`, `clarify` and
-`notice`, it consumes no turn and does not move the floor, and the next speaker must
-answer it.
+Anything urgent can be said out of turn with `--hand`: the acts a **participant** may raise that
+way are `object`, `clarify` and `notice`, it consumes no turn and does not move the floor, and the
+next speaker must answer it. (`decide`'s close announcement is also `--hand` — sent by the room
+rather than raised by a participant, and nobody owes it an answer. `c_send` enforces no list.)
 
 ## Deliberation: what closes what
 
@@ -207,24 +208,42 @@ can come apart: the record on disk while the room is never told. `decide` report
 rather than hiding it.
 
 The announcement is a message of act `decide`, sent `--hand`. It **closes nothing** — the record
-does that, and `verdict`, `status`, `claims` and `decision` all read the record (see above) — so
-it carries no authority and a stray one changes no verdict. What it does is **ring every seat**,
-which turns each participant's next `decision` poll from "after this `recv` times out" into "now".
-`--hand` because closing is a chair action taken out of band: the caller is `--me`-gated to some
-seat, but it acts for the room rather than taking its turn, so it consumes no turn and does not
-move the floor. Before this, the announcement was a plain send and `c_send` refused one from a
-peer that did not hold the floor — the ordinary case for a supervisor — and the refusal was
-discarded, so the commonest close rang nobody and still reported success.
+does that, and `verdict`, `status`, `claims` and `decision` all read the record (see above) — so it
+carries no authority: a stray one cannot make a room report `decided`. (It is not inert, though.
+A stray `decide` sent the ordinary way is a normal message and **consumes a turn** like any other,
+which can bring a room to `ready-to-decide` a turn early; only the close's own `--hand`
+announcement consumes none.) What it does is **ring every seat**, so a waiting participant is
+released now rather than at its own timeout. `--hand` because closing is taken out of band: the
+caller is `--me`-gated to a seat, but it acts for the room rather than taking its turn, so it
+consumes no turn and does not move the floor. Before this, the announcement was a plain send and
+`c_send` refused one from a peer that did not hold the floor — which is any closer but the current
+floor holder — and the refusal was discarded, so the commonest close rang nobody and still
+reported success.
+
+A `--hand` message moves no floor, so on its own it would **not** release a seat waiting in
+`recv --until-floor` — the loop `protocol/_channel.md` prescribes. `recv --until-floor` therefore
+also returns once the room's record says it closed, read through the same `c_recorded_status` as
+everything else. Without that, closing a room left every seat but the floor holder waiting out its
+full `--timeout` (**540 s** by default) with the record already finished on disk.
 
 | exit | what it means |
 |---|---|
-| 0 | the record is written **and** the room was told. |
-| 4 | the record is written, the room was **not** told. The close stands: `board/status` is set, `decision` serves the record, and each seat sees it on its next poll rather than immediately. |
+| 0 | the record is written **and** the announcement was written. |
+| 4 | the record is written, the announcement was **not**. The close stands: `board/status` is set and `decision` serves the record; no seat was rung, so each learns at its own next poll. |
+| 1 | the record itself could not be written. **The room is not closed** and nothing was announced; no path is printed. |
 
-**Exit 4 is not a failed close and must not be retried** — a second `decide` answers 3. It is
-`say`'s exit 6 in another verb: report what was established, never the claim you wanted to make.
-The record path is still printed on stdout, because it is the room's output either way. If the
-room should stop sooner than its own polling, wake a seat with `council.sh say`.
+Exit 0 says the announcement reached the log, which is not quite the same as every seat having
+read it: while an **opening barrier round** is still open, a lane is withheld whole from the other
+seats, so a `--force` close taken mid-round is not visible to them until the round releases. Use
+`council.sh say` to stop a room sooner in that case.
+
+**Exit 4 is not a failed close and must not be retried.** A re-run answers 3 on a `decided` room
+and 2 (*"not ripe"*) on an `unresolved` one — and 2 is the status this skill tells a supervisor it
+may retry, so read it here as "already closed", not as an invitation to `--force`, which would
+rewrite the record and announce a second time. Exit 4 is `say`'s exit 6 in another verb: report
+what was established, never the claim you wanted to make. The record path is still printed on
+stdout, because it is the room's output either way. If the room should stop sooner, wake a seat
+with `council.sh say`.
 
 **A room that has already closed is the exception, and it is a remainder rather than a design.**
 `--force` over a room whose record is on disk rewrites that record, and it does so at exit 0
