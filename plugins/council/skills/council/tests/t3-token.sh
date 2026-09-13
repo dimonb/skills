@@ -128,7 +128,9 @@ elif [ "$h2" -le "$d2" ]; then
 elif [ "${s2:-0}" -lt 3 ]; then
   echo "FAIL status reported held ${s2}s for a token room the floor calls ${h2}ms"; fail=1
 else echo "ok   a token room times its first holder from the room ($h2 ms > $d2, status ${s2}s)"; fi
-# ...and the seat floor names as next= can then skip on that basis.
+# ...and the skip itself is reachable for that seat. This asserts REACHABILITY only — c_send
+# exempts `skip` from the floor check, so it passes whatever held_ms says, and it stays green
+# under every mutation of the anchor above. The gate is the case above; this is the mechanism.
 nx=$(COUNCIL_ROOM="$R2" bash "$CLI" floor | sed -n 's/.*next=\([^ ]*\).*/\1/p')
 ho=$(COUNCIL_ROOM="$R2" bash "$CLI" floor | sed -n 's/.*floor=\([^ ]*\).*/\1/p')
 if COUNCIL_ROOM="$R2" COUNCIL_ME="$nx" bash "$CLI" send --act skip "$ho overdue" >/dev/null 2>&1 \

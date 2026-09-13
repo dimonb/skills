@@ -417,6 +417,15 @@ v_status() {
   #
   # A room that records no creation time (one made before `created_ms` existed) answers nothing
   # and keeps the plain threshold, which is exactly its behaviour before this branch was here.
+  #
+  # THE INVARIANT ABOVE IS ABOUT THE ALARMS THAT EXISTED WHEN IT WAS WRITTEN, and one alarm now
+  # falls outside it. Since c_floor_held_ms learned to time a token room's first holder from
+  # `created_ms`, a room that has never moved raises STALL where it used to raise nothing — and
+  # for THAT case the alarm's condition is the peer-written field itself, not just its wording, so
+  # a seat can switch it off by writing `created_ms` forward or by rewriting `mode` to roundtable.
+  # Nothing that fired before became suppressible; this one arrives that way, which is still
+  # better than the silence it replaced but is not what the paragraphs above promise. Closing it
+  # means a never-moved-room alarm that does not read the floor's age at all; that is filed.
   room_age=$(c_room_age_s) || room_age=""
   if [ "$held" -gt "${COUNCIL_STALL_SECS:-900}" ]; then
     if [ -n "$room_age" ] && [ "$held" -gt "$room_age" ]; then

@@ -63,6 +63,7 @@ council.sh <verb> [options]
 
   Participant (inside a room)
     recv    [--timeout N] [--peek] [--until-floor]     exit 4 = timeout, call again
+                                                       (N is in SECONDS; floor reports ms)
     send    --act <act> [--refs '["id"]'] [--hand] "<text>"
     floor                                              who holds it, who is next, how long it
                                                        has been held and the room's turn

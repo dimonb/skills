@@ -15,8 +15,8 @@ barrier does not withhold from a supervisor.
 
     council.sh agenda                             the question this room is arguing
     council.sh protocol                           these rules and your role, again
-    council.sh recv --until-floor --timeout 150   wait until the floor is yours
-    council.sh recv --timeout 150                 just wait for new messages
+    council.sh recv --until-floor --timeout 150   wait until the floor is yours (150 seconds)
+    council.sh recv --timeout 150                 just wait for new messages (seconds)
     council.sh send --act <act> --refs '["id"]' "text"
     council.sh status                             whose turn, what is on the table, what is open
     council.sh floor                              who holds the floor, who is next, how long
@@ -125,20 +125,23 @@ same text again without reading the new messages is the worst thing you can do. 
 getting 6 because the holder is not speaking at all, that is the case below.
 
 **A seat that has gone quiet does not freeze the room.** `council.sh floor` prints who holds
-it, `next=` (who follows them), `held_ms` (how long since anybody took a turn, in
-**milliseconds**, timed by the clock of whichever seat took it — so a figure longer than this
-room has been running is a broken clock and not a stall, and is worth reporting rather than
-acting on) and the room's `deadline_ms` (**milliseconds** too; `recv --timeout` is the one
-number here that is in seconds). Once `held_ms` is past `deadline_ms` **and `next=` is you —
-only then, and only
+it, `next=` (who follows them), `held_ms` and the room's `deadline_ms`. Both are in
+**milliseconds** — `recv --timeout` is the one number here that is in seconds. `held_ms` is how
+long since anybody took a turn, timed by the clock of the seat that took it, so a figure longer
+than this room has been running is a broken clock rather than a stall and is worth reporting
+instead of acting on. Before a room's **first** turn there is no such seat: the count then runs
+from when the room was created, which includes the time before anybody was launched, so give a
+first holder more room than the number alone suggests. Once `held_ms` is past `deadline_ms`
+**and `next=` is you — only then, and only
 you** — `send --act skip "<holder> overdue"` consumes the missing turn and the room moves on.
 That is its whole purpose: it is not a way to hurry a seat that is thinking, and not an answer
 to one you disagree with. A skip spends a turn nobody spoke in, so a room that reaches for it
 is a room arguing with fewer voices.
 
 Two readings of `floor` that are not what they look like. **`held_ms=0` is not "they just
-started"** — it means this room has not moved yet and cannot time the holder for you, which
-happens before the first turn of a room that opened with a round. Time the holder yourself
+started"** — it means this room has not moved yet and cannot time the holder for you. Usually
+that is a room that opened with a round, before its first turn; a room that records no creation
+time, and a turn stamped from a clock that runs ahead, read 0 as well. Time the holder yourself
 instead, and mind the units: `deadline_ms` is **milliseconds**, while `recv --timeout` is in
 **seconds**. Keep waiting, and once your own waiting on the same holder adds up past
 `deadline_ms` with nothing arriving, and `next=` is still you, the same rule applies — your own
