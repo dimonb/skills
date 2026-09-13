@@ -45,6 +45,7 @@ GATED_SUITES='shared/driver/tests
 shared/flow/tests
 shared/adapters/tests
 shared/policy/tests
+shared/knobs/tests
 plugins/shipyard/skills/shipyard/tests
 plugins/council/skills/council/tests'
 
@@ -681,8 +682,12 @@ done
 # `plugins/<p>/skills/<s>/shared/<mod>/tests/`) would satisfy the shorter one's assertion too.
 # Matching recipe lines rather than named targets keeps it target-agnostic: a later `make
 # test-slow` needs no edit here. The residual limit is that a recipe line in a target nothing ever
-# invokes still counts; probes 30/30b/30c/30d close that for the four suites `make check` runs, by
-# requiring a failing test in each to red `make check` itself.
+# invokes still counts — and, for the same reason, that this check cannot tell a suite in `check:`
+# from one in `test:`, which is deliberate (it is what lets the fast/slow split exist) but means it
+# cannot see a suite quietly leaving the per-commit gate. The 30* probes in check-test.sh close
+# both, one per suite `make check` runs, by requiring a failing test in each to red `make check`
+# itself. Add one whenever that recipe grows: a suite added to it without a probe is exactly how
+# the knobs suite was briefly ungated.
 #
 # `$GIT_Q` and the explicit `:(glob)` magic are both load-bearing. Without `core.quotePath=false`
 # a path holding a byte >= 0x80 comes back C-quoted and no `-F` match can succeed, reddening the

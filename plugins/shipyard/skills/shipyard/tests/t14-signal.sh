@@ -146,7 +146,8 @@ TM_ABSENT='tmux() { echo "can'\''t find session: t14ex" >&2; return 1; }'
 # agterm: a control socket that does not answer `tree` is NOT an empty workspace.
 r=$(slots_rc agterm "$AT_DEAD")
 ok "agterm: a dead tree call is a failure, not an empty container" "|1" "$r"
-# ...and neither is a tree whose shape fails the assertion inside _shipyard_at_sessions.
+# ...and neither is a tree whose shape fails the assertion inside `drv_sessions` (shared/driver,
+# where the agterm arm moved when council became a second caller).
 r=$(slots_rc agterm "$AT_BADSHAPE")
 ok "agterm: a malformed tree is a failure too" "|1" "$r"
 # The honest empty answer: a valid tree in which our workspace holds no sessions. THIS is the check

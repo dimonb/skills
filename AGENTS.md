@@ -231,13 +231,13 @@ than creating one. Either way:
 ## How to verify a change for real
 
 ```bash
-make check        # the static gate (~3-4s) + the four fast suites; run before every commit
-make test         # all six suites' fast subsets — ~2-3 min
+make check        # the static gate + every fast suite (~9s); run before every commit
+make test         # every suite's fast subset — ~2-3 min
 make check-test   # proves the gate's assertions actually fail when violated (needs a clean tree)
 ```
 
 `make check` stays fast because it does not run the shipyard or council suites — those are too
-slow for a per-commit gate. What it DOES enforce for all **six** suites, statically, are the
+slow for a per-commit gate. What it DOES enforce for **every** suite, statically, are the
 **three ways a suite can silently stop running** — separate failure classes, separate checks:
 
 * **Registration** — a test file that stops being listed in its `run-all.sh` reds `make check`

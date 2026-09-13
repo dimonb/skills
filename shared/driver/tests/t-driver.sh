@@ -59,7 +59,10 @@ cat >"$FAKEBIN/agtermctl" <<'EOF'
 #!/usr/bin/env bash
 case "$1" in
   version) exit "${FAKE_AT_VERSION_RC:-0}" ;;
-  tree)    cat "${FAKE_AT_TREE:-/dev/null}"; exit 0 ;;
+  # FAKE_AT_TREE_RC defaults to 0, so every case written before drv_sessions existed behaves
+  # exactly as it did; a control socket that does not answer `tree` is what the new cases need.
+  tree)    [ "${FAKE_AT_TREE_RC:-0}" = 0 ] || exit "${FAKE_AT_TREE_RC}"
+           cat "${FAKE_AT_TREE:-/dev/null}"; exit 0 ;;
   session)
     if [ "${2:-}" = text ]; then
       jq -n --rawfile t "${FAKE_AT_TEXT:-/dev/null}" '{result:{text:($t | rtrimstr("\n"))}}'
@@ -72,7 +75,11 @@ EOF
 cat >"$FAKEBIN/tmux" <<'EOF'
 #!/usr/bin/env bash
 case "$1" in
-  list-windows) cat "${FAKE_TMUX_WINDOWS:-/dev/null}"; exit 0 ;;
+  # FAKE_TMUX_LIST_ERR unset = the pre-existing behaviour. Set, it makes `list-windows` fail with
+  # that text on STDERR, which is the only way to tell an unreachable server from an absent
+  # session — the distinction drv_sessions' exit status rests on.
+  list-windows) [ -z "${FAKE_TMUX_LIST_ERR:-}" ] || { printf '%s\n' "$FAKE_TMUX_LIST_ERR" >&2; exit 1; }
+                cat "${FAKE_TMUX_WINDOWS:-/dev/null}"; exit 0 ;;
   has-session)  exit "${FAKE_TMUX_HASSESSION_RC:-0}" ;;
   capture-pane) cat "${FAKE_TMUX_CAPTURE:-/dev/null}"; exit 0 ;;
   *) printf '%s\n' "$*" >>"${FAKE_TMUX_LOG:-/dev/null}"
@@ -293,6 +300,154 @@ ok "signal idle via the alternate prompt glyph" "live|idle" \
 : >"$TMP/screen-empty.txt"
 ok "signal for a live but blank screen" "live|unknown" \
   "$(PATH="$FAKEBIN:$PATH" FAKE_AT_TREE="$TMP/tree.json" FAKE_AT_TEXT="$TMP/screen-empty.txt" _DRV_BE=agterm DRV_CONTAINER_OVERRIDE=proj drv_signal s1)"
+
+# --- 9. may an absence be believed? -----------------------------------------------------------
+# PROVENANCE. A supervisor that resolves a session name, finds nothing, and concludes the child
+# died then does something destructive about it: shipyard tears the slot down (taking its
+# worktree), council relaunches the seat (killing a live agent mid-turn with its context). But
+# `auto` resolves the backend per PROCESS, so one blipped socket probe sends a run to the other
+# backend, where the caller's container is correctly empty. Both skills grew their own answer to
+# this; these three functions are the one answer, and each half is asserted separately because
+# they are separate facts that fail in different ways.
+printf '\n── drv_sessions ──\n'
+
+# rc AND output in one string, and the subshell runs WITHOUT pipefail on purpose: the agterm arm
+# was once a bare pipeline whose status was `jq`'s last stage, i.e. 0 whichever way the tree call
+# went, and it only looked correct because every caller happened to set the option. A return to
+# that shape reds here rather than waiting for a caller that does not.
+#
+# The assignments are passed as separate WORDS to `export`, never eval'd from one string. One of
+# the tmux messages the driver tolerates is `can't find session`, and an apostrophe inside an
+# eval'd string closes the quoting: the eval died, `drv_sessions` never ran, and the case passed
+# on an empty output and a zero status it had not earned. Caught by the eval's own error on
+# stderr, which is the only reason it did not simply stand.
+sessions_of() { # <VAR=VAL>... -> "<names comma-joined>|<rc>"
+  local out rc=0
+  out=$( set +o pipefail
+         export PATH="$FAKEBIN:$PATH"
+         export "$@"
+         drv_sessions 2>/dev/null ) || rc=$?
+  printf '%s|%s' "$(printf '%s' "$out" | tr '\n' ',')" "$rc"
+}
+
+# tmux: three outcomes that must not be conflated.
+printf 'ship-7\nship-8\nhuman-work\n' >"$TMP/win-three.txt"
+ok "tmux: the container's sessions, rc 0" "ship-7,ship-8,human-work|0" \
+   "$(sessions_of _DRV_BE=tmux DRV_CONTAINER_OVERRIDE=proj "FAKE_TMUX_WINDOWS=$TMP/win-three.txt")"
+# A trailing `-` or `*` is stripped. Stated as the BEHAVIOUR, not as a claim about tmux: an
+# earlier version of this case said "tmux marks the active/last window with a trailing `*` or `-`"
+# and built its fixture from that premise, which a real tmux refutes — `-F '#{window_name}'` emits
+# the name alone (a window named `agent-` comes back verbatim), and the markers belong to
+# `#{window_flags}`. The strip survives only because `drv_target` applies the same one, so the two
+# must agree; this case pins that agreement and nothing more.
+printf 'ship-7*\nship-8-\n' >"$TMP/win-marked.txt"
+ok "tmux: a trailing -/* is stripped, as drv_target also does" "ship-7,ship-8|0" \
+   "$(sessions_of _DRV_BE=tmux DRV_CONTAINER_OVERRIDE=proj "FAKE_TMUX_WINDOWS=$TMP/win-marked.txt")"
+: >"$TMP/win-none.txt"
+ok "tmux: a reachable but empty container is an ANSWER" "|0" \
+   "$(sessions_of _DRV_BE=tmux DRV_CONTAINER_OVERRIDE=proj "FAKE_TMUX_WINDOWS=$TMP/win-none.txt")"
+# An absent session is honestly empty — a tmux session dying takes its children with it.
+ok "tmux: an absent session is honestly empty" "|0" \
+   "$(sessions_of _DRV_BE=tmux DRV_CONTAINER_OVERRIDE=proj "FAKE_TMUX_LIST_ERR=can't find session: proj")"
+# A server that cannot be reached answered nothing. THIS is the case the whole section exists for.
+ok "tmux: an unreachable server is NOT an empty container" "|1" \
+   "$(sessions_of _DRV_BE=tmux DRV_CONTAINER_OVERRIDE=proj "FAKE_TMUX_LIST_ERR=error connecting to server")"
+
+# agterm: the same three, through a control socket and a shape assertion.
+cat >"$TMP/tree-two.json" <<'EOF'
+{"ok":true,"result":{"tree":{"workspaces":[{"name":"proj","sessions":[
+  {"id":"a","name":"council-demo-claude"},{"id":"b","name":"council-demo-codex"}]}]}}}
+EOF
+ok "agterm: the workspace's sessions, rc 0" "council-demo-claude,council-demo-codex|0" \
+   "$(sessions_of _DRV_BE=agterm DRV_CONTAINER_OVERRIDE=proj "FAKE_AT_TREE=$TMP/tree-two.json")"
+cat >"$TMP/tree-empty.json" <<'EOF'
+{"ok":true,"result":{"tree":{"workspaces":[{"name":"proj","sessions":[]}]}}}
+EOF
+ok "agterm: a valid tree with no sessions is empty, rc 0" "|0" \
+   "$(sessions_of _DRV_BE=agterm DRV_CONTAINER_OVERRIDE=proj "FAKE_AT_TREE=$TMP/tree-empty.json")"
+ok "agterm: a dead tree call is a failure, not an empty workspace" "|1" \
+   "$(sessions_of _DRV_BE=agterm DRV_CONTAINER_OVERRIDE=proj FAKE_AT_TREE_RC=1)"
+# A tree that PARSES but is not the tree we expect selects nothing, which is indistinguishable
+# from an empty container — so the shape assertion must make it fail instead.
+printf '{"ok":false}\n' >"$TMP/tree-bad.json"
+ok "agterm: a malformed tree is a failure too" "|1" \
+   "$(sessions_of _DRV_BE=agterm DRV_CONTAINER_OVERRIDE=proj "FAKE_AT_TREE=$TMP/tree-bad.json")"
+# Another workspace's sessions are not ours: selecting by name is what makes the empty answer above
+# mean "this container holds nothing" rather than "I looked at everything".
+cat >"$TMP/tree-other.json" <<'EOF'
+{"ok":true,"result":{"tree":{"workspaces":[{"name":"somewhere-else","sessions":[
+  {"id":"a","name":"council-demo-claude"}]}]}}}
+EOF
+ok "agterm: only THIS container's sessions are listed" "|0" \
+   "$(sessions_of _DRV_BE=agterm DRV_CONTAINER_OVERRIDE=proj "FAKE_AT_TREE=$TMP/tree-other.json")"
+
+printf '\n── drv_pins_elsewhere ──\n'
+# A pure read over the pin directory: the set of `container-<backend>` files present IS the record
+# of which backends this caller launched on, so no second record has to be kept in step.
+PINS="$TMP/pins"; mkdir -p "$PINS"
+pins_of() { # <resolved backend> -> "<answer>|<rc>"
+  local out rc=0
+  out=$( _DRV_BE="$1" DRV_CONTAINER_PIN_DIR="$PINS" drv_pins_elsewhere ) || rc=$?
+  printf '%s|%s' "$out" "$rc"
+}
+rm -f "$PINS"/container-*
+ok "no pin at all -> nothing to disagree with" "|1" "$(pins_of tmux)"
+: >"$PINS/container-tmux"
+ok "the pin names the backend we resolved"     "|1" "$(pins_of tmux)"
+# THE INCIDENT, as a unit: launched on agterm, this process resolved tmux.
+rm -f "$PINS"/container-*; : > "$PINS/container-agterm"
+ok "pinned on agterm, resolved tmux"     "agterm|0" "$(pins_of tmux)"
+ok "...and the reverse is not a disagreement"  "|1" "$(pins_of agterm)"
+# Both present: this caller has launched on each, so neither choice is looking in the wrong place.
+# Reporting a disagreement here would alarm on a legitimate history and teach the operator to
+# ignore the block — which AGENTS.md names as costing more than the bug it guards.
+: >"$PINS/container-tmux"
+ok "both pinned -> no disagreement (tmux)"     "|1" "$(pins_of tmux)"
+ok "both pinned -> no disagreement (agterm)"   "|1" "$(pins_of agterm)"
+ok "a missing pin dir is not a disagreement"   "|1" \
+   "$( out=$( _DRV_BE=tmux DRV_CONTAINER_PIN_DIR="$TMP/no-such-dir" drv_pins_elsewhere ) || rc=$?
+       printf '%s|%s' "$out" "${rc:-0}" )"
+ok "an unset pin dir is not a disagreement"    "|1" \
+   "$( out=$( _DRV_BE=tmux; unset DRV_CONTAINER_PIN_DIR; drv_pins_elsewhere ) || rc=$?
+       printf '%s|%s' "$out" "${rc:-0}" )"
+
+printf '\n── drv_absence_class ──\n'
+# The verdict. "<class><TAB><why>" + rc 1 when the absence may NOT be believed; nothing + rc 0
+# when it may. Only the class is asserted — the `why` is prose each caller may restate in its own
+# vocabulary, and pinning a sentence here would red on a re-flow whose property never changed.
+rm -f "$PINS"/container-*
+class_of() { # <enum-rc> [<list> <name>] -> "<class>|<rc>"
+  local out rc=0 TAB; TAB=$(printf '\t')
+  out=$( _DRV_BE=tmux DRV_CONTAINER_PIN_DIR="$PINS" drv_absence_class "$@" ) || rc=$?
+  printf '%s|%s' "${out%%"$TAB"*}" "$rc"
+}
+: >"$PINS/container-tmux"          # pinned where we resolved: no disagreement from this arm
+ok "the backend answered and has nothing -> believe it" "|0" "$(class_of 0)"
+ok "the backend did not answer"          "unreachable|1" "$(class_of 1)"
+# FAIL CLOSED. A caller that passes no status has ESTABLISHED nothing, and defaulting the other way
+# would make a forgotten argument grant the corroboration this function exists to withhold —
+# silently, which is the incident itself.
+ok "an EMPTY status is unreachable, never answered" "unreachable|1" "$(class_of "")"
+rm -f "$PINS"/container-*; : >"$PINS/container-agterm"
+ok "answered, but launched on another backend"  "elsewhere|1" "$(class_of 0)"
+# Precedence: an unanswered question is the stronger fact, so it wins over the pin.
+ok "unanswered outranks the pin disagreement"   "unreachable|1" "$(class_of 1)"
+rm -f "$PINS"/container-*; : >"$PINS/container-tmux"
+# THE NARROWEST BLIP: the enumeration answered AND still lists this very session, so it is the
+# per-session lookup that failed. A status-only check cannot see this one.
+ok "still listed -> the lookup failed, not the session" "listed|1" \
+   "$(class_of 0 "$(printf 'ship-7\nship-41\nship-8')" ship-41)"
+ok "answered and genuinely absent -> believe it" "|0" \
+   "$(class_of 0 "$(printf 'ship-7\nship-8')" ship-41)"
+# The match is EXACT. A prefix or substring test would make `ship-4` contradict its own absence
+# whenever `ship-41` happened to be running, which turns a real teardown into a permanent refusal.
+ok "the listed match is exact, not a substring"  "|0" \
+   "$(class_of 0 "$(printf 'ship-41\nship-410')" ship-4)"
+# No list = no evidence = no contradiction. This is the mode a caller without an enumeration uses,
+# and it must still reach the pin check rather than erroring or claiming `listed`.
+ok "no list at all -> the arm is skipped"        "|0" "$(class_of 0)"
+ok "a name with no list is not a contradiction"  "|0" "$(class_of 0 "" ship-41)"
+rm -f "$PINS"/container-*
 
 # --- done ------------------------------------------------------------------------------------
 printf '\n'
