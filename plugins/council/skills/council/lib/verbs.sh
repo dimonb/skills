@@ -558,19 +558,34 @@ _stall_escalate() {
   [ -z "$(c_recorded_status)" ] || return 0
   mb=$(policy_mailbox_dir) || return 0
   room=$(basename "$ROOM")
-  # THE ROOM IS IN THE KEY, not only in the glob, and that is not belt-and-braces. `council.sh up`
-  # names a repeated scenario `<name>-2` (see `_mkroom`'s caller), so `design` and `design-2` are
-  # the ordinary pair rather than a contrived one — and `council-design-*.json` matches
-  # `council-design-2-1.json`. With the same `--agents` spec both rooms have the same seat names,
-  # so both wedging at turn 0 produced the same key, and whichever polled second pushed NOTHING,
-  # permanently. Narrowing the glob cannot fix that (`council-design-[0-9]*.json` matches it too);
-  # only a room-exact key can.
-  key="[stall:$room:$peer:$turns]"
-  # -F so a room or peer name carrying a regex character is matched literally, -l so nothing is
-  # read further than the first hit. With no entries yet the glob stays literal, grep fails on the
-  # missing file, and we push — the right way round: a de-duplication check that cannot read its
-  # own history must repeat a notice, never skip one.
-  grep -lF "$key" "$mb"/council-"$room"-*.json >/dev/null 2>&1 && return 0
+  # THE ROOM IS MATCHED AS AN EXACT FIELD, never as a filename prefix, and the distinction is the
+  # whole defect. A first version globbed `council-$room-*.json`; `council.sh up` names a repeated
+  # scenario `<name>-2`, so `design` and `design-2` are the ordinary pair rather than a contrived
+  # one — and `council-design-*.json` matches `council-design-2-1.json`. With the same `--agents`
+  # spec both rooms have the same seat names, so both wedging at turn 0 produced the same key and
+  # whichever polled second pushed NOTHING, permanently.
+  #
+  # A TIGHTER PATTERN IS NOT THE FIX, and trying one is how this class survives: the shape is an
+  # unanchored PREFIX match over a scarce namespace (the same shape as the test-number collisions
+  # in #149), so `council-design-[0-9]*.json` eats the sibling too. What closes it is a comparison
+  # whose room segment cannot bleed into the next one.
+  #
+  # AN EXACT FIELD RATHER THAN A DELIMITER, and the reason is worth recording: `--room` is NOT
+  # validated anywhere (council.sh interpolates `$ROOM_NAME` straight into a path), so no separator
+  # can be guaranteed absent from a room name and a `<room>:<peer>:<turns>` key would be encoding a
+  # value that may contain its own separator. `policy_escalate` already writes the room into a
+  # field of its own — `.slot` — so comparing THAT with `==` is a whole-token match by construction,
+  # whatever the room is called. The key then only has to separate peer and turn within one room.
+  key="[stall:$peer:$turns]"
+  # Fails OPEN by construction, which is the right way round for a de-duplication check: an empty
+  # glob, an unreadable mailbox, a malformed entry or a missing jq all make this print nothing, and
+  # a check that cannot read its own history must repeat a notice rather than skip one.
+  local seen
+  seen=$(jq -s --arg s "council-$room" --arg k "$key" \
+           '[.[] | select(.slot == $s) | select((.text // "") | contains($k))] | length' \
+           "$mb"/council-*.json 2>/dev/null) || seen=""
+  case "$seen" in ''|*[!0-9]*) seen=0 ;; esac
+  [ "$seen" -gt 0 ] && return 0
   # During an open barrier round the caller's `$floor` is a LABEL, not a seat — nobody holds the
   # floor and the room is waiting on everyone — so the notice must not name it as a participant.
   # A real seat is named; anything else degrades to the room, and the terminal to look at becomes

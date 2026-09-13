@@ -198,13 +198,14 @@ ok "a planted latch file suppresses nothing"  1 "$(notices t22j)"
 # And the de-duplication key really is what stops the second notice, not the clock: an entry
 # carrying the key is enough, and it is an entry the supervisor can see.
 ok "...and the key is carried in the notice"  1 \
-   "$(grep -lF '[stall:t22j:alpha:0]' "$POLICY_MAILBOX_DIR"/council-t22j-*.json 2>/dev/null | wc -l | tr -d ' ')"
+   "$(grep -lF '[stall:alpha:0]' "$POLICY_MAILBOX_DIR"/council-t22j-1.json 2>/dev/null | wc -l | tr -d ' ')"
 
-# THE ROOM IS IN THE KEY, and this is why. `council.sh up` names a repeated scenario `<name>-2`, so
-# `x` and `x-2` are the ordinary pair rather than a contrived one — and the entry glob
-# `council-x-*.json` matches `council-x-2-1.json`. With the same --agents spec both rooms have the
-# same seat names, so a key of `<peer>:<turns>` alone made whichever room polled SECOND push
-# nothing, permanently. Narrowing the glob cannot fix it; only a room-exact key can.
+# THE ROOM IS MATCHED AS AN EXACT FIELD, and this is why. `council.sh up` names a repeated scenario
+# `<name>-2`, so `x` and `x-2` are the ordinary pair rather than a contrived one — and an entry glob
+# of `council-x-*.json` matches `council-x-2-1.json`. With the same --agents spec both rooms have
+# the same seat names, so matching the room by filename prefix made whichever room polled SECOND
+# push nothing, permanently. A tighter glob does not fix it (`council-x-[0-9]*.json` eats the
+# sibling too); comparing `.slot` with `==` does, whatever the room is called.
 RA="$COUNCIL_TEST_ROOT/t22n"; stalled_room "$RA" claude alpha beta
 RB="$COUNCIL_TEST_ROOT/t22n-2"; stalled_room "$RB" claude alpha beta
 COUNCIL_ROOM="$RB" COUNCIL_WAIT_SCREEN_FILE="$QUIET" bash "$CLI" status >/dev/null 2>&1
