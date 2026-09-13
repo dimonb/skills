@@ -136,19 +136,31 @@ fi
 # Both knobs are VALIDATED, not just defaulted. An unusable value here fails OPEN in the worst
 # way: a non-numeric window makes the deadline arithmetic empty, `[ … -lt "" ]` errors, and the
 # loop breaks after ONE sample — which is exactly the single-sleep behaviour the poll exists to
-# replace, announced only by a stray test error on stderr. `_shipyard_admission_uint` already
-# carries this lesson for the admission gate's knobs; the interval is deliberately fractional, so
-# it gets its own pattern check rather than that helper.
-CONFIRM_SECS=$(_shipyard_admission_uint "${SHIPYARD_TELL_CONFIRM_SECS:-}" 10)
-# The interval must contain at least one digit and be a plain decimal: a bare `.` makes `sleep`
-# error every iteration and `0` makes it a no-op, and either turns the bounded poll into a spin
-# that re-captures as fast as it can fork. (No `''` arm — the default has already substituted.)
-case "${SHIPYARD_TELL_CONFIRM_INTERVAL:-0.5}" in
-  *[!0-9.]*|*.*.*|.|0|0.|0.0|.0)
-    echo "warning: SHIPYARD_TELL_CONFIRM_INTERVAL is not a positive number — using 0.5" >&2
-    CONFIRM_INTERVAL=0.5 ;;
-  *) CONFIRM_INTERVAL=${SHIPYARD_TELL_CONFIRM_INTERVAL:-0.5} ;;
-esac
+# replace, announced only by a stray test error on stderr.
+#
+# BOTH RULES NOW LIVE IN `shared/knobs`, and the correction matters more than the move. This file
+# used to say that `_shipyard_admission_uint` "already carries this lesson" and that the interval
+# "gets its own pattern check rather than that helper". Neither sentence was true of what the code
+# did, and each hid a defect that shipped:
+#
+#   * the uint helper has no base-ten normalisation, so `SHIPYARD_TELL_CONFIRM_SECS=08` passed its
+#     all-digits test and then made `$(( … + CONFIRM_SECS ))` an invalid-octal EXPANSION. MEASURED
+#     against the pre-fix script rather than assumed — three earlier versions of this sentence said
+#     it killed the shell and none was right: at top level bash prints the error, leaves `DEADLINE`
+#     EMPTY and carries on, so `[ "$(date +%s)" -lt "" ]` errors too and the loop breaks after ONE
+#     sample. The verdict still prints; what is gone is the poll, silently restored to the
+#     single-sleep behaviour it exists to replace — so a delivered directive reads `unconfirmed`,
+#     and the supervisor's next move is to re-send a second copy onto the first;
+#   * the interval's `0|0.|0.0|.0` pattern ENUMERATED zero instead of testing for a non-zero
+#     digit, so `00`, `000`, `0.00`, `.00` and `000.000` all passed and made `sleep` a no-op.
+#
+# `council say` asks the same question and had both defects identically, which is what earned the
+# shared home. The wording stays here, because naming the operator's own variable is this skill's
+# business and not the module's.
+CONFIRM_SECS=$(knob_uint "${SHIPYARD_TELL_CONFIRM_SECS:-}" 10) \
+  || echo "warning: SHIPYARD_TELL_CONFIRM_SECS is not a usable whole number — using 10" >&2
+CONFIRM_INTERVAL=$(knob_interval "${SHIPYARD_TELL_CONFIRM_INTERVAL:-}" 0.5) \
+  || echo "warning: SHIPYARD_TELL_CONFIRM_INTERVAL is not a usable positive number — using 0.5" >&2
 
 # The pre-send sample. It is what lets a turn seen LATER count as one our submit started, and what
 # stops a queued hint left over from an earlier send being read as being about this one.

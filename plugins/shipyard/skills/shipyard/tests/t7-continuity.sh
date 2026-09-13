@@ -221,7 +221,8 @@ if [ "${1:-}" = tree ]; then
     exit 0
   fi
   # A WELL-FORMED workspace that genuinely holds no sessions. The `normal` tree below names no
-  # workspace and no session, so it fails _shipyard_at_sessions' own shape assertion — which used
+  # workspace and no session, so it fails the shape assertion inside `drv_sessions` (shared/driver;
+  # it was `_shipyard_at_sessions` here until council became a second caller) — which used
   # to be invisible, because a failed enumeration was indistinguishable from an empty container.
   # The empty-report checks therefore ran for years against a tree the enumerator rejects, and
   # proved only that the rejection was silent. This mode is what they always meant to assert.

@@ -27,7 +27,9 @@
 # check-test proves check.sh's STATIC assertions fire, so it must not itself be gated on a test
 # suite passing, nor pay those suites' runtime on every one of its ~60 probes. The deliberate
 # exceptions all use `make check` on purpose: the final "green after restore" check, and the probes
-# that prove `make check` actually runs those four suites (30, 30b, 30c, 30d).
+# that prove `make check` actually RUNS each suite it names (30, 30b, 30c, 30d, 30e) — one per
+# suite in the `check:` recipe, because check 12 accepts either Makefile target and so cannot see
+# a suite that has quietly moved out of the per-commit gate.
 set -uo pipefail
 cd "$(dirname "$0")/.."
 
@@ -80,6 +82,7 @@ restore() {
     shared/driver/tests/_probe-unreg.sh plugins/shipyard/skills/shipyard/tests/_probe-unreg.sh \
     shared/flow/tests/_probe-unreg.sh shared/flow/extra.sh \
     shared/adapters/tests/_probe-unreg.sh shared/policy/tests/_probe-unreg.sh \
+    shared/knobs/tests/_probe-unreg.sh \
     2>/dev/null || true
   rmdir docs 2>/dev/null || true
 }
@@ -564,12 +567,23 @@ rm -f shared/adapters/tests/_probe-unreg.sh
 
 # 15f — ...and for the POLICY suite, which is the one that had no gated registration at all: it ran
 # in no automated invocation from the day it landed, so nothing would have noticed a test dropped
-# from its `tests` array either. With 15 through 15e this pins every entry in $GATED_SUITES — so
-# dropping any one of the six from the declaration is caught by the probe that names it.
+# from its `tests` array either.
 printf '#!/usr/bin/env bash\ntrue\n' > shared/policy/tests/_probe-unreg.sh
 expect_fail "policy test on disk but not registered in run-all.sh" \
   "test on disk but not registered in"
 rm -f shared/policy/tests/_probe-unreg.sh
+
+# 15g — ...and for the KNOBS suite. WHAT THE 15* FAMILY ACTUALLY PROVES, stated once here rather
+# than as a running count in each: that check 10's walk reaches each suite's own run-all.sh and
+# parses its list. It is NOT what an earlier version of this comment claimed — dropping an entry
+# from $GATED_SUITES is caught loudly by check 12, and by this script's own baseline guard, which
+# refuses to start at all. That claim was written here and measured false one round later, which
+# is a fair warning about writing a rationale without running it. Add a probe whenever
+# $GATED_SUITES grows; the reason is the walk, not the declaration.
+printf '#!/usr/bin/env bash\ntrue\n' > shared/knobs/tests/_probe-unreg.sh
+expect_fail "knobs test on disk but not registered in run-all.sh" \
+  "test on disk but not registered in"
+rm -f shared/knobs/tests/_probe-unreg.sh
 
 # 16 — and check 10 must say it cannot find the list, rather than comparing the files on disk
 # against an empty set. BOTH assignments are renamed: renaming only `tests=(` leaves the `--full`
@@ -898,6 +912,24 @@ else
   pass=$((pass+1))
 fi
 git checkout -- shared/policy/tests/t-policy.sh
+
+# 30e — ...and `make check` RUNS the knobs suite. THIS IS THE AXIS ITS OWN CHANGE MISSED, which is
+# why the comment says so: that change added the suite, registered it (15g) and named it in both
+# Makefile targets, and stopped there — so moving its line out of `check:` into `test:` alone left
+# `make check-test` reporting every assertion proven while a deliberately failing `t-knobs.sh` kept
+# `make check` green. Check 12 cannot see it: it accepts EITHER target by design, which is what
+# lets the fast/slow split exist. Only executing the gate can. #111 is the same hole for the policy
+# suite, and this is that hole reopened by the next suite to be added — so the rule, not the count:
+# every suite `make check` runs needs a probe here, added in the same change that adds the suite.
+printf '#!/usr/bin/env bash\nexit 1\n' > shared/knobs/tests/t-knobs.sh
+if make check >"$SCRATCH/out" 2>&1; then
+  echo "NOT CAUGHT: make check does not run the knobs suite (a knobs failure did not red it)"
+  nocatch=$((nocatch+1))
+else
+  echo "caught:     make check runs the knobs suite   ->  a failing knobs test reds make check"
+  pass=$((pass+1))
+fi
+git checkout -- shared/knobs/tests/t-knobs.sh
 
 # 31 — the mirror of 30 for the STATIC gate: `make check` must also invoke scripts/check.sh, not
 # only the fast test suites. When this suite switched its ~60 probes from `make check` to

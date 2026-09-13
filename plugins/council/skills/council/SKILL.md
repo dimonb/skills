@@ -495,6 +495,42 @@ not: it accepts the message, prints `Queued message …`, returns 0 — and deli
 (`council.sh say`) arrives in seconds. Judge that channel by delivery, never by its exit
 code.
 
+### What `say` establishes, and what each answer means
+
+`say` reports only what it has established, so its exit code **is** meaningful — unlike the
+`codex queue` channel above. Each answer names a different next move:
+
+| exit | answer | what it means |
+|---|---|---|
+| 0 | `delivered` | a turn was seen to start that was not running before the send. |
+| 0 | `queued` | the participant's own client said it has taken the message for the next turn. |
+| 1 | could not read a verdict | the shared turn-state module did not load. Nothing was established; the plugin install is broken. |
+| 2 | nothing to send, or no such seat | no peer given, an empty message, a roster that cannot be read, or a name that is not in it. The message went **nowhere**; fix the argument. |
+| 3 | has no live terminal | the backend answered and does not have that seat. It really is gone — `council.sh relaunch <peer>`. |
+| 4 | cannot tell whether it is alive | the question went unanswered. **Do not `relaunch`** — that kills a live agent mid-turn and takes its context with it. The message names which of `unreachable`, `elsewhere` or `listed` applies, and the remedy for that one. |
+| 6 | typed, but no turn observed | the text **may be sitting unsent in the seat's input box**. Look before re-sending — a second `say` types another copy onto the first. Also the answer when the submit itself failed, where the text is definitely in the box. |
+
+Exit 6 is not proof the message went nowhere: a turn that starts *and finishes* between two
+samples looks identical, and so does a participant that was mid-turn for the whole window whose
+client rendered no queued hint. The bias is deliberate — re-sending on a false `unconfirmed` is
+cheap and visible, believing a false confirmation is neither. `adp_delivery_verdict` in
+`shared/adapters/agent-adapters.sh` defines each verdict and what it does and does not rule out.
+
+The confirmation window defaults to 10 s, sampled every 0.5 s; `COUNCIL_SAY_CONFIRM_SECS` and
+`COUNCIL_SAY_CONFIRM_INTERVAL` override them. An unusable value falls back to the default and says
+so on stderr rather than being used:
+
+* the **window** must be a whole number of at most nine digits — long enough for any real poll,
+  short enough that a typo cannot leave one running for centuries. `0` is legitimate and means
+  "take one sample and decide"; a leading zero is normalised rather than refused, so `08` is eight
+  seconds and not an octal error.
+* the **interval** must be a plain decimal carrying at least one non-zero digit, and likewise
+  bounded — so every spelling of zero falls back (`0`, `00`, `0.00`, `.00`, `000.000`, …), because
+  each makes `sleep` a no-op and the bounded poll a fork storm.
+
+Both rules live in `shared/knobs/knobs.sh`, which `shipyard tell` reads for the same two knobs —
+it had the same two defects, and one module is why neither can drift back.
+
 ## Modes: turn-taking, and the opening barrier
 
 `token` (the default) is plain turn-taking. `roundtable` adds one thing in front of it:

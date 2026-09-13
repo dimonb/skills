@@ -65,5 +65,55 @@ rc=0
 ( export COUNCIL_BACKEND=none-for-tests ROOM="$ROOM"; . "$TERM_SH"; ct_container ) >/dev/null 2>&1 || rc=$?
 ok "an unresolvable backend refuses (exit 1)" 1 "$rc"
 
+# --- the ABSENCE verbs: ct_sessions / ct_absence_class / ct_pins_elsewhere -------------------
+# WHY THESE ARE HERE AND NOT IN t21-say.sh. t21 drives `council_say`, which sources term.sh at
+# CALL time, so the only seam it has is a shadow `lib/term.sh` — and a shadow means the SHIPPED
+# verbs never execute. Measured: gutting the real `ct_sessions()` to `{ return 0; }`, which
+# restores the exact #141 defect (an unreachable backend read as "answered, nothing there", so
+# `say` exits 3 "that seat is gone" and sends the operator to `relaunch` on a live agent), left
+# the whole council suite green. So the wiring is asserted here, against the real file, the way
+# this file already asserts ct_name and the container verbs. Note what that does NOT amount to:
+# for the OP verbs — ct_capture, ct_type, ct_submit, ct_kill, ct_focus, ct_launch, ct_target —
+# nothing in the council suite asserts the drv_* delegation at all. (Two tests do REACH one:
+# t13-relaunch drives the real ct_launch to prove regeneration happens before the launch, and
+# t16-keeper-canary drives _ct_launch_owned. Neither checks what the driver was handed.) So
+# "t15 covers the ct_* delegations" would be too broad a claim to make anywhere.
+#
+# THE ONE PROPERTY EACH MUST HAVE is `_ct_pin_dir` FIRST. Without it the driver has no pin
+# directory, so `ct_pins_elsewhere` returns 1 — and because `say` guards that remedy with
+# `[ -n "$pin" ]`, the operator is told the room was launched on another backend and then given NO
+# backend to pin, the line omitted entirely. That is the exact thing t21's case 2b was written to
+# catch but cannot, because it runs its own copy of these verbs.
+#
+# Faked at the drv_* layer, AFTER sourcing term.sh, so the real ct_* bodies run: each fake records
+# what it was handed, including the pin directory the delegation was supposed to set.
+#
+# The tmux pin the ct_container_pin case above wrote is REMOVED first, or the last probe asserts
+# nothing: with both pins present this room has launched on each, so `drv_pins_elsewhere` reports
+# no disagreement and returns empty whether or not the pin directory was set. (That it does so is
+# the both-pins rule working — it is asserted in shared/driver/tests, not here.)
+rm -f "$ROOM/state/container-tmux"
+: > "$ROOM/state/container-agterm"     # a pin for a backend we are NOT resolving
+
+probe=$( export COUNCIL_BACKEND=tmux ROOM="$ROOM"
+         . "$TERM_SH"
+         drv_sessions() { printf 'PINDIR=%s\n' "${DRV_CONTAINER_PIN_DIR:-unset}"; }
+         ct_sessions )
+ok "ct_sessions sets the pin dir before delegating" "PINDIR=$ROOM/state" "$probe"
+
+probe=$( export COUNCIL_BACKEND=tmux ROOM="$ROOM"
+         . "$TERM_SH"
+         drv_absence_class() { printf 'rc=%s list=%s name=%s pindir=%s' \
+                                 "$1" "${2:-}" "${3:-}" "${DRV_CONTAINER_PIN_DIR:-unset}"; }
+         ct_absence_class 0 "council-demo-room-alice" "council-demo-room-bob" )
+ok "ct_absence_class passes all three arguments through" \
+   "rc=0 list=council-demo-room-alice name=council-demo-room-bob pindir=$ROOM/state" "$probe"
+
+# The real driver function, not a fake: this is the one whose value reaches an operator, and the
+# pin file above makes the answer non-empty only if the pin directory was actually set.
+probe=$( export COUNCIL_BACKEND=tmux ROOM="$ROOM"; . "$TERM_SH"; ct_pins_elsewhere )
+ok "ct_pins_elsewhere reads \$ROOM/state, so the remedy has a value" "agterm" "$probe"
+rm -f "$ROOM/state/container-agterm"
+
 printf '\n'
 if [ "$FAILURES" -eq 0 ]; then echo "t15 PASS ($CHECKS checks)"; else echo "t15 FAIL ($FAILURES/$CHECKS)"; exit 1; fi
