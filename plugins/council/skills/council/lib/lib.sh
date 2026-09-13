@@ -1143,34 +1143,42 @@ c_last_turn_ms() {
   printf '%s' "$ms"
 }
 
-# How long the current holder has had the floor, in milliseconds. `floor` prints this number and
-# `status` renders it in seconds; both ask here rather than each deriving it, because they are one
-# question and two answers to it would drift.
+# How long since anybody took a turn, in milliseconds. `floor` prints this number and `status`
+# renders it in seconds; both ask here rather than each deriving it, because they are one question
+# and two answers to it drift. (That drift was real: the two derived it separately, so a change to
+# either was a change to only half of what a room reports about its own floor.)
 #
-# Anchored on the last turn-consuming message, and on the room's creation when there is none. That
-# second anchor is not a nicety. Barrier positions and `--hand` messages are stamped `turn: null`,
-# so a room whose first turn nobody has taken yet has no turn to measure from, and answering 0
-# there made the floor look permanently fresh: protocol/_channel.md gates `skip` on this number,
-# so a stuck FIRST holder could never be skipped — and that is the likeliest seat to be stuck,
-# since an agent's permission prompt fires on its first command. `status` was blind by the same
-# route: no turn, no age, no STALL, on the one display a supervisor is told to watch.
+# IT IS 0 UNTIL THE ROOM'S FIRST TURN, AND THAT IS THE CONSERVATIVE ANSWER RATHER THAN A GAP TO
+# PLUG. Barrier positions and `--hand` messages are stamped `turn: null`, so before the first turn
+# there is no turn to measure from — and the thing a caller actually wants there, the instant the
+# current holder RECEIVED the floor, is not in the log at all: no message records it, and the
+# barrier's close time is recomputed on demand by c_barrier and never written down.
 #
-# NOT applied while the opening barrier is open, and that exemption is the whole safety of it.
-# During a roundtable round every position is `turn: null` BY DESIGN, no turn is owed, and the
-# round may legitimately run to `round_deadline_ms` (default 600000) or to twice that — so
-# anchoring on creation there would climb past `status`'s 900s STALL threshold on a healthy room.
-# An alarm that fires on the healthy path costs more than the freeze it was added for.
+# Every anchor that has been tried in its place is a proxy that is wrong in some room shape, and
+# each was wrong in the dangerous direction — reporting a healthy seat as overdue, which
+# protocol/_channel.md turns into a licence to consume its turn. `created_ms` charges the whole
+# opening round to the first post-barrier holder, so on the shipped `debate` scenario every
+# roundtable round longer than `turn_deadline_ms` made its first speaker instantly skippable (and,
+# past 900s, instantly STALLed) — measured at 620s and 950s on the shipped defaults. Exempting the
+# round only while it is OPEN does not save it: the leak is the tick after it closes. The last
+# round-0 position is wrong too, on the path where the round closes by quorum deadline instead.
 #
-# The direction check c_room_age_s's header demands: wherever this changes an answer, the previous
-# answer was 0 — no age, so no alarm — which means a peer-written `created_ms` can only ADD an
-# alarm here, never remove one. A room too old to record `created_ms` keeps 0 and its previous
-# behaviour exactly.
+# So this reports 0 and means it: not "held for no time", but "this room has not moved yet, and I
+# cannot tell you how long that has been". protocol/_channel.md says exactly that to participants
+# and gives them their own wait to time the holder with instead, which is a clock the room cannot
+# get wrong. A supervisor-side alarm for a room that has never moved is a different question from
+# this one — it belongs on the room's age, not on the floor's — and is filed rather than smuggled
+# in here.
 c_floor_held_ms() {
-  local last
+  local last now
   last=$(c_last_turn_ms)
-  if [ "$last" = 0 ] && ! c_round_open; then last=$(c_int_field created_ms 0); fi
   [ "$last" = 0 ] && { printf '0'; return; }
-  printf '%s' $(( $(c_ms) - last ))
+  # `sent_ms` is written by whichever peer took that turn, so a clock ahead of ours reads as a
+  # floor held for a negative time. c_room_age_s refuses the same shape for the same reason; 0
+  # keeps the two agreeing and keeps a nonsense figure out of the comparison participants make.
+  now=$(c_ms)
+  [ "$now" -gt "$last" ] || { printf '0'; return; }
+  printf '%s' $(( now - last ))
 }
 
 # How long this room has existed, in seconds — or NOTHING, which means "this room cannot say".

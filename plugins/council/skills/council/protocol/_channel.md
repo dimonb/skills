@@ -118,19 +118,28 @@ out-of-turn and you have to take the floor again.
 
 The loop: `recv --until-floor` → **one** message on the substance → wait again.
 
-If `send` returned **exit 6**, the floor moved while you were composing. That is not a
+If `send` returned **exit 6**, the floor was not yours at the moment it went to stamp the
+message — either it moved while you were composing, or it was never yours. That is not a
 breakage: drain your inbox (`recv`), read what was said, and wait for your turn. Sending the
-same text again without reading the new messages is the worst thing you can do.
+same text again without reading the new messages is the worst thing you can do. If you keep
+getting 6 because the holder is not speaking at all, that is the case below.
 
 **A seat that has gone quiet does not freeze the room.** `council.sh floor` prints who holds
-it, `next=` (who follows them), `held_ms` (how long the floor has sat where it is — by the
-clock of whoever spoke last, so a figure older than the room itself is a broken clock and not
-a stall, and worth reporting rather than acting on) and the room's `deadline_ms`. Once
-`held_ms` is past `deadline_ms` **and `next=` is you — only then, and only you** —
-`send --act skip "<holder> overdue"` consumes the missing turn and the room moves on. That is
-its whole purpose: it is not a way to hurry a seat that is thinking, and not an answer to one
-you disagree with. A skip spends a turn nobody spoke in, so a room that reaches for it is a
-room arguing with fewer voices.
+it, `next=` (who follows them), `held_ms` (how long since anybody took a turn) and the room's
+`deadline_ms`. Once `held_ms` is past `deadline_ms` **and `next=` is you — only then, and only
+you** — `send --act skip "<holder> overdue"` consumes the missing turn and the room moves on.
+That is its whole purpose: it is not a way to hurry a seat that is thinking, and not an answer
+to one you disagree with. A skip spends a turn nobody spoke in, so a room that reaches for it
+is a room arguing with fewer voices.
+
+Two readings of `floor` that are not what they look like. **`held_ms=0` is not "they just
+started"** — until somebody takes the room's first turn there is no turn to measure from, so
+it means "this room has not moved yet". Time the holder with your own wait instead: two `recv`
+calls longer than `deadline_ms` that each came back with nothing, `floor` still naming the same
+holder, `next=` still you — that is the same condition, measured by a clock the room cannot get
+wrong. And **during an opening round `floor` reports the barrier** (`round=0 (barrier) posted=
+k/N …`) rather than a holder: nobody owes a turn yet, so there is nothing for a skip to consume
+and nothing here to apply. The round releases itself; wait for it.
 
 **Stop when the room has written its record** — `council.sh decision` prints it and exits 0.
 That is the single stop signal. Do **not** stop on seeing a message with `act: decide`: that
@@ -171,8 +180,8 @@ Therefore:
   `agenda`, `protocol`, `decision` and — when you start into a room that is already running —
   `transcript` are the whole of what you might want to read; the rest of what you need is in
   `status`, `claims` and `floor`. (`status` is the fullest picture, but only `floor` carries
-  `next=` and `deadline_ms`, so it is the one that can answer the question below about a
-  holder who has gone quiet.) Writing into the room by hand is worse than
+  `next=` and `deadline_ms`, so it is the one that answers the question above about a holder
+  who has gone quiet.) Writing into the room by hand is worse than
   slow: a stray file in a message lane is read as a message and can reset everyone's count of
   whose turn it is.
 * Do not edit anything outside the room unless your role explicitly says otherwise.
