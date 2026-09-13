@@ -239,6 +239,22 @@ ok "the disposition table answers under /bin/bash" 'park|reprobe|escalate|access
      printf '%s'  \"\$(policy_dispose context_full)\"")"
 ok "the resume guard answers under /bin/bash" 'reprobe' \
   "$(/bin/bash -c ". '$POLICY'; _policy_resume_at 500 1000")"
+ok "the park advice answers under /bin/bash" 0 \
+  "$(/bin/bash -c ". '$POLICY'; policy_park_advice >/dev/null"; echo $?)"
+
+# --- ESC-03, said to a person ------------------------------------------------------------------
+# Two supervisors print this: shipyard's status report and council's room alarm. It is here so
+# there is one wording rather than two that drift, and these pin the two claims it makes — both of
+# which are the REASON an operator is told to leave a parked agent alone.
+advice=$(policy_park_advice)
+ok "the park advice says the wait heals itself" 1 "$(printf '%s' "$advice" | grep -c 'self-healing')"
+ok "...and that the banner's time is in the past" 1 \
+   "$(printf '%s' "$advice" | grep -c 'RAN OUT')"
+# AND THE BOUNDARY, which is the half most likely to erode: the REMEDY NOT TO TAKE is the caller's
+# knowledge, not this module's — shipyard's is compaction, council's is relaunching a seat — so a
+# sentence naming either has absorbed a supervisor's vocabulary and stopped being about the signal.
+ok "it prescribes no caller-specific remedy" 0 \
+   "$(printf '%s' "$advice" | grep -ciE 'compact|relaunch|nudge')"
 
 # --- done ------------------------------------------------------------------------------------
 printf '\n'

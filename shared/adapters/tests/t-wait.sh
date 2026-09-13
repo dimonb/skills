@@ -227,6 +227,38 @@ for f in "$FIX"/pane-*.txt; do
   ok "no class from $(basename "$f")" "" "$(cls "$(cat "$f")")"
 done
 
+# --- 7. the per-kind gate: the anchor is only evidenced where a pane was captured ----------
+# adp_wait_class reads a screen and never asks whose. The column-one argument that makes the
+# allow-list safe rests on captures of the clients in fixtures/, and only those — so a caller
+# admitting a wider set of kinds (council does) has to ask whether the read applies to the kind in
+# front of it. What a 1 costs is the caller's to decide and the two live callers differ: shipyard
+# withholds its stall-clock exemption, council withholds a sentence of its alarm. Neither can be
+# silenced by a 1, which is the property this gate exists to keep true.
+anchored() { adp_wait_anchored "${1:-}" >/dev/null 2>&1; echo $?; }
+ok "a kind with a captured pane is anchored"     0 "$(anchored claude)"
+ok "...and so is the second one"                 0 "$(anchored codex)"
+# The gate's whole purpose. Keep this red until a pane of that kind is captured and committed —
+# the label is added to the module, never to this test alone.
+ok "a kind with no captured pane is NOT anchored" 1 "$(anchored agy)"
+ok "an unknown kind is not anchored"              1 "$(anchored something-new)"
+ok "an empty kind is not anchored"                1 "$(anchored '')"
+# The list is derived from what is on disk, so this is the check that notices a capture landing
+# without the label, or a label added without a capture. It reads the fixture names rather than
+# restating them: a third pane appearing here should make someone decide, not slip through.
+#
+# It looks for the `-running` capture specifically, not for any pane of that kind. Every fixture
+# here was taken for the TURN-STATE read — idle, queued, drafting — and only the mid-turn one says
+# anything about where a client puts its own output. A future turn-state capture of a third kind
+# must not read as evidence for this anchor, because the obvious way to make a red like that go
+# green is to add the label, which is the unevidenced widening this function's header forbids.
+for k in $(adp_kinds); do
+  if [ -f "$FIX/pane-$k-running.txt" ]; then
+    ok "$k has a mid-turn capture, so it is anchored" 0 "$(anchored "$k")"
+  else
+    ok "$k has no mid-turn capture: LOOK before labelling it" 1 "$(anchored "$k")"
+  fi
+done
+
 printf '\n'
 if [ "$FAILURES" -eq 0 ]; then
   printf 't-wait: %d checks, all passed\n' "$CHECKS"

@@ -487,7 +487,9 @@ rule above is about agents that ask per file.
 trust-this-directory prompt** — the blanket flag does not answer that one — and until it is
 answered the participant holds the floor while looking, from the room, exactly like a wedged
 session. `up` prints the caveat for each adapter; `status` flags a long-held floor. Answer it
-once per directory.
+once per directory — **in place**, never with `relaunch`, which would only produce the same
+prompt again with the seat's reading of the argument thrown away. `status`'s `STALL` line says
+so, because this is the distinction it used to guess at.
 
 `codex queue --thread` looks like a native way to wake a busy Codex participant. It is
 not: it accepts the message, prints `Queued message …`, returns 0 — and delivered it
@@ -604,7 +606,78 @@ should be believed; the diagnostic on stderr says what could not be read, and
 `council.sh decision` still prints the record if the room had already closed).
 A `STALL` whose held time is longer than the room has existed says so in the same alarm: one
 seat's clock is wrong, so the figure cannot be trusted even though the stall is real.
-It exits **0 when the room is finished** and 1 while it is open — with one caveat
+
+**A `STALL` says which remedy goes with which cause, and quotes the terminal where it can.** The
+alarm used to guess — *"it may be sitting on a permission prompt"* — and the guess mattered because
+the two likeliest causes need opposite moves: a seat on a permission or first-launch trust prompt
+needs that prompt answered **in place**, while `council.sh relaunch` is for a seat that is
+genuinely dead and discards everything that seat has read. The alarm now names both and guesses
+between neither.
+
+Where it can, it adds a second sentence quoting the seat's own client, read through the shared
+modules shipyard's stall watchdog already uses: `adp_wait_class` (`shared/adapters`) for the class
+the client announced, `policy_dispose` (`shared/policy`) for what that class means. Today the one
+shape it recognises is an announced **capacity limit**, so the annotation reads *"its pane carries
+a live `rate_limited` banner … if that banner is current the seat resumes by itself, so check the
+terminal before relaunching"*, with the matched line printed as evidence.
+
+> **That sentence can never remove the alarm or its push, and that is deliberate.** Everything the
+> read keys on — the roster's `kind`, the container pin, the pane itself — is room state a
+> participant can write, and ["The room is not a trust boundary"](#the-room-is-not-a-trust-boundary)
+> records that no kind is confined at all. So the rule is: **untrusted evidence may annotate an
+> operator-facing signal, never suppress one.** It says *signal*, not *alarm*, because the first
+> draft of this said *alarm*, was applied to the alarm line, and left the mailbox push — the same
+> event's other output — gated on peer-writable state for another round. The test is per output:
+> for each thing a supervisor reads, ask what decides whether it appears.
+>
+> **It does not make this verb unsuppressible, and no rule about how untrusted evidence is *used*
+> could — while every input is room state.** Closing it needs a held time that is not room state;
+> #165's suggested direction is one, and a launch record written outside the room is another.
+> Every field in the block above
+> is a function of room state, `held` included: a seat that stamps a message in the future clamps
+> the held time to 0 and takes the `STALL` line and its push with it (measured — #165). That is
+> #40's fact, not this read's — what the read adds is annotation only, so it adds no new way to go
+> dark.
+
+A `STALL` also **pushes**: one `notice` into the shared escalation mailbox — the same
+fire-and-forget channel an `unresolved` close uses (`.git/ship-escalations/`, which a shipyard
+parent's escalation monitor already polls). What that buys is durability and audience: the alarm
+stops being a line in a console someone has to be reading, and reaches a supervisor who never
+looked at this room. **It does not make the room self-reporting** — something still has to run
+`council.sh status`, and nothing in this repo does so unattended (#21). Until it does, that
+something is you:
+
+```bash
+while true; do council.sh status --room <name> >/dev/null 2>&1; sleep 300; done &
+```
+
+The push is de-duplicated within one room — the room matched on the mailbox entry's own `slot`
+field, and within that, on the floor holder and the turn count — so polling does not accrue
+duplicates while a room that moves and stalls again notifies afresh. **It de-duplicates against the
+mailbox itself, not against a latch file**, and that is the interesting part: nothing confines a
+participant, so a latch anywhere is a file the seat the notice is about could pre-write, and
+pre-writing it is silence. Keying on the mailbox makes suppression **through that check**
+self-revealing — to stop the notice there you must leave an entry carrying its key where you look.
+Weaker than preventing suppression, stronger than pretending to. It is a property of the check and
+not of the push: a forged closure, an unwritable mailbox and #165 each stop the notice by other
+routes, and `_stall_escalate`'s header lists them.
+
+`status` therefore writes, on that one path: a stalled room appends an entry to the mailbox.
+(`recv` already writes too — it advances cursors, even with `--peek` — so this is not the only
+reader with a side effect; the new thing is a write *outside* the room.) Participants are told they
+may read the room with `status`, so a seat that does so on a stalled room will push that notice —
+true and harmless, but worth knowing before you wonder who wrote it.
+
+**The annotation is gated on the agent kind: available for two of the three council can launch.**
+It is withheld for `agy`, and for any room whose roster records no kind at all. The anchor that
+makes a banner the client's own — column one, where the agent's words cannot reach — is a measured
+property of the two clients this repo has committed pane captures of. A kind with no captured pane
+gets **no annotation**: `status` does not print a claim about a client whose chrome nobody has
+looked at. Widening that list means capturing a pane of the kind and committing it
+(`shared/adapters/tests/fixtures/`), never reasoning that a client probably renders like its
+neighbours.
+
+`status` exits **0 when the room is finished** and 1 while it is open — with one caveat
 worth knowing: a room whose
 turn budget ran out reports `unresolved` and exits 0 before anyone has written a record, so
 `council.sh decision` (exit 0 only with a record) is the signal to trust when you need to know

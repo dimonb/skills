@@ -38,7 +38,7 @@
 # sourcing anything, so it constrains nothing; shipyard is the binding caller.
 
 # A version marker, bumped when the body changes, so sync + the drift gate stay easy to prove.
-_ADP_VERSION=2
+_ADP_VERSION=3
 
 # --- the kinds -----------------------------------------------------------------
 # One per line, sorted, so a caller can `paste -sd, -` them into a message.
@@ -512,6 +512,12 @@ adp_delivery_verdict() {
 # One glyph passes the chrome test today. Both admitted kinds put their own words behind a DIFFERENT
 # column-one glyph — one an assistant bullet, one a service bullet — so neither can reach column
 # one behind the warning glyph, and indentation covers tool output and every wrapped continuation.
+# READ THAT SENTENCE WITH `adp_wait_anchored`'s HEADER, which states what the two captures actually
+# show and does not claim the same strength for both: the assistant-bullet half is a capture of
+# that client's own prose, while the service-bullet half is evidenced by the client's service line
+# plus this repo's own recorded defect of one carrying its prose — no committed capture holds an
+# assistant turn for that kind. The conclusion stands; the evidence behind its two halves differs,
+# and reading the strong form alone is how the service bullet got into the allow-list once already.
 # That is why the allow-list below has exactly one entry and why the service bullet was REMOVED
 # from it rather than narrowed: a bullet line is authored content, and no amount of phrase-pinning
 # makes authored content trustworthy.
@@ -631,4 +637,44 @@ adp_wait_class() {
   done <<<"$screen"
   [ -n "$hit_cls" ] || return 1
   printf '%s\t%s' "$hit_cls" "$hit_line"
+}
+
+# adp_wait_anchored <kind> — 0 when THIS kind's column-one chrome has been CAPTURED, so a banner
+# matched above can be trusted to be the client's own and not the agent's words; 1 otherwise.
+#
+# adp_wait_class reads a screen and never asks whose it is. That is sound for a caller whose
+# admission set is exactly the kinds the anchor was derived from, and unsound for one whose set is
+# wider — which is the case the moment a caller admits a kind nobody has captured a pane of.
+#
+# THE ALLOW-LIST ABOVE RESTS ON CAPTURES OF TWO CLIENTS, and only two. Said precisely, because the
+# two captures do not show the same thing: fixtures/pane-claude-running.txt shows that client
+# putting its own ASSISTANT PROSE behind a column-one glyph of its own, with continuations
+# indented; fixtures/pane-codex-running.txt shows the other client's column-one SERVICE line and
+# no assistant turn at all, so for that kind the capture evidences the client's glyph rather than
+# where the agent's words land. fixtures/panes.notes lists every capture this repo holds; no third
+# kind has one. For a kind with no captured pane we do not know where its client puts anything, and
+# "nobody has looked" is not evidence of a fence — it is the absence of one.
+#
+# It lives HERE because it is the per-kind half of the same question the allow-list answers: which
+# client renders what is this module's knowledge, not a supervisor's.
+#
+# THE CALLER THAT NEEDS IT TODAY IS THE ONE WITH THE WIDER SET, and that is a seam worth naming
+# rather than plumbing. council admits every kind `adp_kinds` lists, so it asks this before
+# PRINTING a sentence about what a client's chrome means. shipyard's admission set
+# (`shipyard_agent_kinds`) is exactly the two evidenced kinds, so the gate would change nothing
+# there today — and making `shipyard_wait_state` carry a kind it does not currently hold, to reach
+# a call whose answer is always 0, is the plumbing this repo's law tells you not to buy. The day
+# either admission set widens, the gate is already here and that caller passes the kind it knows.
+#
+# WHAT ANSWERING 1 COSTS DEPENDS ON WHAT THE CALLER DOES WITH A 0, and the two live callers differ
+# — so this is stated as the two cases rather than as one rule. shipyard's read grants an exemption
+# from its stall clock, and there a 1 simply withholds it: the child falls through to the stall
+# path, i.e. to today's behaviour. council's read only ever ANNOTATES an alarm that fires either
+# way, so there a 1 withholds a sentence and nothing else. Neither direction can silence a caller's
+# alarm on a 1, which is the property to preserve. Widen it by CAPTURING a pane of that kind, committing
+# it beside the others, and adding the label below — never by reasoning that a client nobody
+# captured probably renders like the ones that were. That inference is precisely what put the
+# service bullet in the allow-list above, and it had to be taken back out.
+adp_wait_anchored() {
+  case "${1:-}" in claude|codex) return 0 ;; *) return 1 ;; esac
 }

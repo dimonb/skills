@@ -343,8 +343,307 @@ v_verdict() {
   case "$v" in decided|unresolved) return 0 ;; stuck) return 2 ;; *) return 1 ;; esac
 }
 
+# --- WHY a seat that holds the floor is not moving ----------------------------------------------
+# THE DEFECT THESE HELPERS CLOSE. `status` could say "the floor has been held for 626s"; it could
+# not say why, so it guessed — "it may be sitting on a permission prompt" — and a supervisor had to
+# go and capture the terminal by hand to find out. The guess mattered because the two commonest
+# causes need OPPOSITE remedies: a seat parked on a capacity limit resumes on its own, while a seat
+# on a first-launch trust prompt needs that prompt answered IN PLACE. `council.sh relaunch` is the
+# remedy for neither, and it throws away the seat's reading of the whole argument.
+#
+# THE RULE THAT SHAPES ALL OF IT, and the one to keep if everything else here is rewritten:
+#
+#   UNTRUSTED EVIDENCE MAY ANNOTATE AN OPERATOR-FACING SIGNAL, NEVER SUPPRESS ONE.
+#
+# A peer-writable value that changes how a signal READS is fine; one that decides whether the
+# signal APPEARS is not. That is the difference between informing a supervisor and being trusted by
+# one, and a signal a participant can silence is strictly worse than none, because the supervisor
+# stops looking.
+#
+# IT SAYS *SIGNAL*, NOT *ALARM*, AND THAT WORD COST A ROUND. Written as "never suppress an alarm",
+# it was applied to the alarm line that happened to be in front of the author — and the mailbox
+# PUSH, the second operator-facing output of the same event, stayed gated on peer-writable state
+# for another round. So the test is per OUTPUT, not per feature: for each thing a supervisor reads,
+# ask what decides whether it appears. The enumeration further down does that for this verb.
+#
+# THE PRECEDENT IS IN THIS FILE ALREADY: the `created_ms` paragraph in v_status says the same thing
+# for the clock-wrong wording — the alarm fires on the condition it always did, and the untrusted
+# value can only change how it reads. This is that rule applied to a second untrusted input.
+#
+# WHERE SUPPRESSION CANNOT BE PREVENTED, MAKE IT SELF-REVEALING. That is the stronger form, and it
+# is what `_stall_escalate` does below: nothing confines a participant (SKILL.md, "The room is not
+# a trust boundary", measured for all three kinds), so no file a supervisor writes is out of a
+# seat's reach. Rather than pretend otherwise, the push de-duplicates against the MAILBOX ITSELF,
+# so suppressing a notice THROUGH THE DE-DUPLICATION CHECK costs a visible artefact in the
+# directory the supervisor reads. Read that as a property of the check, not of the push: the other
+# ways out are enumerated below and `_stall_escalate` names its own. Self-revealing is the property
+# to prefer to an unreachable-file argument whenever you have the choice — it survives an adversary
+# you cannot lock out, which is the case here.
+#
+# WHAT THIS DOES NOT MAKE TRUE, stated because the rule above reads stronger than the room is.
+# EVERY operator-facing output of this verb is ultimately a function of room state a participant
+# can write, and that is #40's fact rather than this change's defect:
+#   * the status block's fields — roster.json and the lanes, wholesale;
+#   * the STUCK / ready-to-decide / unresolved alarms — the claim graph, i.e. the lanes;
+#   * `status`'s exit code and `rooms`' listing — `board/status` + `board/decision.md`;
+#   * the STALL alarm — `c_floor_held_ms`, hence the last turn's peer-written `sent_ms` and
+#     `created_ms`. A seat that stamps a message in the FUTURE clamps the held time to 0 and
+#     removes the alarm and the push together; measured, and filed as #165. That is a live
+#     counterexample to the rule above, it predates this change, and it is named here rather than
+#     left for a reader to find, because a rule stated absolutely and contradicted by the same file
+#     is worse than a rule stated with its hole;
+#   * the mailbox push — everything the alarm is gated on, PLUS the closed-room early return
+#     (`board/status` + `board/decision.md`, forgeable, #66) and the mailbox's own contents, which
+#     are not room state. It carries strictly more gates than the alarm, so "same condition as the
+#     alarm" is the wrong summary; `_stall_escalate`'s header lists them.
+# What this change CAN keep true is narrower and worth having: the TERMINAL READ — the one input
+# here that is not room state — is annotation-only, so it adds no new way to go dark.
+#
+# WHY IT HAD TO BE THIS WAY ROUND, stated as what was actually checked rather than as a claim about
+# every possible design. An earlier draft let a recognised capacity banner REPLACE the alarm. Every
+# fact that draft keyed on turns out to sit inside the room directory, which is the participant's
+# own writable root (#40): the roster's `.peers[].kind`, the container pin under `state/`, the
+# launcher script, and the pane itself, whose selection follows the pin. A record written outside
+# the room at launch would not be peer-writable, but that is `up.sh`'s to write. NOT CHECKED:
+# whether either terminal backend can attest a session's identity in a way a participant cannot
+# forge — so this is not a claim that no unforgeable anchor exists, only that none of the four this
+# code can reach today is one. The annotation needs no such anchor, which is why it is the
+# annotation that shipped.
+#
+# NOTHING HERE IS COUNCIL'S OWN KNOWLEDGE. Three modules already answer the three parts, and
+# shipyard's stall watchdog asks the same question through the same two of them
+# (`shipyard_wait_state`):
+#   * shared/adapters (`adp_wait_class`) owns what a client RENDERS, and returns a class from the
+#     driver's AgentSignal vocabulary; `adp_wait_anchored` owns whether that read is evidenced for
+#     the kind in question, which matters here and not in shipyard because council admits a wider
+#     set of kinds than the two whose panes have been captured;
+#   * shared/policy (`policy_dispose`) owns what to DO with such a class — `park` is a self-healing
+#     wait — and `policy_park_advice` owns the sentence a person is shown about one.
+# Nothing here re-derives any of that, and in particular nothing here reads a time out of a banner:
+# ESC-03 in the policy module records why that number is always in the past.
+#
+# WHAT THE GATES ARE FOR, now that none of them can clear an alarm: they keep `status` from
+# PRINTING a claim it has no standing to make. An unanchored kind gets no sentence rather than a
+# sentence about a client whose chrome nobody has captured. The screen read itself is anchored on
+# client chrome (see agent-adapters.sh, and AGENTS.md for why a substring over a capture is
+# forgeable by an agent whose work IS that predicate — a council seat arguing about this very
+# feature is exactly such an agent).
+
+# _floor_screen <peer> — the seat's visible screen, or nothing and rc 1.
+_floor_screen() {
+  local peer="${1:-}" f pinned=0
+  [ -n "$peer" ] || return 1
+  # A TEST SEAM: it replaces the CAPTURE, never the classification or the disposition below, so a
+  # test still exercises the real anchor and the real policy table. It is read from the environment
+  # of whichever process runs `status` — usually the supervisor's, but `status` takes no `need_me`
+  # and participants are told they may read the room with it, so a seat running `status` controls
+  # this for ITS OWN invocation. That buys nothing worth having: the result can only ANNOTATE an
+  # alarm, and a seat can already put whatever it likes on its own pane.
+  if [ -n "${COUNCIL_WAIT_SCREEN_FILE:-}" ] && [ -f "$COUNCIL_WAIT_SCREEN_FILE" ]; then
+    cat "$COUNCIL_WAIT_SCREEN_FILE"; return 0
+  fi
+  # A room with no pinned container was never LAUNCHED by this skill, so it has no terminals to
+  # read and there is nothing to ask. What the guard saves is the pane CAPTURE — the backend's
+  # tree/list call and its read — for the rooms that have none: the test rooms, and a room built by
+  # hand. It does not save the backend RESOLUTION, which happens once when term.sh is sourced; the
+  # source is therefore deferred to here, after the guard, so a room with no pin costs neither.
+  for f in "$ROOM"/state/container-*; do [ -f "$f" ] && pinned=1; done
+  [ "$pinned" = 1 ] || return 1
+  # Sourced on demand, PER INVOCATION — not once, whatever the `command -v` looks like it buys.
+  # This function's only call site is `screen=$(_floor_screen "$peer")`, i.e. a command
+  # substitution, so everything it defines dies with that subshell and the next call re-sources.
+  # That is fine while there is one call per `status`, and it is the reason this guard cannot be
+  # read as a cache: a future caller that loops the read would pay the backend resolution every
+  # time, and should hoist the source into v_status, outside the substitution, where the guard
+  # would actually bite. A caller with no $SKILL, or a term.sh that will not load, gets no capture
+  # rather than an error — the same way v_decide treats policy.sh.
+  if ! command -v ct_capture >/dev/null 2>&1; then
+    [ -n "${SKILL:-}" ] && [ -f "$SKILL/lib/term.sh" ] || return 1
+    . "$SKILL/lib/term.sh" || return 1
+    command -v ct_capture >/dev/null 2>&1 || return 1
+  fi
+  ct_capture "$peer" 2>/dev/null
+}
+
+# _floor_wait_state <peer> — "<class><TAB><the line that said so>" and rc 0 when this seat's own
+# client announces a wait that heals itself; nothing and rc 1 for every other answer, including
+# every answer we are not entitled to give.
+#
+# ITS RESULT IS EVIDENCE, NOT A VERDICT. Every input it reads is peer-writable (the header above
+# enumerates them), so the caller may quote it and must not act on it: it adds a sentence to the
+# STALL alarm and decides nothing about whether that alarm, or its push, happens. Keep it that way
+# round — the moment a caller branches the alarm on this, a seat can silence the supervisor's alarm
+# about itself, which is worse than the blindness this whole block exists to fix.
+_floor_wait_state() {
+  local peer="${1:-}" kind screen ev cls
+  [ -n "$peer" ] || return 1
+  # Both shared modules are sourced by council.sh for this verb. Absent either, give up quietly:
+  # the STALL alarm is unchanged by that, and a supervisor is never told a pass ran that did not.
+  command -v adp_wait_class >/dev/null 2>&1 || return 1
+  command -v adp_wait_anchored >/dev/null 2>&1 || return 1
+  command -v policy_dispose >/dev/null 2>&1 || return 1
+  # The kind comes from the roster, which is where `relaunch` already reads it. `.peers` is absent
+  # in a room built without it (the test helper's rooms, and any room made before `up` wrote the
+  # field), and an unknown kind is unanchored by definition — both end the read here.
+  kind=$(jq -r --arg p "$peer" '.peers[]? | select(.name==$p) | .kind // empty' \
+           "$ROOM/roster.json" 2>/dev/null | head -1)
+  [ -n "$kind" ] || return 1
+  adp_wait_anchored "$kind" || return 1
+  screen=$(_floor_screen "$peer") || return 1
+  [ -n "$screen" ] || return 1
+  ev=$(adp_wait_class "$screen" 2>/dev/null)   # "<class><TAB><the line that said so>", or empty
+  cls=${ev%%	*}
+  ev=${ev#*	}
+  # The emptiness test IS the check: adp_wait_class printing nothing is how it says "no class",
+  # and its own exit status is lost to the command substitution.
+  [ -n "$cls" ] || return 1
+  # Routed through policy rather than tested as a class here, so a class added to the adapter
+  # later arrives with the shared disposition already attached and lands on the STALL path unless
+  # someone deliberately writes an arm for it. `park` is the only self-healing disposition there
+  # is; `compact` and every `escalate` are a person's move and belong in the alarm, not out of it.
+  case "$(policy_dispose "$cls" 2>/dev/null)" in
+    park*) printf '%s\t%s' "$cls" "$ev"; return 0 ;;
+  esac
+  return 1
+}
+
+# _stall_escalate <peer> <turns> <held-seconds> [annotation] — push one notice into the shared
+# mailbox for a stalled room. Best-effort: it can never fail the status block that called it.
+#
+# WHAT IT ADDS THAT THE PRINTED ALARM CANNOT. `status` writes to a console someone has to be
+# reading. This is the same fire-and-forget channel `decide` already uses for a room that closed
+# unresolved (ESC-04), so a council stall lands in the one directory a shipyard parent's escalation
+# monitor already polls, alongside ship's — which means the person who sees it need not be the one
+# who ran `status`. It does NOT make the room self-reporting: something still has to invoke
+# `council.sh status`, and nothing in this repo does so unattended (#21 is that gap). SKILL.md
+# documents a watch loop for an operator who wants one; until #21 has an answer, that loop is the
+# trigger.
+#
+# IT FIRES WHENEVER THE ALARM DOES, in either of its wordings and explained or not. Two earlier
+# drafts got this wrong in the same way and it is the mistake worth naming: the first pushed only
+# for an UNEXPLAINED stall, so the screen read decided whether a person was woken; the second still
+# skipped the clock-wrong arm, so a peer writing `created_ms` did. Both times the alarm had been
+# fixed and the push — the same event's second operator-facing output — had not, because the alarm
+# was the one being looked at. What the classification changes is this notice's WORDING, never its
+# existence.
+#
+# DE-DUPLICATED AGAINST THE MAILBOX ITSELF, within ONE room, so polling `status` does not accrue N
+# notices for one stall while a room that moves and stalls again notifies afresh. Two halves, and
+# an agent relocating this scan needs both: the ROOM is matched on the entry's `.slot` field with
+# `==`, and within that, the key `[stall:<peer>:<turns>]` carried in the notice's `.text` separates
+# one stall from the next. Dropping the first half reinstates a collision between sibling rooms
+# that the body below records in full.
+#
+# THAT IS THE POINT OF IT, and it is why there is no latch file. Nothing confines a participant —
+# SKILL.md's "The room is not a trust boundary" records all three kinds writing outside the repo
+# entirely — so a latch anywhere, in the room or in the mailbox, is a file the seat the notice is
+# about can pre-write, and pre-writing it is silence. De-duplicating against the mailbox makes
+# suppression through THIS CHECK self-revealing instead: to stop the notice here you must put an
+# entry carrying its key into the directory the supervisor reads. Weaker than preventing
+# suppression, stronger than pretending to.
+#
+# THE CHECK IS NOT THE ONLY WAY OUT, and the list matters more than the property. Three others,
+# each named here rather than left to be found — an earlier draft of this very comment claimed the
+# check was the only route while listing two of them eight lines below:
+#   * a CLOSED room returns early, and a closure is two files inside the room (`board/status`,
+#     `board/decision.md`), so a seat can forge one and stop the push. A forged closure also makes
+#     every other reader report the room decided, which is the larger pre-existing lie (#66) rather
+#     than something this gate adds;
+#   * a mailbox that cannot be resolved or written pushes nothing at all;
+#   * upstream of this function entirely, a held time clamped to 0 removes the alarm and the push
+#     together (#165).
+_stall_escalate() {
+  local peer="${1:-}" turns="${2:-}" held="${3:-}" note="${4:-}" key room who where mb
+  command -v policy_escalate >/dev/null 2>&1 || return 0
+  command -v policy_mailbox_dir >/dev/null 2>&1 || return 0
+  # A closed room's floor is nobody's problem, and `decide` has already escalated the one closure
+  # that needs a person. Only a LIVE room can be stalled.
+  [ -z "$(c_recorded_status)" ] || return 0
+  mb=$(policy_mailbox_dir) || return 0
+  room=$(basename "$ROOM")
+  # THE ROOM IS MATCHED AS AN EXACT FIELD, never as a filename prefix, and the distinction is the
+  # whole defect. A first version globbed `council-$room-*.json`; `council.sh up` names a repeated
+  # scenario `<name>-2`, so `design` and `design-2` are the ordinary pair rather than a contrived
+  # one — and `council-design-*.json` matches `council-design-2-1.json`. With the same `--agents`
+  # spec both rooms have the same seat names, so both wedging at turn 0 produced the same key and
+  # whichever polled second pushed NOTHING, permanently.
+  #
+  # THE SHAPE IS AN UNANCHORED PREFIX MATCH over a scarce namespace — the same shape as the
+  # test-number collisions in #149 — and what closes it is any comparison whose room segment cannot
+  # bleed into the next one. THREE WERE CHECKED, and the first is the one that fails:
+  #   * a tighter GLOB, `council-design-[0-9]*.json`: still matches `council-design-2-1.json`;
+  #   * an ANCHORED pattern, `+([0-9]).json` under extglob or `^council-<room>-[0-9]+\.json$` as a
+  #     regex: correct — it excludes the sibling, and it is what this file's own test helper uses;
+  #   * an exact FIELD comparison on `.slot`: correct.
+  # (An earlier draft of this comment claimed no tighter pattern could work. That was an untested
+  # claim about a solution space, false, and contradicted by the anchored helper in the same commit.)
+  #
+  # THE EXACT FIELD IS PREFERRED over the anchored pattern for two reasons, neither of which is that
+  # the other cannot work. First, an anchor over the FILENAME re-derives the room's identity from a
+  # path that `policy_escalate` composed, while `.slot` is that identity as the writer recorded it —
+  # one fewer place for the two to disagree. Second, `--room` is validated nowhere (council.sh
+  # interpolates `$ROOM_NAME` straight into a path), so a delimiter-based key would encode a value
+  # that may contain its own delimiter, and an anchored filename pattern would have to be built from
+  # the same unvalidated string.
+  #
+  # THE ROOM IDENTITY IS `basename "$ROOM"`, so `--room a/b` and `--room b` share a slot. Contrived,
+  # and it predates this scan, but it is why this says "the room as `policy_escalate` recorded it"
+  # rather than "whatever the room is called".
+  #
+  # MATCHING `.text` AND NOT THE WHOLE ENTRY also matters: the annotation is a quote from a seat's
+  # own pane and lands in `.context`, so a seat that appends a key-shaped string to its banner would
+  # otherwise suppress the NEXT stall's notice. Keying on `.text`, which this code composes, leaves
+  # that route closed.
+  key="[stall:$peer:$turns]"
+  # Fails OPEN by construction, which is the right way round for a de-duplication check: an empty
+  # glob, an unreadable mailbox, a malformed entry or a missing jq all make this print nothing, and
+  # a check that cannot read its own history must repeat a notice rather than skip one.
+  local seen
+  seen=$(jq -s --arg s "council-$room" --arg k "$key" \
+           '[.[] | select(.slot == $s) | select((.text // "") | contains($k))] | length' \
+           "$mb"/council-*.json 2>/dev/null) || seen=""
+  case "$seen" in ''|*[!0-9]*) seen=0 ;; esac
+  [ "$seen" -gt 0 ] && return 0
+  # During an open barrier round the caller's `$floor` is a LABEL, not a seat — nobody holds the
+  # floor and the room is waiting on everyone — so the notice must not name it as a participant.
+  # A real seat is named; anything else degrades to the room, and the terminal to look at becomes
+  # every terminal. The label is still a fine de-duplication key: it is stable while the round is.
+  #
+  # Captured and matched rather than piped into `grep -q`, for the reason ship's own guidance gives
+  # about this exact shape: `-q` exits on the first hit, the writer takes a SIGPIPE, and under
+  # `pipefail` the pipeline's status is then the writer's — so a present peer intermittently reads
+  # as absent. Here that would only downgrade the wording, which is precisely the kind of rare,
+  # harmless-looking misreport nobody ever tracks down.
+  local roster; roster=$(c_peers)
+  case $'\n'"$roster"$'\n' in
+    *$'\n'"$peer"$'\n'*) who="$peer"; where="$peer's terminal" ;;
+    *)                   who="the room's floor"; where="every participant's terminal" ;;
+  esac
+  # `[ -n "$peer" ]` first: with no floor holder AND an unreadable roster both sides of the `case`
+  # subject are empty, which MATCHES the member pattern and named an empty seat in the notice
+  # ("  has been held for 7200s"). An unnamed floor is exactly the input the fallback is for.
+  [ -n "$peer" ] || { who="the room's floor"; where="every participant's terminal"; }
+  mkdir -p "$mb" 2>/dev/null || true
+  # The annotation goes LAST, after council's own remedies, and the quote is delimited. Spliced
+  # mid-sentence it ran straight into this skill's instructions with nothing marking where the
+  # participant-authored half ended — and the whole reason it is quoted at all is that a seat
+  # chooses its text. On the console the evidence is last for the same reason.
+  #
+  # Built OUTSIDE the argument, not with a `${note:+…}` inside it: an apostrophe in the alternate
+  # text ends the surrounding double-quoted word as far as bash's parser is concerned, and the
+  # whole file then fails to parse. It cost a round here; the plain `if` cannot do that.
+  local ctx="turn $turns; go and look at $where. A permission or first-launch trust prompt is answered IN PLACE; council.sh relaunch is only for a seat that is genuinely dead, and it discards everything that seat has read."
+  if [ -n "$note" ]; then
+    ctx="$ctx Quoted from the pane, not a verdict: <<$note>>"
+  fi
+  policy_escalate notice "council-$room" \
+    "council room '$room': $who has been held for ${held}s — the room has stopped $key" \
+    "$ctx" \
+    >/dev/null 2>&1 || return 0
+}
+
 v_status() {
-  local j verd g t floor held conf room_age alarms="" phase
+  local j verd g t floor held conf room_age alarms="" phase wait_ev="" wait_note=""
   j=$(v_verdict --json); verd=$(printf '%s' "$j" | jq -r '.verdict // empty' 2>/dev/null)
   # Which phase of the turn cycle the room is in, from the declared flow graph via the shared
   # guard (c_phase -> flow_phase over lib/room-graph.sh). This is the supervisor's "where is this
@@ -430,9 +729,42 @@ v_status() {
   if [ "$held" -gt "${COUNCIL_STALL_SECS:-900}" ]; then
     if [ -n "$room_age" ] && [ "$held" -gt "$room_age" ]; then
       alarms="$alarms 🛑 STALL: the floor has been held for ${held}s, which is longer than this room has existed (${room_age}s) — one seat's clock is wrong, so check every terminal rather than trusting the figure"
+      # No terminal read on this arm: `held` is not a trustworthy number here, so nothing about a
+      # seat should be concluded from it, and the threshold-first ordering the paragraph above
+      # insists on stays exactly as it was. The PUSH still happens — see below.
     else
-      alarms="$alarms 🛑 STALL: $floor has held the floor for ${held}s — check its terminal, it may be sitting on a permission prompt"
+      # ONE alarm, on exactly the condition it always fired on, and then — where the seat's own
+      # client announced something this check recognises — one more sentence QUOTING that. The
+      # annotation never gates the alarm or the push (the header of _floor_wait_state says why),
+      # so a seat cannot talk its way out of being noticed; the most it can do is change what the
+      # supervisor reads before going to look, which is what `created_ms` can already do to the
+      # clock wording below.
+      #
+      # The alarm no longer GUESSES a cause. The guess it used to make ("it may be sitting on a
+      # permission prompt") was right often enough to be believed and wrong often enough to cost a
+      # seat, because the two likeliest causes need opposite remedies and only one of them is
+      # `relaunch`. It now names both remedies and says which case each belongs to.
+      #
+      # The recognition clause is CONDITIONAL, and that is not tidiness. Printed unconditionally it
+      # said "nothing this check recognises explains it" in the same line as the annotation this
+      # very check had just produced — the alarm denying and asserting the same fact, on the one
+      # path the feature exists for. It is worded this way rather than "nothing on its terminal"
+      # because the only shape recognised is an announced capacity wait, so on the commonest wedge
+      # the terminal says exactly why and this code cannot read it.
+      wait_ev=$(_floor_wait_state "$floor") || wait_ev=""
+      alarms="$alarms 🛑 STALL: $floor has held the floor for ${held}s — the room has stopped; go and look at it. A seat sitting on a permission or first-launch trust prompt needs that prompt ANSWERED IN PLACE; council.sh relaunch is only for a seat that is genuinely dead, and it discards everything that seat has read."
+      if [ -n "$wait_ev" ]; then
+        wait_note="⏳ its pane carries a live ${wait_ev%%	*} banner: $(policy_park_advice) If that banner is current the seat resumes by itself, so check the terminal before relaunching — this is a quote from a pane, not a verdict. Evidence: ${wait_ev#*	}"
+        alarms="$alarms $wait_note"
+      else
+        alarms="$alarms Nothing this check recognises explains it; only an announced capacity wait is recognised today."
+      fi
     fi
+    # OUTSIDE the wording branches, deliberately. Both of them are the same alarm — this room has
+    # stopped — and the push is that alarm's second operator-facing output, for the supervisor who
+    # is not at the console. Nesting it under one wording is how a peer-written `created_ms`, which
+    # only chooses between the two, came to decide whether anyone was woken.
+    _stall_escalate "$floor" "$t" "$held" "$wait_note"
   fi
   printf 'alarms:%s\n' "${alarms:- —}"
   printf 'last messages:\n'

@@ -19,7 +19,8 @@
 # four things it owns map to the four escalation requirements:
 #   ESC-01  policy_dispose — the disposition table over the normalized signal vocabulary.
 #   ESC-02  policy_dispose + the declared safe-set — access requests are DEFAULT-DENY.
-#   ESC-03  the resume-time guard — a rate-limit park never trusts a stale/past timestamp.
+#   ESC-03  the resume-time guard — a rate-limit park never trusts a stale/past timestamp — plus
+#           policy_park_advice, the same rule said to the person reading a supervisor's report.
 #   ESC-04  policy_mailbox_dir + policy_escalate — the human mailbox, resolvable from any worktree.
 #
 # THE SIGNAL VOCABULARY (the driver's AgentSignal `class`, DRV-03), one of:
@@ -45,7 +46,7 @@
 # the table under /bin/bash, and says there what that assertion is worth where /bin/bash is newer.
 
 # A version marker, bumped when the body changes, so sync + the drift gate stay easy to prove.
-_POLICY_VERSION=2
+_POLICY_VERSION=3
 
 # --- ESC-01 · the disposition table -------------------------------------------------------------
 # policy_dispose <class> [payload] [resume_at] -> one disposition token on stdout, exit 0.
@@ -185,6 +186,25 @@ _policy_resume_at() {
   # `[: integer expected` error deciding a park — re-probe.
   case "$now" in ''|*[!0-9]*) printf 'reprobe'; return 0 ;; esac
   if [ "$cand" -gt "$now" ]; then printf '%s' "$cand"; else printf 'reprobe'; fi
+}
+
+# policy_park_advice -> the one sentence an operator needs when a signal disposes to `park`.
+#
+# ESC-01 returns a token and the guard above keeps its time honest; this is the SAME rule said to
+# a person, and it lives here because both halves are policy's. It is here rather than in either
+# caller because two supervisors have to say it: shipyard's status report tells an operator why a
+# motionless child is fine, and council's room alarm tells one why a seat holding the floor is
+# fine. Two wordings of one rule drift, and the drift is invisible — each reads correct on its own.
+#
+# NO PARAMETER, deliberately. Every class that disposes to `park` (rate_limited, quota_exhausted,
+# overloaded) needs exactly this today, so a `<class>` argument would be plumbing that changes
+# nothing; the seam is named here so the argument arrives on the day a class earns its own wording.
+#
+# What a caller APPENDS is the caller's, and that half must not migrate here: the action not to
+# take differs per skill — shipyard's is compaction, council's is relaunching a seat — and each is
+# knowledge about that supervisor's own remedies, not about the signal.
+policy_park_advice() {
+  printf '%s' "a stated, self-healing wait — it resumes on its own. The banner states when the window RAN OUT, not when it resumes, so re-probe the agent's own usage view if you need a time."
 }
 
 # --- ESC-04 · the human mailbox -----------------------------------------------------------------

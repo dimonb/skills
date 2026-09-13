@@ -429,9 +429,19 @@ answer is to send it a directive.
 Where these shapes live, and why not here: the per-client banner text is in `shared/adapters`
 (`adp_wait_class`) with the turn marker, because what a client renders is per-kind knowledge; what
 to DO with a class is `shared/policy`'s `policy_dispose` (`park` = self-healing wait,
-`escalate|error` = a person's call); and `shipyard_wait_state` in `shipyard-lib.sh` joins those to
+`escalate|error` = a person's call); the SENTENCE a person is shown about a park is that module's
+too (`policy_park_advice`), because council's room alarm has to say the same thing and one rule
+worded twice drifts — what stays here is shipyard's own remedy clause, the refusal to compact; and
+`shipyard_wait_state` in `shipyard-lib.sh` joins those to
 the declared slot graph's phase. Nothing reads a resume TIME off a banner — the policy module's
 ESC-03 records why: a capacity banner states when the window **ran out**, not when it resumes.
+
+One gate in `shared/adapters` this skill does **not** call today, named so it is not mistaken for a
+gap: `adp_wait_anchored <kind>` says whether the banner anchor is evidenced for a given agent kind,
+i.e. whether a pane of that client has been captured. `shipyard_agent_kinds` admits exactly the two
+kinds that have one, so the answer here is always yes and `shipyard_wait_state` is not made to
+carry a kind it does not hold. council admits a wider set and gates on it. Widen this skill's
+admission set and the gate is already there to call.
 
 Arm the **fast escalation monitor** too — 10 minutes is too slow for a child that is
 blocked on a question:
