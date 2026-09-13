@@ -15,10 +15,12 @@ barrier does not withhold from a supervisor.
 
     council.sh agenda                             the question this room is arguing
     council.sh protocol                           these rules and your role, again
-    council.sh recv --until-floor --timeout 150   wait until the floor is yours
-    council.sh recv --timeout 150                 just wait for new messages
+    council.sh recv --until-floor --timeout 150   wait until the floor is yours (150 seconds)
+    council.sh recv --timeout 150                 just wait for new messages (seconds)
     council.sh send --act <act> --refs '["id"]' "text"
     council.sh status                             whose turn, what is on the table, what is open
+    council.sh floor                              who holds the floor, who is next, how long
+                                                  (ms), and this room's limit on a turn (ms)
     council.sh claims                             the objection graph
     council.sh decision                           the record (exit 1 = not written yet, not an error)
     council.sh transcript                         everything you may see, in order (an open
@@ -26,13 +28,22 @@ barrier does not withhold from a supervisor.
 
 **Exit code 4 from `recv` is NOT an error.** It means "nobody said anything within the
 timeout". The only correct reaction is to call `recv` again. Do not fix it, do not treat it
-as a breakage, do not leave the loop.
+as a breakage, do not leave the loop. If it keeps timing out, run `council.sh floor` *between*
+two `recv` calls — looking is part of waiting, not a way out of it. A quiet room and a quiet
+floor **holder** look identical from `recv`, and only one of them is yours to do anything
+about ("A seat that has gone quiet", below).
 
 **The one exception, and it is the only state in which you should stop looping.** If a
 `council:` line about this room's roster appears on stderr — or if `recv` keeps returning 4
-while `send` keeps returning 6, with nothing new arriving — the room is stopped rather than
-quiet: its participant list cannot be read, and no seat can speak until a human repairs
-`roster.json`. Say so to whoever is supervising and stop; looping cannot clear it.
+while `send` keeps returning 6, with nothing new arriving **and `floor` cannot say whose turn
+it is** — the room is stopped rather than quiet: its participant list cannot be read, and no
+seat can speak until a human repairs `roster.json`. Say so to whoever is supervising and stop;
+looping cannot clear it.
+
+That last clause is not a formality: 4-from-`recv` with 6-from-`send` is also what an ordinary
+turn you are simply not holding looks like, so on its own it would condemn a healthy room. What
+separates them is whether `floor` still names a holder. If it does, the room is intact and you
+are waiting — go back to waiting, and read on.
 
 **Two `council:` lines begin `the opening`, and they mean opposite things.**
 
@@ -107,9 +118,38 @@ out-of-turn and you have to take the floor again.
 
 The loop: `recv --until-floor` → **one** message on the substance → wait again.
 
-If `send` returned **exit 6**, the floor moved while you were composing. That is not a
+If `send` returned **exit 6**, the floor was not yours at the moment it went to stamp the
+message — either it moved while you were composing, or it was never yours. That is not a
 breakage: drain your inbox (`recv`), read what was said, and wait for your turn. Sending the
-same text again without reading the new messages is the worst thing you can do.
+same text again without reading the new messages is the worst thing you can do. If you keep
+getting 6 because the holder is not speaking at all, that is the case below.
+
+**A seat that has gone quiet does not freeze the room.** `council.sh floor` prints who holds
+it, `next=` (who follows them), `held_ms` and the room's `deadline_ms`. Both are in
+**milliseconds** — `recv --timeout` is the one number here that is in seconds. `held_ms` is how
+long since anybody took a turn, timed by the clock of the seat that took it, so a figure longer
+than this room has been running is a broken clock rather than a stall and is worth reporting
+instead of acting on. Before a room's **first** turn there is no such seat: the count then runs
+from when the room was created, which includes the time before anybody was launched, so give a
+first holder more room than the number alone suggests. Once `held_ms` is past `deadline_ms`
+**and `next=` is you — only then, and only
+you** — `send --act skip "<holder> overdue"` consumes the missing turn and the room moves on.
+That is its whole purpose: it is not a way to hurry a seat that is thinking, and not an answer
+to one you disagree with. A skip spends a turn nobody spoke in, so a room that reaches for it
+is a room arguing with fewer voices.
+
+Two readings of `floor` that are not what they look like. **`held_ms=0` is not "they just
+started"** — it means this room has not moved yet and cannot time the holder for you. Usually
+that is a room that opened with a round, before its first turn; a room that records no creation
+time, and a turn stamped from a clock that runs ahead, read 0 as well. Time the holder yourself
+instead, and mind the units: `deadline_ms` is **milliseconds**, while `recv --timeout` is in
+**seconds**. Keep waiting, and once your own waiting on the same holder adds up past
+`deadline_ms` with nothing arriving, and `next=` is still you, the same rule applies — your own
+wait is a clock the room cannot get wrong. Messages that arrive without the floor moving — a
+raised hand, the opening round releasing — do not reset that count; the floor moving does. And
+**during an opening round `floor` reports the barrier** (`round=0 (barrier) posted=
+k/N …`) rather than a holder: nobody owes a turn yet, so there is nothing for a skip to consume
+and nothing here to apply. The round releases itself; wait for it.
 
 **Stop when the room has written its record** — `council.sh decision` prints it and exits 0.
 That is the single stop signal. Do **not** stop on seeing a message with `act: decide`: that
@@ -129,7 +169,8 @@ amendment (a reference to an objection CLOSES it) · `object --refs '["<id>"]'` 
 (it must reference a concrete id, or there is nothing to close it against) · `support` ·
 `concede --refs '["<id>"]'` — "I yield" (from the author of an objection it drops the
 objection; from the author of a proposal it drops the proposal) · `withdraw` · `msg` ·
-`notice`.
+`notice` · `skip` — consume the turn of a holder who is past the deadline, and only if `floor`
+says `next=` is you (above).
 
 The room becomes **ready to decide** once no objection is open and a full lap has passed in
 which nobody added a proposal, an amendment or an objection. It does not close itself: closing
@@ -147,8 +188,10 @@ Therefore:
   agents treat every file opened in the room as a separate permission question, and you would
   stop on it while holding the floor, which the room cannot tell apart from a wedged session.
   `agenda`, `protocol`, `decision` and — when you start into a room that is already running —
-  `transcript` are the whole of what you might want to read; everything else is in `status`
-  and `claims`. Writing into the room by hand is worse than
+  `transcript` are the whole of what you might want to read; the rest of what you need is in
+  `status`, `claims` and `floor`. (`status` is the fullest picture, but only `floor` carries
+  `next=` and `deadline_ms`, so it is the one that answers the question above about a holder
+  who has gone quiet.) Writing into the room by hand is worse than
   slow: a stray file in a message lane is read as a message and can reset everyone's count of
   whose turn it is.
 * Do not edit anything outside the room unless your role explicitly says otherwise.

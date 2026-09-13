@@ -523,6 +523,11 @@ c_send() {
     # stops being turn-taking. (Every message after the first such slip reads as
     # out-of-turn: caught exactly that way, by t3, once the check became slow enough to
     # widen the window.) `skip` is exempt: it is by definition spoken for somebody else.
+    #
+    # The exemption is the WHOLE of what the code says about `skip`. "Only the next peer in
+    # order, and only once the holder is past `turn_deadline_ms`" is protocol — stated in
+    # protocol/_channel.md, which every participant is handed, and in SKILL.md — and nothing
+    # here checks either half. Do not read this line as enforcing them.
     if [ "$act" != skip ] && [ "$(c_floor_at "$turn")" != "$ME" ]; then
       echo "council: the floor is no longer yours (turn $turn belongs to $(c_floor_at "$turn")) — drain your inbox and wait for your turn" >&2
       return 6
@@ -1136,6 +1141,77 @@ c_last_turn_ms() {
                         | if length == 0 then 0 else (max_by(.lamport).sent_ms) end')
   case "$ms" in ''|*[!0-9]*) ms=0 ;; esac
   printf '%s' "$ms"
+}
+
+# How long since anybody took a turn, in milliseconds. `floor` prints this number and `status`
+# renders it in seconds; both ask here rather than each deriving it, because they are one question
+# and two answers to it drift. (That drift was real: the two derived it separately, so a change to
+# either was a change to only half of what a room reports about its own floor.)
+#
+# BEFORE THE ROOM'S FIRST TURN THE ANSWER DEPENDS ON THE ROOM'S SHAPE, and this splits on that
+# rather than answering one way for both. Barrier positions and `--hand` messages are stamped
+# `turn: null`, so there is no turn to measure from; what a caller wants instead is the instant the
+# current holder RECEIVED the floor, and whether that is knowable differs:
+#
+#   token mode (`up`'s default; the `freeform` and `review` scenarios) — there is no opening round
+#     at all: c_barrier answers `closed` for any non-roundtable mode before anything else runs, so
+#     such a room can hold no round-0 message, and the floor is `order[0]` from the moment the room
+#     is created. `created_ms` is therefore when the ROOM gave that seat the floor — not a stand-in
+#     for it, which is why it is read here. A reader who finds a creation time being used as a
+#     floor time, assumes it must be a proxy, and "fixes" it will restore the freeze it removes.
+#
+#     What it is NOT is when that seat became able to speak, and the gap is real: the seat a human
+#     takes with `up --me` has no launcher and no process until they type, and `relaunch` puts a
+#     seat back without refreshing `created_ms` (that function's own header says so). Both make the
+#     figure older than the seat, so the room's first turn is skippable sooner than the deadline
+#     suggests. That is the same residual every later turn already carries — a seat is timed from
+#     when the turn became available, not from when it woke up — and it is left alone rather than
+#     papered over, because the alternative is the freeze.
+#
+#   roundtable (`debate`) — the floor becomes real when the barrier closes. Both close instants are
+#     derivable from the same log and roster constants c_barrier already reads: the newest round-0
+#     `sent_ms` when every seat posts, and `first + round_deadline_ms` (or twice that, on the
+#     backstop) when it closes on the quorum deadline. Neither is RECORDED, and neither is read
+#     here: this answers 0 for roundtable on both paths, because a value that is 0-correct anyway
+#     does not earn a branch that has to track c_barrier's own arithmetic to stay right.
+#
+# The split is "is the answer known", and it is drawn there because the alternative was measured
+# and shipped: anchoring roundtable on `created_ms` charges the whole opening round to the first
+# post-barrier holder, so on the shipped `debate` defaults a HEALTHY seat read as 620s (950s on a
+# longer round) overdue the instant it received the floor — which protocol/_channel.md turns into a
+# licence for the next seat to consume its turn, plus a false STALL. Exempting the round only while
+# it is OPEN does not save it; the leak is the tick after it closes.
+#
+# Where it answers 0 that means "this room has not moved yet, and I cannot tell you how long that
+# has been" rather than "held for no time", and protocol/_channel.md says exactly that to
+# participants, handing the waiting seat its own wait to time the holder with instead.
+#
+# ONE CONSEQUENCE FOR THE SUPERVISOR, stated because it is easy to miss from here: in token mode
+# this function now makes a never-moved room raise v_status's STALL, which it never did before.
+# That alarm is accurate — `order[0]` really has held the floor since the room was created, and a
+# permission prompt is the usual reason — but its CONDITION is now a peer-written field, so a seat
+# can switch it off by writing `created_ms` forward or by rewriting `mode`. v_status's own header
+# forbids that direction, and it still holds for every alarm that existed before this: nothing
+# previously firing became suppressible. The new one arrives suppressible. The roundtable half is
+# still unalarmed, and a never-moved-room alarm that does not read the floor at all — which would
+# fix both — is filed rather than smuggled in here.
+c_floor_held_ms() {
+  local last now
+  last=$(c_last_turn_ms)
+  # A damaged roster takes this branch too, and what it then reports varies by damage shape — the
+  # same split c_barrier's header records, for the same reason (jq streams, so a usable first line
+  # survives the error). Shapes that leave `mode` unreadable answer 0 here via c_int_field, and
+  # c_floor_at prints nothing for them, so `floor` renders `floor= next= held_ms=0`; shapes that
+  # leave a usable first object report that room's real age instead. Neither is worse than the
+  # room already is, and c_barrier's header is the authority on which shape does which.
+  if [ "$last" = 0 ] && [ "$(c_mode)" != roundtable ]; then last=$(c_int_field created_ms 0); fi
+  [ "$last" = 0 ] && { printf '0'; return; }
+  # `sent_ms` is written by whichever peer took that turn, so a clock ahead of ours reads as a
+  # floor held for a negative time. c_room_age_s refuses the same shape for the same reason; 0
+  # keeps the two agreeing and keeps a nonsense figure out of the comparison participants make.
+  now=$(c_ms)
+  [ "$now" -gt "$last" ] || { printf '0'; return; }
+  printf '%s' $(( now - last ))
 }
 
 # How long this room has existed, in seconds — or NOTHING, which means "this room cannot say".
