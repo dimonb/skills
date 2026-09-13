@@ -520,7 +520,8 @@ The confirmation window defaults to 10 s, sampled every 0.5 s; `COUNCIL_SAY_CONF
 `COUNCIL_SAY_CONFIRM_INTERVAL` override them. An unusable value falls back to the default and says
 so on stderr rather than being used:
 
-* the **window** must be a whole number short enough to compute with. `0` is legitimate and means
+* the **window** must be a whole number of at most nine digits — long enough for any real poll,
+  short enough that a typo cannot leave one running for centuries. `0` is legitimate and means
   "take one sample and decide"; a leading zero is normalised rather than refused, so `08` is eight
   seconds and not an octal error.
 * the **interval** must be a plain decimal carrying at least one non-zero digit, and likewise

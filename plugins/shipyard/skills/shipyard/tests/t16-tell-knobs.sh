@@ -101,7 +101,9 @@ ok "...and still reports a verdict"         yes "$(has "$out" 'was typed and sub
 # simply refused `08` would pass every other assertion here.
 ok "...having read 08 as eight seconds"     yes "$(has "$out" '8s and the child never said')"
 
-# A window too long to compute with must fall back and SAY so, not truncate in silence.
+# An IMPLAUSIBLE window must fall back and SAY so, not truncate in silence. Not "too long to
+# compute with": `$(( 10#… ))` wraps silently at status 0 on a twenty-digit value, measured — the
+# version of this sentence that said otherwise was written here and disproved a round later.
 out=$(run_tell SHIPYARD_TELL_CONFIRM_SECS=99999999999 SHIPYARD_TELL_CONFIRM_INTERVAL=0.2)
 ok "an unusable window says so"             yes "$(has "$out" 'not a usable whole number')"
 ok "...and does not abort"                  6   "$(rc_of "$out")"

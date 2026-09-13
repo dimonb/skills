@@ -21,11 +21,11 @@ check:
 	@bash shared/policy/tests/run-all.sh
 	@bash shared/knobs/tests/run-all.sh
 
-# The test suites' fast subsets: driver, flow, adapters, policy, shipyard, and council (without
+# Every suite's fast subset — the five `make check` runs, plus shipyard and council (without
 # council's slow `--full` load and latency runs). Run by hand to verify a change for real
 # (~2-3 min), like `make check-test`. This is where a shipyard or council suite RUNTIME error
 # surfaces — `make check` does not run those two (only their registration and invocation are gated
-# at commit time; the other four suites run there in full).
+# at commit time; every other suite runs there in full).
 test:
 	@bash shared/driver/tests/run-all.sh
 	@bash shared/flow/tests/run-all.sh
