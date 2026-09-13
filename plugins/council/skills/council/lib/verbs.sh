@@ -1028,7 +1028,41 @@ v_decide() {
       "council room '$esc_room' closed unresolved — the room did not converge; a human should look" \
       "${esc_ctx:-unresolved}; record: $out" >/dev/null 2>&1 || true
   fi
-  c_send --act decide --text "decision written: $status (council.sh decision)" >/dev/null
+  # THE ANNOUNCEMENT IS A WAKE, NOT A CLAIM ON A TURN, and it is `--hand` for that reason.
+  # `decide` is a chair action taken out of band: the caller is `--me`-gated to some seat, but it
+  # is acting for the room rather than taking its turn, so the rotation has nothing to say about
+  # it. The record on disk is what closes the room -- `c_recorded_status` is the one reader of
+  # that, and #66 hardened every verb onto it -- so this message carries no authority at all. All
+  # it does is ring the peers (c_send's trailing `c_ring` loop), which is what turns each seat's
+  # next `decision` poll from "after this recv times out" into "now".
+  #
+  # It used to be a plain send, and c_send refuses one from a peer that does not hold the floor
+  # (exit 6). The exit status was discarded by `>/dev/null` on the call and never read, so the
+  # commonest close there is -- a supervisor closing a room whose rotation has moved on -- rang
+  # nobody and reported success. `--hand` takes the branch that precedes both the floor check and
+  # the barrier check, stamping `turn: null` and `round: null`, so the refusal that was being
+  # discarded can no longer happen.
+  #
+  # Not the `skip` exemption the issue proposed, and the difference is the turn. `skip` is exempt
+  # from the floor check while still stamping `turn=$(c_turns)`, because consuming the absent
+  # holder's turn is precisely what `skip` is for. This message must consume nothing: the room is
+  # closed and a turn spent here is a turn stamped on top of whoever legitimately holds it, for
+  # c_canon to settle against a real contribution. `--hand` is the existing mechanism for exactly
+  # that shape -- out of turn, consumes no turn, does not move the floor -- so this reuses it
+  # rather than widening c_send's exemption list.
+  #
+  # WHAT IS LEFT CAN STILL FAIL, and it must not read as a clean close. c_atomic can fail on a
+  # full or read-only disk and jq can die, and `--hand` does not make a write succeed. So the
+  # status is read now, and the two facts are reported apart: the record IS written (it is on
+  # stdout either way, because it is the room's output and `decision` is the protocol's stop
+  # signal), and the room was NOT told. This is `say`'s exit 6 in another verb -- report what was
+  # established, never the claim you wanted to make -- and it is deliberately NOT a failure of the
+  # close: re-running `decide` here answers 3, and the room is genuinely decided.
+  if ! c_send --act decide --hand --text "decision written: $status (council.sh decision)" >/dev/null; then
+    printf '%s\n' "$out"
+    echo "council decide: the record is written ($status) but the room was not told — the announcement could not be sent, so no seat was rung. The close stands and 'council.sh decision' serves the record; each seat will see it on its next poll rather than immediately. Do not re-run decide (it answers 3); wake a seat with 'council.sh say' if the room should stop sooner." >&2
+    return 4
+  fi
   printf '%s\n' "$out"
 }
 

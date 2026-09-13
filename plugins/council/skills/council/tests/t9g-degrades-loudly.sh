@@ -314,12 +314,29 @@ COUNCIL_ME=a bash "$CLI" decide --force >/dev/null 2>&1
 recorded=$(cat "$R/board/status" 2>/dev/null)
 jafter=$(bash "$CLI" verdict --json 2>/dev/null)
 sblock=$(bash "$CLI" status 2>/dev/null); srcx=$?
-b=$(printf '%s' "$jbefore" | jq -S 'del(.verdict, .recorded)' 2>/dev/null)
-a=$(printf '%s' "$jafter"  | jq -S 'del(.verdict, .recorded)' 2>/dev/null)
+# `decide_msg` is held out of the comparison and asserted separately just below, because closing
+# a room now legitimately produces one: `decide` announces the close to the room, so a field that
+# reports "is there a decide message in the log" MUST change here. It did not use to, and that is
+# the bug this exemption comes from rather than a licence the field was always owed — the
+# announcement was a plain send, refused whenever the closer did not hold the floor, and `a` does
+# not hold it here. So this assertion was green because the room was never told.
+#
+# Held out and then PINNED, not dropped. Deleting the field would leave the one thing the close is
+# newly responsible for as the one thing nothing checks, which is how this assertion was defanged
+# twice before (above).
+b=$(printf '%s' "$jbefore" | jq -S 'del(.verdict, .recorded, .decide_msg)' 2>/dev/null)
+a=$(printf '%s' "$jafter"  | jq -S 'del(.verdict, .recorded, .decide_msg)' 2>/dev/null)
 if [ -n "$b" ] && [ "$a" = "$b" ]; then
   echo "ok   closing a room changed its verdict word and nothing else"
 else
   echo "FAIL closing the room changed more than the verdict:"; echo "     before: $b"; echo "     after:  $a"; fail=1
+fi
+dm_before=$(printf '%s' "$jbefore" | jq -r '.decide_msg // "null"' 2>/dev/null)
+dm_after=$(printf  '%s' "$jafter"  | jq -r '.decide_msg // "null"' 2>/dev/null)
+if [ "$dm_before" = null ] && [ "$dm_after" != null ] && [ -n "$dm_after" ]; then
+  echo "ok   closing a room told it: decide_msg null -> $dm_after"
+else
+  echo "FAIL closing the room did not tell it: decide_msg '$dm_before' -> '$dm_after'"; fail=1
 fi
 # And the same again through the two surfaces a supervisor actually reads: the plain line must
 # still carry both counts, and `status` must exit 0 having printed a block. A short circuit that

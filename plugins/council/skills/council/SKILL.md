@@ -200,6 +200,32 @@ then closes past `round_deadline_ms` with a quorum and unconditionally past twic
 Exit 2 still means "not ripe" and 3 "already decided", so a supervisor that retries on 2 must
 not retry on 1.
 
+### Closing a room tells it, and `decide` says so when it could not
+
+Writing the record and telling the room are two separate acts, and the record goes first. So they
+can come apart: the record on disk while the room is never told. `decide` reports that state
+rather than hiding it.
+
+The announcement is a message of act `decide`, sent `--hand`. It **closes nothing** — the record
+does that, and `verdict`, `status`, `claims` and `decision` all read the record (see above) — so
+it carries no authority and a stray one changes no verdict. What it does is **ring every seat**,
+which turns each participant's next `decision` poll from "after this `recv` times out" into "now".
+`--hand` because closing is a chair action taken out of band: the caller is `--me`-gated to some
+seat, but it acts for the room rather than taking its turn, so it consumes no turn and does not
+move the floor. Before this, the announcement was a plain send and `c_send` refused one from a
+peer that did not hold the floor — the ordinary case for a supervisor — and the refusal was
+discarded, so the commonest close rang nobody and still reported success.
+
+| exit | what it means |
+|---|---|
+| 0 | the record is written **and** the room was told. |
+| 4 | the record is written, the room was **not** told. The close stands: `board/status` is set, `decision` serves the record, and each seat sees it on its next poll rather than immediately. |
+
+**Exit 4 is not a failed close and must not be retried** — a second `decide` answers 3. It is
+`say`'s exit 6 in another verb: report what was established, never the claim you wanted to make.
+The record path is still printed on stdout, because it is the room's output either way. If the
+room should stop sooner than its own polling, wake a seat with `council.sh say`.
+
 **A room that has already closed is the exception, and it is a remainder rather than a design.**
 `--force` over a room whose record is on disk rewrites that record, and it does so at exit 0
 even when the roster has since become unreadable — the rewritten header then carries
