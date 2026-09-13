@@ -615,7 +615,8 @@ something is you:
 while true; do council.sh status --room <name> >/dev/null 2>&1; sleep 300; done &
 ```
 
-The push is de-duplicated on the floor holder and the turn count, so polling does not accrue
+The push is de-duplicated within one room — the room matched on the mailbox entry's own `slot`
+field, and within that, on the floor holder and the turn count — so polling does not accrue
 duplicates while a room that moves and stalls again notifies afresh. **It de-duplicates against the
 mailbox itself, not against a latch file**, and that is the interesting part: nothing confines a
 participant, so a latch anywhere is a file the seat the notice is about could pre-write, and

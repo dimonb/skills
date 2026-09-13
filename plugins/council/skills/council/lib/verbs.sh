@@ -527,9 +527,12 @@ _floor_wait_state() {
 # was the one being looked at. What the classification changes is this notice's WORDING, never its
 # existence.
 #
-# DE-DUPLICATED AGAINST THE MAILBOX ITSELF, keyed on the floor holder and the turn count, so
-# polling `status` does not accrue N notices for one stall while a room that moves and stalls again
-# notifies afresh. The key is carried inside the notice text as `[stall:<peer>:<turns>]`.
+# DE-DUPLICATED AGAINST THE MAILBOX ITSELF, within ONE room, so polling `status` does not accrue N
+# notices for one stall while a room that moves and stalls again notifies afresh. Two halves, and
+# an agent relocating this scan needs both: the ROOM is matched on the entry's `.slot` field with
+# `==`, and within that, the key `[stall:<peer>:<turns>]` carried in the notice's `.text` separates
+# one stall from the next. Dropping the first half reinstates a collision between sibling rooms
+# that the body below records in full.
 #
 # THAT IS THE POINT OF IT, and it is why there is no latch file. Nothing confines a participant —
 # SKILL.md's "The room is not a trust boundary" records all three kinds writing outside the repo
@@ -565,17 +568,32 @@ _stall_escalate() {
   # spec both rooms have the same seat names, so both wedging at turn 0 produced the same key and
   # whichever polled second pushed NOTHING, permanently.
   #
-  # A TIGHTER PATTERN IS NOT THE FIX, and trying one is how this class survives: the shape is an
-  # unanchored PREFIX match over a scarce namespace (the same shape as the test-number collisions
-  # in #149), so `council-design-[0-9]*.json` eats the sibling too. What closes it is a comparison
-  # whose room segment cannot bleed into the next one.
+  # THE SHAPE IS AN UNANCHORED PREFIX MATCH over a scarce namespace — the same shape as the
+  # test-number collisions in #149 — and what closes it is any comparison whose room segment cannot
+  # bleed into the next one. THREE WERE CHECKED, and the first is the one that fails:
+  #   * a tighter GLOB, `council-design-[0-9]*.json`: still matches `council-design-2-1.json`;
+  #   * an ANCHORED pattern, `+([0-9]).json` under extglob or `^council-<room>-[0-9]+\.json$` as a
+  #     regex: correct — it excludes the sibling, and it is what this file's own test helper uses;
+  #   * an exact FIELD comparison on `.slot`: correct.
+  # (An earlier draft of this comment claimed no tighter pattern could work. That was an untested
+  # claim about a solution space, false, and contradicted by the anchored helper in the same commit.)
   #
-  # AN EXACT FIELD RATHER THAN A DELIMITER, and the reason is worth recording: `--room` is NOT
-  # validated anywhere (council.sh interpolates `$ROOM_NAME` straight into a path), so no separator
-  # can be guaranteed absent from a room name and a `<room>:<peer>:<turns>` key would be encoding a
-  # value that may contain its own separator. `policy_escalate` already writes the room into a
-  # field of its own — `.slot` — so comparing THAT with `==` is a whole-token match by construction,
-  # whatever the room is called. The key then only has to separate peer and turn within one room.
+  # THE EXACT FIELD IS PREFERRED over the anchored pattern for two reasons, neither of which is that
+  # the other cannot work. First, an anchor over the FILENAME re-derives the room's identity from a
+  # path that `policy_escalate` composed, while `.slot` is that identity as the writer recorded it —
+  # one fewer place for the two to disagree. Second, `--room` is validated nowhere (council.sh
+  # interpolates `$ROOM_NAME` straight into a path), so a delimiter-based key would encode a value
+  # that may contain its own delimiter, and an anchored filename pattern would have to be built from
+  # the same unvalidated string.
+  #
+  # THE ROOM IDENTITY IS `basename "$ROOM"`, so `--room a/b` and `--room b` share a slot. Contrived,
+  # and it predates this scan, but it is why this says "the room as `policy_escalate` recorded it"
+  # rather than "whatever the room is called".
+  #
+  # MATCHING `.text` AND NOT THE WHOLE ENTRY also matters: the annotation is a quote from a seat's
+  # own pane and lands in `.context`, so a seat that appends a key-shaped string to its banner would
+  # otherwise suppress the NEXT stall's notice. Keying on `.text`, which this code composes, leaves
+  # that route closed.
   key="[stall:$peer:$turns]"
   # Fails OPEN by construction, which is the right way round for a de-duplication check: an empty
   # glob, an unreadable mailbox, a malformed entry or a missing jq all make this print nothing, and

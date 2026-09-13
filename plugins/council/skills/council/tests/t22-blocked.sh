@@ -204,8 +204,10 @@ ok "...and the key is carried in the notice"  1 \
 # `<name>-2`, so `x` and `x-2` are the ordinary pair rather than a contrived one — and an entry glob
 # of `council-x-*.json` matches `council-x-2-1.json`. With the same --agents spec both rooms have
 # the same seat names, so matching the room by filename prefix made whichever room polled SECOND
-# push nothing, permanently. A tighter glob does not fix it (`council-x-[0-9]*.json` eats the
-# sibling too); comparing `.slot` with `==` does, whatever the room is called.
+# push nothing, permanently. An UNANCHORED tighter glob does not fix it either
+# (`council-x-[0-9]*.json` eats the sibling too); an anchored pattern would, and comparing `.slot`
+# with `==` does — which is what the code uses, for the reasons its header gives. The `notices`
+# helper at the top of this file takes the anchored-pattern route, so both forms are exercised.
 RA="$COUNCIL_TEST_ROOT/t22n"; stalled_room "$RA" claude alpha beta
 RB="$COUNCIL_TEST_ROOT/t22n-2"; stalled_room "$RB" claude alpha beta
 COUNCIL_ROOM="$RB" COUNCIL_WAIT_SCREEN_FILE="$QUIET" bash "$CLI" status >/dev/null 2>&1
