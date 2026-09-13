@@ -374,9 +374,11 @@ v_verdict() {
 # is what `_stall_escalate` does below: nothing confines a participant (SKILL.md, "The room is not
 # a trust boundary", measured for all three kinds), so no file a supervisor writes is out of a
 # seat's reach. Rather than pretend otherwise, the push de-duplicates against the MAILBOX ITSELF,
-# so the only way to suppress a notice is to put something in the directory the supervisor reads.
-# Silencing then costs a visible artefact, which is a property that survives an adversary you
-# cannot lock out. Prefer it to an unreachable-file argument whenever you have the choice.
+# so suppressing a notice THROUGH THE DE-DUPLICATION CHECK costs a visible artefact in the
+# directory the supervisor reads. Read that as a property of the check, not of the push: the other
+# ways out are enumerated below and `_stall_escalate` names its own. Self-revealing is the property
+# to prefer to an unreachable-file argument whenever you have the choice — it survives an adversary
+# you cannot lock out, which is the case here.
 #
 # WHAT THIS DOES NOT MAKE TRUE, stated because the rule above reads stronger than the room is.
 # EVERY operator-facing output of this verb is ultimately a function of room state a participant
@@ -384,12 +386,16 @@ v_verdict() {
 #   * the status block's fields — roster.json and the lanes, wholesale;
 #   * the STUCK / ready-to-decide / unresolved alarms — the claim graph, i.e. the lanes;
 #   * `status`'s exit code and `rooms`' listing — `board/status` + `board/decision.md`;
-#   * the STALL alarm and its push — `c_floor_held_ms`, hence the last turn's peer-written
-#     `sent_ms` and `created_ms`. A seat that stamps a message in the FUTURE clamps the held time
-#     to 0 and removes the alarm and the push together; measured, and filed as #165. That is a live
+#   * the STALL alarm — `c_floor_held_ms`, hence the last turn's peer-written `sent_ms` and
+#     `created_ms`. A seat that stamps a message in the FUTURE clamps the held time to 0 and
+#     removes the alarm and the push together; measured, and filed as #165. That is a live
 #     counterexample to the rule above, it predates this change, and it is named here rather than
 #     left for a reader to find, because a rule stated absolutely and contradicted by the same file
-#     is worse than a rule stated with its hole.
+#     is worse than a rule stated with its hole;
+#   * the mailbox push — everything the alarm is gated on, PLUS the closed-room early return
+#     (`board/status` + `board/decision.md`, forgeable, #66) and the mailbox's own contents, which
+#     are not room state. It carries strictly more gates than the alarm, so "same condition as the
+#     alarm" is the wrong summary; `_stall_escalate`'s header lists them.
 # What this change CAN keep true is narrower and worth having: the TERMINAL READ — the one input
 # here that is not room state — is annotation-only, so it adds no new way to go dark.
 #
@@ -529,16 +535,20 @@ _floor_wait_state() {
 # SKILL.md's "The room is not a trust boundary" records all three kinds writing outside the repo
 # entirely — so a latch anywhere, in the room or in the mailbox, is a file the seat the notice is
 # about can pre-write, and pre-writing it is silence. De-duplicating against the mailbox makes
-# suppression SELF-REVEALING instead: the only way to stop this notice is to put an entry carrying
-# its key into the very directory the supervisor reads. That is weaker than preventing suppression
-# and stronger than pretending to — it is the property to reach for whenever the adversary cannot
-# be locked out.
+# suppression through THIS CHECK self-revealing instead: to stop the notice here you must put an
+# entry carrying its key into the directory the supervisor reads. Weaker than preventing
+# suppression, stronger than pretending to.
 #
-# Two residuals, named rather than left to be found. A CLOSED room returns early, and a closure is
-# two files inside the room (`board/status`, `board/decision.md`), so a seat can forge one and stop
-# the push — but a forged closure also makes every other reader report the room decided, which is
-# the larger, pre-existing lie (#66) rather than something this gate adds. And a mailbox that
-# cannot be resolved or written pushes nothing at all.
+# THE CHECK IS NOT THE ONLY WAY OUT, and the list matters more than the property. Three others,
+# each named here rather than left to be found — an earlier draft of this very comment claimed the
+# check was the only route while listing two of them eight lines below:
+#   * a CLOSED room returns early, and a closure is two files inside the room (`board/status`,
+#     `board/decision.md`), so a seat can forge one and stop the push. A forged closure also makes
+#     every other reader report the room decided, which is the larger pre-existing lie (#66) rather
+#     than something this gate adds;
+#   * a mailbox that cannot be resolved or written pushes nothing at all;
+#   * upstream of this function entirely, a held time clamped to 0 removes the alarm and the push
+#     together (#165).
 _stall_escalate() {
   local peer="${1:-}" turns="${2:-}" held="${3:-}" note="${4:-}" key room who where mb
   command -v policy_escalate >/dev/null 2>&1 || return 0
@@ -548,7 +558,14 @@ _stall_escalate() {
   [ -z "$(c_recorded_status)" ] || return 0
   mb=$(policy_mailbox_dir) || return 0
   room=$(basename "$ROOM")
-  key="[stall:$peer:$turns]"
+  # THE ROOM IS IN THE KEY, not only in the glob, and that is not belt-and-braces. `council.sh up`
+  # names a repeated scenario `<name>-2` (see `_mkroom`'s caller), so `design` and `design-2` are
+  # the ordinary pair rather than a contrived one — and `council-design-*.json` matches
+  # `council-design-2-1.json`. With the same `--agents` spec both rooms have the same seat names,
+  # so both wedging at turn 0 produced the same key, and whichever polled second pushed NOTHING,
+  # permanently. Narrowing the glob cannot fix that (`council-design-[0-9]*.json` matches it too);
+  # only a room-exact key can.
+  key="[stall:$room:$peer:$turns]"
   # -F so a room or peer name carrying a regex character is matched literally, -l so nothing is
   # read further than the first hit. With no entries yet the glob stays literal, grep fails on the
   # missing file, and we push — the right way round: a de-duplication check that cannot read its

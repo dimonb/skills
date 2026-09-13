@@ -13,7 +13,7 @@
 # keys on is peer-writable — the roster's `kind`, the container pin, the pane itself — so the
 # classification is EVIDENCE, not a verdict:
 #
-#   untrusted evidence may ANNOTATE an alarm, never SUPPRESS it.
+#   untrusted evidence may ANNOTATE an operator-facing signal, never SUPPRESS one.
 #
 # A draft that let a recognised banner replace the alarm let a seat silence the supervisor's alarm
 # about itself with two lines of `jq`, which is worse than the blindness it was fixing, because the
@@ -50,7 +50,11 @@ stalled_room() { # <dir> <kind> <peer>...
 }
 
 notices() { # <room-basename> — how many escalations this room has pushed
-  ls "$POLICY_MAILBOX_DIR"/council-"$1"-*.json 2>/dev/null | wc -l | tr -d ' '
+  # Anchored on the entry's full shape (`council-<room>-<n>.json`), not globbed on a prefix. The
+  # glob form counts a SIBLING room's entries too — `council-x-*.json` matches `council-x-2-1.json`
+  # — which is the same over-match that made the production de-duplication drop a room's notice,
+  # and it would have made the regression case below pass for the wrong reason.
+  ls "$POLICY_MAILBOX_DIR" 2>/dev/null | grep -cE "^council-$1-[0-9]+\.json$"
 }
 
 # Every screen below ends with the line that decides it: adp_wait_class clears a banner the moment
@@ -173,7 +177,8 @@ COUNCIL_ROOM="$R7" COUNCIL_WAIT_SCREEN_FILE="$QUIET" bash "$CLI" status >/dev/nu
 COUNCIL_ROOM="$R7" COUNCIL_WAIT_SCREEN_FILE="$QUIET" bash "$CLI" status >/dev/null 2>&1
 ok "polling status does not accrue notices"  1 "$(notices t22g)"
 
-# The latch is the floor holder and the turn count, so a room that MOVES and stalls again is a new
+# The de-duplication key is the room, the floor holder and the turn count, so a room that MOVES and
+# stalls again is a new
 # event and notifies afresh. Asserted by moving the room the only way that leaves the floor old:
 # a message written straight into a lane, which claims the turn without restamping the clock.
 ROOM="$R7" raw_msg alpha 1 1 1 msg '[]' "still here" >/dev/null
@@ -183,17 +188,29 @@ ok "a room that moved and stalled again notifies" 2 "$(notices t22g)"
 # THERE IS NO LATCH FILE, and that is the point. Nothing confines a participant — SKILL.md's "The
 # room is not a trust boundary" measured all three kinds writing outside the repo entirely — so a
 # latch anywhere is a file the seat the notice is about could pre-write, and pre-writing it is
-# silence. The push de-duplicates against the MAILBOX instead, which makes suppression
-# self-revealing: the only way to stop the notice is to leave an entry where the supervisor looks.
+# silence. The push de-duplicates against the MAILBOX instead, so suppressing it THROUGH THAT CHECK
+# costs an entry where the supervisor looks. A latch planted at the path the previous design used
+# is the regression guard.
 R7B="$COUNCIL_TEST_ROOT/t22j"; stalled_room "$R7B" claude alpha beta
-mkdir -p "$R7B/state"; printf '%s' 'alpha 0' > "$R7B/state/stall-notified"
 printf '%s' 'alpha 0' > "$POLICY_MAILBOX_DIR/.council-t22j.stall-latch" 2>/dev/null
 COUNCIL_ROOM="$R7B" COUNCIL_WAIT_SCREEN_FILE="$QUIET" bash "$CLI" status >/dev/null 2>&1
 ok "a planted latch file suppresses nothing"  1 "$(notices t22j)"
 # And the de-duplication key really is what stops the second notice, not the clock: an entry
 # carrying the key is enough, and it is an entry the supervisor can see.
 ok "...and the key is carried in the notice"  1 \
-   "$(grep -lF '[stall:alpha:0]' "$POLICY_MAILBOX_DIR"/council-t22j-*.json 2>/dev/null | wc -l | tr -d ' ')"
+   "$(grep -lF '[stall:t22j:alpha:0]' "$POLICY_MAILBOX_DIR"/council-t22j-*.json 2>/dev/null | wc -l | tr -d ' ')"
+
+# THE ROOM IS IN THE KEY, and this is why. `council.sh up` names a repeated scenario `<name>-2`, so
+# `x` and `x-2` are the ordinary pair rather than a contrived one — and the entry glob
+# `council-x-*.json` matches `council-x-2-1.json`. With the same --agents spec both rooms have the
+# same seat names, so a key of `<peer>:<turns>` alone made whichever room polled SECOND push
+# nothing, permanently. Narrowing the glob cannot fix it; only a room-exact key can.
+RA="$COUNCIL_TEST_ROOT/t22n"; stalled_room "$RA" claude alpha beta
+RB="$COUNCIL_TEST_ROOT/t22n-2"; stalled_room "$RB" claude alpha beta
+COUNCIL_ROOM="$RB" COUNCIL_WAIT_SCREEN_FILE="$QUIET" bash "$CLI" status >/dev/null 2>&1
+COUNCIL_ROOM="$RA" COUNCIL_WAIT_SCREEN_FILE="$QUIET" bash "$CLI" status >/dev/null 2>&1
+ok "a sibling room's notice suppresses nothing" 1 "$(notices t22n)"
+ok "...and the sibling kept its own"            1 "$(notices t22n-2)"
 
 # --- 6. a CLOSED room is nobody's emergency ------------------------------------------------
 # Its floor stops meaning anything the moment the record is written, and `decide` has already

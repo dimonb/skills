@@ -594,7 +594,10 @@ terminal before relaunching"*, with the matched line printed as evidence.
 > event's other output — gated on peer-writable state for another round. The test is per output:
 > for each thing a supervisor reads, ask what decides whether it appears.
 >
-> **It does not make this verb unsuppressible, and no rule could.** Every field in the block above
+> **It does not make this verb unsuppressible, and no rule about how untrusted evidence is *used*
+> could — while every input is room state.** Closing it needs a held time that is not room state;
+> #165's suggested direction is one, and a launch record written outside the room is another.
+> Every field in the block above
 > is a function of room state, `held` included: a seat that stamps a message in the future clamps
 > the held time to 0 and takes the `STALL` line and its push with it (measured — #165). That is
 > #40's fact, not this read's — what the read adds is annotation only, so it adds no new way to go
@@ -616,9 +619,11 @@ The push is de-duplicated on the floor holder and the turn count, so polling doe
 duplicates while a room that moves and stalls again notifies afresh. **It de-duplicates against the
 mailbox itself, not against a latch file**, and that is the interesting part: nothing confines a
 participant, so a latch anywhere is a file the seat the notice is about could pre-write, and
-pre-writing it is silence. Keying on the mailbox makes suppression **self-revealing** — the only
-way to stop the notice is to put an entry carrying its key into the directory you read. That is
-weaker than preventing suppression, and stronger than pretending to.
+pre-writing it is silence. Keying on the mailbox makes suppression **through that check**
+self-revealing — to stop the notice there you must leave an entry carrying its key where you look.
+Weaker than preventing suppression, stronger than pretending to. It is a property of the check and
+not of the push: a forged closure, an unwritable mailbox and #165 each stop the notice by other
+routes, and `_stall_escalate`'s header lists them.
 
 `status` therefore writes, on that one path: a stalled room appends an entry to the mailbox.
 (`recv` already writes too — it advances cursors, even with `--peek` — so this is not the only
