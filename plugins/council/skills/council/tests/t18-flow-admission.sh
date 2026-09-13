@@ -52,10 +52,12 @@ say_floor msg '[]' "Then record it." >/dev/null
 
 # Decide, and the graph closes: c_phase is empty (the room is decided). The phase stays empty even
 # though the verdict flips from `ready-to-decide` to `decided` — the `closing` node's OR-with-record
-# keeps it monotonic rather than falling back to `exchange`. (stderr is suppressed: the record is
-# written before decide's own trailing `decide` message, whose floor check can legitimately refuse
-# the caller, exactly as in t5.)
-COUNCIL_ME=a bash "$CLI" decide >/dev/null 2>&1 || { echo "FAIL decide refused"; fail=1; }
+# keeps it monotonic rather than falling back to `exchange`. stderr is NO LONGER suppressed here:
+# it used to be, because decide's own trailing `decide` message could be refused by the floor check
+# and print into a passing test — that refusal is gone (the announcement is `--hand` since t23's
+# change), so anything decide says on stderr now is a real failure, including the exit-4 line that
+# says the record was written but the room was not told. Swallowing it would hide exactly that.
+COUNCIL_ME=a bash "$CLI" decide >/dev/null || { echo "FAIL decide refused"; fail=1; }
 [ -z "$(phase "$R" a)" ] \
   || { echo "FAIL a decided room's phase is not empty (got '$(phase "$R" a)')"; fail=1; }
 echo "c_phase tracks a token room: exchange -> closing -> decided (empty)"

@@ -93,6 +93,27 @@ v_recv() { # [--timeout N] [--peek] [--until-floor]
     got=0
     if out=$(c_drain); then printf '%s\n' "$out"; got=1; c_bell_drain; fi
     if [ "$until_floor" = 1 ]; then
+      # A CLOSED ROOM RELEASES THIS WAIT, because otherwise nothing does. `--until-floor` returns
+      # only when the floor becomes mine, and a closed room hands out no more turns — so a seat
+      # that is not the holder when the room closes waits out its whole `--timeout` (540 s by
+      # default) and every other seat does the same. protocol/_channel.md prescribes exactly this
+      # loop ("recv --until-floor -> one message -> wait again"), so that was the ordinary path,
+      # not a corner: a decided room held every participant idle for up to nine minutes apiece
+      # while its record sat finished on disk.
+      #
+      # `c_recorded_status` and NOTHING ELSE decides this. It is the one reader #66 hardened as the
+      # authority on a closed room, shared with `verdict`, `claims` and the room graph, so this
+      # introduces no second notion of closed — which is the defect this whole family is about. In
+      # particular it does NOT key on seeing an `act: decide` message: that says only that somebody
+      # ran the verb, and `_channel.md` tells participants the same thing.
+      #
+      # THE PROPERTY THAT MAKES THIS SAFE: it can only ever return EARLIER than before, never
+      # later, and only in a state where the previous behaviour was to wait for a turn that can no
+      # longer arrive. So the risk is releasing too EAGERLY, and that is what the test pins — t23
+      # asserts an open room still waits, which is the direction a mistake here would break.
+      # Placed after the drain above, so a seat released by a close still receives whatever was
+      # waiting for it, the announcement included.
+      if [ -n "$(c_recorded_status)" ]; then return 0; fi
       # Posted already, round still open: keep waiting — not for a turn, but for the round
       # to complete, which is what releases everyone else's positions. The round/turn advance
       # is the guard's call: the opening round is over (`! c_round_open`) and the floor is mine.
@@ -883,10 +904,20 @@ v_decide() {
   # to anyone, so the positions are already out and refusing the rewrite protects nothing while
   # costing the documented exit codes. Two reachable states need it. A room recorded `decided`
   # must still answer 3, which the placement above already secures. A room recorded
-  # `unresolved` falls through `*)` under `--force`, and there this fired absurdly: closing an
-  # EMPTY round stamps the closer's own trailing `decide` message `round: 0` -- c_send does that
-  # whenever the barrier is open and the sender has not posted -- so that message then reads as
-  # a foreign opening position and gated every other seat out of ever re-closing. Measured.
+  # `unresolved` falls through `*)` under `--force`, and there this gate would otherwise wedge a
+  # room that is already closed: a seat states a real opening position and force-closes mid-round,
+  # leaving a record on disk, a FOREIGN `round: 0` position in the log and the barrier still open,
+  # so every seat that has posted nothing is refused for ever on a round it can no longer join --
+  # while `decision` hands that same record to any of them anyway. That is the state t7's `t7e`
+  # fixture builds, and deleting this term reds it.
+  #
+  # It reached that state a SECOND way until the announcement became `--hand`, and the note is kept
+  # because the mechanism is gone and a reader who greps for it will not find it: closing an EMPTY
+  # round used to stamp the closer's own trailing `decide` message `round: 0` -- c_send did that
+  # whenever the barrier was open and the sender had not posted -- so the announcement itself read
+  # as a foreign opening position and gated every other seat out of ever re-closing. Measured, then.
+  # `--hand` stamps `turn: null, round: null`, so a close can no longer manufacture that position;
+  # t7e now has to state one for real. The term is still load-bearing for the first state above.
   #
   # The message is the ONE authoritative statement of the rule: SKILL.md describes the behaviour
   # and its cost without restating it, and t7 asserts a substring rather than a copy.
@@ -1004,11 +1035,40 @@ v_decide() {
       cat "$ROOM/agenda.md"
     fi
   } > "$out"
+  # THE RECORD IS THE CLOSE, so nothing downstream may assume it landed. This block used to be a
+  # bare `> "$out"` followed by a bare `> board/status`, and a redirect that cannot open reports
+  # nothing to the shell: with `board/` unwritable, `decide` printed the record's path for a file
+  # that does not exist, announced "decision written: decided" to the room, and exited 0 -- while
+  # `verdict` still said `ready-to-decide` and `decision` still answered 1, because
+  # `c_recorded_status` had nothing to read. Measured. That is this verb's own headline defect
+  # (a verb reporting a close it did not perform) sitting one step ABOVE the announcement, and it
+  # is strictly worse than the announcement case: there the room's output exists and only the wake
+  # is lost, whereas here the room is told a decision was written that is not there.
+  #
+  # `-s` and not `-f`: the redirect creates the file at zero bytes the instant it opens, so a
+  # truncated-then-failed write (a full disk, which `>` reaches after truncating an EXISTING
+  # record) leaves an empty file behind that `-f` would accept. `v_decision`'s own reader uses `-s`
+  # for the same reason and its header says so; keep the two in step.
+  #
+  # This refuses with 1 and prints NO path, which is the honest report and a DIFFERENT one from the
+  # exit 4 below. 1 already means "refusing to write a record" for the two readers above it; a
+  # record that could not be written belongs with them, because in every one of those cases the
+  # room is not closed and stdout must not carry a path to a record a caller would then try to read.
+  [ -s "$out" ] || {
+    echo "council decide: the decision record could not be written to $out — the room is NOT closed and nothing has been announced. The error above says why; fix it and run decide again." >&2
+    return 1
+  }
   # Read the PRIOR status before overwriting it, so the escalation below can fire ONCE. `decide
   # --force` on an already-unresolved room rewrites the record idempotently; the escalation must
   # be idempotent too, or N re-forces would accrue N notices in the mailbox.
   local prev_status; prev_status=$(cat "$ROOM/board/status" 2>/dev/null || true)
-  printf '%s' "$status" > "$ROOM/board/status"
+  # And board/status is what every OTHER verb reads to know the room closed (c_recorded_status), so
+  # a record with no status is a room that reads open to `verdict`, `status`, `claims` and the
+  # room graph while its record sits on disk -- the same disagreement, one file over.
+  printf '%s' "$status" > "$ROOM/board/status" || {
+    echo "council decide: the record was written to $out but board/status could not be — every other verb reads that file, so the room will keep reporting itself open. The error above says why; fix it and run decide again to complete the close." >&2
+    return 1
+  }
   # ESC-04: an unresolved close is council's needs-human signal — the room could not converge, so
   # a person has to look. Route it to the shared escalation mailbox (the one shipyard's reporter
   # already reads) as a fire-and-forget notice, so a council escalation surfaces alongside ship's
@@ -1028,7 +1088,50 @@ v_decide() {
       "council room '$esc_room' closed unresolved — the room did not converge; a human should look" \
       "${esc_ctx:-unresolved}; record: $out" >/dev/null 2>&1 || true
   fi
-  c_send --act decide --text "decision written: $status (council.sh decision)" >/dev/null
+  # THE ANNOUNCEMENT IS A WAKE, NOT A CLAIM ON A TURN, and it is `--hand` for that reason.
+  # `decide` is a chair action taken out of band: the caller is `--me`-gated to some seat, but it
+  # is acting for the room rather than taking its turn, so the rotation has nothing to say about
+  # it. The record on disk is what closes the room: `c_recorded_status` is the reader every verb
+  # consults for that VERDICT (v_verdict, v_claims, v_status, c_room_decided), while v_decision
+  # reads `board/decision.md` directly to print it and v_decide reads `board/status` with `cat`
+  # just above for its escalation's prior value -- three readers of the record, kept deliberately
+  # in step rather than one. Either way this message carries no authority at all. All
+  # it does is ring the peers (c_send's trailing `c_ring` loop), which is what turns each seat's
+  # next `decision` poll from "after this recv times out" into "now".
+  #
+  # It used to be a plain send, and c_send refuses one from a peer that does not hold the floor
+  # (exit 6). The exit status was discarded by `>/dev/null` on the call and never read, so the
+  # commonest close there is -- a supervisor closing a room whose rotation has moved on -- rang
+  # nobody and reported success. `--hand` takes the branch that precedes both the floor check and
+  # the barrier check, stamping `turn: null` and `round: null`, so the refusal that was being
+  # discarded can no longer happen.
+  #
+  # Not the `skip` exemption the issue proposed, and the difference is the turn. `skip` is exempt
+  # from the floor check while still stamping `turn=$(c_turns)`, because consuming the absent
+  # holder's turn is precisely what `skip` is for. This message must consume nothing: the room is
+  # closed and a turn spent here is a turn stamped on top of whoever legitimately holds it, for
+  # c_canon to settle against a real contribution. `--hand` is the existing mechanism for exactly
+  # that shape -- out of turn, consumes no turn, does not move the floor -- so this reuses it
+  # rather than widening c_send's exemption list.
+  #
+  # WHAT IS LEFT CAN STILL FAIL, and it must not read as a clean close. c_atomic can fail on a
+  # full or read-only disk and jq can die, and `--hand` does not make a write succeed. So the
+  # status is read now, and the two facts are reported apart: the record IS written (it is on
+  # stdout either way, because it is the room's output and `decision` is the protocol's stop
+  # signal), and the room was NOT told. This is `say`'s exit 6 in another verb -- report what was
+  # established, never the claim you wanted to make -- and it is deliberately NOT a failure of the
+  # close: the room is genuinely closed, and a re-run says so rather than re-closing it — 3 on a
+  # `decided` record, 2 ("not ripe") on an `unresolved` one, because v_verdict answers from the
+  # record and v_decide's `*)` arm catches `unresolved`. Neither re-opens the room. Do not write
+  # the bare "answers 3" here: `--force` on a stuck room is the commonest way to reach exit 4, it
+  # records `unresolved`, and 2 is the one status this skill tells a supervisor it MAY retry — so
+  # that shorthand sent a supervisor to `--force`, which rewrites the record and posts a second
+  # announcement. Measured, in the round that introduced this message.
+  if ! c_send --act decide --hand --text "decision written: $status (council.sh decision)" >/dev/null; then
+    printf '%s\n' "$out"
+    echo "council decide: the record is written ($status) but the room was not told — the announcement could not be sent, so no seat was rung. The close stands and 'council.sh decision' serves the record. Do not re-run decide to check: it answers 3 on a decided room and 2 ('not ripe') on an unresolved one, and --force would rewrite the record and announce a second time. Wake a seat with 'council.sh say' if the room should stop sooner." >&2
+    return 4
+  fi
   printf '%s\n' "$out"
 }
 

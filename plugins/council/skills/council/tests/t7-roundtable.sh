@@ -282,7 +282,14 @@ while [ "$(bash "$CLI" floor | sed -n 's/.*floor=\([^ ]*\).*/\1/p')" != c ]; do
   say_floor msg '[]' "a turn" >/dev/null || break
 done
 COUNCIL_ME=c bash "$CLI" send --act msg "I am late, but I waited for my turn" >/dev/null
-late=$(bash "$CLI" order | jq -r 'select(.from=="c") | .round')
+# THE LATE MESSAGE, not every message c has ever sent. c also closed the room above, and `decide`
+# announces that close to the room in c's own lane — so the unfiltered selector returns TWO rounds
+# and the `=` test compares a two-line string against `null`, failing on a room where both values
+# are in fact null. It matched one message only while that announcement was being silently refused
+# (c did not hold the floor), which is the defect this suite now covers in t22; the selector was
+# reading a symptom of it. Pick the message by its act and take the last, which is the one the two
+# lines above just sent.
+late=$(bash "$CLI" order | jq -r 'select(.from=="c" and .act=="msg") | .round' | tail -1)
 [ "$late" = null ] || { echo "FAIL the late message was recorded as an opening position (round=$late)"; fail=1; }
 st=$(COUNCIL_ME=a bash -c '. '"$SKILL"'/lib/lib.sh; c_barrier')
 [ "$st" = closed ] || { echo "FAIL the latecomer reopened the round: $st"; fail=1; }
@@ -353,15 +360,27 @@ echo "a round nobody has posted in holds nothing to disclose, so it can still be
 # ...and ONCE A RECORD EXISTS the gate stands down, because `decision` already hands that record
 # to anyone: refusing the rewrite would protect nothing and cost the documented exit codes. It
 # needs its own room, because it is the one state the other fixtures cannot reach — a record on
-# disk, a foreign `round: 0` message in the log, and a barrier still open. Closing an empty round
-# produces exactly that: `c_send` stamps the closer's own trailing `decide` message `round: 0`
-# (the barrier is open and it has not posted), and with a long deadline the round stays open, so
-# from then on every other seat looks like a latecomer to a round it never joined.
+# disk, a foreign `round: 0` message in the log, and a barrier still open.
+#
+# `a` states a genuine opening position and then closes the room. One position of a three-seat
+# room is short of the quorum (`n-1`, floored at 2) and the deadline is ten minutes out, so the
+# barrier stays open; the position is `round: 0` and foreign to `b`; and `a` may close because it
+# has posted. That is every part of the state, built out of what the protocol does.
+#
+# It used to be built out of a BUG instead, and the note is worth keeping because the bug is now
+# fixed and a future reader will otherwise wonder why this is not the shorter thing: closing an
+# empty round made `c_send` stamp the closer's own trailing `decide` message `round: 0` — the
+# barrier was open and the closer had not posted — so the announcement itself became the foreign
+# opening position, and from then on every other seat looked like a latecomer to a round it never
+# joined. The announcement is now `--hand` (`turn: null`, `round: null`), so it can no longer
+# masquerade as anybody's position, and this fixture has to state one for real.
 R5="$COUNCIL_TEST_ROOT/t7e"; rm -rf "$R5"
 mkroom "$R5" a b c
 jq '.mode="roundtable" | .round_deadline_ms=600000' "$R5/roster.json" > "$R5/r.tmp" && mv "$R5/r.tmp" "$R5/roster.json"
+COUNCIL_ROOM="$R5" COUNCIL_ME=a bash "$CLI" send --act propose "a position, stated for real" >/dev/null 2>&1 \
+  || { echo "FAIL could not state the opening position the recorded-room case needs"; fail=1; }
 COUNCIL_ROOM="$R5" COUNCIL_ME=a bash "$CLI" decide --force >/dev/null 2>&1 \
-  || { echo "FAIL could not close the empty round to set up the recorded-room case"; fail=1; }
+  || { echo "FAIL could not close the room to set up the recorded-room case"; fail=1; }
 [ -n "$(COUNCIL_ROOM="$R5" COUNCIL_ME=b bash -c ". $SKILL/lib/lib.sh; c_round0" | head -1)" ] \
   || { echo "FAIL the fixture has no round-0 message, so it cannot separate the two tests"; fail=1; }
 st=$(COUNCIL_ROOM="$R5" COUNCIL_ME=b bash -c ". $SKILL/lib/lib.sh; c_barrier")

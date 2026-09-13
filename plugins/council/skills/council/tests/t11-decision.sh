@@ -58,9 +58,12 @@ acts=$(q '[(.revisions // [])[].act] | join(",")')
   echo "FAIL current_text changed meaning: '$(q '.current_text')'"; fail=1; }
 echo "the graph carries the revision chain in order, and current_text is unchanged"
 
-# Decide as whoever holds the floor. Deciding as a fixed peer leaves v_decide's own trailing
-# `decide` message refused, which prints "the floor is no longer yours" into the middle of a
-# PASSING test and leaves the room readable as ready-to-decide although the record is written.
+# Decide as whoever holds the floor — now belt-and-braces. Deciding as a fixed peer used to leave
+# v_decide's own trailing `decide` message refused, printing "the floor is no longer yours" into
+# the middle of a PASSING test; the announcement is `--hand` since t23's change and is no longer
+# refused for the floor. The old note's second half was never true even then: v_verdict answers
+# from the record (c_recorded_status), so a room whose record is written reads back `decided`, not
+# `ready-to-decide`.
 decider() { bash "$CLI" floor | sed -n 's/.*floor=\([^ ]*\).*/\1/p'; }
 OUT=$(COUNCIL_ME=$(decider) bash "$CLI" decide) || { echo "FAIL decide refused"; exit 1; }
 [ "$(bash "$CLI" verdict | cut -d' ' -f1)" = decided ] || {

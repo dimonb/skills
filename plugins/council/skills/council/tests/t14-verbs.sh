@@ -56,10 +56,13 @@ say_floor msg '[]' "Agreed." >/dev/null
 say_floor msg '[]' "No objections." >/dev/null
 say_floor msg '[]' "Record it." >/dev/null
 [ "$(v)" = ready-to-decide ] || { echo "FAIL expected ready-to-decide, got $(v)"; exit 1; }
-# Decide as whoever holds the floor. `decide` posts an `act: decide` message, and c_send
-# refuses one from a peer that is not the floor holder — so a hard-coded name makes this
-# test depend on where the rotation happens to have stopped. That refusal is now harmless to
-# the room: closure reads the record, not the message, and t9f pins both directions.
+# Decide as whoever holds the floor. This used to be REQUIRED: `decide` posts an `act: decide`
+# message, and c_send refused one from a peer that was not the floor holder, so a hard-coded name
+# made this test depend on where the rotation happened to have stopped. The announcement now goes
+# `--hand` and lands from any seat, so reading the floor here is belt-and-braces rather than
+# necessary — t23 covers the non-holder close. Do not read the old note as "a refused announcement
+# is harmless": it never was (it is the defect t23 exists for), and a send that genuinely fails is
+# now reported as exit 4, which the `|| FAIL decide refused` below would catch.
 holder=$(bash "$CLI" floor | sed -n 's/.*floor=\([^ ]*\).*/\1/p')
 [ -n "$holder" ] || { echo "FAIL could not read the floor holder"; exit 1; }
 written=$(COUNCIL_ME="$holder" bash "$CLI" decide) || { echo "FAIL decide refused"; exit 1; }
