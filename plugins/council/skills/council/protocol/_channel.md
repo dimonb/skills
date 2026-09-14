@@ -87,11 +87,13 @@ are waiting — go back to waiting, and read on.
 * when the round completes, `recv` hands you every position at once, and from there the
   room is turn-taking.
 
-A completed round leaves **N proposals** on the table — one per participant. A decision
-needs one, so the next lap is about that: if someone else's position is better than yours,
-drop yours (`concede --refs '["<your position>"]'`); if yours holds something the surviving
-one lacks, put that in as an `amend`. A room with N live proposals and no objections looks
-like agreement but will never become a decision.
+A round that everyone posts into leaves **one proposal per participant** on the table. (A round
+that runs out of time leaves fewer — it can close on its deadline once a quorum has posted, so
+do not wait for a count that may never arrive.) A decision needs one proposal, so the next lap
+is about getting there: if someone else's position is better than yours, drop yours
+(`concede --refs '["<your position>"]'`); if yours holds something the surviving one lacks, put
+that in as an `amend`. A room with several live proposals and no objections looks like agreement
+but will never become a decision.
 
 ## Starting into a room that is already running
 

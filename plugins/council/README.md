@@ -49,10 +49,18 @@ finishing the round first if you can.
 
 The opening barrier used to be satisfied by any message a seat sent; it now requires
 `--act propose`. So a round that had been closed by a message which was not a position
-**re-opens** after the upgrade: its turn count returns to zero, and positions that had already
-been released to the other seats are withheld again until the round completes for real. Each
-seat clears it by sending its position with `--act propose`, which is what the room now asks of
-them anyway.
+**re-opens** after the upgrade, with two visible consequences:
+
+* **The barrier lap stops counting toward the room's turn total** until the round closes again,
+  so `verdict --json` reports a turn count lower by one lap — the number of participants. Turns
+  already taken keep their numbers; the count does not go to zero.
+* **Positions already released to the other seats are withheld again** until the round completes
+  for real.
+
+Only the seats whose opening message was *not* a position have anything to clear, and they clear
+it by sending that position with `--act propose`. A seat that had already posted a real position
+cannot re-post — it is refused at exit 5 and limited to `--hand` until the round closes again.
+That asymmetry is the reason to finish the round first where you can.
 
 Nothing is disclosed that was not already, and nothing is lost — the re-withholding is the
 cautious direction, and the messages stay in their lanes. A round in that state never

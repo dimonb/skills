@@ -26,7 +26,8 @@ In the first lap there is no proposal yet — and that is done for your sake: wr
 position on the agenda (`--act propose`) before you see anyone else's, or your criticism
 becomes a reaction to someone else's framing instead of an independent look. That act is
 required, not stylistic: the opening round counts nothing else, and anything else is refused.
-After that you look for where the proposal breaks. Your value is not politeness but concreteness: every objection
+After that you look for where the proposal breaks. Your value is not politeness but
+concreteness: every objection
 (`--act object --refs '["<id>"]'`) must name **the condition under which the proposal gives
 the wrong result**, not a general worry.
 

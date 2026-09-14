@@ -412,8 +412,10 @@ c_quorum() { c_int_field round_quorum ''; }
 # An earlier version of this change kept two spellings and justified it by claiming a single one
 # would cost a jq subprocess per send. THAT WAS FALSE, and it is recorded here because the shape
 # matters more than the mistake: it foreclosed `--arg` without ever enumerating it. `--arg` is an
-# argument to a jq process c_round0_positions already spawns. Counted with a jq shim, both forms
-# are 13 jq calls for an opening send and 30 for an in-turn one — identical.
+# argument to a jq process c_round0_positions already spawns, so neither form adds a process at
+# all. Counted with a jq shim on a two-seat roundtable room, both forms are 13 jq calls for an
+# opening send; the in-turn figure varies by room shape (10 to 30 across the shapes measured), so
+# it is the EQUALITY that is the point here, not either number.
 #
 # Declared like C_UNTRUSTED above: bare `C_`-prefixed, file scope, UNEXPORTED (so it cannot leak
 # into a spawned agent's environment), unconditional, and NOT readonly (lib.sh is sourced once per
@@ -422,6 +424,14 @@ c_quorum() { c_int_field round_quorum ''; }
 # DO NOT give it a `${COUNCIL_OPENING_ACT:-propose}` default the way C_IDLE takes one. C_IDLE is a
 # comfort knob; this is a protocol invariant, and every seat can write to the room, so an
 # environment-overridable barrier rule is a guard a participant could switch off from outside.
+# NOTHING CHECKS EITHER OF THOSE TWO PROPERTIES — not `make check`, not the knobs suite — so they
+# are carried by this paragraph and by review, which is worth knowing before relying on them.
+#
+# IT BINDS THE TWO PREDICATES, NOT THE PROSE. The act's NAME is also written out in c_send's
+# exit-7 refusal, in v_decide's exit-2 refusal, in council.sh's usage text, in
+# protocol/_channel.md and in the scenarios. Those are diagnostics and instructions rather than
+# bindings, and nothing keeps them in step with this line: setting it to another act would leave
+# every one of them naming `propose` at a room that no longer accepts it.
 C_OPENING_ACT=propose
 
 # --- round-0: TWO QUESTIONS, TWO PREDICATES, opposite safe directions ----------------
@@ -487,8 +497,10 @@ c_round0_withheld() { { c_all || true; } | jq -c 'select(.round == 0)'; }
 #     on the record and on other seats' objections.
 #
 # That leaves `propose`, which is what protocol/_channel.md — the file every seat is handed —
-# already called "your position on the agenda", promising "a completed round leaves N proposals
-# on the table, one per participant". The rule existed in prose and was enforced nowhere.
+# already called "your position on the agenda". The rule existed in prose and was enforced
+# nowhere. (That file ALSO says a completed round leaves one proposal per participant; do not
+# lean on that half, because it is only true of a round that completes on positions — the
+# deadline-with-quorum close and the 2x backstop both finish with fewer.)
 #
 # THE SCENARIOS ARE A WEAKER LEG, and an earlier version of this comment overstated them as "all
 # three scenarios instruct `--act propose`". They do not: only `debate` runs a barrier at all
@@ -613,13 +625,12 @@ c_send() {
       echo "council: the round is not complete — you have stated your position, wait for the others" >&2
       return 5
     fi
-    # THE OTHER HALF OF THE SAME RULE (#175), asking the SAME constant c_round0_positions
-    # filters on. That accessor is what makes a non-position not COUNT; without this branch the
-    # narrowing is a
-    # silent no-op from the seat's side — the message lands, the seat believes it has spoken, and
-    # it waits out a round that will never count it. That is precisely what the room that produced
-    # this issue did. So the filter decides the arithmetic and this decides what the participant
-    # is told, and neither re-spells the condition the other uses.
+    # THE OTHER HALF OF THE SAME RULE (#175), asking the SAME constant c_round0_positions filters
+    # on. That accessor is what makes a non-position not COUNT; without this branch the narrowing
+    # is a silent no-op from the seat's side — the message lands, the seat believes it has spoken,
+    # and it waits out a round that will never count it. That is precisely what the room that
+    # produced this issue did. So the filter decides the arithmetic and this decides what the
+    # participant is told, and neither re-spells the condition the other uses.
     #
     # EXIT 7, NOT 5, AND THE DIFFERENCE IS THE WHOLE POINT. Exit 5 is the branch just above, and
     # protocol/_channel.md teaches it as "you have already posted — wait"; the correct reaction to
@@ -1128,9 +1139,11 @@ c_canon() {
 # a roster nobody can read and hand everything over, which is the barrier deleting itself. The
 # roster IS read, but only to ask whether it parses at all -- see the function.
 #
-# NOT APPLIED to c_round0_positions, c_round0_withheld, c_turns, c_floor_at, c_conflicts, v_verdict or v_decide, and each
-# omission is deliberate. c_round0_positions is the barrier's OWN input: filter it and `posted k/N` never
-# reaches N, so the round never closes and the room deadlocks. The rest are counts, turn
+# NOT APPLIED to the two round-0 accessors, c_turns, c_floor_at, c_conflicts, v_verdict or
+# v_decide, and each omission is deliberate. c_round0_positions is the barrier's OWN input:
+# filter it and `posted k/N` never reaches N, so the round never closes and the room deadlocks;
+# c_round0_withheld feeds the disclosure gate, which must see what is being withheld in order to
+# refuse over it. The rest are counts, turn
 # arithmetic and the durable record -- facts about the ROOM rather than about what one seat may
 # read. The record most of all: a decision record that is wrong is the worst outcome this
 # codebase has, so it is written from the whole log even when the seat writing it could not

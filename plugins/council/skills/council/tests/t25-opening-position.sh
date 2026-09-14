@@ -23,8 +23,9 @@
 #
 # SECTION 4 IS THE ONE THIS SUITE DID NOT HAVE. The first version of this change narrowed the
 # barrier's accessor and thereby narrowed v_decide's disclosure gate, which read the same one —
-# and the gate asks the opposite question, so narrowing it RELEASED. Every other fixture for that
-# gate (t7f/t7g/t7h) writes act:"propose", where the two predicates agree, so the whole battery
+# and the gate asks the opposite question, so narrowing it RELEASED. Every fixture that existed
+# for that gate -- t7c's real sends and t7f/t7g/t7h's hand-written lanes -- carries act "propose",
+# where the two predicates agree, so none of them could tell the two apart and the whole battery
 # stayed green through the broken version. A suite that cannot fail is a defect in itself.
 #
 # SECTION 5 IS THE STRUCTURAL GUARD. Section 1's act list is a tripwire and it is defeated by one
@@ -130,6 +131,18 @@ raw_round0 b 1 5 msg "$(now_ms)" "--help"
 [ "$(barrier a)" = open ] && ok "a round-0 msg written straight into a lane does not close the round" \
                           || bad "the barrier counted a round-0 msg that bypassed send"
 
+# THE SUPERVISOR'S VIEW OF THE SAME FACT, and it is the one reader of the counting accessor that
+# nothing else in this suite asserts. Measured by a reviewer: pointing v_status's two call sites
+# at a name that does not exist leaves the ENTIRE council suite green, because a missing function
+# inside `$( )` yields the empty string rather than failing -- so the line would render
+# `posted /2, waiting for a,b` to a human watching a live round with nothing red anywhere.
+# v_floor's identical pair is already covered (t9e asserts its waiting= list); this is its twin.
+st=$(COUNCIL_ME=a bash "$CLI" status 2>&1 || true)
+case "$st" in *"posted 1/2"*) ok "status reports the position count, not the message count" ;;
+  *) bad "status did not report 'posted 1/2'; it said: $st" ;; esac
+case "$st" in *"waiting for b"*) ok "...and names the seat whose message was not a position" ;;
+  *) bad "status did not name b as still owing a position; it said: $st" ;; esac
+
 # c_posted_round0 inherits the same narrowing, so the seat is not locked out by its own stray
 # message: it still owes a position and must still be able to state one.
 COUNCIL_ME=b bash "$CLI" send --act propose "position b" >/dev/null 2>&1 \
@@ -149,8 +162,9 @@ raw_round0 b 1 5 propose "$(now_ms)" "position b, written directly"
 
 # ------------------------------------------------ 3. the deadline anchors on the first POSITION
 echo "--- the round deadline starts at the first position, not the first message ---"
-# c_barrier takes its clock from min_by(.sent_ms) over c_round0's output. While that selected on
-# the field alone, a non-position was the anchor -- in the observed room, the `--help`. A stray
+# c_barrier takes its clock from min_by(.sent_ms) over c_round0_positions' output. While the one
+# round-0 accessor selected on the field alone, a non-position was the anchor -- in the observed
+# room, the `--help`. A stray
 # message minutes before anybody actually spoke therefore backdated the deadline, and the round
 # could close on a quorum the moment the first real position landed.
 R4="$COUNCIL_TEST_ROOT/t25d"; newroom "$R4" 1000 2 a b c
@@ -180,25 +194,34 @@ echo "--- decide --force still refuses while a foreign round-0 message is withhe
 # but `propose` stopped satisfying it while c_visible went on withholding that same message, so
 # a seat that had posted nothing could force-close and read a peer's withheld text in the record.
 #
-# t7f/t7g/t7h are the only other fixtures for this gate and every one of them writes
-# act:"propose" into its hand-written lane -- so raw and narrow agree there and the whole suite
-# stayed green through the broken version. A fixture whose act is NOT a position is the only
-# thing that can tell the two predicates apart.
+# The fixtures that already existed for this gate carry act "propose" throughout -- t7c states a
+# position with a real `send`, and t7f/t7g/t7h write one into a hand-written lane -- so the raw
+# and narrow predicates agree in every one of them and the whole suite stayed green through the
+# broken version. A fixture whose act is NOT a position is what tells the two apart.
 R6="$COUNCIL_TEST_ROOT/t25f"; newroom "$R6" 600000 2 a b
 raw_round0 b 1 5 msg "$(now_ms)" "SECRET-B-TEXT"
 [ "$(barrier a)" = open ] || bad "the gate fixture's barrier is not open, so it proves nothing"
 # a is withheld from b's lane: that is the state in which the gate must refuse.
 seen_a=$(COUNCIL_ME=a bash "$CLI" transcript 2>/dev/null | grep -c "SECRET-B-TEXT" || true)
 [ "$seen_a" = 0 ] || bad "the fixture does not withhold b's message from a, so the gate is moot"
+# ...and c_drain, the FOURTH spelling of the withholding rule, must agree with the other three.
+# `transcript` above goes through c_visible; `recv` goes through c_drain's own inline truncation,
+# and nothing else in the suite exercises that one against a round-0 message that is NOT a
+# position. They agree today; this is what notices if one of them is narrowed alone.
+seen_r=$(COUNCIL_ME=a bash "$CLI" recv --peek 2>/dev/null | grep -c "SECRET-B-TEXT" || true)
+[ "$seen_r" = 0 ] && ok "recv withholds it too, so c_drain and c_visible agree" \
+                  || bad "recv released b's round-0 message that transcript withheld"
+
 out=$(COUNCIL_ME=a bash "$CLI" decide --force 2>&1); rc=$?
 [ "$rc" = 2 ] && ok "a seat that posted nothing is refused while foreign round-0 traffic is withheld" \
                || bad "decide --force returned $rc, want 2 — the disclosure gate is open again"
+# WHICH exit 2, not merely exit 2. t7 records, measured, that a bare rc check on this gate also
+# passes with `need_me` deleted -- a different refusal entirely. Assert the clause that is unique
+# to the disclosure gate.
+case "$out" in *"round-0 traffic being withheld from you"*) ok "...naming the disclosure it refused over" ;;
+  *) bad "the refusal was not the disclosure gate's; it said: $out" ;; esac
 [ -s "$R6/board/decision.md" ] && bad "the refused close wrote a record anyway" \
                                || ok "...and wrote no record"
-# ...and the record it would have written is the disclosure, so prove the text was really at risk.
-grep -q "SECRET-B-TEXT" "$R6/board/decision.md" 2>/dev/null \
-  && bad "b's withheld text reached the record" \
-  || ok "...so b's withheld text did not reach a"
 
 # THE POSITIVE CONTROL: the same seat must still be able to clear the refusal by posting, or the
 # gate is a freeze rather than a gate. This is also the self-heal for a room upgraded mid-flight.
@@ -209,15 +232,38 @@ out=$(COUNCIL_ME=a bash "$CLI" decide --force 2>&1); rc=$?
 [ "$rc" = 0 ] && ok "...and that stands the refusal down at once" \
               || bad "decide --force still refused after posting (exit $rc): $out"
 
+# AND NOW THE DISCLOSURE IS REAL, SO PROVE IT ON THE RECORD THAT EXISTS. An earlier version of
+# this section grepped for the text in the record the REFUSED close did not write -- a file the
+# line above had just asserted absent -- so the green line printed without testing anything, the
+# very shape this file's header is about. The close that succeeded writes the record from the
+# whole log (c_canon), with no act filter, so b's text IS in it: that is exactly what the gate
+# was holding back a moment ago, and finding it here is what makes the refusal above meaningful.
+grep -q "SECRET-B-TEXT" "$R6/board/decision.md" 2>/dev/null \
+  && ok "...and the record it then wrote does carry b's text — what the gate was withholding" \
+  || bad "the record does not carry b's text, so the refusal above was not protecting anything"
+
 # ------------------------------- 5. send-acceptance and barrier-counting must agree
 echo "--- every act: accepted by send iff counted by the barrier ---"
 # THE STRUCTURAL GUARD, as opposed to the act list in section 1. That list is a tripwire and a
 # reviewer measured how it is defeated: widen the send predicate AND drop the act from the list
 # -- a one-word edit the list invites -- and the suite goes green while the divergence is live
 # (the seat sends successfully, gets an id, and `status` reports the room still waiting for it,
-# which is #175 verbatim). This section cannot be satisfied that way: it derives BOTH sides from
-# the same act table and asserts they agree, so any one-sided change to what opens a round reds
-# it whichever side moves, and it keeps working if the rule ever becomes a set.
+# which is #175 verbatim). This section is not defeated that way: it derives both sides from the
+# same act table, so dropping an act from section 1 does not remove it from here. Measured: with
+# `support` widened in c_opens_round AND removed from section 1's list, section 1 goes silent and
+# this section still reds.
+#
+# WHAT IT COVERS, STATED AS A SCOPE RATHER THAN AS "WHICHEVER SIDE MOVES", WHICH IT IS NOT.
+# Agreement is a weaker property than correctness: `(refused, counted 0)` is agreement too, so a
+# rule that admits NOTHING satisfies the table for every act. Measured with `c_opens_round() {
+# false; }` -- which section 1 calls a worse bug than the one fixed -- this table stayed green on
+# all twelve and every FAIL came from other sections. So the equivalence catches WIDENING, and
+# the `propose` row below is what catches NARROWING; section 1 is the identity pin for the rest.
+#
+# The `propose` row is also this section's FIXTURE CONTROL, which it otherwise lacked: if the
+# rooms stopped being built at all, every act would agree at (refused, 0) and the section would
+# pass in silence. One row that must come back ACCEPTED AND COUNTED makes that impossible.
+agree_ok=1
 for act in propose msg notice clarify object support concede amend withdraw skip decide overrule; do
   RX="$COUNCIL_TEST_ROOT/t25g-$act"; newroom "$RX" 600000 2 a b
   COUNCIL_ME=a bash "$CLI" send --act "$act" "opening with $act" >/dev/null 2>&1; sent=$?
@@ -226,12 +272,19 @@ for act in propose msg notice clarify object support concede amend withdraw skip
   # the round, and a send that was refused must leave none.
   if [ "$sent" = 0 ] && [ "$counted" != 1 ]; then
     bad "--act $act was ACCEPTED by send but the barrier counted $counted — the silent no-op of #175"
+    agree_ok=0
   elif [ "$sent" != 0 ] && [ "$counted" != 0 ]; then
     bad "--act $act was REFUSED by send but the barrier counted $counted"
+    agree_ok=0
+  fi
+  # THE POSITIVE ROW. Without it the whole table is satisfied by a rule that opens nothing.
+  if [ "$act" = propose ] && { [ "$sent" != 0 ] || [ "$counted" != 1 ]; }; then
+    bad "the opening act itself was not accepted-and-counted (sent=$sent counted=$counted) — the table proves nothing"
+    agree_ok=0
   fi
   rm -rf "$RX"
 done
-ok "send-acceptance and barrier-counting agree on all twelve acts"
+[ "$agree_ok" = 1 ] && ok "send-acceptance and barrier-counting agree on every act in the table"
 
 rm -rf "$R1" "$R2" "$R3" "$R4" "$R5" "$R6"
 [ "$fail" = 0 ] && echo "t25 PASS" || echo "t25 FAIL"

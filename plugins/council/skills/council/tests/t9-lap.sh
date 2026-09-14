@@ -100,8 +100,10 @@ echo "Should the room keep a lap counter?" > "$R3/agenda.md"
 # has two, and could never reach it however long the room stays quiet). A barrier round that
 # COMPLETES ON POSITIONS puts N proposals on the table -- only `propose` opens a round (#175),
 # so the old fixture's `say b msg` is refused rather than counted. (Not "always N": c_barrier
-# also closes on the deadline with a quorum, and on the 2x backstop, both with fewer -- t7
-# asserts exactly that. This room closes on positions, which is why N holds HERE.) The way a
+# also closes on the deadline with a quorum, and on the 2x backstop, both with fewer. t7b asserts
+# the deadline-with-quorum close; the 2x backstop is asserted by NO test in this suite, so do not
+# read this parenthesis as saying it is covered. This room closes on positions, which is why one
+# proposal per seat holds HERE.) The way a
 # room gets from N live proposals to one is the lap after the barrier, which is what
 # protocol/_channel.md tells a participant to do: yield yours if someone else's is better.
 #
@@ -123,7 +125,7 @@ say b concede '["b-1"]' "Yielding to a's."
 # THE PRECONDITION, ASSERTED WHERE IT IS ESTABLISHED. `want ... 1 deliberating` below holds with
 # two live proposals too, so without this line a claims.jq regression in the proposer-yield rule
 # would surface three lines later as a lap-counter failure -- a diagnosis pointing at the wrong
-# subsystem, which is the shape t7 warns about further down this suite.
+# subsystem -- the unasserted-precondition shape t7-roundtable.sh records in its own comments.
 lv=$(bash "$CLI" verdict --json | jq -r '.live | length')
 [ "$lv" = 1 ] && echo "  ok   b's concession retired its own proposal" \
               || { echo "  FAIL b's concession left $lv live proposals, want 1"; fail=1; }
