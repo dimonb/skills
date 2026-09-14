@@ -82,6 +82,52 @@ _room_dirs_sane() { # <room>
   return 0
 }
 
+# --- teardown-on-close ----------------------------------------------------------
+# One name for the file that asks the room's keeper to close the participant terminals and
+# exit. Three places read or write it — the writer below, the keeper's loop, and `relaunch`'s
+# cancel — and a path spelled out in three places is the one that stops agreeing with itself.
+_keeper_teardown_file() { printf '%s/state/teardown' "$1"; }
+
+# Ask the room's keeper to reap. This is the whole of `decide`'s teardown (#48), and it is a
+# REQUEST rather than the act: the seat that closes a room is `--me`-gated to a participant, so
+# it is asking for its own terminal to be closed, and a reap written inline would race the
+# process that began it. The keeper already runs in its own process group, already holds the
+# roster it was forked with, and already knows how to close every terminal and exit — that is
+# what `up --hold` uses when its owner dies. So this signals that machinery instead of adding a
+# second teardown path. The cost is latency: the keeper polls, so the terminals go within one
+# poll (five seconds) rather than at once. That is the right side to err on — the close
+# announcement rings every seat first, and a reap that waits a moment lets it land.
+#
+# THE KEEPER IS CHECKED BEFORE THE MARKER IS WRITTEN, and the order is deliberate in both
+# directions. A room with no live keeper has nothing that will ever take the marker, so writing
+# one would leave `decide` reporting a teardown that cannot happen — and would leave a trap for
+# whichever keeper starts next. Returning 1 here lets the caller say what is true and name `down`.
+# The reverse window (a keeper that dies in the instant after the check) leaves a marker nothing
+# takes; `relaunch` clears it, because that is the one verb that puts a room back into use.
+_keeper_teardown() { # <room> -> 0 the keeper was asked, 1 there is no live keeper to ask
+  local room="$1" pid f
+  _room_dirs_sane "$room" || return 1
+  pid=$(_keeper_pid "$room/state/keeper.pid") || return 1
+  kill -0 "$pid" 2>/dev/null || return 1
+  f=$(_keeper_teardown_file "$room") || return 1
+  # Presence IS the whole signal, and `>` creates the file before it writes a byte, so there is
+  # no half-written state a reader could misread. The word is for whoever finds it by hand.
+  printf 'teardown\n' > "$f" 2>/dev/null || return 1
+  return 0
+}
+
+# The reap itself, shared by the keeper's two reaping triggers so neither can drift from the
+# other. ct_kill resolves terminal names and the container from $ROOM, and a keeper forked
+# before council_up assigned it would not inherit the value — so set it from the room we were
+# handed. Failures are swallowed on purpose: a peer whose terminal is already gone is the
+# ordinary case on both backends, and a room built without terminals at all (the test harness
+# does exactly that) has no ct_* in scope, which must not stop the keeper exiting.
+_keeper_reap() { # <room> <peer>...
+  local room="$1" p; shift
+  ROOM="$room"
+  for p in "$@"; do ct_kill "$p" 2>/dev/null || true; done
+}
+
 # --- create ---------------------------------------------------------------------
 # A private fifo for the owner canary (see _keeper_ensure). mktemp -u then mkfifo, in the room's
 # own state dir rather than a shared tmp, so it inherits the room's directory and never collides
@@ -98,14 +144,19 @@ _canary_fifo() { # <room> -> a freshly created fifo path on stdout, or rc 1
   printf '%s' "$f"
 }
 
-# The keeper's body. It exits on ANY of three triggers — but only the first two end the LIVE room
-# (its terminals and itself, never the durable record); on the third the room carries on without
+# The keeper's body. It exits on ANY of four triggers — but only the first three end the LIVE room
+# (its terminals and itself, never the durable record); on the last the room carries on without
 # this keeper, under the one that superseded it:
 #   * the room directory going away: an explicit `down`/`council_down`, exactly as before. In that
 #     path `council_down` has already closed the terminals, so the keeper only has to exit.
 #   * (a `--hold` room only) its OWNER dying, seen as EOF on the canary read end. Here nothing
 #     else closes the terminals — an owner that was Ctrl-C'd, crashed or was OOM/SIGKILLed never
 #     reached `council_down` — so the keeper REAPS every participant terminal itself, then exits.
+#   * the teardown marker appearing: a `decide` that closed the room with a decision has asked for
+#     the seats to go (#48, _keeper_teardown above). Same reap as the canary trigger, through the
+#     same _keeper_reap, because it is the same act asked for by a different party. It applies in
+#     a detached room as much as in a `--hold` one — the marker is checked on every pass, before
+#     the canary read, so both kinds of room notice it within one poll.
 #   * the pid file naming ANOTHER keeper: the room was rebuilt at this same path and the rebuild's
 #     own keeper has claimed it. This one steps down — and REAPS NOTHING, see below.
 #
@@ -142,11 +193,30 @@ _canary_fifo() { # <room> -> a freshly created fifo path on stdout, or rc 1
 # The check goes at the TOP of the loop body, before the canary read, and not at the bottom: both
 # `continue`s below jump straight back to the `while` test, so a check placed after them would
 # never run at all in a `--hold` room — exactly the rooms whose owner is holding a terminal open.
+#
+# THE TEARDOWN CHECK SITS BETWEEN THE TWO, and both neighbours decide its placement. It goes
+# AFTER the step-down check for the same reason the canary's second check exists: a keeper that
+# has been superseded must reap nothing, and a marker left by the room this path once served
+# would otherwise close the terminals of the room that replaced it. It goes BEFORE the canary
+# read because that read blocks for up to five seconds, and a detached room has no canary at all
+# — putting it after would make a detached room wait on `sleep 5` and a `--hold` room notice a
+# teardown only when its owner also died.
+#
+# It CONSUMES the marker before reaping, so the instruction is one-shot. A marker left in place
+# would be taken again by whatever keeper the room is given next — `relaunch` forks one — and a
+# seat put back up would then be killed within five seconds of starting, which reads as the
+# relaunch having silently failed.
 _keeper_loop() { # <room> <pid-file> <canary-read-fd-or-empty> <peer>...
   local room="$1" keep="$2" cfd="$3"; shift 3
-  local rc p named
+  local rc named tdn
+  tdn=$(_keeper_teardown_file "$room")
   while [ -d "$room" ]; do
     if named=$(_keeper_pid "$keep") && [ "$named" != "$BASHPID" ]; then return 0; fi
+    if [ -f "$tdn" ]; then
+      rm -f "$tdn"
+      _keeper_reap "$room" "$@"
+      return 0
+    fi
     if [ -n "$cfd" ]; then
       read -t 5 -u "$cfd" _ 2>/dev/null; rc=$?
       [ "$rc" -eq 0 ] && continue
@@ -158,10 +228,7 @@ _keeper_loop() { # <room> <pid-file> <canary-read-fd-or-empty> <peer>...
       # room that superseded it, which is the one outcome the step-down exists to avoid. Cheap, and
       # it changes nothing for a room nobody superseded: the file names us, so the reap proceeds.
       if named=$(_keeper_pid "$keep") && [ "$named" != "$BASHPID" ]; then return 0; fi
-      # ct_kill resolves terminal names and the container from $ROOM, and a keeper forked before
-      # council_up assigned it would not inherit the value — set it from the room we were handed.
-      ROOM="$room"
-      for p in "$@"; do ct_kill "$p" 2>/dev/null || true; done
+      _keeper_reap "$room" "$@"
       return 0
     fi
     sleep 5
@@ -980,6 +1047,13 @@ council_relaunch() {
     esac
   fi
 
+  # CANCEL A PENDING TEARDOWN FIRST. Putting a seat back up is an operator saying this room is in
+  # use again, so it outranks a close that asked for the seats to go (#48) — and it has to, or the
+  # seat launched below is killed within one keeper poll of starting. Ordinarily there is nothing
+  # here to clear: the keeper consumes the marker as it reaps. What this covers is the marker no
+  # keeper took — one written in the instant before its keeper died — which would otherwise be
+  # picked up by the keeper `_keeper_ensure` is about to fork.
+  rm -f "$(_keeper_teardown_file "$ROOM")"
   # A seat can be relaunched after `down`, which killed the keeper along with the terminals.
   # Without it every bell rung at this participant is lost while the room looks healthy.
   _keeper_ensure "$ROOM" "${roster[@]}"

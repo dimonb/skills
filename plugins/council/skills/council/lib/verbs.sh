@@ -1144,10 +1144,45 @@ v_decide() {
   # announcement. Measured, in the round that introduced this message.
   if ! c_send --act decide --hand --text "decision written: $status (council.sh decision)" >/dev/null; then
     printf '%s\n' "$out"
-    echo "council decide: the record is written ($status) but the room was not told — the announcement could not be sent, so no seat was rung. The close stands and 'council.sh decision' serves the record. Do not re-run decide to check: it answers 3 on a decided room and 2 ('not ripe') on an unresolved one, and --force would rewrite the record and announce a second time. Wake a seat with 'council.sh say' if the room should stop sooner." >&2
+    echo "council decide: the record is written ($status) but the room was not told — the announcement could not be sent, so no seat was rung. The close stands and 'council.sh decision' serves the record. Do not re-run decide to check: it answers 3 on a decided room and 2 ('not ripe') on an unresolved one, and --force would rewrite the record and announce a second time. Wake a seat with 'council.sh say' if the room should stop sooner. The participants' terminals are still live: 'council.sh down --room $(basename "$ROOM")' closes them and keeps the record." >&2
     return 4
   fi
+  # THE DECISION IS THE DELIVERABLE, SO A DECIDED ROOM CLOSES ITS OWN SEATS (#48). The record,
+  # the transcript and the lanes all survive teardown — only `down --purge` deletes anything —
+  # so the room stays readable afterwards through `decision` and `transcript`. What goes is the
+  # thing nobody wanted: three live agent sessions whose work is finished, which in the case that
+  # produced this issue sat idle for about eleven hours because the moment a room decides is the
+  # moment its OUTPUT arrives, and the output is what the operator turns to.
+  #
+  # AFTER THE ANNOUNCEMENT, NEVER BEFORE IT. The announcement exists to ring every seat so each
+  # learns now rather than at its own timeout; closing the terminals first would leave it ringing
+  # nobody. The request below is asynchronous (the keeper polls), which widens that gap rather
+  # than narrowing it.
+  #
+  # ONLY ON A `decided` CLOSE. An `unresolved` one is a room that did NOT converge — the ESC-04
+  # branch above has just escalated it as needs-human — and it is the case a person is most likely to
+  # want to walk into. The owner's rule is about a room whose question is answered; it does not
+  # reach a room that failed to answer one. So `--force` keeps the old behaviour and gets the
+  # pointer the room never used to give it.
+  #
+  # A TEARDOWN THAT FAILS MUST NOT TURN A SUCCESSFUL CLOSE INTO A FAILURE, so it gets an exit
+  # code of its own rather than borrowing 4 or spoiling 0. The record is on stdout on every path
+  # from here down, because it is the room's output whatever happened to the terminals.
+  if [ "$status" != decided ]; then
+    printf '%s\n' "$out"
+    echo "council decide: the record is written (unresolved) and the participants' terminals are LEFT LIVE — a room that did not converge is one a person should be able to walk into. 'council.sh down --room $(basename "$ROOM")' closes them and keeps the record." >&2
+    return 0
+  fi
+  # `command -v` like the ESC-04 escalation above: this lives in lib/up.sh, which council.sh
+  # sources for this verb. A caller that sourced only verbs.sh has no keeper to ask and must not
+  # be told the seats are closing — it takes the same honest exit as a room with no keeper.
+  if ! command -v _keeper_teardown >/dev/null 2>&1 || ! _keeper_teardown "$ROOM"; then
+    printf '%s\n' "$out"
+    echo "council decide: the record is written (decided) and the room was told, but its terminals could NOT be closed — this room has no live keeper to do the reaping, so the participants' sessions are still up. The close stands; 'council.sh down --room $(basename "$ROOM")' closes them and keeps the record." >&2
+    return 5
+  fi
   printf '%s\n' "$out"
+  echo "council decide: the room's keeper has been asked to close the participants' terminals; they go within a few seconds. The record, the transcript and the lanes stay — 'council.sh decision' and 'council.sh transcript' serve them afterwards." >&2
 }
 
 # The room's turn cycle as a declared flow graph, and c_phase / the closure predicates it needs.
