@@ -320,7 +320,7 @@ out=$(COUNCIL_ME=c bash "$CLI" decide --force 2>&1); rc=$?
 [ "$rc" = 2 ] || { echo "FAIL a seat that has posted nothing closed the open round (exit $rc)"; fail=1; }
 [ -s "$R3/board/decision.md" ] && { echo "FAIL the refused close wrote a record anyway"; fail=1; }
 case "$out" in
-  *"another seat has stated an opening position and you have not"*) ;;
+  *"round-0 traffic being withheld from you"*) ;;
   *) echo "FAIL the refusal did not say why; it said: $out"; fail=1 ;;
 esac
 case "$out" in
@@ -381,7 +381,7 @@ COUNCIL_ROOM="$R5" COUNCIL_ME=a bash "$CLI" send --act propose "a position, stat
   || { echo "FAIL could not state the opening position the recorded-room case needs"; fail=1; }
 COUNCIL_ROOM="$R5" COUNCIL_ME=a bash "$CLI" decide --force >/dev/null 2>&1 \
   || { echo "FAIL could not close the room to set up the recorded-room case"; fail=1; }
-[ -n "$(COUNCIL_ROOM="$R5" COUNCIL_ME=b bash -c ". $SKILL/lib/lib.sh; c_round0" | head -1)" ] \
+[ -n "$(COUNCIL_ROOM="$R5" COUNCIL_ME=b bash -c ". $SKILL/lib/lib.sh; c_round0_withheld" | head -1)" ] \
   || { echo "FAIL the fixture has no round-0 message, so it cannot separate the two tests"; fail=1; }
 st=$(COUNCIL_ROOM="$R5" COUNCIL_ME=b bash -c ". $SKILL/lib/lib.sh; c_barrier")
 [ "$st" = open ] || { echo "FAIL the fixture's barrier reads $st, so the check below proves nothing"; fail=1; }
@@ -415,7 +415,7 @@ st=$(COUNCIL_ROOM="$R6" COUNCIL_ME=a bash -c ". $SKILL/lib/lib.sh; c_barrier")
 [ "$st" = open ] || { echo "FAIL the fixture's barrier reads $st, so the gate never runs and this proves nothing"; fail=1; }
 [ -z "$(COUNCIL_ROOM="$R6" COUNCIL_ME=a bash -c ". $SKILL/lib/lib.sh; c_posted_round0")" ] \
   || { echo "FAIL the fixture's empty id is visible to c_posted_round0, so it separates nothing"; fail=1; }
-[ -n "$(COUNCIL_ROOM="$R6" COUNCIL_ME=a bash -c ". $SKILL/lib/lib.sh; c_round0" | head -1)" ] \
+[ -n "$(COUNCIL_ROOM="$R6" COUNCIL_ME=a bash -c ". $SKILL/lib/lib.sh; c_round0_withheld" | head -1)" ] \
   || { echo "FAIL the fixture has no round-0 message at all"; fail=1; }
 out=$(COUNCIL_ROOM="$R6" COUNCIL_ME=a bash "$CLI" decide --force 2>&1); rc=$?
 [ "$rc" = 0 ] || { echo "FAIL the gate refused the only seat that had posted (exit $rc): $out"; fail=1; }

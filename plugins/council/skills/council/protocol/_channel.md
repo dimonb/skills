@@ -62,11 +62,11 @@ are waiting — go back to waiting, and read on.
 
 * **speak straight away, do not wait for your turn** — one message with your position on
   the agenda, sent as **`--act propose`**. That act is what the barrier counts, and it is the
-  only one that can open the round: everything else either references something the barrier has
-  not released to you yet (`object`, `amend`, `support`, `concede`) or states no position at all
-  (`msg`, `notice`, `withdraw`, `skip`). Anything else is refused with **exit 7** and a
-  `council:` line saying so, and **nothing is sent** — re-send the same text with
-  `--act propose`. Exit 7 is not the room breaking and not a reason to stop looping;
+  only one that opens the round: every other act either references something the barrier has not
+  released to you yet, or states no position at all, or is room mechanics — so none of them can
+  be your opening message. Anything else is refused with **exit 7** and a `council:` line saying
+  so, and **nothing is sent** — re-send the same text with `--act propose`. Exit 7 is not the
+  room breaking and not a reason to stop looping;
 * **you will not see anyone else's position** until everyone has spoken: `recv` withholds
   them, and so do `transcript`, `claims`, `order` and `status` — none of the verbs you read
   the room with will hand you another seat's words. That is not a failure and not an empty

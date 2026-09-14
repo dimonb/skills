@@ -155,8 +155,8 @@ v_floor() {
   local t f age
   if c_round_open; then
     printf 'round=0 (barrier) posted=%s/%s waiting=%s conflicts=%s\n' \
-      "$(c_round0 | wc -l | tr -d ' ')" "$(c_npeers)" \
-      "$(comm -23 <(c_peers | sort) <(c_round0 | jq -r .from | sort) | paste -sd, -)" \
+      "$(c_round0_positions | wc -l | tr -d ' ')" "$(c_npeers)" \
+      "$(comm -23 <(c_peers | sort) <(c_round0_positions | jq -r .from | sort) | paste -sd, -)" \
       "$(c_conflicts)"
     return 0
   fi
@@ -697,8 +697,8 @@ v_status() {
   printf 'phase: %s\n' "$phase"
   if c_round_open; then
     printf 'OPEN ROUND: posted %s/%s, waiting for %s — nobody sees their positions yet\n' \
-      "$(c_round0 | wc -l | tr -d ' ')" "$(c_npeers)" \
-      "$(comm -23 <(c_peers | sort) <(c_round0 | jq -r .from | sort) | paste -sd, -)"
+      "$(c_round0_positions | wc -l | tr -d ' ')" "$(c_npeers)" \
+      "$(comm -23 <(c_peers | sort) <(c_round0_positions | jq -r .from | sort) | paste -sd, -)"
   fi
   printf '%s' "$g" | jq -r '
     if (.live|length) == 0 then "on the table: nothing" else (.live[] | "on the table: \(.id) from \(.from) — \(.current_text[0:90])") end,
@@ -876,9 +876,22 @@ v_decide() {
   # protected nothing while doing it: with no position in the log, `c_visible` withholds nothing
   # (measured: a seat that had posted nothing read byte-identically to the supervisor).
   #
-  # So the rule is about DISCLOSURE, not about manners. When `c_round0` yields no foreign
-  # position the record cannot carry one, whatever the reason -- an empty round, or a log this
-  # reader cannot parse. The second of those leaves `--force` able to write a record over a log
+  # So the rule is about DISCLOSURE, not about manners. When `c_round0_withheld` yields no
+  # foreign round-0 message the record cannot carry one, whatever the reason -- an empty round,
+  # or a log this reader cannot parse.
+  #
+  # IT MUST BE `c_round0_withheld` AND NOT THE COUNTING PREDICATE, and this cost a real
+  # regression to learn (#175). The question here is "is something being HELD BACK from me that
+  # the record would hand over", which is c_drain's and c_visible's question, not "is there a
+  # POSITION in the round", which is the barrier's. While this term was briefly keyed to the
+  # counting predicate, a round-0 message with any other act stopped satisfying it while
+  # c_visible went on withholding that same message -- so a seat that had posted nothing could
+  # `--force` and read a peer's withheld text in the record, measured, in a room built by the
+  # previous version's own `send` (the default act is `msg`, so an ordinary fumbled first
+  # message produced exactly that lane). The two predicates carry the asymmetry in their names;
+  # picking the counting one here is a leak, not a tidy-up.
+  #
+  # The unparseable-log case leaves `--force` able to write a record over a log
   # it could not read, which is a REMAINDER THIS GATE DELIBERATELY DOES NOT TAKE ON: it is
   # recorded at `c_all` and in SKILL.md, three attempts at it are recorded there, and two were
   # reverted. Do not quietly make this gate the fourth.
@@ -922,8 +935,10 @@ v_decide() {
   # The message is the ONE authoritative statement of the rule: SKILL.md describes the behaviour
   # and its cost without restating it, and t7 asserts a substring rather than a copy.
   # The last test asks for SOMEBODY ELSE'S position, and the `.from != $me` is not redundant
-  # with the test before it, though it looks it. `c_posted_round0` and `c_round0` read the same
-  # documents, but not the same way: the former pipes them through `jq -r … | .id | head -1`, so
+  # with the test before it, though it looks it. `c_posted_round0` and `c_round0_withheld` read
+  # overlapping documents, but not the same way (and since #175 not the same SET either -- the
+  # former is narrowed to positions, this one is not, which is the asymmetry two paragraphs up):
+  # the former pipes them through `jq -r … | .id | head -1`, so
   # a round-0 message in MY OWN lane carrying an empty `.id` -- which `c_send` never mints, but a
   # hand-written or harness-written lane file does -- comes back as an empty line that `$( )`
   # strips, and the second test then reads "I have not posted" about a position I did post.
@@ -934,7 +949,7 @@ v_decide() {
   # attempt at this line. Each earlier one was defeated by a value whose FIRST LINE can be empty
   # while the message is not, which is all `head -1` reads:
   #
-  #   The first printed no field at all -- `c_round0 | head -1`, no filter -- and leaned on
+  #   The first printed no field at all -- `c_round0_withheld | head -1`, no filter -- and leaned on
   #   `c_posted_round0` to have established that no position was mine. That reader goes through
   #   `.id`, a string the message chose, so an empty one in MY OWN lane made it report that I had
   #   not posted and the gate refused the one seat that had, while withholding nothing from it.
@@ -954,8 +969,8 @@ v_decide() {
   # header records the same class -- a peer-chosen lane name reaching a reader raw -- for its
   # error path.
   if ! c_round_closed && [ -z "$(c_posted_round0)" ] && [ -z "$(c_recorded_status)" ] \
-     && [ -n "$(c_round0 | jq -c --arg me "$ME" 'select(.from != $me)' | head -1)" ]; then
-    echo "council decide: another seat has stated an opening position and you have not — refusing to close a round you have not taken part in, because the record would hand you every position in it. Post your position first; the round also closes on its own once its deadline passes." >&2
+     && [ -n "$(c_round0_withheld | jq -c --arg me "$ME" 'select(.from != $me)' | head -1)" ]; then
+    echo "council decide: another seat has round-0 traffic being withheld from you and you have posted nothing — refusing to close a round you have not taken part in, because the record is written from the whole log and would hand you what the barrier is holding back. Post your position first (--act propose); that stands this refusal down at once. Once any position exists the round also closes on its own past its deadline — but with no position anywhere the deadline never starts, so waiting alone will not clear this." >&2
     return 2
   fi
   g=$(_graph) && [ -n "$g" ] || {

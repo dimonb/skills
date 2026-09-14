@@ -404,26 +404,75 @@ c_int_field() { # <field> <default>  -- a roster integer, or the default if it i
 }
 c_quorum() { c_int_field round_quorum ''; }
 
-# Positions posted in the opening round, as JSON lines.
+# THE OPENING ACT, spelled ONCE (#175). Both executable bindings of "what opens a round" read
+# this: the shell predicate c_send asks, and the jq term c_round0_positions filters on. Setting
+# it moves BOTH, so the two can no longer disagree — verified by setting it to another act and
+# watching that act both send and count.
 #
-# A POSITION, NOT MERELY A ROUND-0 MESSAGE (#175). This used to select on `.round == 0` alone,
-# so the barrier counted by field and never consulted the act: a seat whose first message was
-# the literal string `--help`, sent as the default `msg`, satisfied it, and the room reached
-# `ready-to-decide` on one proposal with zero independent positions. The act belongs HERE
-# because this accessor is what every reader of the opening round already goes through — the
-# barrier's `posted k/N`, c_posted_round0's "have I spoken", and the deadline's anchor — so
-# narrowing it once narrows all three by construction, instead of growing a second notion of
-# what opens a round somewhere else. c_send asks the same question through c_opens_round.
+# An earlier version of this change kept two spellings and justified it by claiming a single one
+# would cost a jq subprocess per send. THAT WAS FALSE, and it is recorded here because the shape
+# matters more than the mistake: it foreclosed `--arg` without ever enumerating it. `--arg` is an
+# argument to a jq process c_round0_positions already spawns. Counted with a jq shim, both forms
+# are 13 jq calls for an opening send and 30 for an in-turn one — identical.
 #
-# WHICH READERS THIS NARROWS, stated as a scope because the obvious wider claim is false. The
-# three named above go through this accessor and inherit it. The WITHHOLDING predicate does not:
-# c_drain's truncation and c_visible's lane filter each test `.round == 0` raw, and they are left
-# raw deliberately, because they answer a different question — "is this lane holding anything back
-# from the opening round" — where releasing too little is the safe direction and releasing too
-# much is the bug. In any room whose messages went through `send` the two agree exactly, since a
-# round-0 message can then only be a position; they can diverge only for a lane file written
-# directly, and there the raw test withholds where the narrow one would release.
-c_round0() { { c_all || true; } | jq -c 'select(.round == 0 and .act == "propose")'; }
+# Declared like C_UNTRUSTED above: bare `C_`-prefixed, file scope, UNEXPORTED (so it cannot leak
+# into a spawned agent's environment), unconditional, and NOT readonly (lib.sh is sourced once per
+# process, but a plain assignment stays idempotent if that ever changes).
+#
+# DO NOT give it a `${COUNCIL_OPENING_ACT:-propose}` default the way C_IDLE takes one. C_IDLE is a
+# comfort knob; this is a protocol invariant, and every seat can write to the room, so an
+# environment-overridable barrier rule is a guard a participant could switch off from outside.
+C_OPENING_ACT=propose
+
+# --- round-0: TWO QUESTIONS, TWO PREDICATES, opposite safe directions ----------------
+#
+# The opening round is read for two different reasons, and ONE accessor served both until #175
+# showed it could not. They fail in OPPOSITE directions, which is why each is named for the
+# question it answers rather than one of them being the short default:
+#
+#   COUNTING     "is this a position?"                     -> c_round0_positions  (narrow)
+#                Too NARROW is safe: the barrier closes later, a seat is asked to speak again.
+#                Too WIDE is the #175 bug: a fumbled message closes the round on nothing.
+#
+#   WITHHOLDING  "is this round-0 traffic that must not     -> c_round0_withheld  (raw)
+#                 be shown to another seat?"
+#                Too WIDE is safe: something is held back that need not have been.
+#                Too NARROW RELEASES a seat's position before the round completes — the
+#                disclosure the barrier exists to prevent.
+#
+# So never substitute one for the other to save a line. Narrowing the withholding side is not a
+# tidy-up, it is a leak; widening the counting side is not leniency, it is the original bug.
+
+# COUNTING. Positions posted in the opening round, as JSON lines.
+#
+# Readers: c_barrier's `posted k/N` and its `min_by(.sent_ms)` deadline anchor, c_posted_round0's
+# "have I spoken", and the `posted=`/`waiting=` lines in v_floor and v_status. Every one of them
+# asks how many POSITIONS are in, so every one of them wants the narrow answer.
+#
+# It used to select on `.round == 0` alone, so the barrier counted by field and never consulted
+# the act: a seat whose first message was the literal string `--help`, sent as the default `msg`,
+# satisfied it, and the room reached `ready-to-decide` on one proposal with zero independent
+# positions.
+c_round0_positions() {
+  { c_all || true; } | jq -c --arg a "$C_OPENING_ACT" 'select(.round == 0 and .act == $a)'
+}
+
+# WITHHOLDING. Any round-0 message, whatever its act — what the barrier is holding back.
+#
+# Reader: v_decide's mid-round disclosure gate. That gate refuses a seat which has posted nothing
+# from force-closing a round while another seat's round-0 traffic is being withheld from it,
+# because the record is rendered from the WHOLE log (c_canon) and would hand that traffic over.
+# So the gate must ask what the withholders are HOLDING, never what the barrier is COUNTING — and
+# when this was briefly keyed to the counting predicate, a seat could force-close and read a
+# peer's withheld message while its own `transcript` still refused to show it. Measured, both
+# ways, against a room built by the previous version's own `send`.
+#
+# TWO MORE READERS ASK THIS SAME QUESTION AND CANNOT CALL THIS FUNCTION: c_drain's truncation and
+# c_visible's lane filter each test `.round == 0` inline. Both run INSIDE a jq program over many
+# lane documents at once, so a shell accessor cannot reach them; a shared jq prelude would buy one
+# term for real plumbing. They are the same rule in a third and fourth spelling — change this and
+# check both.
+c_round0_withheld() { { c_all || true; } | jq -c 'select(.round == 0)'; }
 
 # WHICH ACTS OPEN A ROUND. `propose`, and only `propose` — and the set is derived rather than
 # chosen, so a later reader can see why widening it would be wrong:
@@ -437,18 +486,17 @@ c_round0() { { c_all || true; } | jq -c 'select(.round == 0 and .act == "propose
 #   * `skip`, `decide` and `overrule` are room mechanics, not positions: they act on turns,
 #     on the record and on other seats' objections.
 #
-# That leaves `propose`, which is also what the room's own documents already said the opening
-# message is: protocol/_channel.md calls it "your position on the agenda" and promises "a
-# completed round leaves N proposals on the table — one per participant", and all three
-# scenarios instruct `--act propose` for it. The rule existed in prose and was enforced nowhere.
+# That leaves `propose`, which is what protocol/_channel.md — the file every seat is handed —
+# already called "your position on the agenda", promising "a completed round leaves N proposals
+# on the table, one per participant". The rule existed in prose and was enforced nowhere.
 #
-# ONE RULE, TWO BINDINGS, and the seam is here rather than hidden: the send path holds an act in
-# a shell variable while every log reader holds messages in a jq stream, so the same rule is
-# spelled once as this predicate and once as the `.act == "propose"` term in c_round0 just
-# above. They are two lines apart so that changing one without the other is visibly wrong; a
-# single spelling would cost a jq subprocess per send on a path the header of this file already
-# counts (three per in-turn send), which is not worth buying.
-c_opens_round() { [ "$1" = propose ]; }
+# THE SCENARIOS ARE A WEAKER LEG, and an earlier version of this comment overstated them as "all
+# three scenarios instruct `--act propose`". They do not: only `debate` runs a barrier at all
+# (`review` and `freeform` are `mode: token`, so they have no opening round for an instruction to
+# be about), and of `debate`'s three roles only `proposer` named the act until this change gave
+# the other two the same sentence. _channel.md is the leg that holds, because `_write_protocol`
+# prepends it to every seat's file whatever that seat's role.
+c_opens_round() { [ "$1" = "$C_OPENING_ACT" ]; }
 
 # open | closed. Closed for good once everyone has posted, or once the deadline has passed
 # with a quorum — one participant that never starts must not hold the room forever.
@@ -475,13 +523,13 @@ c_barrier() {
   # c_visible does not depend on which way it went: it refuses to trust this function's answer
   # whenever the file is not one JSON object, and withholds. Its header carries that.
   [ "$n" -gt 0 ] || { printf 'open'; return; }
-  posted=$(c_round0 | wc -l | tr -d ' ')
+  posted=$(c_round0_positions | wc -l | tr -d ' ')
   [ "$posted" -ge "$n" ] && { printf 'closed'; return; }
   # A quorum below 2 is not a quorum: at N=2 the N-1 default would let ONE position plus a
   # deadline close the round, which is the barrier deleting itself. (Raised, blind and
   # independently, by a Codex participant inside the very room deciding this question.)
   quorum=$(c_quorum); [ -n "$quorum" ] || quorum=$(( n - 1 )); [ "$quorum" -lt 2 ] && quorum=2
-  first=$(c_round0 | jq -s 'if length == 0 then 0 else (min_by(.sent_ms).sent_ms) end')
+  first=$(c_round0_positions | jq -s 'if length == 0 then 0 else (min_by(.sent_ms).sent_ms) end')
   case "$first" in ''|*[!0-9]*) first=0 ;; esac
   deadline=$(c_int_field round_deadline_ms 600000)
   [ "$first" = 0 ] && { printf 'open'; return; }
@@ -517,7 +565,7 @@ c_round_closed()   { [ "$(c_barrier)" = closed ]; }
 # The `opening` node's mechanical predicate (see lib/room-graph.sh): the opening round is complete
 # once it is closed. Named for what the graph asks, so the graph and the transport share one rule.
 c_round_complete() { c_round_closed; }
-c_posted_round0() { c_round0 | jq -r --arg me "$ME" 'select(.from == $me) | .id' | head -1; }
+c_posted_round0() { c_round0_positions | jq -r --arg me "$ME" 'select(.from == $me) | .id' | head -1; }
 
 # --- send ----------------------------------------------------------------------
 # c_send --act A [--refs '["id"]'] [--to '["*"]'] [--hand] [--text T]
@@ -565,8 +613,9 @@ c_send() {
       echo "council: the round is not complete — you have stated your position, wait for the others" >&2
       return 5
     fi
-    # THE OTHER HALF OF THE SAME RULE (#175), asking the SAME predicate c_round0 filters on.
-    # c_round0 is what makes a non-position not COUNT; without this branch that narrowing is a
+    # THE OTHER HALF OF THE SAME RULE (#175), asking the SAME constant c_round0_positions
+    # filters on. That accessor is what makes a non-position not COUNT; without this branch the
+    # narrowing is a
     # silent no-op from the seat's side — the message lands, the seat believes it has spoken, and
     # it waits out a round that will never count it. That is precisely what the room that produced
     # this issue did. So the filter decides the arithmetic and this decides what the participant
@@ -1048,9 +1097,10 @@ c_canon() {
 # use rather than only by a hand-written lane -- an earlier version of this comment said
 # otherwise and was wrong twice over:
 #
-#   `send --hand` is ALLOWED during an open round (c_send's `hand = true` branch precedes the
-#   exit-5 refusal, so it succeeds before AND after I have posted; only a second POSITION is
-#   refused). So a lane legitimately holds an ordinary message beside an opening position, and
+#   `send --hand` is ALLOWED during an open round (c_send's `hand = true` branch precedes BOTH
+#   refusals, so it succeeds before AND after I have posted; without `--hand`, a second message
+#   once I have posted is refused at 5 and a first message that is not a position at 7 -- #175).
+#   So a lane legitimately holds an ordinary message beside an opening position, and
 #   this reader withholds it with the lane while `recv` releases whatever preceded the
 #   position. Measured on this tree: a `notice --hand` then a `propose`, read as a peer that
 #   had posted nothing -- recv 1 hit, transcript 0. Nothing is lost; the round releases it.
@@ -1078,8 +1128,8 @@ c_canon() {
 # a roster nobody can read and hand everything over, which is the barrier deleting itself. The
 # roster IS read, but only to ask whether it parses at all -- see the function.
 #
-# NOT APPLIED to c_round0, c_turns, c_floor_at, c_conflicts, v_verdict or v_decide, and each
-# omission is deliberate. c_round0 is the barrier's OWN input: filter it and `posted k/N` never
+# NOT APPLIED to c_round0_positions, c_round0_withheld, c_turns, c_floor_at, c_conflicts, v_verdict or v_decide, and each
+# omission is deliberate. c_round0_positions is the barrier's OWN input: filter it and `posted k/N` never
 # reaches N, so the round never closes and the room deadlocks. The rest are counts, turn
 # arithmetic and the durable record -- facts about the ROOM rather than about what one seat may
 # read. The record most of all: a decision record that is wrong is the worst outcome this
@@ -1117,7 +1167,7 @@ c_visible() {
   if ! jq -e -s 'length == 1 and (.[0] | type) == "object"' "$ROOM/roster.json" >/dev/null 2>&1; then
     why="the opening barrier cannot be resolved (this room's roster is not one JSON object) — every other seat's opening position is withheld from you until it can be"
   # The barrier read is not free: on the path that answers `open` from a parseable roster,
-  # c_barrier runs c_round0 TWICE (once for `posted`, once for the first `sent_ms`), each a
+  # c_barrier runs c_round0_positions TWICE (once for `posted`, once for the first `sent_ms`), each a
   # whole c_all, and c_canon below is a third. Two paths are cheaper and neither is the common
   # one: `n == 0` answers `open` from its precondition having read no log at all, and a `token`
   # room returns on c_mode alone. Measured cost is on the pull request.

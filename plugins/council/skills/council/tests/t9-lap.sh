@@ -97,11 +97,20 @@ jq '.mode = "roundtable"' "$R3/roster.json" > "$R3/r.tmp" && mv "$R3/r.tmp" "$R3
 echo "Should the room keep a lap counter?" > "$R3/agenda.md"
 
 # Exactly one proposal must be LIVE for `ready-to-decide` to be reachable at all (t9b's room
-# has two, and could never reach it however long the room stays quiet). A barrier round now
-# always puts N proposals on the table -- only `propose` opens a round (#175), so the old
-# fixture's `say b msg` is refused rather than counted -- and the way a room gets from N live
-# proposals to one is the lap after the barrier, which is what protocol/_channel.md tells a
-# participant to do: yield yours if someone else's is better. So b concedes its own.
+# has two, and could never reach it however long the room stays quiet). A barrier round that
+# COMPLETES ON POSITIONS puts N proposals on the table -- only `propose` opens a round (#175),
+# so the old fixture's `say b msg` is refused rather than counted. (Not "always N": c_barrier
+# also closes on the deadline with a quorum, and on the 2x backstop, both with fewer -- t7
+# asserts exactly that. This room closes on positions, which is why N holds HERE.) The way a
+# room gets from N live proposals to one is the lap after the barrier, which is what
+# protocol/_channel.md tells a participant to do: yield yours if someone else's is better.
+#
+# `say b`, NOT `say_floor`, and the difference is an assertion rather than a preference:
+# claims.jq retires a proposal on a concede from THE PROPOSAL'S OWN AUTHOR, and say_floor is
+# documented as not caring who speaks. The rotation does put b on the floor here (floor at
+# turns=2 is order[(2%2 + 2/2) % 2] = order[1] = b), so say_floor would work -- by coincidence,
+# silently, until a rotation change broke it three lines later as a lap-counter error. Naming b
+# states the requirement the fixture actually depends on.
 #
 # The arithmetic is unchanged by that substitution, and it is worth seeing why rather than
 # trusting it: `concede` is not one of the acts that counts as a NEW claim (claims.jq counts
@@ -110,7 +119,14 @@ echo "Should the room keep a lap counter?" > "$R3/agenda.md"
 say a propose '[]' "The only opening proposal."
 say b propose '[]' "A rival opening proposal, which b will yield."
 want "barrier closed, two proposals" 0 deliberating
-say_floor concede '["b-1"]' "Yielding to a's." >/dev/null
+say b concede '["b-1"]' "Yielding to a's."
+# THE PRECONDITION, ASSERTED WHERE IT IS ESTABLISHED. `want ... 1 deliberating` below holds with
+# two live proposals too, so without this line a claims.jq regression in the proposer-yield rule
+# would surface three lines later as a lap-counter failure -- a diagnosis pointing at the wrong
+# subsystem, which is the shape t7 warns about further down this suite.
+lv=$(bash "$CLI" verdict --json | jq -r '.live | length')
+[ "$lv" = 1 ] && echo "  ok   b's concession retired its own proposal" \
+              || { echo "  FAIL b's concession left $lv live proposals, want 1"; fail=1; }
 want "half a lap past the barrier" 1 deliberating
 say_floor msg '[]' "Still nothing here either." >/dev/null
 # The claims that ripen this room stamped no turn at all -- they are barrier positions.
