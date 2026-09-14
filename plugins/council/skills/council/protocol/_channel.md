@@ -61,7 +61,12 @@ are waiting — go back to waiting, and read on.
 `council.sh status` says `OPEN ROUND` when that is your case. Then:
 
 * **speak straight away, do not wait for your turn** — one message with your position on
-  the agenda;
+  the agenda, sent as **`--act propose`**. That act is what the barrier counts, and it is the
+  only one that can open the round: everything else either references something the barrier has
+  not released to you yet (`object`, `amend`, `support`, `concede`) or states no position at all
+  (`msg`, `notice`, `withdraw`, `skip`). Anything else is refused with **exit 7** and a
+  `council:` line saying so, and **nothing is sent** — re-send the same text with
+  `--act propose`. Exit 7 is not the room breaking and not a reason to stop looping;
 * **you will not see anyone else's position** until everyone has spoken: `recv` withholds
   them, and so do `transcript`, `claims`, `order` and `status` — none of the verbs you read
   the room with will hand you another seat's words. That is not a failure and not an empty
@@ -75,6 +80,10 @@ are waiting — go back to waiting, and read on.
 * a second message in an open round is refused (exit 5) — **unless** it is an urgent `--hand`
   one (below), which is allowed before and after you post and is the one thing you may add.
   Once you have spoken, wait;
+* **exit 5 and exit 7 ask for opposite things, so read which one you got.** 5 means your
+  position is already in — *wait*, do not send it again. 7 means nothing is in yet because what
+  you sent was not a position — *send it again* as `--act propose`. Waiting on a 7 leaves you
+  silent for the whole round;
 * when the round completes, `recv` hands you every position at once, and from there the
   room is turn-taking.
 

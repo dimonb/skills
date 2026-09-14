@@ -405,7 +405,50 @@ c_int_field() { # <field> <default>  -- a roster integer, or the default if it i
 c_quorum() { c_int_field round_quorum ''; }
 
 # Positions posted in the opening round, as JSON lines.
-c_round0() { { c_all || true; } | jq -c 'select(.round == 0)'; }
+#
+# A POSITION, NOT MERELY A ROUND-0 MESSAGE (#175). This used to select on `.round == 0` alone,
+# so the barrier counted by field and never consulted the act: a seat whose first message was
+# the literal string `--help`, sent as the default `msg`, satisfied it, and the room reached
+# `ready-to-decide` on one proposal with zero independent positions. The act belongs HERE
+# because this accessor is what every reader of the opening round already goes through — the
+# barrier's `posted k/N`, c_posted_round0's "have I spoken", and the deadline's anchor — so
+# narrowing it once narrows all three by construction, instead of growing a second notion of
+# what opens a round somewhere else. c_send asks the same question through c_opens_round.
+#
+# WHICH READERS THIS NARROWS, stated as a scope because the obvious wider claim is false. The
+# three named above go through this accessor and inherit it. The WITHHOLDING predicate does not:
+# c_drain's truncation and c_visible's lane filter each test `.round == 0` raw, and they are left
+# raw deliberately, because they answer a different question — "is this lane holding anything back
+# from the opening round" — where releasing too little is the safe direction and releasing too
+# much is the bug. In any room whose messages went through `send` the two agree exactly, since a
+# round-0 message can then only be a position; they can diverge only for a lane file written
+# directly, and there the raw test withholds where the narrow one would release.
+c_round0() { { c_all || true; } | jq -c 'select(.round == 0 and .act == "propose")'; }
+
+# WHICH ACTS OPEN A ROUND. `propose`, and only `propose` — and the set is derived rather than
+# chosen, so a later reader can see why widening it would be wrong:
+#
+#   * `object`, `amend`, `support`, `concede` and `withdraw` all REFERENCE something. The opening
+#     round is blind by construction — no seat has been shown another's words, and a seat has
+#     said nothing of its own to retract — so at round 0 there is nothing for any of them to
+#     point at.
+#   * `msg`, `notice` and `clarify` state no stance on the agenda — `clarify` asks about one.
+#     `msg` is the measured failure above.
+#   * `skip`, `decide` and `overrule` are room mechanics, not positions: they act on turns,
+#     on the record and on other seats' objections.
+#
+# That leaves `propose`, which is also what the room's own documents already said the opening
+# message is: protocol/_channel.md calls it "your position on the agenda" and promises "a
+# completed round leaves N proposals on the table — one per participant", and all three
+# scenarios instruct `--act propose` for it. The rule existed in prose and was enforced nowhere.
+#
+# ONE RULE, TWO BINDINGS, and the seam is here rather than hidden: the send path holds an act in
+# a shell variable while every log reader holds messages in a jq stream, so the same rule is
+# spelled once as this predicate and once as the `.act == "propose"` term in c_round0 just
+# above. They are two lines apart so that changing one without the other is visibly wrong; a
+# single spelling would cost a jq subprocess per send on a path the header of this file already
+# counts (three per in-turn send), which is not worth buying.
+c_opens_round() { [ "$1" = propose ]; }
 
 # open | closed. Closed for good once everyone has posted, or once the deadline has passed
 # with a quorum — one participant that never starts must not hold the room forever.
@@ -521,6 +564,27 @@ c_send() {
     if [ -n "$(c_posted_round0)" ]; then
       echo "council: the round is not complete — you have stated your position, wait for the others" >&2
       return 5
+    fi
+    # THE OTHER HALF OF THE SAME RULE (#175), asking the SAME predicate c_round0 filters on.
+    # c_round0 is what makes a non-position not COUNT; without this branch that narrowing is a
+    # silent no-op from the seat's side — the message lands, the seat believes it has spoken, and
+    # it waits out a round that will never count it. That is precisely what the room that produced
+    # this issue did. So the filter decides the arithmetic and this decides what the participant
+    # is told, and neither re-spells the condition the other uses.
+    #
+    # EXIT 7, NOT 5, AND THE DIFFERENCE IS THE WHOLE POINT. Exit 5 is the branch just above, and
+    # protocol/_channel.md teaches it as "you have already posted — wait"; the correct reaction to
+    # THIS refusal is the opposite, send again as a position. One code for both would make the
+    # code uninformative exactly where a seat has to choose between waiting and resending, and a
+    # seat that read it as 5 would wait forever — reproducing the freeze this change is closing.
+    #
+    # THE REFUSAL COSTS THE PARTICIPANT NOTHING IT DID NOT ALREADY HAVE. `--hand` carries
+    # `object`, `clarify` and `notice`, is allowed both before and after a seat posts, and takes
+    # the branch above this one — so a seat that needs to say something non-positional during an
+    # open round already has the verb, and the message below names it.
+    if ! c_opens_round "$act"; then
+      echo "council: an opening position must be --act propose (this was --act $act) — nothing was sent. Re-send your position on the agenda with --act propose; to say something that is NOT a position while the round is open, add --hand." >&2
+      return 7
     fi
     round=0; turn=null
   else

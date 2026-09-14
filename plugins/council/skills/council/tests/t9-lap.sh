@@ -96,13 +96,21 @@ export COUNCIL_ROOM="$R3" ROOM="$R3"
 jq '.mode = "roundtable"' "$R3/roster.json" > "$R3/r.tmp" && mv "$R3/r.tmp" "$R3/roster.json"
 echo "Should the room keep a lap counter?" > "$R3/agenda.md"
 
-# One opening position is a proposal and the other is not, so exactly one proposal is live
-# and `ready-to-decide` is reachable at all. (t9b's room has two, and could never reach it
-# however long the room stays quiet.)
+# Exactly one proposal must be LIVE for `ready-to-decide` to be reachable at all (t9b's room
+# has two, and could never reach it however long the room stays quiet). A barrier round now
+# always puts N proposals on the table -- only `propose` opens a round (#175), so the old
+# fixture's `say b msg` is refused rather than counted -- and the way a room gets from N live
+# proposals to one is the lap after the barrier, which is what protocol/_channel.md tells a
+# participant to do: yield yours if someone else's is better. So b concedes its own.
+#
+# The arithmetic is unchanged by that substitution, and it is worth seeing why rather than
+# trusting it: `concede` is not one of the acts that counts as a NEW claim (claims.jq counts
+# propose|amend|object), so b's concession advances the turn count without resetting the
+# silence window -- exactly as the `msg` it replaces did.
 say a propose '[]' "The only opening proposal."
-say b msg     '[]' "Nothing to add beyond a's."
-want "barrier closed, one proposal" 0 deliberating
-say_floor msg '[]' "Still nothing." >/dev/null
+say b propose '[]' "A rival opening proposal, which b will yield."
+want "barrier closed, two proposals" 0 deliberating
+say_floor concede '["b-1"]' "Yielding to a's." >/dev/null
 want "half a lap past the barrier" 1 deliberating
 say_floor msg '[]' "Still nothing here either." >/dev/null
 # The claims that ripen this room stamped no turn at all -- they are barrier positions.

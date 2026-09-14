@@ -606,6 +606,16 @@ cursor runs ahead of unread words. A second message in an open round is refused 
 rather than queued — unless it is an urgent `--hand` one, which is allowed before and after a
 seat posts.
 
+**What satisfies the barrier is a position, and a position is `--act propose`.** Any other act
+sent into an open round without `--hand` is refused (exit 7) and nothing is written; the two
+refusals ask for opposite things, so they carry different codes — 5 means "already posted,
+wait", 7 means "that was not a position, send it again as one". The rule lives beside the
+barrier's own accessors as `c_opens_round` (`lib.sh`), so what opens a round is decided in the
+one place that also decides whether the round is still open. Until this was checked the barrier
+counted by field alone: a seat whose first message was the literal `--help`, sent as the default
+`msg`, satisfied it, and the room reached `ready-to-decide` on one proposal with zero
+independent positions.
+
 **Every reader holds it, not only `recv`.** `transcript`, `claims`, `order` and `status` show
 a participant no more than `recv` has already released **for any lane `recv` reads** — a lane
 is withheld whole — so none of the verbs a participant reads the room with hands it another
