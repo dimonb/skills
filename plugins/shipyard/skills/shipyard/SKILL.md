@@ -605,6 +605,11 @@ blip the child is alive and mid-review in the other backend, and teardown takes 
 with it. The refusal names the class it saw and the one command that clears it
 (`SHIPYARD_BACKEND=<the pinned backend>`, or starting the backend back up).
 
+`shipyard-down.sh` now refuses on the same answer rather than leaving that to the operator: when
+a run closed no terminal, it asks `shipyard_absence_report` before removing anything and refuses
+unless `--force` (#139(1), Step 6). `--list` still prints `gone` for an unresolvable slot —
+#139(2), open — so do not read that column as the answer to this question.
+
 Three limits, because a guarantee is worth only what it actually covers:
 
 * **A dead agterm socket surfaces as exit 1, not 7.** `shipyard_backend_check` runs first and
@@ -948,14 +953,37 @@ If you drive the terminal by hand instead, three facts that each cost a wrong di
 MERGE (or close) is the only teardown signal. Never tear a slot down early: a child
 re-wakes itself and continues after long idle pauses, and the worktree goes with it.
 
+**A finished slot now tears itself down, and the report is what does it.** Once a slot's PR/MR
+has read `merged` on two consecutive ticks (`SHIPYARD_AUTODOWN_TICKS`), ship's own stage is
+terminal (`done` or `ready-to-merge`), and nobody is at the terminal — it reports `idle`, or it
+is gone and the backend corroborates that — the report calls `shipyard-down.sh <slot>` for you.
+It calls it **unchanged, with no flags and never `--force`**, so every gate below is the gate
+that runs; a slot the gate refuses is named in the report's `✋ AWAITING REMOVAL` block with the
+exact command, and nothing is removed. `SHIPYARD_AUTODOWN=0` turns it off and leaves teardown
+entirely manual.
+
+Why those conditions and not simply `merged`: **merged is not "child done"**. The forge state
+says one PR ended, and a child is still posting its record and writing its state file after
+that — so the stage is what says the child is finished, and the idle/absent read is what says
+nobody is using the terminal. The cost of the stage condition, stated plainly: a child that
+writes no `.pipeline-state` file has no stage, so it is never torn down automatically. That
+fails towards leaving a worktree alone, and the manual command below is unchanged for it.
+
 ```bash
 bash <SKILL>/shipyard-down.sh --list        # what exists and whether it is safe
 bash <SKILL>/shipyard-down.sh <slot>        # close the terminal, remove the worktree, prune
 bash <SKILL>/shipyard-down.sh <slot> --force
 ```
 
-It refuses a slot with uncommitted changes, or one whose content it cannot prove is already in
-the base branch, and says what to look at; `--force` overrides all of it. The second gate asks
+It refuses a slot with uncommitted changes, one whose content it cannot prove is already in
+the base branch, or one whose terminal **this run did not close and whose absence it could not
+corroborate** — `shipyard_absence_report`, the same question `tell` and `compact` ask, answers
+0 only when the backend answered and does not list the slot. That last gate is #139(1): an
+unresolvable target used to skip the kill silently and remove the worktree anyway, so one
+failed agterm socket probe under `SHIPYARD_BACKEND=auto` took the worktree of a child that was
+alive in the other backend. It is asked only when this run closed nothing, so a successful kill
+pays no enumeration and cannot be refused by a backend that has not caught up yet. Every
+refusal says what to look at; `--force` overrides all of it. The second gate asks
 about CONTENT, never ancestry: a squash merge leaves none of the branch's commits an ancestor of
 the base branch, so an ancestry test refuses the *successful* path — and it passes a branch with
 no upstream configured at all. Containment is proven either by tree equality or by a test merge
@@ -1050,12 +1078,14 @@ collide with it.
 | `shipyard-answer.sh` | PARENT side: answer one |
 | `shipyard-tell.sh` | PARENT side: speak first, into the child's terminal |
 | `shipyard-compact.sh` | compact a child AND put it back to work |
-| `shipyard-down.sh` | teardown after a merge |
+| `shipyard-down.sh` | teardown after a merge — by hand, and the one the report calls for you |
 
 ## Reminders
 
 * Do not tear a terminal/worktree down before the MR is actually merged — ship re-wakes
-  itself and continues after an idle pause (Step 6).
+  itself and continues after an idle pause (Step 6). The report will do it for you once the
+  merge, ship's own stage and an idle-or-corroborated-absent terminal all agree; it never
+  forces, and what it declines it names.
 * glab: `OAUTH_TOKEN` must be unset (the scripts do that themselves); the host comes from
   the origin remote.
 * The scripts are runnable by hand from a shell too — nothing here needs the skill runtime

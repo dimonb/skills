@@ -215,10 +215,12 @@ shipyard_focus()   { drv_focus "ship-$1"; }
 # anything to a human.
 #
 # THEY ARE NOT THE ONLY CALLERS THAT SPEAK. `shipyard-down.sh` renders this failure as `gone` in
-# its `--list` TERMINAL column, and on the teardown path skips the kill and removes the worktree
-# anyway; it asks nothing. That is the remaining instance in this skill, out of scope here and
-# filed on its own — named for the same reason the admission-gate caller is named below, so a
-# later reader does not take this paragraph as a claim that the sweep is finished. No driver twin.
+# its `--list` TERMINAL column and asks nothing there — #139(2), still open. Its TEARDOWN path no
+# longer does: #181 put `shipyard_absence_report` in front of the worktree removal, because that
+# is the path where acting on a wrong answer takes a live child's worktree, and the monitor now
+# drives it. #139(3) and (4) — the continuity cleanup's status-only corroboration and
+# `shipyard_container_prune`'s unshaped tree read — are open too. Named so a later reader does not
+# take this paragraph as a claim that the sweep is finished. No driver twin.
 shipyard_slot_addr() {
   local t; t=$(shipyard_target "$1") || return 1
   case "$(shipyard_backend)" in

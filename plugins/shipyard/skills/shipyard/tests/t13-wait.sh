@@ -165,7 +165,7 @@ ok "...only of a motionless child with nothing pending" 1 \
 ok "an answered slot never reaches STALLED" 1 \
    "$(grep -Fc 'if [ -n "$wait_kind" ]; then' "$REPORT")"
 ok "the class is in the --only-changed signature" 1 \
-   "$(grep -Fc 'SIG+=("$slot|$mr_label|term=1|$state|$stage|$pend|$band|$wait_class")' "$REPORT")"
+   "$(grep -Fc 'SIG+=("$slot|$mr_label|term=1|$state|$stage|$pend|$band|$wait_class|$reap_note")' "$REPORT")"
 ok "the stall clock restarts across an unwatched gap" 1 \
    "$(grep -Fc '{ [ "$GAP" != 0 ] || [ -n "$wait_kind" ]; } && since="$now_epoch"' "$REPORT")"
 ok "a gap breaks --only-changed silence" 1 \
