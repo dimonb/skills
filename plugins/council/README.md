@@ -57,10 +57,10 @@ The opening barrier used to be satisfied by any message a seat sent; it now requ
 * **Positions already released to the other seats are withheld again** until the round completes
   for real.
 
-Only the seats whose opening message was *not* a position have anything to clear, and they clear
-it by sending that position with `--act propose`. A seat that had already posted a real position
-cannot re-post — it is refused at exit 5 and limited to `--hand` until the round closes again.
-That asymmetry is the reason to finish the round first where you can.
+Every seat that has not posted a **position** must post one — whether its opening message was not
+a position, or it never sent one at all — with `--act propose`. A seat that had already posted a
+real position cannot re-post: it is refused at exit 5 and limited to `--hand` until the round
+closes again. That asymmetry is the reason to finish the round first where you can.
 
 Nothing is disclosed that was not already, and nothing is lost — the re-withholding is the
 cautious direction, and the messages stay in their lanes. A round in that state never

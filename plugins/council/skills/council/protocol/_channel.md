@@ -88,8 +88,8 @@ are waiting — go back to waiting, and read on.
   room is turn-taking.
 
 A round that everyone posts into leaves **one proposal per participant** on the table. (A round
-that runs out of time leaves fewer — it can close on its deadline once a quorum has posted, so
-do not wait for a count that may never arrive.) A decision needs one proposal, so the next lap
+that runs out of time leaves fewer, so do not wait for a count that may never arrive.) A decision
+needs one proposal, so the next lap
 is about getting there: if someone else's position is better than yours, drop yours
 (`concede --refs '["<your position>"]'`); if yours holds something the surviving one lacks, put
 that in as an `amend`. A room with several live proposals and no objections looks like agreement

@@ -103,9 +103,9 @@ echo "Should the room keep a lap counter?" > "$R3/agenda.md"
 # also closes on the deadline with a quorum, and on the 2x backstop, both with fewer. t7b asserts
 # the deadline-with-quorum close; the 2x backstop is asserted by NO test in this suite, so do not
 # read this parenthesis as saying it is covered. This room closes on positions, which is why one
-# proposal per seat holds HERE.) The way a
-# room gets from N live proposals to one is the lap after the barrier, which is what
-# protocol/_channel.md tells a participant to do: yield yours if someone else's is better.
+# proposal per seat holds HERE.) The way a room gets from several live proposals to one is the
+# lap after the barrier, which is what protocol/_channel.md tells a participant to do: yield
+# yours if someone else's is better.
 #
 # `say b`, NOT `say_floor`, and the difference is an assertion rather than a preference:
 # claims.jq retires a proposal on a concede from THE PROPOSAL'S OWN AUTHOR, and say_floor is

@@ -413,9 +413,10 @@ c_quorum() { c_int_field round_quorum ''; }
 # would cost a jq subprocess per send. THAT WAS FALSE, and it is recorded here because the shape
 # matters more than the mistake: it foreclosed `--arg` without ever enumerating it. `--arg` is an
 # argument to a jq process c_round0_positions already spawns, so neither form adds a process at
-# all. Counted with a jq shim on a two-seat roundtable room, both forms are 13 jq calls for an
-# opening send; the in-turn figure varies by room shape (10 to 30 across the shapes measured), so
-# it is the EQUALITY that is the point here, not either number.
+# all. Counted with a jq shim: identical either way, at 13 calls for the first opening position on
+# a two-seat roundtable room (17 for the one that closes the round, since c_barrier then runs the
+# accessor twice more, and 10 to 30 in-turn depending on room shape). It is the EQUALITY that is
+# the point, not any of those numbers — which is why they carry the shape that produced them.
 #
 # Declared like C_UNTRUSTED above: bare `C_`-prefixed, file scope, UNEXPORTED (so it cannot leak
 # into a spawned agent's environment), unconditional, and NOT readonly (lib.sh is sourced once per
@@ -427,11 +428,26 @@ c_quorum() { c_int_field round_quorum ''; }
 # NOTHING CHECKS EITHER OF THOSE TWO PROPERTIES — not `make check`, not the knobs suite — so they
 # are carried by this paragraph and by review, which is worth knowing before relying on them.
 #
-# IT BINDS THE TWO PREDICATES, NOT THE PROSE. The act's NAME is also written out in c_send's
-# exit-7 refusal, in v_decide's exit-2 refusal, in council.sh's usage text, in
-# protocol/_channel.md and in the scenarios. Those are diagnostics and instructions rather than
-# bindings, and nothing keeps them in step with this line: setting it to another act would leave
-# every one of them naming `propose` at a room that no longer accepts it.
+# WHAT IT BINDS IS THE OPENING GATE, AND NOTHING ELSE — do not read the verification recipe two
+# paragraphs up as "set this and the room follows". It does not, and an earlier version of this
+# comment said it did, splitting the world into these two predicates and "diagnostics". That was
+# wrong in the direction that costs a room:
+#
+#   OTHER CODE BINDS THE SAME LITERAL, for a DIFFERENT question — "what is a proposal on the
+#   table", which is the argument graph's question, not the barrier's. lib/claims.jq hardcodes
+#   `propose` for the live-proposal set, for what counts as a NEW claim, and for the record's
+#   revision list; c_turns_since_last_claim repeats the claim set here in lib.sh; and v_decide's
+#   record renderer writes the "As proposed" heading from it. None of those moves with this
+#   constant, and they are CODE, not messages. Measured: with this set to another act, both seats
+#   post, the barrier opens and closes correctly, and claims.jq then sees ZERO proposals — so the
+#   room answers `no-proposal` for ever, neither `stuck` nor `ready-to-decide` can fire, and
+#   nothing in the tree reds. Changing the opening act means changing those too, deliberately,
+#   after deciding whether the opening act and the proposal act are even the same thing.
+#
+#   THEN there are the places that only SAY the name: c_send's exit-7 refusal, v_decide's exit-2
+#   refusal, council.sh's usage text, protocol/_channel.md and the scenarios. Those are stale
+#   prose after such a change rather than broken behaviour — a smaller problem, listed second so
+#   the two are not confused again.
 C_OPENING_ACT=propose
 
 # --- round-0: TWO QUESTIONS, TWO PREDICATES, opposite safe directions ----------------
@@ -480,8 +496,11 @@ c_round0_positions() {
 # TWO MORE READERS ASK THIS SAME QUESTION AND CANNOT CALL THIS FUNCTION: c_drain's truncation and
 # c_visible's lane filter each test `.round == 0` inline. Both run INSIDE a jq program over many
 # lane documents at once, so a shell accessor cannot reach them; a shared jq prelude would buy one
-# term for real plumbing. They are the same rule in a third and fourth spelling — change this and
-# check both.
+# term for real plumbing. With this function they are three spellings of ONE rule — change any and
+# check the other two. (The only other `.round == 0` in the file is c_round0_positions, which is
+# the COUNTING rule and must NOT agree with these; making it agree is the #175 bug.) Both inline
+# spellings are pinned: t25 section 4 asserts that `transcript` and `recv` withhold the same
+# non-position round-0 message, which is c_visible and c_drain respectively.
 c_round0_withheld() { { c_all || true; } | jq -c 'select(.round == 0)'; }
 
 # WHICH ACTS OPEN A ROUND. `propose`, and only `propose` — and the set is derived rather than
