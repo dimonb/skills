@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# t26 — the supervisor's monitor protocol: `status --only-changed`, `status --alarms-only`,
+# t27 — the supervisor's monitor protocol: `status --only-changed`, `status --alarms-only`,
 # the two stall tiers, and the closed-room-with-live-terminals alarm.
 #
 # WHAT THIS FILE IS REALLY GUARDING is one property, and it is the property the feature was
@@ -36,7 +36,7 @@ age_room() { # <room> <seconds>
 }
 
 # --- 1. the filter filters -------------------------------------------------------------
-R="$COUNCIL_TEST_ROOT/t26a"; rm -rf "$R"
+R="$COUNCIL_TEST_ROOT/t27a"; rm -rf "$R"
 mkroom "$R" a b c
 export COUNCIL_ROOM="$R" ROOM="$R"
 
@@ -64,7 +64,7 @@ ok "a moved room prints again" 1 "$(printf '%s' "$out" | grep -c '^=== council')
 # room that has spoken moves nothing at all — which is how the first draft of this test asserted
 # an alarm against a room whose held time was two seconds, and read the resulting silence as a
 # filter bug.
-RS="$COUNCIL_TEST_ROOT/t26s"; rm -rf "$RS"
+RS="$COUNCIL_TEST_ROOT/t27s"; rm -rf "$RS"
 mkroom "$RS" a b c
 export COUNCIL_ROOM="$RS" ROOM="$RS"
 age_room "$RS" 400
@@ -106,7 +106,7 @@ n=$(ls "$POLICY_MAILBOX_DIR"/*.json 2>/dev/null | wc -l | tr -d ' ')
 ok "the hard tier still pushes" 1 "$n"
 
 # --- 4. --alarms-only is an alarm channel, not a heartbeat -------------------------------
-R2="$COUNCIL_TEST_ROOT/t26b"; rm -rf "$R2"
+R2="$COUNCIL_TEST_ROOT/t27b"; rm -rf "$R2"
 mkroom "$R2" a b c
 export COUNCIL_ROOM="$R2" ROOM="$R2"
 
@@ -125,7 +125,7 @@ ok "...and nothing else"                  0 "$(printf '%s' "$out" | grep -c 'las
 ok "...not even the floor line"           0 "$(printf '%s' "$out" | grep -c '^mode ')"
 
 # --- 5. a closed room is never suppressed, and says what is still running ---------------
-R3="$COUNCIL_TEST_ROOT/t26c"; rm -rf "$R3"
+R3="$COUNCIL_TEST_ROOT/t27c"; rm -rf "$R3"
 mkroom "$R3" a b c
 export COUNCIL_ROOM="$R3" ROOM="$R3"
 prop=$(say_floor propose '[]' "Arm the monitors.")
@@ -213,7 +213,7 @@ if command -v tmux >/dev/null 2>&1; then
   # 9c/9d over a real tmux container, because the seam this is about is the backend's answer and
   # a stubbed enumeration would assert the stub. The windows are named exactly as `ct_name`
   # renders them, which is the spelling `drv_absence_class` warns must match on both sides.
-  CONT="council-t26-$$"
+  CONT="council-t27-$$"
   # Bounded by its own command, not by a trap: `_helpers.sh` owns the only EXIT trap here, and a
   # second one would replace it. A wedged or killed test therefore leaks this session for at most
   # the sleep below rather than until the machine reboots.
@@ -261,7 +261,7 @@ ok "no pin ⇒ the alarm names no verdict" 0 "$(printf '%s' "$out" | grep -c 'te
 ok "...and still gives both remedies"    1 "$(printf '%s' "$out" | grep -c 'ANSWERED IN PLACE')"
 
 if command -v tmux >/dev/null 2>&1; then
-  CONT2="council-t26b-$$"
+  CONT2="council-t27b-$$"
   tmux new-session -d -s "$CONT2" -n "council-$SN-$FLOOR" 'sleep 30' 2>/dev/null
   printf '%s\n' "$CONT2" > "$RS/state/container-tmux"
 
@@ -293,5 +293,5 @@ if command -v tmux >/dev/null 2>&1; then
   rm -f "$RS/state/container-agterm"
 fi
 
-printf '\n%s\n' "$([ "$fails" = 0 ] && echo 't26: all passed' || echo "t26: $fails FAILURES")"
+printf '\n%s\n' "$([ "$fails" = 0 ] && echo 't27: all passed' || echo "t27: $fails FAILURES")"
 exit $([ "$fails" = 0 ] && echo 0 || echo 1)
