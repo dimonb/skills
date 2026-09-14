@@ -42,6 +42,31 @@ or `tmux`. Plus the CLI of each agent you want in the room: `claude`, `codex`, `
 
 A new scenario is one markdown file: front-matter plus a block per role. No code changes.
 
+## Upgrading while a `roundtable` room is open
+
+Upgrading council over a **live** barrier room is safe but not invisible, and it is worth
+finishing the round first if you can.
+
+The opening barrier used to be satisfied by any message a seat sent; it now requires
+`--act propose`. So a round that had been closed by a message which was not a position
+**re-opens** after the upgrade, with two visible consequences:
+
+* **The barrier lap stops counting toward the room's turn total** until the round closes again,
+  so `verdict --json` reports a turn count lower by one lap — the number of participants. Turns
+  already taken keep their numbers; the count does not go to zero.
+* **Positions already released to the other seats are withheld again** until the round completes
+  for real.
+
+Every seat that has not posted a **position** must post one — whether its opening message was not
+a position, or it never sent one at all — with `--act propose`. A seat that had already posted a
+real position cannot re-post: it is refused at exit 5 and limited to `--hand` until the round
+closes again. That asymmetry is the reason to finish the round first where you can.
+
+Nothing is disclosed that was not already, and nothing is lost — the re-withholding is the
+cautious direction, and the messages stay in their lanes. A round in that state never
+legitimately closed: it closed on something that was not a position, which is the defect the
+change exists to remove.
+
 ## A note on permissions
 
 Agents differ in how they let a participant act. Claude Code and Codex take it declaratively

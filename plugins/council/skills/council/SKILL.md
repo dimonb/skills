@@ -179,19 +179,26 @@ is not.
 * **while a room is still open**, if its **roster** cannot be read, `decide` refuses with
   **exit 1** and writes nothing, `--force` included, because there is then no participant list
   to write a record about;
-* **while an opening barrier round is not verifiably closed and another seat has stated a
-  position**, a seat that has stated none is refused with **exit 2**. Closing a room writes the
-  record from the whole log and `decision` hands it to anyone, so without this a seat that owed
-  a position could read every other by closing the round — two commands, available to every
-  participant and to no supervisor, since `decide` takes `--me`. A seat that has posted keeps
-  the escape hatch.
+* **while an opening barrier round is not verifiably closed and another seat's round-0 traffic
+  is being withheld from the caller**, a seat that has posted nothing is refused with **exit 2**.
+  Closing a room writes the record from the whole log and `decision` hands it to anyone, so
+  without this a seat that owed a position could read every other by closing the round — two
+  commands, available to every participant and to no supervisor, since `decide` takes `--me`. A
+  seat that has posted keeps the escape hatch.
 
-That second one refuses exactly when the record would hand over a position the caller may not
-read, and **not** merely because the round is open: a round nobody has posted in holds nothing
-to disclose, so any seat may still close it. That distinction is the difference between a gate
-and a wedge — a barrier round with no positions in it never closes on its own (the deadline is
-only measured from the first position), so refusing there would have left the room unclosable
-by anyone, `decide` being `--me`-gated.
+That second one refuses exactly when the record would hand over something the caller may not
+read, and **not** merely because the round is open: a round with no round-0 traffic at all holds
+nothing to disclose, so any seat may still close it. That distinction is the difference between
+a gate and a wedge — such a round never closes on its own (the deadline is measured from the
+first position), so refusing there would have left the room unclosable by anyone, `decide` being
+`--me`-gated.
+
+It asks `c_round0_withheld`, deliberately: the question is what the barrier is **holding back**,
+which is `c_drain`'s and `c_visible`'s question, not how many **positions** are in, which is the
+barrier's own. Keying it to the counting predicate looks equivalent and is not — a round-0
+message with any other act then stops satisfying the gate while the withholders go on hiding it,
+and a seat that posted nothing can force-close and read it. That shipped briefly and is pinned
+now by a fixture whose hand-written message is deliberately *not* a position.
 
 It still has a cost, named here rather than left to be discovered: **a seat that has not posted
 cannot close a round others have started.** Post a position first — that is always available,
@@ -605,6 +612,24 @@ A lane stops at its withheld message instead of skipping past it, so nothing is 
 cursor runs ahead of unread words. A second message in an open round is refused (exit 5)
 rather than queued — unless it is an urgent `--hand` one, which is allowed before and after a
 seat posts.
+
+**What satisfies the barrier is a position, and a position is `--act propose`.** Any other act
+sent into an open round without `--hand` is refused (exit 7) and nothing is written; the two
+refusals ask for opposite things, so they carry different codes — 5 means "already posted,
+wait", 7 means "that was not a position, send it again as one". Until this was checked the
+barrier counted by field alone: a seat whose first message was the literal `--help`, sent as the
+default `msg`, satisfied it, and the room reached `ready-to-decide` on one proposal with zero
+independent positions.
+
+The act itself is one constant, `C_OPENING_ACT` in `lib.sh`, read by both executable bindings —
+the `c_opens_round` predicate the send path asks, and the `.act` term `c_round0_positions`
+filters on — so the two cannot drift apart. Round 0 is then read through **two** predicates,
+named for the questions they answer because their safe directions are opposite:
+`c_round0_positions` (narrow) answers *"is this a position?"* for everything that counts them,
+and `c_round0_withheld` (raw) answers *"is this round-0 traffic that must not be shown?"* for
+`decide`'s disclosure gate, alongside the inline tests in `c_drain` and `c_visible`. Narrowing
+the withholding side is not a tidy-up but a leak, and widening the counting side is the original
+bug; the names exist so neither is reachable by picking the shorter one.
 
 **Every reader holds it, not only `recv`.** `transcript`, `claims`, `order` and `status` show
 a participant no more than `recv` has already released **for any lane `recv` reads** — a lane
