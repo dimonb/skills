@@ -104,6 +104,20 @@ _keeper_teardown_file() { printf '%s/state/teardown' "$1"; }
 # whichever keeper starts next. Returning 1 here lets the caller say what is true and name `down`.
 # The reverse window (a keeper that dies in the instant after the check) leaves a marker nothing
 # takes; `relaunch` clears it, because that is the one verb that puts a room back into use.
+#
+# THE CALLER IS ASKING FOR ITS OWN TERMINAL, so its remaining output races this request — and what
+# makes that safe is NOT the poll interval. The interval bounds only WHEN the reap happens, not
+# that it happens after `decide` has finished writing. What bounds it is the asymmetry of the two
+# paths once the marker exists: `decide` has two write syscalls left (the record path on stdout,
+# one line on stderr), while the keeper must run `[ -f ]`, an external `rm`, `ct_kill`, the
+# `$(ct_name …)` subshell and finally the backend's own command — three process spawns at least
+# before any signal reaches a pane. Measured, because an asymmetry argued and not counted is how a
+# margin turns out to be the wrong sign: 5 end-to-end closes (reap 3.2-3.5 s behind), 25 at a
+# random phase, and 15 sweeping fork+4.90 s .. fork+5.10 s to land the marker right on a check —
+# there the reap still trailed by 13-240 ms, and in none of the 45 did it win. The floor is a
+# LOWER bound on the real margin, since those runs faked `ct_kill` as a `printf`: a live agterm or
+# tmux reap is slower than that, never faster. Keep the two writes cheap, and if this ever grows a
+# third thing to say, say it before asking rather than after.
 _keeper_teardown() { # <room> -> 0 the keeper was asked, 1 there is no live keeper to ask
   local room="$1" pid f
   _room_dirs_sane "$room" || return 1
