@@ -682,6 +682,102 @@ it.)*
 
 ## Supervising a room
 
+**Arm two monitors, then stop watching.** A room is meant to run unattended, and until this
+section had a procedure it did not: the primitives were all here and the numbered step telling
+anyone to arm them was not, so four rooms in one evening were supervised by four hand-rolled
+loops with four different blind spots (#21). The shape below is `shipyard`'s, because that skill
+had already paid for it — a slow status loop that **ends itself** when the work does, and a fast
+one for anything needing a person. The primitives differ; the protocol does not.
+
+**1. The status loop — the block, every ten minutes, and it exits by itself.**
+
+```bash
+SCRIPT=<skill>/council.sh
+while true; do
+  bash "$SCRIPT" status --room <room> --only-changed && { echo "__room closed — exiting monitor__"; break; }
+  sleep 600
+done
+```
+
+`status` already exits **0 when the room is finished** and 1 while it is open, so the `&&` is
+the whole termination condition — there is no separate "is it done yet" call to get wrong, and a
+watch left running is a watch that ends when the room does.
+
+`--only-changed` is what makes it liveable. A room spends most of its life with one seat
+thinking, so without the flag this prints the same block every ten minutes for hours and the one
+tick that matters drowns in it. With it the tick is silent until the floor, the verdict, the turn
+count or the open-objection count actually moves.
+
+**It cannot hide an alarm, and that is the point.** Any tick carrying one prints in full, every
+time it holds — not once when it arrives. A stalled room *changes nothing by definition*, so a
+filter that suppressed a standing alarm would go quiet exactly when the room needs a person;
+that is the failure this loop is a fix for, in a hand-rolled monitor that printed on verdict
+changes while the verdict sat still. A **closed** room is always printed too, since that is the
+tick the loop exits on.
+
+**2. The alarm loop — anything needing a person, at a minute's cadence.**
+
+```bash
+SCRIPT=<skill>/council.sh
+while true; do
+  bash "$SCRIPT" status --room <room> --alarms-only
+  sleep 60
+done
+```
+
+`--alarms-only` prints the alarms and nothing else, and **prints nothing at all when there are
+none** — so this stays silent until something actually needs you. Ten minutes is too slow for a
+seat sitting on a permission prompt; a minute is not. It keeps no state between ticks, so unlike
+the loop above there is nothing here that could go stale and swallow a standing alarm.
+
+**3. When a room closes, take it down.** `council.sh down --room <room>` releases the terminals.
+The status loop exits on the closing tick, so nothing after that will remind you — which is why
+a closed room that still holds seats raises an alarm of its own (`⚠️ this room is closed but N of
+M terminals are still up`) on the very tick the loop stops, and `council.sh rooms` carries a
+`term` column so several rooms' seats are visible at a glance. `council.sh terminals` asks for
+one room directly.
+
+### What the alarms can tell you apart, and what they cannot
+
+A seat that is **ALIVE and idle at a prompt** and a seat that is **GONE** look identical from
+inside the room — a floor held, nothing arriving — and they need opposite remedies. The prompt is
+answered **in place**, and the seat carries on with everything it has read; `relaunch` is for a
+seat that is genuinely dead, and it **discards everything that seat has read**. Using the second
+on the first throws away the argument that seat was holding.
+
+**Which of the two the alarm can name today:**
+
+| | can it tell? | how |
+|---|---|---|
+| the seat's terminal is **gone** | **yes**, when corroborated | the backend is asked which sessions exist; an absence counts only if the backend answered and the room's container pin agrees this run is looking at the right backend |
+| the seat's terminal is **up** | **yes**, same read | its session is listed |
+| a terminal that is up is **at a prompt** rather than working | **no** | nothing distinguishes them from outside the pane |
+| a terminal that is up is in an announced **capacity wait** | **partly** | `status` quotes a `rate_limited`-style banner where the client's chrome makes it forgery-proof — two of the three agent kinds have a committed pane capture, the third gets no annotation at all |
+
+So a `STALL` or `⚠️ quiet` alarm names the remedy when it can (*"its terminal is GONE — this is
+the relaunch case"* / *"its terminal is still up, so it is NOT a dead seat — answer whatever its
+pane is asking"*) and, when the read cannot be corroborated, says nothing rather than guessing.
+That silence is deliberate: a wrong confident *gone* is the expensive error, because it sends a
+supervisor to `relaunch` on a live seat mid-turn.
+
+**Two stall tiers, because a wedge and a slow model are different animals.**
+
+| tier | default | what it is | does it push? |
+|---|---|---|---|
+| `⚠️ quiet` | `COUNCIL_STALL_WARN_SECS`, 300s | the window a permission prompt sits in — glance at the terminal | no |
+| `🛑 STALL` | `COUNCIL_STALL_SECS`, 900s | the room has stopped; go and look | yes, one `notice` to the mailbox |
+
+The earlier tier exists because the wedges that actually cost rooms were **323s and 344s**, well
+under the 900s threshold, so nothing would have fired for any of them. Lowering the single
+threshold instead would make every long think raise `🛑` and wake somebody, and an alarm that
+fires on the normal case is one an operator learns to ignore. The quiet tier deliberately does
+**not** push: the mailbox is the durable channel for *a person must act*, and a quiet floor is not
+yet that — and mechanically, a push from the early tier would consume the de-duplication key
+(`[stall:<peer>:<turns>]`) that the real `STALL` needs, silencing the alarm it warns about. It is
+skipped on a closed room, and during an open barrier round, where a long-held floor is normal.
+
+### Reading the block
+
 `council.sh status` is the block to read: whose floor and for how long, what is on the
 table, what is open, the verdict, and the alarms (`STUCK`, `STALL`, turn conflicts, budget
 exhausted, and **"this room's state could not be computed"** — that last one means the room's
@@ -695,8 +791,10 @@ seat's clock is wrong, so the figure cannot be trusted even though the stall is 
 alarm used to guess — *"it may be sitting on a permission prompt"* — and the guess mattered because
 the two likeliest causes need opposite moves: a seat on a permission or first-launch trust prompt
 needs that prompt answered **in place**, while `council.sh relaunch` is for a seat that is
-genuinely dead and discards everything that seat has read. The alarm now names both and guesses
-between neither.
+genuinely dead and discards everything that seat has read. The alarm names both rather than
+guessing between them, and then narrows to one where the backend can settle it — see
+["What the alarms can tell you apart"](#what-the-alarms-can-tell-you-apart-and-what-they-cannot)
+above for which half of that question this skill can actually answer.
 
 Where it can, it adds a second sentence quoting the seat's own client, read through the shared
 modules shipyard's stall watchdog already uses: `adp_wait_class` (`shared/adapters`) for the class
@@ -727,13 +825,10 @@ A `STALL` also **pushes**: one `notice` into the shared escalation mailbox — t
 fire-and-forget channel an `unresolved` close uses (`.git/ship-escalations/`, which a shipyard
 parent's escalation monitor already polls). What that buys is durability and audience: the alarm
 stops being a line in a console someone has to be reading, and reaches a supervisor who never
-looked at this room. **It does not make the room self-reporting** — something still has to run
-`council.sh status`, and nothing in this repo does so unattended (#21). Until it does, that
-something is you:
-
-```bash
-while true; do council.sh status --room <name> >/dev/null 2>&1; sleep 300; done &
-```
+looked at this room. **It still does not make the room self-reporting** — something has to run
+`council.sh status` for the alarm to be reached at all, which is what the two monitors at the top
+of this section are for. Arm them; the push is what covers the supervisor who is not watching
+*this* room's console.
 
 The push is de-duplicated within one room — the room matched on the mailbox entry's own `slot`
 field, and within that, on the floor holder and the turn count — so polling does not accrue

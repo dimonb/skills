@@ -535,10 +535,11 @@ _floor_wait_state() {
 # reading. This is the same fire-and-forget channel `decide` already uses for a room that closed
 # unresolved (ESC-04), so a council stall lands in the one directory a shipyard parent's escalation
 # monitor already polls, alongside ship's — which means the person who sees it need not be the one
-# who ran `status`. It does NOT make the room self-reporting: something still has to invoke
-# `council.sh status`, and nothing in this repo does so unattended (#21 is that gap). SKILL.md
-# documents a watch loop for an operator who wants one; until #21 has an answer, that loop is the
-# trigger.
+# who ran `status`. It still does NOT make the room self-reporting: something has to invoke
+# `council.sh status` for this line to be reached at all. What that something is, is now a numbered
+# step rather than a suggestion — SKILL.md's "Supervising a room" tells a supervisor to arm two
+# loops, a self-terminating status loop and a fast `--alarms-only` one, which is what #21 asked for.
+# This push is what covers the supervisor who is watching neither.
 #
 # IT FIRES WHENEVER THE ALARM DOES, in either of its wordings and explained or not. Two earlier
 # drafts got this wrong in the same way and it is the mistake worth naming: the first pushed only
@@ -663,8 +664,165 @@ _stall_escalate() {
     >/dev/null 2>&1 || return 0
 }
 
+# _room_terminals — how many of this room's seats still hold a terminal.
+#
+# Echoes "<live><TAB><total>" and returns 0 when the backend ANSWERED and the answer may be
+# believed. Returns 2 when the room was launched with terminals but the read could not be
+# resolved (the backend did not answer, or the pin says these sessions were launched on the
+# OTHER backend). Returns 1 when the room carries no container pin at all, i.e. was never
+# launched by this skill and so has no terminals to count — the same guard, and the same
+# reasoning, as `_floor_screen`'s.
+#
+# RC 2 EXISTS SO THAT AN UNANSWERABLE READ FAILS OPEN. Its one consumer is the closed-room
+# alarm below, which tells a supervisor to run `down`; every input here is room state a
+# participant can write (the pin, and — through the backend — the session names), and this
+# repo's rule is that untrusted evidence may ANNOTATE an operator-facing signal and never
+# suppress one. So a read that cannot be resolved must still produce the alarm, in a wording
+# that says it could not tell, rather than silently produce none. What rc 1 concedes is
+# narrower and pre-existing: a seat that DELETES the pin makes this — and `_floor_screen`
+# before it — answer "no terminals" for a room that has some. Nothing here closes that; a
+# launch record written outside the room would, and is the same fix `_floor_wait_state`'s
+# header names for its own inputs.
+#
+# IT SOURCES term.sh IN ITS OWN SUBSHELL, like `_floor_screen`, so a `status` that reaches
+# both pays the backend resolution twice. That is the cost `_floor_screen`'s header warns a
+# LOOPING caller about; this is one call per invocation, so it stays inside the same budget.
+# A caller that adds a third read should hoist the source into `v_status`, outside every
+# command substitution, where the `command -v` guard would actually bite.
+_room_terminals() {
+  local f pinned=0 list erc=0 peer name s live=0 total=0
+  for f in "$ROOM"/state/container-*; do [ -f "$f" ] && pinned=1; done
+  [ "$pinned" = 1 ] || return 1
+  if ! command -v ct_sessions >/dev/null 2>&1; then
+    [ -n "${SKILL:-}" ] && [ -f "$SKILL/lib/term.sh" ] || return 2
+    . "$SKILL/lib/term.sh" || return 2
+    command -v ct_sessions >/dev/null 2>&1 || return 2
+  fi
+  # ONE enumeration, and its STATUS is kept as well as its answer — the distinction
+  # `_council_say_absence` already turns on: an empty list from a backend that answered is an
+  # honest "nothing there", while an empty list from one that did not is no evidence at all.
+  list=$(ct_sessions 2>/dev/null) || erc=$?
+  # The global trust gate, asked with no session name so the per-session `listed` arm is
+  # skipped — that arm is redundant here because the loop below reads the same list directly.
+  # What is left is exactly the two refusals this caller must honour: `unreachable` and
+  # `elsewhere`.
+  ct_absence_class "$erc" >/dev/null 2>&1 || return 2
+  while IFS= read -r peer; do
+    [ -n "$peer" ] || continue
+    total=$((total + 1))
+    name=$(ct_name "$peer")
+    # Matched by READING the list rather than `grep -q`, for the reason `drv_absence_class`
+    # gives at the same comparison: `-q` exits on the first hit, the writer takes a SIGPIPE,
+    # and under `pipefail` a match then reports as a failure.
+    while IFS= read -r s; do
+      [ "$s" = "$name" ] || continue
+      live=$((live + 1)); break
+    done <<EOF
+$list
+EOF
+  done <<EOF
+$(c_peers)
+EOF
+  printf '%s\t%s' "$live" "$total"
+}
+
+# v_terminals — how many of this room's seats still hold a terminal, in one short token.
+#
+# `<live>/<total>` when the backend answered and the answer may be believed, `?` when the room
+# was launched with terminals but the read could not be resolved, and `-` when the room carries
+# no container pin at all. The exit status repeats that: 0 for a believable answer, 1 for `?`.
+#
+# IT EXISTS SO `rooms` NEED NOT ASK THE QUESTION A SECOND WAY. That listing runs before a room
+# is resolved and never sources lib.sh, so it has no roster reader — and re-deriving the
+# participant list over there would be a second implementation of `c_peers`, whose whole body is
+# the validation that makes a malformed roster REFUSE rather than silently shrink the room. One
+# subprocess per room is the cheaper mistake. A supervisor can also run it directly, which is
+# the honest answer to "is anything still up in there".
+v_terminals() {
+  local out rc TAB
+  TAB=$(printf '\t')
+  out=$(_room_terminals); rc=$?
+  case "$rc" in
+    0) printf '%s/%s\n' "${out%%"$TAB"*}" "${out##*"$TAB"}"; return 0 ;;
+    2) printf '?\n'; return 1 ;;
+    *) printf -- '-\n'; return 0 ;;
+  esac
+}
+
+# _seat_liveness <peer> — one sentence naming which of the two stall remedies this seat needs,
+# or nothing when the read cannot tell.
+#
+# THIS IS THE HALF OF THE QUESTION THE SKILL CAN ANSWER, and the alarm says so rather than
+# implying it answers both. A seat that is GONE and a seat that is ALIVE but idle at a prompt
+# present identically in the room — a floor held, nothing arriving — and they need opposite
+# moves: `relaunch` discards everything the seat has read, so using it on a live seat waiting
+# on a permission prompt destroys the argument that seat was holding. What a backend
+# enumeration settles is presence: whether a terminal exists. What it cannot settle is what a
+# present terminal is DOING, so an alive seat gets "alive, so do not relaunch it" and never
+# "it is at a prompt" — the only in-pane shape this skill recognises today is an announced
+# capacity wait (`_floor_wait_state`), which is a park, not a prompt.
+#
+# EVIDENCE, NOT A VERDICT, exactly like `_floor_wait_state`: it appends to the alarm and can
+# neither remove it nor stop its push.
+_seat_liveness() { # <peer>
+  local peer="${1:-}" f pinned=0 list erc=0 name s
+  [ -n "$peer" ] || return 1
+  for f in "$ROOM"/state/container-*; do [ -f "$f" ] && pinned=1; done
+  [ "$pinned" = 1 ] || return 1
+  if ! command -v ct_sessions >/dev/null 2>&1; then
+    [ -n "${SKILL:-}" ] && [ -f "$SKILL/lib/term.sh" ] || return 1
+    . "$SKILL/lib/term.sh" || return 1
+    command -v ct_sessions >/dev/null 2>&1 || return 1
+  fi
+  list=$(ct_sessions 2>/dev/null) || erc=$?
+  name=$(ct_name "$peer")
+  while IFS= read -r s; do
+    [ "$s" = "$name" ] || continue
+    printf 'its terminal is still up, so it is NOT a dead seat — answer whatever its pane is asking, in place; do not relaunch it.'
+    return 0
+  done <<EOF
+$list
+EOF
+  # Not listed. That is only believable if the backend answered and these sessions were
+  # launched on the backend this run resolved — `ct_absence_class` is the one place that
+  # judgement lives, and it refuses on `unreachable` and `elsewhere`. An uncorroborated
+  # absence says nothing, because the confident negative is the expensive one here: it is
+  # what sends a supervisor to `relaunch` on a seat that is alive and mid-turn.
+  ct_absence_class "$erc" "$list" "$name" >/dev/null 2>&1 || return 1
+  printf 'its terminal is GONE — the %s backend answered and does not have it, so this is the relaunch case: council.sh relaunch %s (it discards everything that seat has read).' \
+    "$(ct_backend)" "$peer"
+}
+
+# _status_sigfile — where the last PRINTED status block's signature lives, for --only-changed.
+#
+# OUTSIDE THE ROOM, deliberately, and that is the only interesting thing about it. Every other
+# input this verb reads is room state a participant can write; a signature file inside the room
+# would be one a seat could pre-write to make the next tick read as "nothing changed" — i.e. to
+# buy itself silence on the one display a supervisor is told to watch. It lives in the shared
+# escalation mailbox instead, beside the signature shipyard's own reporter keeps there
+# (`report-sig`), which is in the git common dir and so resolves the same from every worktree.
+# A room whose mailbox cannot be resolved gets no filter at all rather than a forgeable one:
+# `--only-changed` then prints every tick, which is the safe direction.
+_status_sigfile() {
+  local mb
+  command -v policy_mailbox_dir >/dev/null 2>&1 || return 1
+  mb=$(policy_mailbox_dir) || return 1
+  mkdir -p "$mb" 2>/dev/null || return 1
+  printf '%s/council-status-sig-%s' "$mb" "$(basename "$ROOM")"
+}
+
 v_status() {
   local j verd g t floor held conf room_age alarms="" phase wait_ev="" wait_note=""
+  local only_changed=0 alarms_only=0 term_live="" term_total="" term_rc term_out="" live_note=""
+  local out="" round_line="" openct sig sigfile TAB
+  TAB=$(printf '\t')
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --only-changed) only_changed=1; shift ;;
+      --alarms-only)  alarms_only=1; shift ;;
+      *) echo "council status: unknown option '$1'" >&2; return 2 ;;
+    esac
+  done
   j=$(v_verdict --json); verd=$(printf '%s' "$j" | jq -r '.verdict // empty' 2>/dev/null)
   # Which phase of the turn cycle the room is in, from the declared flow graph via the shared
   # guard (c_phase -> flow_phase over lib/room-graph.sh). This is the supervisor's "where is this
@@ -687,22 +845,12 @@ v_status() {
   t=$(c_turns); floor=$(c_floor_at "$t")
   held=$(( $(c_floor_held_ms) / 1000 ))
   conf=$(c_conflicts)
-  printf '=== council %s ===\n' "$(basename "$ROOM")"
   c_round_open && floor="— (barrier)"
-  printf 'mode %s · participants %s · turns %s/%s · floor: %s (held %ss) · turn conflicts: %s\n' \
-    "$(jq -r .mode "$ROOM/roster.json")" "$(c_peers | paste -sd, -)" "$t" \
-    "$(printf '%s' "$j" | jq -r .budget)" "$floor" "$held" "$conf"
-  printf 'verdict: %s (nothing new for %s turns, lap %s)\n' "$verd" \
-    "$(printf '%s' "$j" | jq -r .since_last_claim)" "$(printf '%s' "$j" | jq -r .lap)"
-  printf 'phase: %s\n' "$phase"
   if c_round_open; then
-    printf 'OPEN ROUND: posted %s/%s, waiting for %s — nobody sees their positions yet\n' \
+    round_line=$(printf 'OPEN ROUND: posted %s/%s, waiting for %s — nobody sees their positions yet\n' \
       "$(c_round0_positions | wc -l | tr -d ' ')" "$(c_npeers)" \
-      "$(comm -23 <(c_peers | sort) <(c_round0_positions | jq -r .from | sort) | paste -sd, -)"
+      "$(comm -23 <(c_peers | sort) <(c_round0_positions | jq -r .from | sort) | paste -sd, -)")
   fi
-  printf '%s' "$g" | jq -r '
-    if (.live|length) == 0 then "on the table: nothing" else (.live[] | "on the table: \(.id) from \(.from) — \(.current_text[0:90])") end,
-    (if (.open|length) > 0 then (.open[] | "  ✗ OPEN \(.id) (\(.from)): \(.text[0:90])") else "  no open objections" end)'
   case "$verd" in
     stuck) alarms="$alarms 🛑 STUCK: a whole lap and nothing new was said, while objections are open" ;;
     ready-to-decide) alarms="$alarms ✅ ready to decide: council.sh decide" ;;
@@ -716,6 +864,28 @@ v_status() {
                 else alarms="$alarms 🛑 the turn budget is spent — write an honest unresolved"; fi ;;
   esac
   [ "$conf" -gt 0 ] && alarms="$alarms ⚠️ $conf messages lost a turn conflict (their authors must take the floor again)"
+  # A CLOSED ROOM THAT STILL HOLDS PROCESSES. `status` exits 0 on a closed room and the
+  # documented monitor loop stops there, so without this the supervisor's LAST tick is also the
+  # last word on a room whose seats are still burning — which is how two terminals stayed up
+  # unnoticed until someone asked why (#21). The alarm is what makes the exit say `run down`
+  # instead of nothing; the exit code itself is deliberately unchanged, because it is a
+  # documented contract (`status` exits 0 when the room is finished) and because the tick that
+  # carries an alarm is never suppressed by `--only-changed`, so this always reaches the console.
+  # `decide` growing a teardown of its own (#48) would make this a backstop rather than the
+  # first line of defence; it stays either way, for a room closed with `--force`, closed by an
+  # older build, or whose teardown half-failed.
+  if [ -n "$(c_recorded_status)" ]; then
+    # CAPTURED, not read through a process substitution: `< <(_room_terminals)` throws the
+    # function's exit status away and leaves `read`'s own, which cannot tell rc 1 (no terminals
+    # to count) from rc 2 (could not tell) — and those two are exactly what this branch is for.
+    term_out=$(_room_terminals); term_rc=$?
+    term_live=${term_out%%"$TAB"*}; term_total=${term_out##*"$TAB"}
+    case "$term_rc" in
+      0) [ "${term_live:-0}" -gt 0 ] \
+           && alarms="$alarms ⚠️ this room is closed but $term_live of $term_total terminals are still up — council.sh down releases them" ;;
+      2) alarms="$alarms ⚠️ this room is closed and whether its terminals are still up could not be determined — run council.sh down to be sure" ;;
+    esac
+  fi
   # The held time comes from the last turn-consuming message's `sent_ms`, so it is only as good
   # as the clock of whichever seat wrote that message — and a held time longer than the ROOM has
   # existed cannot be true. It is not reported as a smaller number: clamping it would let an
@@ -774,6 +944,11 @@ v_status() {
       # the terminal says exactly why and this code cannot read it.
       wait_ev=$(_floor_wait_state "$floor") || wait_ev=""
       alarms="$alarms 🛑 STALL: $floor has held the floor for ${held}s — the room has stopped; go and look at it. A seat sitting on a permission or first-launch trust prompt needs that prompt ANSWERED IN PLACE; council.sh relaunch is only for a seat that is genuinely dead, and it discards everything that seat has read."
+      # WHICH of those two the seat is, where the backend can settle it. The alarm above names
+      # both remedies and picks neither; this narrows it to one whenever presence is
+      # corroborated, and stays silent rather than guessing when it is not.
+      live_note=$(_seat_liveness "$floor") || live_note=""
+      [ -n "$live_note" ] && alarms="$alarms $live_note"
       if [ -n "$wait_ev" ]; then
         wait_note="⏳ its pane carries a live ${wait_ev%%	*} banner: $(policy_park_advice) If that banner is current the seat resumes by itself, so check the terminal before relaunching — this is a quote from a pane, not a verdict. Evidence: ${wait_ev#*	}"
         alarms="$alarms $wait_note"
@@ -786,10 +961,100 @@ v_status() {
     # is not at the console. Nesting it under one wording is how a peer-written `created_ms`, which
     # only chooses between the two, came to decide whether anyone was woken.
     _stall_escalate "$floor" "$t" "$held" "$wait_note"
+  elif [ "$held" -gt "${COUNCIL_STALL_WARN_SECS:-300}" ] && [ -z "$(c_recorded_status)" ] \
+       && ! c_round_open; then
+    # THE EARLY TIER, and the reason it is not just a smaller COUNCIL_STALL_SECS. The hard
+    # threshold's default of 900s is tuned for a slow model thinking; the wedges that actually
+    # cost rooms were 323s and 344s — a seat sitting on a permission prompt, which is not slow,
+    # it is stopped. Lowering the one threshold to catch those would make every long think
+    # raise 🛑 STALL and push a notice about it, and an alarm that fires on the normal case is
+    # one an operator learns to ignore. So this tier is DIFFERENT IN KIND, not just in number:
+    #
+    #   * it is ⚠️, not 🛑 — a thing to glance at, not a thing that has gone wrong;
+    #   * it does NOT push. The mailbox is the durable cross-room channel for "a person must
+    #     act", and a quiet floor is not yet that. It is also the mechanically safe choice:
+    #     `_stall_escalate` de-duplicates on `[stall:<peer>:<turns>]`, so a push from here
+    #     would consume the key the real STALL needs and silence it for that whole turn —
+    #     turning an early warning into a way to lose the alarm it warns about.
+    #
+    # It still bypasses `--only-changed`, like every alarm, which is the whole point: a room
+    # that goes quiet changes nothing, so a change-triggered monitor is exactly the reader that
+    # would otherwise never hear about it.
+    #
+    # NOT on a closed room (a finished room's floor is nobody's problem — `_stall_escalate`
+    # returns early on the same test) and NOT during an open barrier round, which is the one
+    # state in which a long-held floor is normal rather than a stall: nobody holds it and the
+    # room is waiting on everyone, which `OPEN ROUND:` already says.
+    alarms="$alarms ⚠️ quiet: $floor has held the floor for ${held}s with nothing arriving — not yet a stall (🛑 at ${COUNCIL_STALL_SECS:-900}s), but this is the window a permission prompt sits in. Glance at its terminal."
+    live_note=$(_seat_liveness "$floor") || live_note=""
+    [ -n "$live_note" ] && alarms="$alarms $live_note"
   fi
-  printf 'alarms:%s\n' "${alarms:- —}"
-  printf 'last messages:\n'
-  v_transcript | tail -3 | sed 's/^/  /'
+  openct=$(printf '%s' "$g" | jq -r '.open | length' 2>/dev/null)
+  # --only-changed: stay silent unless the meaningful state moved — the floor, the verdict, the
+  # turn count, the open-objection count, or the alarm set.
+  #
+  # AN ALARM IS NEVER SUPPRESSED, and it is in the CONDITION rather than in the signature. Both
+  # spellings break silence when an alarm ARRIVES; only this one keeps breaking it while the alarm
+  # HOLDS, and holding is the whole failure mode. A room whose seat has stopped changes nothing by
+  # definition — that is what being stopped means — so a filter that suppresses a standing alarm
+  # goes quiet exactly when the room needs a person. It is the same choice shipyard's reporter
+  # makes for its 🛑 STALLED block and for a backend disagreement ("news on EVERY tick it holds,
+  # not once"), and it is what a hand-rolled supervisor loop got wrong: it printed on verdict
+  # changes, the verdict had not moved, and the room sat until a human asked.
+  #
+  # A CLOSED ROOM IS ALSO ALWAYS PRINTED. It is the tick the documented loop exits on, so
+  # swallowing it would make the end of the watch silent — the loudest thing this verb says
+  # arriving as nothing at all.
+  if [ "$only_changed" = 1 ] && sigfile=$(_status_sigfile); then
+    sig="$floor|$verd|$t|$openct"
+    if [ -z "$alarms" ] && [ -z "$(c_recorded_status)" ] \
+       && [ -f "$sigfile" ] && [ "$sig" = "$(cat "$sigfile" 2>/dev/null)" ]; then
+      return 1   # the room is open, carries no alarm, and nothing worth saying has moved
+    fi
+    # Stored on every tick that PRINTS, including the ones that printed because of an alarm, so
+    # the tick after an alarm clears is compared against what was last shown rather than against
+    # a stale line from before it.
+    printf '%s\n' "$sig" >"$sigfile" 2>/dev/null
+  fi
+  if [ "$alarms_only" = 1 ]; then
+    # The fast monitor's shape: the room's name, so several loops are tellable apart, and the
+    # alarms. Nothing else — at a 60-second cadence the whole block is a wall of text, and the
+    # block is what the 10-minute loop is for. It also skips the transcript read below, which is
+    # the only part of this verb that costs anything per line of log.
+    #
+    # NOTHING AT ALL WHEN THERE IS NO ALARM, which is what makes it armable at that cadence: an
+    # alarm channel that says "alarms: —" sixty times an hour is one an operator stops reading,
+    # and the thing it is competing with for attention is the alarm itself. Silence here is not
+    # the silence `--only-changed` can produce — it means "asked, nothing wrong", on every tick,
+    # with no memory between them and so nothing that could go stale and suppress a standing
+    # alarm. Note the two flags are independent: `--only-changed` can still suppress this mode's
+    # tick, and it too refuses to suppress one carrying an alarm.
+    if [ -n "$alarms" ]; then
+      printf '=== council %s ===\n' "$(basename "$ROOM")"
+      printf 'alarms:%s\n' "$alarms"
+    fi
+    case "$verd" in decided|unresolved) return 0 ;; *) return 1 ;; esac
+  fi
+  # BUILT in one subshell and then printed, so that `--only-changed` above can decide from the
+  # finished alarm set. Every value below was computed before the filter ran; what moved is only
+  # when these lines reach stdout, and the order of them is unchanged.
+  out=$(
+    printf '=== council %s ===\n' "$(basename "$ROOM")"
+    printf 'mode %s · participants %s · turns %s/%s · floor: %s (held %ss) · turn conflicts: %s\n' \
+      "$(jq -r .mode "$ROOM/roster.json")" "$(c_peers | paste -sd, -)" "$t" \
+      "$(printf '%s' "$j" | jq -r .budget)" "$floor" "$held" "$conf"
+    printf 'verdict: %s (nothing new for %s turns, lap %s)\n' "$verd" \
+      "$(printf '%s' "$j" | jq -r .since_last_claim)" "$(printf '%s' "$j" | jq -r .lap)"
+    printf 'phase: %s\n' "$phase"
+    [ -n "$round_line" ] && printf '%s\n' "$round_line"
+    printf '%s' "$g" | jq -r '
+      if (.live|length) == 0 then "on the table: nothing" else (.live[] | "on the table: \(.id) from \(.from) — \(.current_text[0:90])") end,
+      (if (.open|length) > 0 then (.open[] | "  ✗ OPEN \(.id) (\(.from)): \(.text[0:90])") else "  no open objections" end)'
+    printf 'alarms:%s\n' "${alarms:- —}"
+    printf 'last messages:\n'
+    v_transcript | tail -3 | sed 's/^/  /'
+  )
+  printf '%s\n' "$out"
   case "$verd" in decided|unresolved) return 0 ;; *) return 1 ;; esac
 }
 
