@@ -13,7 +13,8 @@ and then writes a decision record with the whole argument history.
 council.sh up --scenario debate --agents claude,codex,agy "Synchronous or asynchronous delivery?"
 council.sh status          # whose turn, what is on the table, what is still open
 council.sh relaunch codex  # one participant died or wedged — put that seat back up
-council.sh decide          # write the decision record and close the room
+council.sh decide          # write the decision record and close the room — a room that decided
+                           # then closes its own participant terminals, keeping the record
 ```
 
 ## Why a room and not a chat
