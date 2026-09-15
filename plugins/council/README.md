@@ -14,7 +14,14 @@ council.sh up --scenario debate --agents claude,codex,agy "Synchronous or asynch
 council.sh status          # whose turn, what is on the table, what is still open
 council.sh relaunch codex  # one participant died or wedged — put that seat back up
 council.sh decide          # write the decision record and close the room
+council.sh down            # release the terminals once the room has closed
 ```
+
+Supervising a room is two loops, and the skill tells you to arm them rather than leaving you to
+invent your own: a ten-minute `status --only-changed` block that **exits by itself** when the
+room finishes, and a one-minute `status --alarms-only` check that prints nothing until something
+needs a person. Neither can be talked into silence by a room that has stopped — an alarm always
+breaks the filter, on every tick it holds.
 
 ## Why a room and not a chat
 
@@ -86,13 +93,19 @@ Until you do, the participant holds the floor and looks, from the room, exactly 
 session. Answer it once per directory — **in place**. Relaunching that seat only asks the same
 question again, with everything it has read thrown away.
 
-`council.sh status` will not tell the two apart for you — a trust prompt and a dead seat still read
-as the same `🛑 STALL` — but it no longer guesses, and it now names which remedy belongs to which
-cause instead. Where the seat's own client announced a capacity limit it quotes that too, with the
-line it matched, so you can see a seat that will resume by itself before reaching for `relaunch`.
-A `STALL` also writes one notice into the shared escalation mailbox, which turns a line in a
-console into a record a supervisor elsewhere will see — though something still has to run
-`status`; nothing does so on a timer yet.
+`council.sh status` tells you **half** of that apart, and says which half. It asks the terminal
+backend whether the seat's session still exists, so a seat that is **gone** is named as the
+`relaunch` case and a seat that is still **up** is named as the one to answer in place — and when
+the backend cannot be asked, or the room's container pin says this run is looking at the wrong
+backend, it says nothing rather than guess, because a wrong confident *gone* is what sends you to
+`relaunch` on a live seat mid-turn. What it still cannot tell you is what a terminal that IS up is
+doing: a seat sitting on a trust prompt and a seat thinking hard both read as a held floor. The
+one exception is a client that announced a capacity limit, which `status` quotes with the line it
+matched.
+
+Two stall tiers, because a wedge and a slow model are different animals: `⚠️ quiet` at 300s — the
+window a prompt sits in — and `🛑 STALL` at 900s, which also writes one notice into the shared
+escalation mailbox, turning a line in a console into a record a supervisor elsewhere will see.
 
 Nothing here edits an agent's settings file for you.
 

@@ -494,7 +494,7 @@ council_up() {
 council_rooms() {
   local base; base=$(room_base) || return 1
   [ -d "$base" ] || { echo "no rooms"; return 0; }
-  local d name line
+  local d name line term
   for d in "$base"/*/; do
     [ -d "$d" ] || continue
     d="${d%/}"
@@ -509,7 +509,15 @@ council_rooms() {
     # OF THE FILE, surfacing the syntax error over a hundred lines away in a function this one
     # never calls. Found the hard way; do not "simplify" it back.
     [ -n "$line" ] || line="🛑 this room's state could not be read — council.sh status --room $name"
-    printf '%-24s %s\n' "$name" "$line"
+    # WHAT THE ROOM'S STATE DOES NOT SAY: whether it still holds processes. A room that reached
+    # `decided` and was never taken down looks identical here to one that was, and that is the
+    # second half of #21 — two terminals stayed up unnoticed because nothing in any listing
+    # mentioned them. `terminals` answers in one token (`<live>/<total>`, `?` when the backend
+    # could not be asked, `-` for a room that was never launched with any); its own exit status
+    # is a STATUS like every other verb's here, so it is deliberately not branched on.
+    term=$(COUNCIL_ROOM="$d" bash "$SKILL/council.sh" terminals 2>/dev/null) || true
+    [ -n "$term" ] || term="?"
+    printf '%-24s %-10s %s\n' "$name" "term $term" "$line"
   done
 }
 
