@@ -128,6 +128,27 @@ _keeper_teardown_file() { printf '%s/state/teardown' "$1"; }
 # run is the one to remember: `_room_dirs_sane` prints its own true sentence and the false one
 # lands directly underneath it, two contradicting lines on one stderr. A verb that reports a
 # cause it did not establish is the exact defect exit 5 was added to prevent, one level down.
+# WHAT DECIDES WHETHER THE OPERATOR IS TOLD, asked per output as AGENTS.md's rule on untrusted
+# evidence requires. `decide`'s exit 5 and its "terminals could NOT be closed" sentence are an
+# operator-facing signal, and their APPEARANCE is gated on `state/keeper.pid` and on `state/`
+# being writable — both of them room state a participant can write, and the room is not a trust
+# boundary. So the honest answer is that this achieves NEITHER prevention NOR self-revelation,
+# and the routes that bypass it are:
+#
+#   * `state/keeper.pid` naming a live process that is not this room's keeper. `kill -0` cannot
+#     tell them apart, so this returns 0, a marker is written that nothing will ever take, and
+#     `decide` reports the seats are going. Reachable WITHOUT a hostile seat: `down` leaves the
+#     pid file behind and the OS recycles pids (#30).
+#   * the marker removed between this write and the keeper's next poll — up to five seconds, and
+#     `relaunch` does exactly that legitimately.
+#   * the keeper killed after the marker is written.
+#
+# None of the three is prevented here and nothing detects them. What is NOT lost is the evidence
+# underneath: the seats are still there and (on the first route) the marker stays on disk. What is
+# missing is a verb that reports it — `rooms` does not probe the backend, which is #190. Until it
+# does (#194 tracks this), this signal is trustworthy only about the room's own bookkeeping, not about whether a
+# terminal actually closed, and the sentence it prints is worded for that: it says the keeper HAS
+# BEEN ASKED, not that the seats are gone.
 _keeper_teardown() { # <room> -> 0 asked, 1 no live keeper to ask, 2 the request could not be written
   local room="$1" pid f
   # Liveness first: with no keeper nothing will ever reap, whatever the directory looks like.

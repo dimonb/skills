@@ -48,7 +48,8 @@ producing polite agreement.
   cursor/<me>/<peer>         ← exactly ONE writer per cursor (me)
   bell/<peer>.fifo       the doorbell
   board/decision.md      the output; board/status holds decided|unresolved
-  state/                 counters, launchers, the pinned terminal container, keeper pid
+  state/                 counters, launchers, the pinned terminal container, keeper pid,
+                         and `teardown` — a decided close's request that the keeper reap
 ```
 
 It lives in the **shared git dir** so one path resolves from every worktree of the repo,
@@ -336,6 +337,16 @@ Three consequences worth knowing:
   which of the three causes it was: no live keeper, a request that could not be written, or a
   caller with no keeper machinery in scope. Nothing is written when there is no keeper — a marker
   no keeper will ever take would sit waiting for whichever keeper the room is given next.
+* **But that report is about the room's bookkeeping, never about a terminal actually closing**, and
+  the difference matters because [the room is not a trust
+  boundary](#the-room-is-not-a-trust-boundary). Whether exit 5 *appears* is decided by
+  `state/keeper.pid` and by `state/` being writable, which are room state any participant can
+  write. A pid file naming a live process that is not this room's keeper — a seat's own doing, or
+  just `down` leaving a stale pid the OS then recycles — makes the close report success while
+  nothing ever reaps. So `decide` says the keeper **has been asked**, which is all it establishes;
+  it does not say the seats are gone. Neither prevented nor made self-revealing here, and
+  `_keeper_teardown`'s header names the three routes. Nothing reports the difference today
+  (`rooms` does not probe the backend); tracked separately.
 * **`relaunch` cancels a teardown no keeper has taken yet.** Putting a seat back up says the room
   is in use again, and it outranks a close that asked for the seats to go — it has to, or the seat
   it launches is reaped within a poll of starting. That covers the keeper that died before taking
