@@ -84,11 +84,13 @@ council.sh <verb> [options]
     transcript                     the transcript, for a human
 
   Closing the room
-    decide  [--force]              write the ADR on the board and close the room; a room that
-                                   DECIDED then closes its own participant terminals (the
-                                   record, transcript and lanes stay). exit 5 = record written
-                                   and the room told, terminals not closed. `--force` writes an
-                                   unresolved record and leaves the terminals up.
+    decide  [--force]              write the ADR on the board and close the room; a close
+                                   recorded DECIDED then closes its own participant terminals
+                                   (the record, transcript and lanes stay), and one recorded
+                                   UNRESOLVED leaves them up. exit 5 = record written and the
+                                   room told, terminals not closed. --force only lifts the
+                                   not-ripe refusal: on a room that has converged it still
+                                   records decided and still closes the terminals.
     say     <peer> "<text>"        speak to a participant out of band, in its terminal
 
   Common options: --room <name> --me <peer>

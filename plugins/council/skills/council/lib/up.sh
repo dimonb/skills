@@ -118,15 +118,31 @@ _keeper_teardown_file() { printf '%s/state/teardown' "$1"; }
 # LOWER bound on the real margin, since those runs faked `ct_kill` as a `printf`: a live agterm or
 # tmux reap is slower than that, never faster. Keep the two writes cheap, and if this ever grows a
 # third thing to say, say it before asking rather than after.
-_keeper_teardown() { # <room> -> 0 the keeper was asked, 1 there is no live keeper to ask
+# THE TWO WAYS THIS FAILS ARE DIFFERENT FACTS AND GET DIFFERENT STATUSES. One `return 1` for
+# both let `decide` report "this room has no live keeper" over a room whose keeper was alive and
+# answering `kill -0` — measured on four separate triggers (an unwritable `state/`, the marker
+# path being a directory, the marker file mode 0444, and `state/` being a symlink). The symlink
+# run is the one to remember: `_room_dirs_sane` prints its own true sentence and the false one
+# lands directly underneath it, two contradicting lines on one stderr. A verb that reports a
+# cause it did not establish is the exact defect exit 5 was added to prevent, one level down.
+_keeper_teardown() { # <room> -> 0 asked, 1 no live keeper to ask, 2 the request could not be written
   local room="$1" pid f
-  _room_dirs_sane "$room" || return 1
+  # Liveness first: with no keeper nothing will ever reap, whatever the directory looks like.
   pid=$(_keeper_pid "$room/state/keeper.pid") || return 1
   kill -0 "$pid" 2>/dev/null || return 1
-  f=$(_keeper_teardown_file "$room") || return 1
+  _room_dirs_sane "$room" || return 2
+  f=$(_keeper_teardown_file "$room") || return 2
   # Presence IS the whole signal, and `>` creates the file before it writes a byte, so there is
   # no half-written state a reader could misread. The word is for whoever finds it by hand.
-  printf 'teardown\n' > "$f" 2>/dev/null || return 1
+  #
+  # `2>/dev/null` BEFORE the redirection, not after, and that ordering is the whole of it.
+  # Redirections are applied left to right, so a trailing suppressor is installed AFTER the
+  # failing `open()` and bash writes its own diagnostic to the still-original fd 2. Measured on
+  # this platform rather than reasoned: `printf x > "$F" 2>/dev/null` leaks `Permission denied`,
+  # `printf x 2>/dev/null > "$F"` does not. The trailing form is an idiom this tree carries in a
+  # dozen places and it is harmless at all of them; here it put a raw `up.sh: line NN:` above a
+  # sentence that contradicted it, which is what made it worth fixing at this one site.
+  printf 'teardown\n' 2>/dev/null > "$f" || return 2
   return 0
 }
 
@@ -213,8 +229,12 @@ _canary_fifo() { # <room> -> a freshly created fifo path on stdout, or rc 1
 # has been superseded must reap nothing, and a marker left by the room this path once served
 # would otherwise close the terminals of the room that replaced it. It goes BEFORE the canary
 # read because that read blocks for up to five seconds, and a detached room has no canary at all
-# — putting it after would make a detached room wait on `sleep 5` and a `--hold` room notice a
-# teardown only when its owner also died.
+# — putting it after would make a detached room wait on `sleep 5`, and would make a `--hold` room
+# NEVER NOTICE A TEARDOWN AT ALL. Not "late", and not "only on owner death": both `continue`s
+# above jump straight back to the `while` test, and the EOF branch reaps and returns, so a check
+# placed below that block is unreachable in a held room for the room's whole life — `decide`
+# reports the seats are going, exits 0, and nothing ever happens. That was measured by mutation,
+# through the shipped `up --hold` + `decide` path; t26 case H exists to keep it measured.
 #
 # It CONSUMES the marker before reaping, so the instruction is one-shot. A marker left in place
 # would be taken again by whatever keeper the room is given next — `relaunch` forks one — and a
@@ -562,9 +582,15 @@ council_up() {
   # child that would inherit the write end and keep the room alive past this shell's death — the
   # exact trap that a `while sleep` loop falls into. When this shell dies for ANY reason (Ctrl-C,
   # a closed pane, a crash, SIGKILL) the write end closes, the keeper hits EOF and reaps every
-  # terminal; if `wait` ever returns on its own it is because the keeper already exited (an
-  # explicit `down` removed the room), so there is nothing left to hold. Without --hold the
-  # function simply returns here and the detached keeper outlives the caller, as it always has.
+  # terminal; if `wait` ever returns on its own it is because the keeper already exited, and there
+  # is then nothing left to hold. TWO THINGS MAKE IT RETURN, and only one of them removes the
+  # room: an explicit `down`, and — since #48 — a close recorded `decided`, whose teardown the
+  # keeper takes before reaping and exiting. On that second path THE ROOM, THE RECORD AND THE
+  # TRANSCRIPT ALL SURVIVE; measured, on a real held room. So a returning hold shell no longer
+  # implies a `down`, and an operator whose foreground `up --hold` came back to a prompt has not
+  # lost anything — the four-trigger list in `_keeper_loop`'s header is the one place that
+  # enumerates this. Without --hold the function simply returns here and the detached keeper
+  # outlives the caller, as it always has.
   if [ "$hold" = 1 ]; then
     printf '\n[hold] this shell owns the room; its death (Ctrl-C, closed pane, crash, kill) tears it down.\n'
     printf '       run without --hold for a room that outlives this shell (bounded by its directory).\n'
@@ -1063,10 +1089,22 @@ council_relaunch() {
 
   # CANCEL A PENDING TEARDOWN FIRST. Putting a seat back up is an operator saying this room is in
   # use again, so it outranks a close that asked for the seats to go (#48) — and it has to, or the
-  # seat launched below is killed within one keeper poll of starting. Ordinarily there is nothing
-  # here to clear: the keeper consumes the marker as it reaps. What this covers is the marker no
-  # keeper took — one written in the instant before its keeper died — which would otherwise be
-  # picked up by the keeper `_keeper_ensure` is about to fork.
+  # seat launched below is killed within one keeper poll of starting.
+  #
+  # WHAT THIS COVERS is any request no keeper has TAKEN yet: the keeper that died before its next
+  # pass (whose marker the keeper `_keeper_ensure` is about to fork would otherwise pick up), and
+  # the live keeper still inside its five-second poll window. Both were measured; an earlier
+  # version of this comment claimed only the first, and the guard is unconditional precisely
+  # because it is not trying to tell them apart.
+  #
+  # WHAT IT CANNOT COVER is a reap already IN FLIGHT. The keeper consumes the marker before it
+  # starts closing, so once that has happened there is nothing left to clear and no observable
+  # here saying a reap is running — `kill -0` reports a reaping keeper as alive, which is what
+  # makes `_keeper_ensure` below return early and leave the room without one. The window is the
+  # length of one reap, measured at 84-383 ms for three seats on a live tmux backend. Do not
+  # "fix" that by narrowing this `rm -f` to a dead-keeper condition: the live-keeper case above
+  # is real and losing it costs a relaunched seat. Tracked separately; closing it needs an
+  # observable for an in-flight reap, not a tighter test here.
   rm -f "$(_keeper_teardown_file "$ROOM")"
   # A seat can be relaunched after `down`, which killed the keeper along with the terminals.
   # Without it every bell rung at this participant is lost while the room looks healthy.

@@ -17,6 +17,20 @@
 #
 # No real agent consoles: ct_kill is faked so a reap leaves one marker per peer — the t16/t15/t13
 # argument, that a harness must not depend on a live backend.
+#
+# Needs bash >= 5 for what IT uses: `$EPOCHREALTIME` in mkroom_faked, and — in case H — the
+# `{fd}` redirections `_keeper_ensure` builds the owner canary with. Stock macOS starts scripts
+# under bash 3.2, so re-exec into a modern one, the same guard council.sh, t15, t16 and t19 use.
+if [ "${BASH_VERSINFO[0]:-0}" -lt 5 ] && [ -z "${T26_BASH_REEXEC:-}" ]; then
+  for _c in /opt/homebrew/bin/bash /usr/local/bin/bash /usr/bin/bash bash; do
+    _p=$(command -v "$_c" 2>/dev/null) || continue
+    _v=$("$_p" -c 'echo ${BASH_VERSINFO[0]}' 2>/dev/null) || continue
+    [ "${_v:-0}" -ge 5 ] && exec env T26_BASH_REEXEC=1 "$_p" "$0" "$@"
+  done
+  echo "t26: needs bash >= 5, this one is ${BASH_VERSION:-unknown}." >&2
+  exit 70
+fi
+
 set -uo pipefail
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=_helpers.sh
@@ -241,6 +255,148 @@ else
   ok "relaunch left a keeper running" yes "$([ -n "$KG" ] && echo yes || echo no)"
   ok "...which found no teardown to act on, so it is still alive" alive "$(wait_gone "$KG" 20)"
   ok "...over a room with no pending teardown" no "$([ -e "$RG/state/teardown" ] && echo yes || echo no)"
+fi
+
+# ================================================================================================
+echo "--- H. a --hold room takes the marker too, while its owner is still holding ---"
+# The placement of the teardown check is what this case pins, and nothing else in the suite can
+# see it. Every other room in this file is DETACHED — `mkroom_faked` sets no _KEEPER_OWNER_HOLD,
+# so its keepers have no canary and fall straight through to `sleep 5`. A `--hold` keeper takes
+# the other branch: it blocks in `read -t 5` on the canary and `continue`s on every timeout, so a
+# teardown check placed below that read is not merely late, it is NEVER REACHED — the marker
+# would sit on disk for the life of the room while `decide` exited 0 saying the seats were going.
+# Measured by mutation through the shipped `up --hold` + `decide` path, where the mutant's exit
+# code and stderr were byte-identical to the healthy one.
+#
+# The owner is a live subshell holding the canary write end, exactly as t16's OWNER script and the
+# tail of `up --hold` do, and its `wait` is FORKLESS on purpose: a `sleep` child would inherit the
+# write end and the canary would never EOF (t16 case D). One consequence is asserted rather than
+# fought: the keeper is that subshell's background job, so the owner falls out of `wait` and exits
+# the moment the keeper does. The owner is therefore checked alive BEFORE the marker is written —
+# which is what makes this a teardown and not a canary death — and never after the reap. Asserting
+# "the owner outlives the keeper" would be flaky by construction, and measuring it on the HEALTHY
+# code is what showed that.
+#
+# THE CONSUMED MARKER IS WHAT NAMES THE TRIGGER. Both of the keeper's reaping paths leave the same
+# `reaped-*` files, so those alone cannot tell a teardown from an owner death; only the teardown
+# path `rm`s the marker. "Seats reaped AND marker gone" is the one combination the canary path
+# cannot produce.
+RH="$COUNCIL_TEST_ROOT/t26h"; rm -rf "$RH"
+T26H_MARK="$COUNCIL_TEST_ROOT/t26-marks/h"; mkdir -p "$T26H_MARK" || exit 1
+( SKILL="$SKILL"; . "$SKILL/lib/up.sh"
+  ct_kill() { : > "$T26H_MARK/reaped-$1"; }
+  _KEEPER_OWNER_HOLD=1
+  _mkroom "$RH" a b || exit 1
+  unset _KEEPER_OWNER_HOLD
+  printf 'up\n' > "$T26H_MARK/ready"
+  wait ) &                       # the owner: holds the canary write end until the keeper exits
+HOWNER=$!
+ROOM_KEEPERS+=("$RH/state/keeper.pid")
+ok "the --hold room came up" yes "$(wait_file "$T26H_MARK/ready" "$PATIENCE")"
+KH=$(kpid_of "$RH/state/keeper.pid")
+ok "...with a keeper carrying a canary" yes "$([ -n "$KH" ] && kill -0 "$KH" 2>/dev/null && echo yes || echo no)"
+ok "...and an owner still holding it open" yes "$(kill -0 "$HOWNER" 2>/dev/null && echo yes || echo no)"
+ok "nothing is reaped while the owner lives and no marker exists" no \
+   "$([ -e "$T26H_MARK/reaped-a" ] && echo yes || echo no)"
+( . "$SKILL/lib/up.sh"; _keeper_teardown "$RH" ); rc=$?
+ok "_keeper_teardown reports it asked the --hold keeper" 0 "$rc"
+ok "the first seat is closed" yes "$(wait_file "$T26H_MARK/reaped-a" "$PATIENCE")"
+ok "the second seat is closed too" yes "$(wait_file "$T26H_MARK/reaped-b" "$PATIENCE")"
+ok "the keeper exits after reaping" gone "$(wait_gone "$KH" "$PATIENCE")"
+ok "...having consumed the marker, which is what names the trigger" gone \
+   "$(wait_gone_file "$RH/state/teardown" "$PATIENCE")"
+ok "the record directory is untouched" yes "$([ -d "$RH/lane" ] && [ -d "$RH/board" ] && echo yes || echo no)"
+kill -9 "$HOWNER" 2>/dev/null; wait "$HOWNER" 2>/dev/null
+
+# ================================================================================================
+echo "--- I. --force on a RIPE room still records decided, and still tears down ---"
+# The cell no test visited, and the one four documentation sites used to describe backwards.
+# `--force` is read in exactly one expression in v_decide — the `*)` arm that lifts the not-ripe
+# refusal — so on a room that HAS converged it is a no-op: the verdict is still ready-to-decide,
+# the record still comes out `decided`, and the teardown still happens. Case E covers `--force` on
+# an unresolved room, which is the other half and the one that leaves the seats up; between them
+# they say that the gate is the RECORDED STATUS and never the flag.
+RI="$COUNCIL_TEST_ROOT/t26i"
+mkroom_faked "$RI" i a b c
+export COUNCIL_ROOM="$RI" ROOM="$RI"
+echo "Should the log keep one lane per author?" > "$RI/agenda.md"
+prop=$(say_floor propose '[]' "Keep the history as one lane per author.")
+obj=$(say_floor  object  '["'"$prop"'-1"]' "Then a reader scans N directories on every poll.")
+say_floor amend '["'"$prop"'-1","'"$obj"'-1"]' "One lane per author; readers probe upward from a cursor." >/dev/null
+say_floor msg '[]' "Agreed."        >/dev/null
+say_floor msg '[]' "No objections." >/dev/null
+say_floor msg '[]' "Record it."     >/dev/null
+ok "the room is ripe" ready-to-decide "$(verdict1)"
+KI=$(kpid_of "$RI/state/keeper.pid")
+erri="$COUNCIL_TEST_ROOT/t26i.err"
+outi=$(COUNCIL_ME=a bash "$CLI" decide --force 2>"$erri"); rc=$?
+ok "--force on a ripe room exits 0" 0 "$rc"
+ok "...recording decided, not unresolved" decided "$(cat "$RI/board/status" 2>/dev/null)"
+ok "...printing the record path and nothing else on stdout" "$RI/board/decision.md" "$outi"
+ok "...and asking for the teardown like any decided close" yes "$(has "$(cat "$erri")" 'keeper has been asked')"
+ok "the seats go" yes "$(wait_file "$MARK/i/reaped-a" "$PATIENCE")"
+ok "...all of them" yes "$([ -e "$MARK/i/reaped-b" ] && [ -e "$MARK/i/reaped-c" ] && echo yes || echo no)"
+ok "the keeper exits" gone "$(wait_gone "$KI" "$PATIENCE")"
+
+# ================================================================================================
+echo "--- J. a successful close does not let an advisory write decide its exit status ---"
+# The verb's last statement is a message on stderr. Without an explicit `return 0` that write
+# BECOMES the exit status, and a close that fully succeeded then reports 1 — the code documented
+# as "the record could not be written, the room is NOT closed, no path is printed", every clause
+# of it false. Measured before the fix: `2>&-` gave 1 and a dead stderr pipe gave 141, where
+# origin/main gave 0 for both. No in-tree caller closes stderr, which is exactly why the suite
+# could not see it; this case is the trigger the tree otherwise lacks.
+RJ="$COUNCIL_TEST_ROOT/t26j"
+mkroom_faked "$RJ" j a b c
+export COUNCIL_ROOM="$RJ" ROOM="$RJ"
+echo "Should the log keep one lane per author?" > "$RJ/agenda.md"
+prop=$(say_floor propose '[]' "Keep the history as one lane per author.")
+obj=$(say_floor  object  '["'"$prop"'-1"]' "Then a reader scans N directories on every poll.")
+say_floor amend '["'"$prop"'-1","'"$obj"'-1"]' "One lane per author; readers probe upward from a cursor." >/dev/null
+say_floor msg '[]' "Agreed."        >/dev/null
+say_floor msg '[]' "No objections." >/dev/null
+say_floor msg '[]' "Record it."     >/dev/null
+outj=$(COUNCIL_ME=a bash "$CLI" decide 2>&-); rc=$?
+ok "a clean close with stderr CLOSED still exits 0" 0 "$rc"
+ok "...and still prints the record path" "$RJ/board/decision.md" "$outj"
+ok "...over a room that really did close" decided "$(cat "$RJ/board/status" 2>/dev/null)"
+
+# ================================================================================================
+echo "--- K. a teardown that could not be WRITTEN says so, and does not blame a missing keeper ---"
+# `_keeper_teardown` can fail two ways and they are different facts. While both returned 1, a room
+# whose keeper was alive and answering `kill -0` was told "this room has no live keeper to do the
+# reaping" — a verb reporting a cause it had not established, which is the defect exit 5 exists to
+# prevent, one level down. Reached with an unwritable `state/`, and the reason that is reachable
+# rather than theoretical is worth recording: `c_send` bumps `state/$ME.seq` and `.lamport` with
+# NO status check, so an unwritable state directory does not fail the close first — the room
+# closes, the announcement lands, and only the teardown notices.
+#
+# Root cannot be made to fail an open(2) by mode bits, so skip rather than assert a lie.
+if [ "$(id -u)" = 0 ]; then
+  echo "  SKIP K: running as root — mode bits do not apply"
+else
+  RK="$COUNCIL_TEST_ROOT/t26k"
+  mkroom_faked "$RK" k a b c
+  export COUNCIL_ROOM="$RK" ROOM="$RK"
+  echo "Should the log keep one lane per author?" > "$RK/agenda.md"
+  prop=$(say_floor propose '[]' "Keep the history as one lane per author.")
+  obj=$(say_floor  object  '["'"$prop"'-1"]' "Then a reader scans N directories on every poll.")
+  say_floor amend '["'"$prop"'-1","'"$obj"'-1"]' "One lane per author; readers probe upward from a cursor." >/dev/null
+  say_floor msg '[]' "Agreed."        >/dev/null
+  say_floor msg '[]' "No objections." >/dev/null
+  say_floor msg '[]' "Record it."     >/dev/null
+  KK=$(kpid_of "$RK/state/keeper.pid")
+  chmod 500 "$RK/state" || { echo "  FAIL K: could not make state/ read-only"; FAILURES=$((FAILURES+1)); }
+  errk="$COUNCIL_TEST_ROOT/t26k.err"
+  outk=$(COUNCIL_ME=a bash "$CLI" decide 2>"$errk"); rc=$?
+  chmod 700 "$RK/state"
+  ok "an unwritable state/ still exits 5, like any teardown that did not happen" 5 "$rc"
+  ok "...still printing the record path, because the close stands" "$RK/board/decision.md" "$outk"
+  ok "...saying the request could not be WRITTEN" yes "$(has "$(cat "$errk")" 'could not be written to')"
+  # The whole point: it must NOT claim the room has no keeper, because the keeper is right there.
+  ok "...and NOT blaming a missing keeper" no "$(has "$(cat "$errk")" 'no live keeper')"
+  ok "the keeper really was alive throughout" yes "$([ -n "$KK" ] && kill -0 "$KK" 2>/dev/null && echo yes || echo no)"
+  ok "the room is closed regardless" decided "$(cat "$RK/board/status" 2>/dev/null)"
 fi
 
 # ================================================================================================

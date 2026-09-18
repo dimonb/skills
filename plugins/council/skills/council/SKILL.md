@@ -235,8 +235,8 @@ full `--timeout` (**540 s** by default) with the record already finished on disk
 
 | exit | what it means |
 |---|---|
-| 0 | the record is written, the announcement was written, **and** the teardown below was asked for (or, on `--force`, deliberately not). |
-| 5 | the record is written and the announcement went out, but the **terminals could not be closed**: this room has no live keeper to do the reaping, so the participants' sessions are still up. The close stands; `down` closes them. |
+| 0 | the record is written, the announcement was written, **and** — on a close recorded `decided` — the teardown below was asked for. A close recorded `unresolved` deliberately asks for none. |
+| 5 | the record is written and the announcement went out, but the **terminals could not be closed**: no live keeper to do the reaping, or the request could not be written, or the caller has no keeper machinery in scope. The message names which. The close stands; `down` closes them. |
 | 4 | the record is written, the announcement was **not**. The close stands: `board/status` is set and `decision` serves the record; no seat was rung, so each learns at its own next poll. No teardown is asked for on this path, so the terminals are still up. |
 | 1 | the record itself could not be written. **The room is not closed** and nothing was announced; no path is printed. |
 
@@ -323,18 +323,28 @@ it ringing nobody.
 
 Three consequences worth knowing:
 
-* **`--force` does not tear down.** An `unresolved` close is a room that did *not* converge — the
-  same close escalates it to the shared mailbox as needs-human — and that is the room a person is
-  most likely to want to walk into. So `--force` leaves the seats up and says so, naming `down`.
-  The rule is about a room whose question is answered; it does not reach one that failed to answer
-  it.
-* **A room with no live keeper cannot be torn down, and `decide` says so rather than pretending.**
-  That is exit 5 above. Nothing is written in that case — a marker no keeper will ever take would
-  sit waiting for whichever keeper the room is given next.
-* **`relaunch` cancels a pending teardown.** Putting a seat back up says the room is in use again,
-  and it outranks a close that asked for the seats to go. Ordinarily there is nothing to cancel —
-  the keeper consumes the request as it reaps — so this covers only a request whose keeper died
-  before taking it.
+* **An `unresolved` close does not tear down — and `--force` is NOT the switch.** A room that did
+  *not* converge is one the same close escalates to the shared mailbox as needs-human, and it is
+  the room a person is most likely to want to walk into, so its seats stay up and the close says
+  so, naming `down`. The rule is about a room whose question is answered; it does not reach one
+  that failed to answer it. **The gate is the recorded status, not the flag.** `--force` does one
+  thing only — it lifts the not-ripe refusal — so on a room that has already converged it is a
+  no-op: the record still comes out `decided` and the seats still go. There is no flag that means
+  "write the record and keep the seats"; if that is ever wanted it belongs on a separate
+  `--keep-seats`, not on `--force`.
+* **A teardown that cannot happen is reported, not pretended.** That is exit 5 above, and it names
+  which of the three causes it was: no live keeper, a request that could not be written, or a
+  caller with no keeper machinery in scope. Nothing is written when there is no keeper — a marker
+  no keeper will ever take would sit waiting for whichever keeper the room is given next.
+* **`relaunch` cancels a teardown no keeper has taken yet.** Putting a seat back up says the room
+  is in use again, and it outranks a close that asked for the seats to go — it has to, or the seat
+  it launches is reaped within a poll of starting. That covers the keeper that died before taking
+  the request *and* the live keeper still inside its five-second poll window. What it cannot
+  cancel is a reap already **in flight**: the keeper consumes the request before it starts
+  closing, so from that moment there is nothing left to clear and `relaunch` cannot see it. That
+  window is the length of one reap — measured at 84–383 ms for three seats — and a `relaunch`
+  landing inside it can leave the room without a keeper until the next one repairs it. It is
+  tracked separately rather than papered over here.
 
 `down` is unchanged and still the way to close a room by hand: an unresolved one, one whose
 teardown could not happen, or any room at all before it decides. `down --purge` remains the only
@@ -348,8 +358,9 @@ council.sh status | claims | verdict | order | transcript | floor
 council.sh agenda | protocol | decision   # the room's own files, through the entrypoint
 council.sh say <peer> "..."        # out of band, into that participant's terminal
 council.sh relaunch <peer>         # put one seat back up, mid-room
-council.sh decide [--force]        # write the ADR and close the room; a DECIDED room then
-                                   # closes its own terminals (--force leaves them up)
+council.sh decide [--force]        # write the ADR and close the room; a close recorded DECIDED
+                                   # then closes its own terminals, an UNRESOLVED one leaves
+                                   # them up (--force only lifts the not-ripe refusal)
 council.sh down [--purge]          # close terminals; the room (the record) survives
 council.sh rooms                   # what exists and where each room stands
 ```
@@ -376,6 +387,14 @@ this shell: when it dies for *any* reason — Ctrl-C, the pane closing, a crash,
 room's keeper closes every participant terminal and exits, so no background console is left
 orphaned. Use it for a short session tied to one terminal, where walking away should tear the
 room down rather than strand agents in it.
+
+**A held room also ends when it decides, and that returns your shell.** A participant closing the
+room asks the keeper to reap ([above](#a-decided-room-closes-its-own-terminals)); the keeper is
+this shell's own background job, so when it reaps and exits, the `wait` above returns and
+`up --hold` comes back to a prompt. **Nothing is lost when that happens** — the room directory,
+the record and the transcript all survive, exactly as on the detached path; only the live seats
+are gone, which is what the close asked for. So a held shell returning is the normal end of a room
+that reached a decision, not a sign that something tore it down.
 
 The mechanism, in one paragraph, because it is the kind of thing that rots silently: the owner
 holds the write end of a small **canary pipe** and the keeper inherits the read end, so the
@@ -830,12 +849,21 @@ turn budget ran out reports `unresolved` and exits 0 before anyone has written a
 `council.sh decision` (exit 0 only with a record) is the signal to trust when you need to know
 that the room's output exists.
 
-**The watch ends at `decided`, and nothing is outstanding after it.** A room that decides closes
-its own participant terminals ([above](#a-decided-room-closes-its-own-terminals)), so there is no
-teardown step waiting for the operator once the record is there — read it and move on. The two
-endings that DO leave something to do say so in `decide`'s own output at the moment they happen:
-an `unresolved` close leaves the seats up deliberately (and pushes a needs-human notice to the
-mailbox), and exit 5 means the teardown could not happen. Both name `council.sh down`.
+**A `decided` close that exited 0 leaves nothing outstanding**, because asking for the teardown is
+its last act ([above](#a-decided-room-closes-its-own-terminals)) — read the record and move on.
+Any other ending can leave the seats up, and `decide`'s **exit code** is what says so: the table
+under ["Closing a room tells it"](#closing-a-room-tells-it-and-decide-says-so-when-it-could-not)
+is the authoritative list, and each of those paths names `council.sh down` in its own message.
+
+Two cautions for a supervisor rather than a participant. That message goes to **whoever ran
+`decide`**, which is `--me`-gated to a seat — so a supervisor watching from outside sees the
+record say `decided` and does *not* see the sentence, which is exactly the room-2 case that
+produced this issue. And `board/status` alone cannot tell you which ending it was: it reads
+`decided` on a clean close, on an exit 4 whose announcement was lost, and on an exit 5 whose
+teardown could not happen. **Nothing in the skill reports that difference today** — `rooms` does
+not probe the backend, so a decided room with live seats and one without print identically. If you
+did not see the exit code, the backend itself (`agtermctl`/`tmux ls`) is the only place the answer
+exists.
 
 **Exit codes here mean status, not success.** `verdict` returns 1 on a live room and 2 on
 a stuck one. It also returns **1 having printed nothing at all** when the room's ROSTER
