@@ -119,7 +119,7 @@ shipyard_wait_state() {
     ready-to-merge|done)
       if [ "$phase" = concluded ]; then
         printf 'attention\tfinished\t✅ finished\t%s' \
-          'nothing is wrong — ship reached a terminal outcome and a human owns the next move: review and merge it, tell it what to change, or tear the slot down if it is already merged. Do NOT compact.'
+          'nothing is wrong — ship reached a terminal outcome and a human owns the next move: review and merge it, tell it what to change, or leave it: a merged slot tears itself down on a later tick, unless an escalation holds it or the gate refuses. Do NOT compact.'
         return 0
       fi ;;
   esac

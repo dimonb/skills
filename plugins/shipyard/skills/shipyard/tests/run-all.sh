@@ -15,11 +15,16 @@
 #
 # Most tests are pure functions over fixture files and environment variables. The continuity
 # suite also starts one short detached watcher against a fake `agtermctl`, proves idempotency,
-# and reaps it through the real lifecycle cleanup. t12 is the one deliberate exception to the
-# fixture rule: the teardown gate's whole defect was a wrong belief about what git answers, so
-# it builds real repositories, real squash merges and real worktrees and asks the real git — a
-# faked git there would only replay the belief. Nothing uses the network or fixtures outside
-# its own mktemp directory.
+# and reaps it through the real lifecycle cleanup. TWO files deliberately drop the fixture rule,
+# each because the defect it closes IS git's answer, so a faked git would only replay the belief
+# under test: t12 (the teardown gate — real repositories, real squash merges, real worktrees) and
+# t17 Part A (what `worktree remove` actually does — a real bare origin, a real clone and real
+# registered worktrees, faking only the terminal backend). Nothing uses the network or fixtures
+# outside its own mktemp directory.
+#
+# This sentence is part of the change that adds a third. It read "t12 is the one deliberate
+# exception" until t17 landed, and the change that ADDED the second exception is the one that
+# left it claiming there was none — the repeat defect AGENTS.md names by name.
 #
 # SCOPE IS DELIBERATELY NARROW, and the rule is about PROVENANCE, not about counting: every
 # property asserted here traces to a defect this code actually shipped or a live failure this

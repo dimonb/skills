@@ -3,7 +3,7 @@
 # automating it safe (#139(1)).
 #
 # PROVENANCE. A merged slot is finished work, and it sat there — terminal and worktree — until
-# somebody remembered `shipyard-down.sh`; eight were torn down by hand in one week, and the
+# somebody remembered `shipyard-down.sh` (#181 counts eight torn down by hand in one week), and the
 # report exits by itself once nothing is in flight, which makes the fleet feel self-cleaning
 # while the worktrees remain. Automating that meant putting a monitor in front of the one path
 # in this repo where acting on a wrong answer removes a live child's worktree, so the two
@@ -49,10 +49,16 @@
 #   B5 `closed` never fires. A closed PR's content is not in the base branch, so the content
 #      gate would refuse by construction; it is left out on purpose, and this case pins that
 #      decision so a later reader does not add it back as an obvious omission.
-#   B6 merged -> `?` -> merged does NOT fire on the third tick. #142 measured a flickering
-#      forge producing exactly that sequence over a child that had not moved. This is a kill
+#   B6 merged -> `?` -> merged does NOT fire on the third tick. #142 documents the two failure
+#      modes behind it — `mr_state` mapping any unrecognised answer to `?`, and a failing iid
+#      lookup falling back to `no MR yet` — for the sequences `opened -> ? -> opened` and
+#      `opened -> no MR yet -> opened`, found by review of #138 rather than measured in the
+#      wild. Neither mode is state-specific, so the same intermittency produces this one. A kill
 #      test for the unconditional rewrite of $MERGEDFILE: preserve the file when empty, as the
-#      stall table beside it does, and this case goes green while the lock is gone.
+#      stall table beside it does, and this case goes RED on the third tick. (Measured: two of
+#      B6's assertions fail. "Goes green" is this suite's idiom for a case that proves nothing,
+#      and this sentence said it by accident — the exact reading that invites a maintainer to
+#      prune B6 as padding and reinstate the flicker path.)
 #   B7 a refusal is RENDERED, with the exact command, and no teardown is claimed. Without the
 #      block, a slot the automatic path declines would be QUIETER than one nobody looked at —
 #      it keeps its worktree and, once its terminal goes, stops being enumerated.
@@ -70,10 +76,18 @@
 # agterm session closes or that a real socket blip produces the classes A2/A4 stage. The agterm
 # arm of the backend is not exercised at all. No case runs the report against the real
 # `shipyard-down.sh`, so the two halves meet only through the argv Part B records.
+#
+# THREE LINES MUTATION TESTING FOUND UNGUARDED, named here rather than left to be rediscovered:
+# the in-flight accounting of a reaping tick (both call sites can be made to count a reaped slot
+# in flight with everything below still green); lock 3's absence arm on the no-terminal path
+# (making `shipyard_absence_report` never refuse changes nothing here, because shipyard-down.sh's
+# own guard catches it one level down — which is worth knowing, not a gap to close twice); and
+# `A4: ...at a non-zero exit`, which holds even with the guard deleted, because an unreachable
+# backend independently makes the run exit 1 through the continuity-cleanup warning. A4's other
+# two checks do fail, so the case is not vacuous — that one line just proves less than it looks.
 set -uo pipefail
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SKILL_DIR="$(cd "$DIR/.." && pwd)"
-REPORT="$SKILL_DIR/shipyard-report.sh"
 DOWN="$SKILL_DIR/shipyard-down.sh"
 
 CHECKS=0; FAILURES=0
@@ -163,7 +177,6 @@ a_run() {
 printf '1 ship-79\n2 ship-71\n' >"$A_WINS"
 : >"$A_ENUM_CALLS"
 a_run 71; a1_rc=$?
-a1=$(cat "$A_OUT")
 ok "A1: a resolvable terminal is killed"             1 "$(grep -c 'ship-71\|t17a:2' "$A_KILLS")"
 ok "A1: ...its worktree is removed"                  0 "$(present "$A/repo/.claude/worktrees/ship-71")"
 ok "A1: ...at exit 0"                                0 "$a1_rc"
@@ -191,7 +204,6 @@ ok "A2: ...and the guard DID spend one, unlike A1"   $((A1_ENUMS + 1)) "$(grep -
 # A3 — corroborated gone: the guard must not refuse this, or teardown stops working entirely.
 printf 'ship-79\n' >"$A_ENUM"
 a_run 73; a3_rc=$?
-a3=$(cat "$A_OUT")
 ok "A3: a corroborated absence proceeds"             0 "$(present "$A/repo/.claude/worktrees/ship-73")"
 ok "A3: ...at exit 0"                                0 "$a3_rc"
 
@@ -204,13 +216,12 @@ ok "A4: ...at a non-zero exit"                       1 "$a4_rc"
 ok "A4: ...with the worktree kept"                   1 "$(present "$A/repo/.claude/worktrees/ship-74")"
 
 # A5 — and --force still overrides it, because a guard nobody can get past is a new way to be stuck.
-a_run 75 --force; a5_rc=$?
-a5=$(cat "$A_OUT")
+a_run 75 --force
 ok "A5: --force removes it anyway"                   0 "$(present "$A/repo/.claude/worktrees/ship-75")"
 
 # A6 — the content gate must not have been loosened on the way past.
 printf '0\n' >"$A_ENUM_RC"
-a_run 76; a6_rc=$?
+a_run 76
 a6=$(cat "$A_OUT")
 ok "A6: a dirty worktree is still refused"           1 "$(printf '%s' "$a6" | grep -c 'uncommitted or untracked')"
 ok "A6: ...with the worktree kept"                   1 "$(present "$A/repo/.claude/worktrees/ship-76")"
@@ -316,8 +327,16 @@ b_tick() { # [<VAR=value> ...] -- <slot> ...
     if [ "$seen" = 0 ]; then envs+=("$a"); else slots+=("$a"); fi
   done
   printf '%s\n' "$(date +%s)" >"$B_GIT/ship-escalations/report-tick"
-  env SHIPYARD_STALL_SECS=100000 SHIPYARD_BACKEND=tmux SHIPYARD_SESSION=t17b "${envs[@]}" \
-    bash "$FARM/shipyard-report.sh" "${slots[@]}" 2>/dev/null
+  # ${a[@]+"${a[@]}"} and not "${a[@]}": expanding an EMPTY array under `set -u` is a fatal
+  # unbound-variable error in bash 3.2, which is what /bin/bash is on macOS — the interpreter
+  # this suite exists to keep the production code runnable under. Every b_tick call with no env
+  # override passes an empty `envs`, so the plain form aborted the whole file at the first such
+  # call outside a $( ) and 19 of the checks below never ran. No automated invocation saw it
+  # (run-all.sh, the Makefile and CI all reach a modern bash through PATH), which is exactly why
+  # it is spelled out here. `slots` gets the same treatment: it is non-empty at every call site
+  # today, so it is latent rather than broken, and the two should not differ.
+  env SHIPYARD_STALL_SECS=100000 SHIPYARD_BACKEND=tmux SHIPYARD_SESSION=t17b ${envs[@]+"${envs[@]}"} \
+    bash "$FARM/shipyard-report.sh" ${slots[@]+"${slots[@]}"} 2>/dev/null
 }
 
 # --- B1/B2: one tick is not enough, two are; and the argv carries no flags ------------------
@@ -429,6 +448,50 @@ ok "B10: ...and it renders as having no terminal"    1 "$(printf '%s' "$b10a" | 
 b10b=$(b_tick -- 69)
 ok "B10: the second one tears it down"               1 "$(grep -c '^69$' "$DOWN_CALLS")"
 ok "B10: ...and says so"                             1 "$(printf '%s' "$b10b" | grep -c 'TORN DOWN — merged, finished')"
+
+# --- B11: the iid guard, which had no test at all ------------------------------------------
+# A SUCCESSFUL reap leaves its row behind — the count is appended before the teardown runs — and
+# the mailbox outlives the fleet while slot numbers are reused. The `prev_iid = iid` test is the
+# only thing standing between that stale row and a brand-new child being torn down on its FIRST
+# forge read, which is the single-observation trigger the whole mechanism exists to refuse.
+# Deleting the condition left all other checks green, so this is written as its kill test:
+# seed exactly what a completed reap leaves, then run ONE tick with a different PR number.
+b_reset
+b_slot 70 870 ready-to-merge
+printf '1 ship-70\n' >"$B_WINS"; printf 'ship-70\n' >"$B_ENUM"
+printf '870\tMERGED\n' >"$B_STATES"
+printf '70\t999\t2\n' >"$B_GIT/ship-escalations/report-merged"
+b_tick -- 70 >/dev/null
+ok "B11: a stale count under a REUSED slot does not fire" 0 "$(grep -c . "$DOWN_CALLS")"
+ok "B11: ...and the row is rewritten for the new PR"      1 \
+   "$(grep -c '^70	870	1$' "$B_GIT/ship-escalations/report-merged")"
+
+# --- B12: an open escalation HOLDS the teardown --------------------------------------------
+# The slot is finished by every other measure — merged, stage terminal, terminal idle — and is
+# idle only BECAUSE it asked the operator something. Tearing it down destroys the session that
+# asked; worse, `shipyard-answer.sh` then exits 0 and claims the child will pick the answer up,
+# because its fallback to `shipyard-tell.sh` is gated on `kind = notice`. Every other B case
+# runs with an empty mailbox, so nothing pinned this until now.
+b_reset
+b_slot 71 871 ready-to-merge
+printf '1 ship-71\n' >"$B_WINS"; printf 'ship-71\n' >"$B_ENUM"
+printf '871\tMERGED\n' >"$B_STATES"
+printf '{"kind":"question","status":"pending","slot":"71","text":"migrate or defer?"}\n' \
+  >"$B_GIT/ship-escalations/71-1.json"
+b_tick -- 71 >/dev/null
+b12=$(b_tick -- 71)
+ok "B12: an open question holds the teardown"        0 "$(grep -c . "$DOWN_CALLS")"
+ok "B12: ...and the hold is rendered, not silent"    1 "$(printf '%s' "$b12" | grep -c 'HELD — finished and merged')"
+ok "B12: ...naming the remedy as answering it"       1 "$(printf '%s' "$b12" | grep -c 'tears itself down on the next tick')"
+ok "B12: ...and no teardown is claimed"              0 "$(printf '%s' "$b12" | grep -c 'TORN DOWN — merged, finished')"
+# ...and the control: the SAME slot with the record answered IS torn down, so the hold is what
+# the escalation does and not some other property of the fixture.
+printf '{"kind":"question","status":"answered","slot":"71","text":"migrate or defer?"}\n' \
+  >"$B_GIT/ship-escalations/71-1.json"
+b_reset
+b_tick -- 71 >/dev/null
+b_tick -- 71 >/dev/null
+ok "B12: ...while an ANSWERED one does not hold it"  1 "$(grep -c '^71$' "$DOWN_CALLS")"
 
 printf '\n%s: %d checks, %d failures\n' "$(basename "$0")" "$CHECKS" "$FAILURES"
 [ "$FAILURES" -eq 0 ]

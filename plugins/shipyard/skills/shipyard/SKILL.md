@@ -143,12 +143,18 @@ collapses away, so the slug can end up short — that is fine, it is only a name
 duplicate numeric slot is refused (two Claudes in one worktree collide); a duplicate
 text slot gets a `-2` suffix.
 
-## Step 0. `/shipyard` with no arguments — monitor only
+## Step 0. `/shipyard` with no arguments — supervise what is already running
 
 Ship has no "inbox" (work comes from a human, not from the forge), so the no-argument
-mode is just the report: `bash <SKILL>/shipyard-report.sh` with no arguments finds every
+mode launches nothing: `bash <SKILL>/shipyard-report.sh` with no arguments finds every
 `ship-*` terminal in the container by itself. Then go to Step 2 (same monitor, no slot
 list in the command).
+
+**It is not read-only, and this section used to say it was.** Discovery mode reaches the same
+per-slot code a named run does, so a slot that is merged, finished, unattended and gate-clear is
+TORN DOWN by it — terminal and worktree — exactly as described in Step 6. That is the intended
+behaviour, not an accident; what was wrong was a heading promising a monitor. `SHIPYARD_AUTODOWN=0`
+keeps a run purely observational if that is what you want.
 
 ## Step 1. Launch (with dedup)
 
@@ -297,6 +303,11 @@ so do not plan on driving it from here.
   under the table;
 * on agterm, it also repaints each child's sidebar glyph (its completed/active verdict comes
   from the declared slot graph — see below);
+* **and it TEARS DOWN a slot that is finished** — merged on consecutive ticks, ship's stage
+  terminal, nobody at the terminal, and clear through `shipyard-down.sh`'s own content gate. That
+  removes the terminal AND the worktree, so arming this loop arms that. An open escalation holds
+  it, and anything it declines is named in its own block with the exact command. Step 6 has every
+  lock and the reasoning; `SHIPYARD_AUTODOWN=0` turns it off;
 * whole report in one block → Monitor batches it into one notification;
 * exit 0 = nothing in flight **and** no open escalation → stop the loop; exit 1 = work
   is still open, **or this run could not tell**. Those two share an exit code deliberately: the
@@ -960,7 +971,12 @@ is gone and the backend corroborates that — the report calls `shipyard-down.sh
 It calls it **unchanged, with no flags and never `--force`**, so every gate below is the gate
 that runs; a slot the gate refuses is named in the report's `✋ AWAITING REMOVAL` block with the
 exact command, and nothing is removed. `SHIPYARD_AUTODOWN=0` turns it off and leaves teardown
-entirely manual.
+entirely manual. **An open escalation holds it**: a child that stopped to ask you something is
+idle *because it is waiting for you*, and tearing it down destroys the session that asked —
+after which `shipyard-answer.sh` still exits 0 and claims the child will pick the answer up.
+Held slots get their own block; answer the question and the slot tears itself down next tick.
+
+This applies to `/shipyard` with no arguments too — discovery mode reaches the same code.
 
 Why those conditions and not simply `merged`: **merged is not "child done"**. The forge state
 says one PR ended, and a child is still posting its record and writing its state file after
@@ -1026,7 +1042,7 @@ starts a fresh watcher for its own parent session.
 | slot | terminal/worktree key (number or slug) |
 | MR | `!<number>` once the MR/PR exists |
 | term | tmux window index, or the agterm session-id prefix |
-| session | ▶️ running / ⏸ idle-wait (snapshot diff) / ⛔ no terminal — or, when a motionless slot's reason is known, `⏳ rate-limited`, `⏳ overloaded`, `✅ finished` or `🙋 needs you` (Step 2) |
+| session | ▶️ running / ⏸ idle-wait (snapshot diff) / ⛔ no terminal — or, when a motionless slot's reason is known, `⏳ rate-limited`, `⏳ overloaded`, `✅ finished` or `🙋 needs you` (Step 2). `🧹 torn down` means THIS tick removed the slot's terminal and worktree (Step 6) — it is the report's own act, not something the child did to itself |
 | MR state / stage | forge state (opened/merged/closed) + ship's pipeline stage |
 | esc | open escalations for this slot |
 | ctx | child context usage as `<pct>% · <tokens>`, read from its transcript; `⚠️` ≥65%, `🛑` ≥80%. A bare `<pct>%` is the client's own footer figure, used when no transcript was found. Two non-readings, neither meaning healthy: `—` = nothing measurable yet; `❓ <tokens>` = the figure exceeds every window this script knows, so the percentage would be invented — resolve it with `SHIPYARD_CTX_WINDOW` or a new `CTX_WINDOWS` entry before acting (Step 5) |
@@ -1072,7 +1088,7 @@ collide with it.
 | `tests/run-all.sh` | the shipyard script suite — run by hand: `bash <SKILL>/tests/run-all.sh` |
 | `shipyard-launch.sh` | start a child: slot, protocol, launcher, container |
 | `shipyard-admission.sh` | the pre-launch admission gate: concurrency cap + macOS memory-pressure |
-| `shipyard-report.sh` | the status table + stall watchdog + sidebar glyphs |
+| `shipyard-report.sh` | the status table + stall watchdog + sidebar glyphs + the teardown of a finished slot |
 | `shipyard-escalations.sh` | the escalation view (`--new` for the fast monitor) |
 | `shipyard-ask.sh` | CHILD side: raise a question / decision / notice |
 | `shipyard-answer.sh` | PARENT side: answer one |
