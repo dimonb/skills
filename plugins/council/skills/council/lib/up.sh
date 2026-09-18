@@ -216,9 +216,19 @@ _keeper_teardown() { # <room> -> 0 asked, 1 no live keeper to ask, 2 the request
   mv -f "$tmp" "$f" 2>/dev/null || { rm -f "$tmp" 2>/dev/null; return 2; }
   # CONFIRM WITH THE READER'S OWN PREDICATE. The test above races: a peer can `mkdir` between it
   # and the rename, and there is no atomic rename-only-onto-a-non-directory. Asking `[ -f ]` — the
-  # exact question `_keeper_loop` will ask — is what makes writer and reader unable to disagree,
-  # whatever shape arrives in between. On that path the temp has been moved inside the planted
+  # exact question `_keeper_loop` will ask — stops this function claiming a success the reader's
+  # own predicate would not support. On that path the temp has been moved inside the planted
   # directory, so clean it up there as well as at its own name.
+  #
+  # IT DOES NOT COVER THE CONVERSE, and an earlier version of this comment claimed it did ("what
+  # makes writer and reader unable to disagree, whatever shape arrives in between" — false, and it
+  # survived its author and a review round). `_keeper_loop`'s FIRST act on the marker is to `rm`
+  # it, so the keeper is the one actor certain to be racing this path, in the other direction: a
+  # poll landing between the rename and this check consumes the marker and reaps, and this then
+  # returns 2 over a teardown that happened. Measured at a ~2.4 ms window against a 5 s poll, so
+  # of the order of one close in two thousand. Known, unfixed, and tracked as #196 — the direction
+  # is a false alarm rather than a silent non-teardown, which is why it did not hold up the change
+  # that introduced it.
   #
   # THESE TWO ARE REDUNDANT FOR EVERY SHAPE A TEST CAN BUILD, and that is measured rather than
   # assumed: deleting either one on its own leaves t26 fully green, because each catches the
