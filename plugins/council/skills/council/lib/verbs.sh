@@ -1197,15 +1197,21 @@ v_decide() {
   # did not run is never reported as one that did, and that governs the REASON as much as the
   # outcome. Exit 5 is the same in all three — the terminals are up and `down` is the remedy —
   # so the code stays one value and only the sentence differs.
-  local td=0 tdf=""
+  local td=0
   if ! command -v _keeper_teardown >/dev/null 2>&1; then td=3
-  else _keeper_teardown "$ROOM"; td=$?; tdf=$(_keeper_teardown_file "$ROOM")
+  else _keeper_teardown "$ROOM"; td=$?
   fi
   if [ "$td" != 0 ]; then
     printf '%s\n' "$out"
     case "$td" in
       1) echo "council decide: the record is written (decided) and the room was told, but its terminals could NOT be closed — this room has no live keeper to do the reaping, so the participants' sessions are still up. The close stands; 'council.sh down --room $(basename "$ROOM")' closes them and keeps the record." >&2 ;;
-      2) echo "council decide: the record is written (decided) and the room was told, but its terminals could NOT be closed — the teardown request could not be written to $tdf, so its keeper will never see it and the participants' sessions are still up. The close stands; 'council.sh down --room $(basename "$ROOM")' closes them and keeps the record." >&2 ;;
+      # The path is resolved HERE and not beside `local td` above, because that assignment is a
+      # command substitution — a fork — and on the td=0 path it would sit between the marker
+      # write and this verb's last two writes, which is the margin `_keeper_teardown`'s header
+      # measures and whose closing instruction is to say anything new BEFORE asking, not after.
+      # Measured at ~1.1 ms against a 13 ms worst-case floor: not fatal, and no reason to spend.
+      # In this arm no marker exists and there is no race to eat into.
+      2) echo "council decide: the record is written (decided) and the room was told, but its terminals could NOT be closed — the teardown request could not be written to $(_keeper_teardown_file "$ROOM"), so its keeper will never see it and the participants' sessions are still up. The close stands; 'council.sh down --room $(basename "$ROOM")' closes them and keeps the record." >&2 ;;
       *) echo "council decide: the record is written (decided) and the room was told, but no teardown was asked for — this caller has no keeper machinery in scope (lib/up.sh was not sourced), so the participants' sessions are still up. The close stands; 'council.sh down --room $(basename "$ROOM")' closes them and keeps the record." >&2 ;;
     esac
     return 5

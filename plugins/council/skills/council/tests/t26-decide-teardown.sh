@@ -479,6 +479,33 @@ ok "the room's keeper really was alive" yes "$([ -n "$KL" ] && kill -0 "$KL" 2>/
 ok "...and nothing was reaped, since nobody was asked" no "$([ -e "$MARK/l/reaped-a" ] && echo yes || echo no)"
 
 # ================================================================================================
+echo "--- M. the marker path cannot be turned into a symlink that swallows the request ---"
+# The fourth bypass route, and the only one that was a live defect rather than a race. `>` FOLLOWS
+# a symlink, so pointing `state/teardown` at a non-regular file made the write succeed — rc 0,
+# `decide` reporting the seats were going — while the keeper's `[ -f "$tdn" ]` stayed false for
+# ever and nothing reaped. The room is not a trust boundary, so a seat can plant that link; the
+# write goes through `mv -f` now, which REPLACES a link at the destination instead of following
+# it, exactly as `_write_launcher` has always done a few hundred lines away.
+RM="$COUNCIL_TEST_ROOT/t26m"
+mkroom_faked "$RM" m a b
+KM=$(kpid_of "$RM/state/keeper.pid")
+ln -sf /dev/null "$RM/state/teardown"
+ok "the marker path starts out as a planted symlink" yes "$([ -L "$RM/state/teardown" ] && echo yes || echo no)"
+( . "$SKILL/lib/up.sh"; _keeper_teardown "$RM" ); rc=$?
+ok "_keeper_teardown still reports it asked the keeper" 0 "$rc"
+# The discriminator: a bare `>` leaves the link in place and writes through it, so the keeper
+# never sees a regular file. `mv -f` replaces it.
+ok "...having REPLACED the link rather than written through it" no "$([ -L "$RM/state/teardown" ] && echo yes || echo no)"
+ok "...leaving a regular file the keeper can actually see" yes "$([ -f "$RM/state/teardown" ] && echo yes || echo no)"
+ok "/dev/null was not written through" yes "$([ -c /dev/null ] && echo yes || echo no)"
+# And the end-to-end proof, which is what the route actually cost: the seats really do go.
+ok "the seats go, which the symlink used to prevent for ever" yes "$(wait_file "$MARK/m/reaped-a" "$PATIENCE")"
+ok "...both of them" yes "$([ -e "$MARK/m/reaped-b" ] && echo yes || echo no)"
+ok "the keeper exits" gone "$(wait_gone "$KM" "$PATIENCE")"
+# No temp file left behind by the rename.
+ok "...leaving no .teardown temp behind" no "$(ls "$RM"/state/.teardown.* >/dev/null 2>&1 && echo yes || echo no)"
+
+# ================================================================================================
 printf '\nt26-decide-teardown: %s checks, %s failed\n' "$CHECKS" "$FAILURES"
 [ "$FAILURES" = 0 ] || exit 1
 echo "t26 PASS"

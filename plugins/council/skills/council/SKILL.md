@@ -419,9 +419,9 @@ does not also kill the keeper before it can do the reaping. `down` and `--purge`
 room down exactly as before; the canary is an added trigger, not a replacement.
 
 The keeper's loop has **four** ways to return, and it is worth keeping them straight because only
-three of them end the live room. Its directory going away (`down --purge`, or a deletion by hand —
-*not* a plain `down`, which keeps the room and ends the keeper with a signal instead, outside the
-loop entirely); a `--hold` room's owner dying, seen as the EOF
+three of them end the live room. Its directory going away — a backstop rather than the usual
+cause, since *both* forms of `down` signal the keeper first and a signal beats a five-second poll,
+and a plain `down` does not remove the directory at all; a `--hold` room's owner dying, seen as the EOF
 above, on which it reaps; **a decided `decide` asking it to reap**
 ([above](#a-decided-room-closes-its-own-terminals)), which applies to a detached room as much as
 to a held one; and its pid file naming another keeper, on which it steps down and reaps
