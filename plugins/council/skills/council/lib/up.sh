@@ -144,10 +144,16 @@ _keeper_teardown_file() { printf '%s/state/teardown' "$1"; }
 #     `relaunch` does exactly that legitimately.
 #   * the keeper killed after the marker is written.
 #   * (CLOSED, and listed because the list must not look shorter than the history) the marker path
-#     replaced by a symlink to a non-regular file, which made a bare `>` succeed while the
-#     keeper's `[ -f ]` stayed false for ever. The write goes through `mv -f` now.
+#     planted as a symlink to /dev/null, which made a bare `>` succeed while the keeper's `[ -f ]`
+#     stayed false for ever; and then, in the fix for THAT, a plain directory or a symlink to one,
+#     which `mv` moves the temp inside of at rc 0. The write now renames and then asks the
+#     reader's own `[ -f ]`.
 #
-# None of the three is prevented here and nothing detects them. What is NOT lost is the evidence
+# NOTHING GUARANTEES THIS LIST IS COMPLETE, and nothing can: every route above was found by
+# review rather than by the author, two of them in the fix for the one before, and the gate sees
+# none of it. Read it as the routes known so far, never as the set.
+#
+# None of the open ones is prevented here and nothing detects them. What is NOT lost is the evidence
 # underneath: the seats are still there and (on the first route) the marker stays on disk. What is
 # missing is a verb that reports it — `rooms` does not probe the backend, which is #190. Until it
 # does (#194 tracks this), this signal is trustworthy only about the room's own bookkeeping, not about whether a
@@ -162,13 +168,18 @@ _keeper_teardown() { # <room> -> 0 asked, 1 no live keeper to ask, 2 the request
   f=$(_keeper_teardown_file "$room") || return 2
   # WRITE A TEMP AND RENAME IT IN, never `>` onto the name — the same remedy `_write_launcher`
   # uses a few hundred lines below, for the same reason and against the same actor. `>` FOLLOWS a
-  # symlink: point `state/teardown` at `/dev/null` (or at any non-regular file) and the write
-  # succeeds, so this returns 0 and `decide` reports the seats are going, while the keeper's
-  # `[ -f "$tdn" ]` is false for ever and nothing ever reaps. Measured. `mv -f` REPLACES a
-  # symlink at the destination instead of following it, and it is atomic, so there is no window
-  # a racer can win — and `rm -f` first would not be enough, as `_write_launcher`'s own header
-  # explains. This was the fourth bypass route, found by review after the header above had
-  # enumerated three and implied that was all of them.
+  # symlink: point `state/teardown` at `/dev/null` and the write succeeds, so this returns 0 and
+  # `decide` reports the seats are going, while the keeper's `[ -f "$tdn" ]` is false for ever and
+  # nothing ever reaps. Measured. `mv -f` replaces a symlink to a NON-DIRECTORY at the destination
+  # instead of following it — the qualifier matters and cost a round: a symlink to a directory,
+  # like a plain directory, is moved INTO rather than replaced, which is what the shape check
+  # above is for.
+  #
+  # The destination shapes actually tried, on this platform, before and after: absent, a plain
+  # directory, a symlink to a directory, a symlink to /dev/null, a symlink to a regular file, and
+  # a mode-0444 regular file. That is the scope checked — NOT a proof that the set is closed.
+  # Nothing guards it: the gate cannot see any of this, and the first version of this write
+  # shipped with a list of three routes that read as complete until review found a fourth.
   #
   # Presence IS the whole signal, and the rename is atomic, so there is no half-written state a
   # reader could misread. The word in the file is for whoever finds it by hand.
@@ -188,7 +199,33 @@ _keeper_teardown() { # <room> -> 0 asked, 1 no live keeper to ask, 2 the request
   # — suppressed the error and then told the operator to read it.
   local tmp="$room/state/.teardown.$$"
   printf 'teardown\n' 2>/dev/null > "$tmp" || return 2
+  # REFUSE A DIRECTORY AT THE DESTINATION, and refuse ONLY that. `mv file dir` does not replace a
+  # directory, it moves the file INSIDE it and returns 0 doing so — so `mkdir state/teardown`, or
+  # a link to any directory, makes the rename "succeed" while `[ -f ]` stays false for ever: the
+  # teardown silently never happens and the close reports success. Measured. The bare `>` this
+  # replaced returned 2 on that shape, so leaving this out would not merely keep a hole open, it
+  # would REMOVE an operator signal that existed before.
+  #
+  # Narrow on purpose. The first version of this guard refused every non-regular destination, and
+  # that traded one denial for another: a link to `/dev/null` is not a regular file, so it was
+  # refused — where the rename on its own had DEFEATED that plant by replacing the link. `[ -d ]`
+  # follows symlinks, so this catches a directory and a link to one, and leaves every other shape
+  # to the rename, which handles them. Checked here: absent, plain directory, link to a directory,
+  # link to /dev/null, link to a regular file, mode-0444 regular file.
+  if [ -d "$f" ]; then rm -f "$tmp" 2>/dev/null; return 2; fi
   mv -f "$tmp" "$f" 2>/dev/null || { rm -f "$tmp" 2>/dev/null; return 2; }
+  # CONFIRM WITH THE READER'S OWN PREDICATE. The test above races: a peer can `mkdir` between it
+  # and the rename, and there is no atomic rename-only-onto-a-non-directory. Asking `[ -f ]` — the
+  # exact question `_keeper_loop` will ask — is what makes writer and reader unable to disagree,
+  # whatever shape arrives in between. On that path the temp has been moved inside the planted
+  # directory, so clean it up there as well as at its own name.
+  #
+  # THESE TWO ARE REDUNDANT FOR EVERY SHAPE A TEST CAN BUILD, and that is measured rather than
+  # assumed: deleting either one on its own leaves t26 fully green, because each catches the
+  # planted directory by itself. Only this one also covers the race, and the race cannot be
+  # provoked without instrumenting the code, so nothing pins it — do not read the suite staying
+  # green after deleting a line here as evidence the line is dead.
+  [ -f "$f" ] || { rm -f "$f/${tmp##*/}" "$tmp" 2>/dev/null; return 2; }
   return 0
 }
 
@@ -225,10 +262,11 @@ _canary_fifo() { # <room> -> a freshly created fifo path on stdout, or rc 1
 # this keeper, under the one that superseded it:
 #   * the room directory going away — a deletion by hand, or `down --purge`. This is the BACKSTOP
 #     rather than the usual cause, and the distinction has now been got wrong twice in this
-#     comment. BOTH forms of `down` SIGTERM the keeper first (`council_down` kills unconditionally,
-#     before it decides whether to purge), and a signal ends the process in well under a second
-#     while this poll can take up to five — so on `--purge` the signal always wins and the loop
-#     never sees the removal. A plain `down` does not remove the directory at all: it prints
+#     comment. Whenever the pid file names a process, BOTH forms of `down` SIGTERM the keeper
+#     before the purge branch — the kill is gated on `_keeper_pid` resolving, so a missing or
+#     malformed pid file sends nothing at all — and a signal ends it in ~11 ms measured while
+#     this poll can take up to five seconds, so on `--purge` the signal gets there first and the
+#     loop never sees the removal. A plain `down` does not remove the directory at all: it prints
 #     "room kept". So this trigger is what catches a room that went away without anyone signalling
 #     the keeper. This list is the ways the LOOP returns; a signal is outside it entirely.
 #   * (a `--hold` room only) its OWNER dying, seen as EOF on the canary read end. Here nothing

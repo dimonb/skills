@@ -497,13 +497,54 @@ ok "_keeper_teardown still reports it asked the keeper" 0 "$rc"
 # never sees a regular file. `mv -f` replaces it.
 ok "...having REPLACED the link rather than written through it" no "$([ -L "$RM/state/teardown" ] && echo yes || echo no)"
 ok "...leaving a regular file the keeper can actually see" yes "$([ -f "$RM/state/teardown" ] && echo yes || echo no)"
-ok "/dev/null was not written through" yes "$([ -c /dev/null ] && echo yes || echo no)"
 # And the end-to-end proof, which is what the route actually cost: the seats really do go.
 ok "the seats go, which the symlink used to prevent for ever" yes "$(wait_file "$MARK/m/reaped-a" "$PATIENCE")"
 ok "...both of them" yes "$([ -e "$MARK/m/reaped-b" ] && echo yes || echo no)"
 ok "the keeper exits" gone "$(wait_gone "$KM" "$PATIENCE")"
 # No temp file left behind by the rename.
 ok "...leaving no .teardown temp behind" no "$(ls "$RM"/state/.teardown.* >/dev/null 2>&1 && echo yes || echo no)"
+
+# A LINK TO A REGULAR FILE is the shape that discriminates, and the earlier version of this case
+# used /dev/null for it — which cannot: writing through /dev/null leaves it a character device, so
+# `[ -c /dev/null ]` is true either way and the check passed against the unfixed code. Point the
+# link at a file whose CONTENT can be inspected instead.
+RM2="$COUNCIL_TEST_ROOT/t26m2"
+mkroom_faked "$RM2" m2 a b
+KM2=$(kpid_of "$RM2/state/keeper.pid")
+VICTIM="$COUNCIL_TEST_ROOT/t26m2-victim"; printf 'do not clobber me\n' > "$VICTIM"
+ln -sf "$VICTIM" "$RM2/state/teardown"
+( . "$SKILL/lib/up.sh"; _keeper_teardown "$RM2" ); rc=$?
+ok "a link to a regular file: the request is still made" 0 "$rc"
+ok "...and the victim is untouched, not written through" "do not clobber me" "$(cat "$VICTIM")"
+ok "...the link replaced by a real file" no "$([ -L "$RM2/state/teardown" ] && echo yes || echo no)"
+ok "...and the seats go" yes "$(wait_file "$MARK/m2/reaped-a" "$PATIENCE")"
+
+# A DIRECTORY at the destination, and a link to one. `mv file dir` does NOT replace the directory
+# — it moves the file INSIDE it, at rc 0 — so the rename alone reports success while `[ -f ]`
+# stays false for ever and nothing reaps. That is the same silent failure the rename was added to
+# prevent, reached with `mkdir` instead of `ln -s`, and the bare `>` it replaced refused it with
+# rc 2. Found in review of the rename itself.
+for shape in dir symlink-to-dir; do
+  RD="$COUNCIL_TEST_ROOT/t26m-$shape"
+  mkroom_faked "$RD" "m-$shape" a b
+  KD=$(kpid_of "$RD/state/keeper.pid")
+  if [ "$shape" = dir ]; then
+    mkdir "$RD/state/teardown"
+  else
+    mkdir "$COUNCIL_TEST_ROOT/t26m-otherdir-$shape"
+    ln -sf "$COUNCIL_TEST_ROOT/t26m-otherdir-$shape" "$RD/state/teardown"
+  fi
+  ( . "$SKILL/lib/up.sh"; _keeper_teardown "$RD" ) 2>/dev/null; rc=$?
+  ok "$shape at the marker path: REFUSED, not silently swallowed" 2 "$rc"
+  ok "...and no temp left inside it" no \
+     "$(ls "$RD"/state/teardown/.teardown.* >/dev/null 2>&1 && echo yes || echo no)"
+  ok "...nor at its own name" no "$(ls "$RD"/state/.teardown.* >/dev/null 2>&1 && echo yes || echo no)"
+  # The keeper must be left alone: a refused request is not a teardown.
+  sleep 6
+  ok "...the keeper is untouched, since nothing was asked of it" yes \
+     "$([ -n "$KD" ] && kill -0 "$KD" 2>/dev/null && echo yes || echo no)"
+  ok "...and nothing was reaped" no "$([ -e "$MARK/m-$shape/reaped-a" ] && echo yes || echo no)"
+done
 
 # ================================================================================================
 printf '\nt26-decide-teardown: %s checks, %s failed\n' "$CHECKS" "$FAILURES"
