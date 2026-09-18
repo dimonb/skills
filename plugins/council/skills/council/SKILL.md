@@ -293,6 +293,8 @@ turn it is while a room is in either state.
 ```bash
 council.sh up --scenario debate --agents claude,codex,agy "question"   # or @file
 council.sh status | claims | verdict | order | transcript | floor
+council.sh status --only-changed | --alarms-only   # the two supervisor monitors
+council.sh terminals               # <live>/<total> seats still holding one; ? unknown; - never had any
 council.sh agenda | protocol | decision   # the room's own files, through the entrypoint
 council.sh say <peer> "..."        # out of band, into that participant's terminal
 council.sh relaunch <peer>         # put one seat back up, mid-room
@@ -720,7 +722,7 @@ tick the loop exits on.
 ```bash
 SCRIPT=<skill>/council.sh
 while true; do
-  bash "$SCRIPT" status --room <room> --alarms-only
+  bash "$SCRIPT" status --room <room> --alarms-only && break
   sleep 60
 done
 ```
@@ -730,12 +732,25 @@ none** — so this stays silent until something actually needs you. Ten minutes 
 seat sitting on a permission prompt; a minute is not. It keeps no state between ticks, so unlike
 the loop above there is nothing here that could go stale and swallow a standing alarm.
 
+**It takes the same `&& break` as loop 1, and for a sharper reason than tidiness.** `status`'s
+exit code is the same in this mode, so the loop ends itself when the room closes — and a loop
+without that clause never ends: a finished room's floor keeps ageing, so it stays past the stall
+threshold for ever, and this channel would report that once a minute until somebody noticed. If
+you do stop one by hand, `TaskStop` (or whatever your runtime calls it) is the way.
+
 **3. When a room closes, take it down.** `council.sh down --room <room>` releases the terminals.
-The status loop exits on the closing tick, so nothing after that will remind you — which is why
-a closed room that still holds seats raises an alarm of its own (`⚠️ this room is closed but N of
-M terminals are still up`) on the very tick the loop stops, and `council.sh rooms` carries a
-`term` column so several rooms' seats are visible at a glance. `council.sh terminals` asks for
-one room directly.
+Both loops exit on the closing tick, so nothing after that will remind you — which is why a
+closed room that still holds seats raises an alarm of its own (`⚠️ this room is closed but N of M
+terminals are still up`) on the very tick they stop, and `council.sh rooms` carries a `term`
+column so several rooms' seats are visible at a glance. `council.sh terminals` asks for one room
+directly.
+
+**A zero is reported, not trusted.** The count is taken through the container pin, a file inside
+the room, so a room whose pin has been retargeted or removed reads as empty exactly like one that
+was properly torn down. The closing tick therefore always *says* what it read — `terminals: none
+of N seats is listed … a zero is not proof` — rather than falling silent, and when the read cannot
+be resolved at all it raises the alarm instead. Silence on that tick is the one outcome the block
+will not produce.
 
 ### What the alarms can tell you apart, and what they cannot
 
@@ -749,38 +764,70 @@ on the first throws away the argument that seat was holding.
 
 | | can it tell? | how |
 |---|---|---|
-| the seat's terminal is **gone** | **yes**, when corroborated | the backend is asked which sessions exist; an absence counts only if the backend answered and the room's container pin agrees this run is looking at the right backend |
-| the seat's terminal is **up** | **yes**, same read | its session is listed |
-| a terminal that is up is **at a prompt** rather than working | **no** | nothing distinguishes them from outside the pane |
+| the seat's terminal is **gone** | **partly — evidence, not proof** | the backend is asked which sessions exist, and an absence is reported only when it answered and no pin says these seats were launched on a different backend. Neither check establishes *which* container was enumerated, and the pin (`<room>/state/container-<backend>`) is a file inside the room — so a participant can point the read at an empty container and make a live seat look gone |
+| the seat's terminal is **up** | **partly — same read, same limit** | a session named `council-<room>-<peer>` is listed. Anything that can reach the backend can create that name, so this is a reason not to reach for `relaunch` first, not proof of identity |
+| a terminal that is up is **at a prompt** rather than working | **no** | no committed pane capture separates a prompt from a think. `adp_turn_state` (shared adapters, used by `say`) reads running/idle/queued, but `idle` cannot tell a permission prompt from a finished turn, so it would not answer this either |
 | a terminal that is up is in an announced **capacity wait** | **partly** | `status` quotes a `rate_limited`-style banner where the client's chrome makes it forgery-proof — two of the three agent kinds have a committed pane capture, the third gets no annotation at all |
 
-So a `STALL` or `⚠️ quiet` alarm names the remedy when it can (*"its terminal is GONE — this is
-the relaunch case"* / *"its terminal is still up, so it is NOT a dead seat — answer whatever its
-pane is asking"*) and, when the read cannot be corroborated, says nothing rather than guessing.
-That silence is deliberate: a wrong confident *gone* is the expensive error, because it sends a
-supervisor to `relaunch` on a live seat mid-turn.
+So the alarm says what a live seat and a dead seat **look like** (*"a session named … is listed,
+which is what a live seat looks like — so do not reach for relaunch first"* / *"its terminal is
+GONE … which is what a dead seat looks like … look at the terminal before running
+`council.sh relaunch`"*), and when the read cannot be corroborated it says nothing rather than
+guessing. Two things that wording is doing deliberately:
 
-**Two stall tiers, because a wedge and a slow model are different animals.**
+* **it never issues the destructive command as an instruction.** A wrong confident *gone* is the
+  expensive error — it is the one that sends a supervisor to `relaunch` on a live seat mid-turn,
+  discarding everything that seat has read.
+* **the corroboration rules out the two accidental misreads** — a backend that did not answer,
+  and a run resolved to the other backend. It does not rule out a room file that has been
+  rewritten. Making this a verdict rather than evidence needs an identity a participant cannot
+  forge: the backend-assigned handle (a tmux window id, an agterm session UUID) recorded outside
+  the room at launch. That is filed, not done here.
 
-| tier | default | what it is | does it push? |
+A seat the room never gave a terminal — the one a human took with `--me` — is named as exactly
+that rather than as a dead seat, because `relaunch` refuses it and the room is simply waiting on
+a person.
+
+**One alarm and one annotation — and the difference is not a matter of degree.**
+
+| line | default | where it goes | pushes? |
 |---|---|---|---|
-| `⚠️ quiet` | `COUNCIL_STALL_WARN_SECS`, 300s | the window a permission prompt sits in — glance at the terminal | no |
-| `🛑 STALL` | `COUNCIL_STALL_SECS`, 900s | the room has stopped; go and look | yes, one `notice` to the mailbox |
+| `quiet: …` | `COUNCIL_STALL_WARN_SECS`, 300s | the **block only** — never the alarms line, never `--alarms-only`, never breaks `--only-changed`'s silence | no |
+| `🛑 STALL` | `COUNCIL_STALL_SECS`, 900s | the alarms line: both loops, and it bypasses every filter | yes, one `notice` to the mailbox |
 
-The earlier tier exists because the wedges that actually cost rooms were **323s and 344s**, well
-under the 900s threshold, so nothing would have fired for any of them. Lowering the single
-threshold instead would make every long think raise `🛑` and wake somebody, and an alarm that
-fires on the normal case is one an operator learns to ignore. The quiet tier deliberately does
-**not** push: the mailbox is the durable channel for *a person must act*, and a quiet floor is not
-yet that — and mechanically, a push from the early tier would consume the de-duplication key
-(`[stall:<peer>:<turns>]`) that the real `STALL` needs, silencing the alarm it warns about. It is
-skipped on a closed room, and during an open barrier round, where a long-held floor is normal.
+The early line exists because the wedges that actually cost rooms were **323s and 344s**, well
+under the 900s threshold, so nothing fired for either. It was first written as an alarm, and that
+was wrong: **single turns on real rooms were then measured at 24, 51, 55 and 84 minutes** — every
+one a healthy seat thinking, and every one of them past a 300-second alarm. That is the
+alarm-on-the-commonest-healthy-path failure this repo has been bitten by three times, and it is
+the one that teaches an operator to skim.
+
+**Raising the number could not fix it, and that is the useful part.** Past that measurement the
+threshold would sit above 5000s — above the 900s stall tier it exists to sit below, which is not a
+tier but dead code. The two states are simply not separable by held time: a 323-second prompt
+wedge and a 5040-second think are the same number to this clock. So **held time is the wrong
+instrument, not a mistuned one**, and the honest form of the early signal is a line on the block
+that a supervisor reads when the block is printing anyway. At that point a low threshold costs
+nothing, which is why 300s stays — as an annotation threshold, not an alarm threshold.
+
+What *would* separate them is turn state: the failure this was asked for was a seat that **ended
+its turn** at a prompt, i.e. idle rather than running, and `adp_turn_state` in the shared adapters
+already reads that. Wiring it in is a change of its own and is filed rather than half-made here.
+
+The `🛑 STALL` alarm keeps the mailbox push to itself, for a mechanical reason as well as a
+judgement one: `_stall_escalate` de-duplicates on `[stall:<peer>:<turns>]`, so a push from an
+earlier tier would consume the key the real alarm needs and silence it. Both lines are skipped
+during an open barrier round, where a long-held floor is normal; the quiet line is also skipped on
+a closed room, and on a closed room the `STALL` alarm still fires (a closure is two files a
+participant can forge, so withholding it would buy that silence) but makes no claim about any
+seat's terminal.
 
 ### Reading the block
 
 `council.sh status` is the block to read: whose floor and for how long, what is on the
 table, what is open, the verdict, and the alarms (`STUCK`, `STALL`, turn conflicts, budget
-exhausted, and **"this room's state could not be computed"** — that last one means the room's
+exhausted, **"this room is closed but N of M terminals are still up"**, and
+**"this room's state could not be computed"** — that last one means the room's
 participant list could not be read, so the lines above it are incomplete and none of them
 should be believed; the diagnostic on stderr says what could not be read, and
 `council.sh decision` still prints the record if the room had already closed).

@@ -574,6 +574,31 @@ _floor_wait_state() {
 #   * a mailbox that cannot be resolved or written pushes nothing at all;
 #   * upstream of this function entirely, a held time clamped to 0 removes the alarm and the push
 #     together (#165).
+# _is_seat <name> — is this a participant of this room, as the roster reads it?
+#
+# ONE predicate, called from three places, because all three are asking the same question and a
+# second copy is the copy that stops being maintained. `_stall_escalate` asked it first and had
+# the only copy; `v_status`' liveness read needed it too and did not have it, which is how
+# `council.sh relaunch — (barrier)` reached an operator's console: during an open barrier round
+# `$floor` is a LABEL, not a seat, and the mailbox notice degraded correctly while the console
+# line — the same event's other output — named the label as a participant.
+#
+# A refusing roster answers NO, not "assume yes". `c_peers` returns 1 for a roster it will not
+# validate, and a name that cannot be checked against the roster is a name this predicate has no
+# business confirming; every caller uses it to decide whether to make a claim ABOUT a seat, so
+# the safe answer is to make none.
+_is_seat() { # <name>
+  local name="${1:-}" roster
+  [ -n "$name" ] || return 1
+  roster=$(c_peers) || return 1
+  # Matched by reading rather than `printf … | grep -q`, for the reason given at every other
+  # comparison of this shape in the tree: `-q` exits on the first hit, the writer takes a
+  # SIGPIPE, and under `pipefail` the pipeline's status is then the writer's — so a present peer
+  # intermittently reads as absent.
+  case $'\n'"$roster"$'\n' in *$'\n'"$name"$'\n'*) return 0 ;; esac
+  return 1
+}
+
 _stall_escalate() {
   local peer="${1:-}" turns="${2:-}" held="${3:-}" note="${4:-}" key room who where mb
   command -v policy_escalate >/dev/null 2>&1 || return 0
@@ -636,15 +661,14 @@ _stall_escalate() {
   # `pipefail` the pipeline's status is then the writer's — so a present peer intermittently reads
   # as absent. Here that would only downgrade the wording, which is precisely the kind of rare,
   # harmless-looking misreport nobody ever tracks down.
-  local roster; roster=$(c_peers)
-  case $'\n'"$roster"$'\n' in
-    *$'\n'"$peer"$'\n'*) who="$peer"; where="$peer's terminal" ;;
-    *)                   who="the room's floor"; where="every participant's terminal" ;;
-  esac
-  # `[ -n "$peer" ]` first: with no floor holder AND an unreadable roster both sides of the `case`
-  # subject are empty, which MATCHES the member pattern and named an empty seat in the notice
-  # ("  has been held for 7200s"). An unnamed floor is exactly the input the fallback is for.
-  [ -n "$peer" ] || { who="the room's floor"; where="every participant's terminal"; }
+  # Through the shared `_is_seat` rather than a local `case`, which is what this used to be. It
+  # answers the same way for the same reasons — including the two inputs that used to need a
+  # separate line here: an EMPTY peer (with an unreadable roster both sides of the old `case`
+  # subject were empty, which MATCHES the member pattern and named an empty seat in the notice,
+  # "  has been held for 7200s"), and a roster `c_peers` refuses. Both now fall to the fallback,
+  # which is exactly what an unnamed or uncheckable floor is for.
+  if _is_seat "$peer"; then who="$peer"; where="$peer's terminal"
+  else who="the room's floor"; where="every participant's terminal"; fi
   mkdir -p "$mb" 2>/dev/null || true
   # The annotation goes LAST, after council's own remedies, and the quote is delimited. Spliced
   # mid-sentence it ran straight into this skill's instructions with nothing marking where the
@@ -673,16 +697,29 @@ _stall_escalate() {
 # launched by this skill and so has no terminals to count — the same guard, and the same
 # reasoning, as `_floor_screen`'s.
 #
-# RC 2 EXISTS SO THAT AN UNANSWERABLE READ FAILS OPEN. Its one consumer is the closed-room
-# alarm below, which tells a supervisor to run `down`; every input here is room state a
-# participant can write (the pin, and — through the backend — the session names), and this
-# repo's rule is that untrusted evidence may ANNOTATE an operator-facing signal and never
-# suppress one. So a read that cannot be resolved must still produce the alarm, in a wording
-# that says it could not tell, rather than silently produce none. What rc 1 concedes is
-# narrower and pre-existing: a seat that DELETES the pin makes this — and `_floor_screen`
-# before it — answer "no terminals" for a room that has some. Nothing here closes that; a
-# launch record written outside the room would, and is the same fix `_floor_wait_state`'s
-# header names for its own inputs.
+# RC 2 EXISTS SO THAT AN UNANSWERABLE READ FAILS OPEN. Two consumers read it: the closed-room
+# alarm in `v_status`, which must still fire in a wording that says it could not tell, and
+# `v_terminals`, which renders it as `?` rather than `-` so `rooms` does not report "never
+# launched" for a room nothing is known about.
+#
+# WHAT THIS CANNOT DO, stated because the alarm above it is an operator-facing signal and this
+# repo's rule is that untrusted evidence may ANNOTATE one and never SUPPRESS one. Every input
+# here is room state a participant can write, and the list is longer than the pin:
+#   * the ROSTER. `c_peers` refuses a roster it cannot validate, and that refusal used to be
+#     swallowed by the heredoc below — an empty list, a confident `0/0` at rc 0, and the alarm
+#     gone while the terminals ran. It now returns 2. This one is not only adversarial:
+#     `up` writes `roster.json` with a plain `>`, so an interrupted run leaves a truncated file.
+#   * the PIN's VALUE. Retargeted at a container that does not exist, the backend answers
+#     honestly that it holds nothing, so this is a RESOLVED read reporting zero — indistinguishable
+#     here from a room that was correctly torn down, because `council_down` leaves the pin in
+#     place. Nothing in this function closes that, and no arrangement of its inputs can: they all
+#     live in the room. `v_status` therefore does not treat a zero as proof — it says so on the
+#     block instead of falling silent.
+#   * the PIN's EXISTENCE. Deleted, this answers rc 1 (`_floor_screen` has the same shape).
+# The durable fix for the last two is a launch record written OUTSIDE the room, the same move
+# `_status_sigfile` already makes for the signature and the same one `_floor_wait_state`'s header
+# names for its own inputs. That is a change to `up`, `relaunch` and `down`, so it is filed
+# rather than smuggled in here.
 #
 # IT SOURCES term.sh IN ITS OWN SUBSHELL, like `_floor_screen`, so a `status` that reaches
 # both pays the backend resolution twice. That is the cost `_floor_screen`'s header warns a
@@ -690,7 +727,7 @@ _stall_escalate() {
 # A caller that adds a third read should hoist the source into `v_status`, outside every
 # command substitution, where the `command -v` guard would actually bite.
 _room_terminals() {
-  local f pinned=0 list erc=0 peer name s live=0 total=0
+  local f pinned=0 list erc=0 peers peer name s live=0 total=0
   for f in "$ROOM"/state/container-*; do [ -f "$f" ] && pinned=1; done
   [ "$pinned" = 1 ] || return 1
   if ! command -v ct_sessions >/dev/null 2>&1; then
@@ -707,6 +744,12 @@ _room_terminals() {
   # What is left is exactly the two refusals this caller must honour: `unreachable` and
   # `elsewhere`.
   ct_absence_class "$erc" >/dev/null 2>&1 || return 2
+  # CAPTURED, with its status, before the loop. Read inline as `done <<EOF $(c_peers) EOF` the
+  # command substitution threw `c_peers`' exit status away, so a roster it REFUSES became an empty
+  # list, zero iterations, and `0\t0` returned at rc 0 — the one answer this function must never
+  # give for a read it could not make. `c_peers` never returns 0 with an empty list, so rc 2 here
+  # is unambiguous.
+  peers=$(c_peers) || return 2
   while IFS= read -r peer; do
     [ -n "$peer" ] || continue
     total=$((total + 1))
@@ -721,7 +764,7 @@ _room_terminals() {
 $list
 EOF
   done <<EOF
-$(c_peers)
+$peers
 EOF
   printf '%s\t%s' "$live" "$total"
 }
@@ -757,13 +800,25 @@ v_terminals() {
 # present identically in the room — a floor held, nothing arriving — and they need opposite
 # moves: `relaunch` discards everything the seat has read, so using it on a live seat waiting
 # on a permission prompt destroys the argument that seat was holding. What a backend
-# enumeration settles is presence: whether a terminal exists. What it cannot settle is what a
-# present terminal is DOING, so an alive seat gets "alive, so do not relaunch it" and never
-# "it is at a prompt" — the only in-pane shape this skill recognises today is an announced
-# capacity wait (`_floor_wait_state`), which is a park, not a prompt.
+# enumeration settles is presence: whether a terminal WITH THAT NAME exists. What it cannot
+# settle is what a present terminal is DOING, so an alive seat is never told "it is at a prompt".
+# An announced capacity wait is the only in-pane shape THIS ALARM reads (`_floor_wait_state`),
+# and it is a park, not a prompt. council does read the pane elsewhere — `say` classifies turn
+# state through `adp_turn_state` (`lib/up.sh`), which is vendored here as `lib/agent-adapters.sh`
+# — but `running`/`idle` cannot separate "at a permission prompt" from "finished and waiting",
+# so it would not answer this question either. Named rather than omitted: the sentence that used
+# to stand here said this was the only in-pane read in the skill, which was false and hid a
+# shared-engine reader from the next person to ask.
 #
-# EVIDENCE, NOT A VERDICT, exactly like `_floor_wait_state`: it appends to the alarm and can
-# neither remove it nor stop its push.
+# EVIDENCE, NOT A VERDICT — and unlike the first draft, THE STRINGS NOW SAY SO. `_floor_wait_state`
+# prints "this is a quote from a pane, not a verdict" and this printed an unhedged verdict that
+# PRESCRIBED the destructive command, while its own header claimed to follow that convention. It
+# does not any more: every input below is room state a participant can write — the pin names the
+# container, and any process that can reach the backend can create a session with the expected
+# name — so what this returns is what a live seat and a dead seat LOOK LIKE, for an operator to
+# check, never authority to relaunch on. Matching a backend-assigned handle (a tmux `#{window_id}`,
+# an agterm session UUID) recorded outside the room at launch is what would make it a verdict;
+# that is filed with `_room_terminals`' launch record, since it is the same record.
 _seat_liveness() { # <peer>
   local peer="${1:-}" f pinned=0 list erc=0 name s
   [ -n "$peer" ] || return 1
@@ -778,7 +833,7 @@ _seat_liveness() { # <peer>
   name=$(ct_name "$peer")
   while IFS= read -r s; do
     [ "$s" = "$name" ] || continue
-    printf 'its terminal is still up, so it is NOT a dead seat — answer whatever its pane is asking, in place; do not relaunch it.'
+    printf 'a session named `%s` is listed, which is what a live seat looks like — so do not reach for relaunch first; a name is not an identity, so look at the pane.' "$name"
     return 0
   done <<EOF
 $list
@@ -789,8 +844,23 @@ EOF
   # absence says nothing, because the confident negative is the expensive one here: it is
   # what sends a supervisor to `relaunch` on a seat that is alive and mid-turn.
   ct_absence_class "$erc" "$list" "$name" >/dev/null 2>&1 || return 1
-  printf 'its terminal is GONE — the %s backend answered and does not have it, so this is the relaunch case: council.sh relaunch %s (it discards everything that seat has read).' \
-    "$(ct_backend)" "$peer"
+  # A SEAT WITH NO LAUNCHER WAS NEVER GIVEN A TERMINAL, so its absence means something else
+  # entirely. `council up` skips `_write_launcher` for the seat the human took with `--me`, which
+  # still sits in the roster and still takes its turn — so without this branch the commonest
+  # healthy path in a human-in-the-room scenario (a person thinking for longer than the threshold)
+  # printed a confident GONE and prescribed a command `relaunch` then refuses. The launcher is the
+  # record `relaunch` itself reads for this, and nothing ever deletes one.
+  #
+  # BOTH BRANCHES KEEP THE "terminal is GONE" WORDS, and only the advice differs. Withholding the
+  # absence on a missing launcher would let a deleted launcher silence a genuinely dead seat —
+  # trading a wrong remedy for no signal, which is the worse direction.
+  if [ ! -f "$ROOM/state/launch-$peer.sh" ]; then
+    printf 'its terminal is GONE — the %s backend answered and does not have it. But this seat has no launcher, so it was never GIVEN one: it is the seat taken with `--me` and the room is waiting on a person (council.sh relaunch refuses such a seat), or somebody removed the launcher.' \
+      "$(ct_backend)"
+    return 0
+  fi
+  printf 'its terminal is GONE — the %s backend answered and its session list does not contain `%s`, which is what a dead seat looks like. The list is matched by NAME, inside a container named by a file in the room, so look at the terminal before running council.sh relaunch %s (it discards everything that seat has read).' \
+    "$(ct_backend)" "$name" "$peer"
 }
 
 # _status_sigfile — where the last PRINTED status block's signature lives, for --only-changed.
@@ -814,7 +884,7 @@ _status_sigfile() {
 v_status() {
   local j verd g t floor held conf room_age alarms="" phase wait_ev="" wait_note=""
   local only_changed=0 alarms_only=0 term_live="" term_total="" term_rc term_out="" live_note=""
-  local out="" round_line="" openct sig sigfile TAB
+  local out="" round_line="" openct sig sigfile TAB term_line="" quiet_line=""
   TAB=$(printf '\t')
   while [ $# -gt 0 ]; do
     case "$1" in
@@ -880,10 +950,27 @@ v_status() {
     # to count) from rc 2 (could not tell) — and those two are exactly what this branch is for.
     term_out=$(_room_terminals); term_rc=$?
     term_live=${term_out%%"$TAB"*}; term_total=${term_out##*"$TAB"}
+    # A ZERO IS NOT PROOF, AND THE TICK MUST NOT FALL SILENT ON ONE. The count is taken through
+    # `state/container-<backend>`, a file in the room: retargeted at a container that does not
+    # exist, the backend answers honestly that it holds nothing, so a live room reports 0 as a
+    # RESOLVED read and the alarm simply vanished — on the exact tick the documented monitor loop
+    # exits, which made it the supervisor's last word. It cannot be told apart from a room that
+    # was correctly torn down, because `council_down` leaves the pin in place, so raising the
+    # ALARM on a zero would cry wolf on every finished room for ever. The answer is neither: the
+    # zero goes on the BLOCK, with its provenance, where a closed room always prints it (a closed
+    # tick is never suppressed by --only-changed) and the fast alarm loop is not woken by it.
     case "$term_rc" in
-      0) [ "${term_live:-0}" -gt 0 ] \
-           && alarms="$alarms ⚠️ this room is closed but $term_live of $term_total terminals are still up — council.sh down releases them" ;;
+      0) if [ "${term_live:-0}" -gt 0 ]; then
+           alarms="$alarms ⚠️ this room is closed but $term_live of $term_total terminals are still up — council.sh down releases them"
+         else
+           term_line="terminals: none of $term_total seats is listed — but that count came through a container pin inside the room, so a zero is not proof. If council.sh down has not been run here, run it."
+         fi ;;
       2) alarms="$alarms ⚠️ this room is closed and whether its terminals are still up could not be determined — run council.sh down to be sure" ;;
+      # No pin at all. A room never launched by this skill has no terminals to release, which is
+      # every hand-built and test room — so this is a line on the block, not an alarm. It is on the
+      # block rather than absent because a DELETED pin lands here too, and that is a route to
+      # silence (`_room_terminals`' header names it): saying what was read costs one line.
+      *) term_line="terminals: this room carries no container pin, so it was never given any — or the pin is gone. council.sh down is harmless either way." ;;
     esac
   fi
   # The held time comes from the last turn-consuming message's `sent_ms`, so it is only as good
@@ -944,11 +1031,25 @@ v_status() {
       # the terminal says exactly why and this code cannot read it.
       wait_ev=$(_floor_wait_state "$floor") || wait_ev=""
       alarms="$alarms 🛑 STALL: $floor has held the floor for ${held}s — the room has stopped; go and look at it. A seat sitting on a permission or first-launch trust prompt needs that prompt ANSWERED IN PLACE; council.sh relaunch is only for a seat that is genuinely dead, and it discards everything that seat has read."
-      # WHICH of those two the seat is, where the backend can settle it. The alarm above names
-      # both remedies and picks neither; this narrows it to one whenever presence is
-      # corroborated, and stays silent rather than guessing when it is not.
-      live_note=$(_seat_liveness "$floor") || live_note=""
-      [ -n "$live_note" ] && alarms="$alarms $live_note"
+      # WHAT the seat looks like, where the backend can be asked. It narrows the two remedies
+      # above whenever presence is corroborated, and says nothing rather than guessing when it is
+      # not.
+      #
+      # THE READ IS GATED; THE ALARM ABOVE IS NOT, AND THAT ASYMMETRY IS THE WHOLE POINT. The
+      # 🛑 STALL line fires on a closed room on purpose — `t22` pins it, because a closure is two
+      # files a participant can forge and a withheld alarm would be the silence that buys. But the
+      # liveness SENTENCE has no business on a room that is finished: `held` is `now - last turn`
+      # and grows without bound after a closure, so every decided room reached this branch about
+      # fifteen minutes later and was told to `council.sh relaunch` a seat in a room whose record
+      # was already written — and, with the 60s alarm loop this skill now documents, once a minute
+      # for ever. `_is_seat` closes the other half: during an open barrier round `$floor` is the
+      # label `— (barrier)`, and this printed `council.sh relaunch — (barrier)` while
+      # `_stall_escalate`'s notice for the same event degraded correctly, because that one had the
+      # membership test and this did not.
+      if [ -z "$(c_recorded_status)" ] && _is_seat "$floor"; then
+        live_note=$(_seat_liveness "$floor") || live_note=""
+        [ -n "$live_note" ] && alarms="$alarms $live_note"
+      fi
       if [ -n "$wait_ev" ]; then
         wait_note="⏳ its pane carries a live ${wait_ev%%	*} banner: $(policy_park_advice) If that banner is current the seat resumes by itself, so check the terminal before relaunching — this is a quote from a pane, not a verdict. Evidence: ${wait_ev#*	}"
         alarms="$alarms $wait_note"
@@ -962,32 +1063,37 @@ v_status() {
     # only chooses between the two, came to decide whether anyone was woken.
     _stall_escalate "$floor" "$t" "$held" "$wait_note"
   elif [ "$held" -gt "${COUNCIL_STALL_WARN_SECS:-300}" ] && [ -z "$(c_recorded_status)" ] \
-       && ! c_round_open; then
-    # THE EARLY TIER, and the reason it is not just a smaller COUNCIL_STALL_SECS. The hard
-    # threshold's default of 900s is tuned for a slow model thinking; the wedges that actually
-    # cost rooms were 323s and 344s — a seat sitting on a permission prompt, which is not slow,
-    # it is stopped. Lowering the one threshold to catch those would make every long think
-    # raise 🛑 STALL and push a notice about it, and an alarm that fires on the normal case is
-    # one an operator learns to ignore. So this tier is DIFFERENT IN KIND, not just in number:
+       && ! c_round_open && _is_seat "$floor"; then
+    # THE EARLY TIER IS AN ANNOTATION, NOT AN ALARM, and the measurement is what decides that.
     #
-    #   * it is ⚠️, not 🛑 — a thing to glance at, not a thing that has gone wrong;
-    #   * it does NOT push. The mailbox is the durable cross-room channel for "a person must
-    #     act", and a quiet floor is not yet that. It is also the mechanically safe choice:
-    #     `_stall_escalate` de-duplicates on `[stall:<peer>:<turns>]`, so a push from here
-    #     would consume the key the real STALL needs and silence it for that whole turn —
-    #     turning an early warning into a way to lose the alarm it warns about.
+    # It was written as an alarm, because the wedges that actually cost rooms were 323s and 344s
+    # and nothing fired for them. Then single turns on real slots were measured at 24, 51, 55 and
+    # 84 minutes — 1440 to 5040 seconds, every one of them a healthy seat thinking. An alarm here
+    # would fire on all four. That is the failure this repo has been bitten by three times and
+    # which the comment above, arguing against lowering COUNCIL_STALL_SECS, names in as many
+    # words: an alarm that fires on the commonest healthy path is one an operator learns to skim.
     #
-    # It still bypasses `--only-changed`, like every alarm, which is the whole point: a room
-    # that goes quiet changes nothing, so a change-triggered monitor is exactly the reader that
-    # would otherwise never hear about it.
+    # RAISING THE NUMBER CANNOT FIX IT, which is the part worth keeping. Past the measurement
+    # this threshold would sit above 5040s — i.e. above the 900s hard tier it exists to sit below.
+    # A quiet tier above the stall tier is not a tier, it is dead code. The two states simply are
+    # not separable by held time: a 323-second prompt wedge and a 5040-second think are the same
+    # number to this clock, so no threshold can tell them apart and the instrument is wrong, not
+    # its tuning. What could tell them apart is TURN STATE — the supervisor's own failure was a
+    # seat that ENDED ITS TURN at a prompt, i.e. idle rather than running — and `adp_turn_state`
+    # in the shared adapters already reads queued/running/idle. That is a real change to make, and
+    # it is filed rather than half-made here.
     #
-    # NOT on a closed room (a finished room's floor is nobody's problem — `_stall_escalate`
-    # returns early on the same test) and NOT during an open barrier round, which is the one
-    # state in which a long-held floor is normal rather than a stall: nobody holds it and the
-    # room is waiting on everyone, which `OPEN ROUND:` already says.
-    alarms="$alarms ⚠️ quiet: $floor has held the floor for ${held}s with nothing arriving — not yet a stall (🛑 at ${COUNCIL_STALL_SECS:-900}s), but this is the window a permission prompt sits in. Glance at its terminal."
+    # So this goes on the BLOCK, never into `$alarms`: it does not bypass `--only-changed`, does
+    # not break the slow loop's silence, and does not wake the 60-second alarm loop. It is a line
+    # a supervisor reads when the block is printing anyway — at which point a low threshold costs
+    # nothing, which is why 300s stays. It is an annotation threshold now, not an alarm threshold.
+    #
+    # The guards are unchanged and still right: not on a closed room, not during an open barrier
+    # round (where a long-held floor is normal and `OPEN ROUND:` already says so), and now not for
+    # a `$floor` that is not a seat.
+    quiet_line="quiet: $floor has held the floor for ${held}s with nothing arriving — under the ${COUNCIL_STALL_SECS:-900}s stall threshold, and a long think looks exactly like this, so it is a thing to notice rather than a thing that is wrong."
     live_note=$(_seat_liveness "$floor") || live_note=""
-    [ -n "$live_note" ] && alarms="$alarms $live_note"
+    [ -n "$live_note" ] && quiet_line="$quiet_line $live_note"
   fi
   openct=$(printf '%s' "$g" | jq -r '.open | length' 2>/dev/null)
   # --only-changed: stay silent unless the meaningful state moved — the floor, the verdict, the
@@ -1005,7 +1111,13 @@ v_status() {
   # A CLOSED ROOM IS ALSO ALWAYS PRINTED. It is the tick the documented loop exits on, so
   # swallowing it would make the end of the watch silent — the loudest thing this verb says
   # arriving as nothing at all.
-  if [ "$only_changed" = 1 ] && sigfile=$(_status_sigfile); then
+  # NOT in --alarms-only mode, and that is a silencing bug rather than tidiness. The two flags
+  # parse together, and combined they printed nothing (no alarm) while still STORING the new
+  # signature — so an operator who added `--only-changed` to the fast loop "to make it quieter"
+  # had the fast loop eat the slow loop's change, and the ten-minute block went silent for that
+  # turn. The signature is the BLOCK loop's memory; only a tick that could have printed a block
+  # may write it.
+  if [ "$only_changed" = 1 ] && [ "$alarms_only" = 0 ] && sigfile=$(_status_sigfile); then
     sig="$floor|$verd|$t|$openct"
     if [ -z "$alarms" ] && [ -z "$(c_recorded_status)" ] \
        && [ -f "$sigfile" ] && [ "$sig" = "$(cat "$sigfile" 2>/dev/null)" ]; then
@@ -1029,6 +1141,14 @@ v_status() {
     # with no memory between them and so nothing that could go stale and suppress a standing
     # alarm. Note the two flags are independent: `--only-changed` can still suppress this mode's
     # tick, and it too refuses to suppress one carrying an alarm.
+    #
+    # WHAT THIS MODE SAVES IS OUTPUT, NOT LOG WALKING. It skips the transcript render below, and
+    # that is all: `v_verdict --json` and `_graph_seen` above are full-log passes run before any
+    # flag branch. Measured at 1200 lane messages, the transcript read is about a tenth of the
+    # verb and skipping it saves ~7%. Said plainly because the sentence here used to call the
+    # transcript the only per-line cost, which would have someone arm this loop believing it
+    # cheap; at realistic room sizes a 60-second cadence is still comfortable, but the reason is
+    # that rooms are small, not that this mode is thrifty.
     if [ -n "$alarms" ]; then
       printf '=== council %s ===\n' "$(basename "$ROOM")"
       printf 'alarms:%s\n' "$alarms"
@@ -1046,6 +1166,10 @@ v_status() {
     printf 'verdict: %s (nothing new for %s turns, lap %s)\n' "$verd" \
       "$(printf '%s' "$j" | jq -r .since_last_claim)" "$(printf '%s' "$j" | jq -r .lap)"
     printf 'phase: %s\n' "$phase"
+    # The two non-alarm annotations. On the block only: neither breaks --only-changed's silence
+    # and neither reaches --alarms-only, which is what keeps the 60-second loop an alarm channel.
+    [ -n "$term_line" ]  && printf '%s\n' "$term_line"
+    [ -n "$quiet_line" ] && printf '%s\n' "$quiet_line"
     [ -n "$round_line" ] && printf '%s\n' "$round_line"
     printf '%s' "$g" | jq -r '
       if (.live|length) == 0 then "on the table: nothing" else (.live[] | "on the table: \(.id) from \(.from) — \(.current_text[0:90])") end,
