@@ -236,7 +236,7 @@ full `--timeout` (**540 s** by default) with the record already finished on disk
 | exit | what it means |
 |---|---|
 | 0 | the record is written, the announcement was written, **and** — on a close recorded `decided` — the teardown below was asked for. A close recorded `unresolved` deliberately asks for none. |
-| 5 | the record is written and the announcement went out, but the **terminals could not be closed**: no live keeper to do the reaping, or the request could not be written, or the caller has no keeper machinery in scope. The message names which. The close stands; `down` closes them. |
+| 5 | the record is written and the announcement went out, but the **terminals could not be closed**: no live keeper to do the reaping, or the request could not be written (the message names the path). The close stands; `down` closes them. A third cause exists only for a *library* caller that sourced `verbs.sh` without `lib/up.sh` and so has no keeper machinery in scope — `council.sh decide` cannot produce it, because the entrypoint always sources it. |
 | 4 | the record is written, the announcement was **not**. The close stands: `board/status` is set and `decision` serves the record; no seat was rung, so each learns at its own next poll. No teardown is asked for on this path, so the terminals are still up. |
 | 1 | the record itself could not be written. **The room is not closed** and nothing was announced; no path is printed. |
 
@@ -342,9 +342,9 @@ Three consequences worth knowing:
   the request *and* the live keeper still inside its five-second poll window. What it cannot
   cancel is a reap already **in flight**: the keeper consumes the request before it starts
   closing, so from that moment there is nothing left to clear and `relaunch` cannot see it. That
-  window is the length of one reap — measured at 84–383 ms for three seats — and a `relaunch`
-  landing inside it can leave the room without a keeper until the next one repairs it. It is
-  tracked separately rather than papered over here.
+  window is the length of one reap — measured at 84–383 ms for three seats on a live tmux backend
+  — and a `relaunch` landing inside it can leave the room without a keeper until the next one
+  repairs it. It is tracked separately rather than papered over here.
 
 `down` is unchanged and still the way to close a room by hand: an unresolved one, one whose
 teardown could not happen, or any room at all before it decides. `down --purge` remains the only
@@ -377,9 +377,11 @@ terminal because it is you.
 ### Room lifetime: detached (default) or `--hold`
 
 By default `up` **launches the room and returns**. The room is detached: it outlives the shell
-that started it and lives until its directory is removed — an explicit `down`/`--purge`, or the
-directory going away — or until it decides, which closes its own terminals
-([above](#a-decided-room-closes-its-own-terminals)) while leaving the record. This is the right
+that started it and its **live** side lasts until something ends it: `down` (which closes the seats
+and the keeper but **keeps** the room), `down --purge` or a deletion by hand (which removes the
+directory as well), or the room deciding, which closes its own terminals
+([above](#a-decided-room-closes-its-own-terminals)) and likewise leaves everything durable behind.
+Only `--purge` and a hand deletion take the record with them. This is the right
 mode for a room you want to leave running and revisit from another shell.
 
 `up --hold` instead **stays in the foreground as the room's owner**, and binds the room's life to
@@ -405,9 +407,10 @@ polled for. The keeper runs in its own process group, so the very Ctrl-C that ki
 does not also kill the keeper before it can do the reaping. `down` and `--purge` still tear a
 room down exactly as before; the canary is an added trigger, not a replacement.
 
-The keeper now has **four** exit triggers, and it is worth keeping them straight because only
-three of them end the live room. Its directory going away (an explicit `down`, which has already
-closed the terminals, so the keeper only exits); a `--hold` room's owner dying, seen as the EOF
+The keeper's loop has **four** ways to return, and it is worth keeping them straight because only
+three of them end the live room. Its directory going away (`down --purge`, or a deletion by hand —
+*not* a plain `down`, which keeps the room and ends the keeper with a signal instead, outside the
+loop entirely); a `--hold` room's owner dying, seen as the EOF
 above, on which it reaps; **a decided `decide` asking it to reap**
 ([above](#a-decided-room-closes-its-own-terminals)), which applies to a detached room as much as
 to a held one; and its pid file naming another keeper, on which it steps down and reaps
@@ -860,10 +863,13 @@ Two cautions for a supervisor rather than a participant. That message goes to **
 record say `decided` and does *not* see the sentence, which is exactly the room-2 case that
 produced this issue. And `board/status` alone cannot tell you which ending it was: it reads
 `decided` on a clean close, on an exit 4 whose announcement was lost, and on an exit 5 whose
-teardown could not happen. **Nothing in the skill reports that difference today** — `rooms` does
-not probe the backend, so a decided room with live seats and one without print identically. If you
-did not see the exit code, the backend itself (`agtermctl`/`tmux ls`) is the only place the answer
-exists.
+teardown could not happen. **`rooms` will not tell you either** — it reports each room's verdict and
+never probes the backend, so a decided room with live seats and one without print identically. What
+does ask the backend is [`say`](#what-say-establishes-and-what-each-answer-means): `council.sh say
+<peer> "…"` answers **exit 3** when that seat has no live terminal, and **exit 4** when the room was
+launched on the *other* backend — which is the caveat that makes reading `tmux ls` by hand
+unreliable here, since `COUNCIL_BACKEND=auto` resolves per process and the seats may be in the
+other container entirely. The cost of asking is that `say` types into the seat if it *is* alive.
 
 **Exit codes here mean status, not success.** `verdict` returns 1 on a live room and 2 on
 a stuck one. It also returns **1 having printed nothing at all** when the room's ROSTER

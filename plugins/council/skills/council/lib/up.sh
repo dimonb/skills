@@ -83,9 +83,12 @@ _room_dirs_sane() { # <room>
 }
 
 # --- teardown-on-close ----------------------------------------------------------
-# One name for the file that asks the room's keeper to close the participant terminals and
-# exit. Three places read or write it — the writer below, the keeper's loop, and `relaunch`'s
-# cancel — and a path spelled out in three places is the one that stops agreeing with itself.
+# One name for the file that asks the room's keeper to close the participant terminals and exit.
+# Everything that reads, writes, clears or NAMES it goes through here — the writer below, the
+# keeper's loop, `relaunch`'s cancel, and `v_decide`'s message when it has to tell an operator
+# which path could not be written. Deliberately not a count: the first version of this comment
+# said "three places", `v_decide` then became a fourth by spelling the path out as a literal, and
+# a number that has to be maintained is the thing that stops agreeing with the tree.
 _keeper_teardown_file() { printf '%s/state/teardown' "$1"; }
 
 # Ask the room's keeper to reap. This is the whole of `decide`'s teardown (#48), and it is a
@@ -139,9 +142,15 @@ _keeper_teardown() { # <room> -> 0 asked, 1 no live keeper to ask, 2 the request
   # Redirections are applied left to right, so a trailing suppressor is installed AFTER the
   # failing `open()` and bash writes its own diagnostic to the still-original fd 2. Measured on
   # this platform rather than reasoned: `printf x > "$F" 2>/dev/null` leaks `Permission denied`,
-  # `printf x 2>/dev/null > "$F"` does not. The trailing form is an idiom this tree carries in a
-  # dozen places and it is harmless at all of them; here it put a raw `up.sh: line NN:` above a
-  # sentence that contradicted it, which is what made it worth fixing at this one site.
+  # `printf x 2>/dev/null > "$F"` does not. The trailing form is an idiom this tree carries in
+  # roughly twenty places; the ones looked at here (shared/driver, shared/flow, shipyard's
+  # report and continuity writers) print nothing that a contradicting sentence sits under, so
+  # they were left alone — the rest were not audited. What made this one site worth fixing is
+  # that it put a raw `up.sh: line NN:` directly above a message that disagreed with it.
+  #
+  # Because the diagnostic is now suppressed, the caller's exit-5 message NAMES THE PATH itself
+  # rather than pointing at an error above it. The two go together: an earlier revision did both
+  # — suppressed the error and then told the operator to read it.
   printf 'teardown\n' 2>/dev/null > "$f" || return 2
   return 0
 }
@@ -177,8 +186,13 @@ _canary_fifo() { # <room> -> a freshly created fifo path on stdout, or rc 1
 # The keeper's body. It exits on ANY of four triggers — but only the first three end the LIVE room
 # (its terminals and itself, never the durable record); on the last the room carries on without
 # this keeper, under the one that superseded it:
-#   * the room directory going away: an explicit `down`/`council_down`, exactly as before. In that
-#     path `council_down` has already closed the terminals, so the keeper only has to exit.
+#   * the room directory going away — `down --purge`, or a deletion by hand. The terminals are
+#     already closed on the `--purge` path, so the keeper only has to exit.
+#     NOT a plain `down`: that KEEPS the room (it prints "room kept") and ends the keeper with a
+#     SIGTERM instead, which is not a polled trigger at all — the loop never decides anything, the
+#     process is simply killed. This list is the ways the LOOP returns; a signal is outside it.
+#     An earlier version of this line said "an explicit `down`/`council_down`" and so described a
+#     directory removal that a plain `down` does not perform.
 #   * (a `--hold` room only) its OWNER dying, seen as EOF on the canary read end. Here nothing
 #     else closes the terminals — an owner that was Ctrl-C'd, crashed or was OOM/SIGKILLed never
 #     reached `council_down` — so the keeper REAPS every participant terminal itself, then exits.
@@ -583,14 +597,17 @@ council_up() {
   # exact trap that a `while sleep` loop falls into. When this shell dies for ANY reason (Ctrl-C,
   # a closed pane, a crash, SIGKILL) the write end closes, the keeper hits EOF and reaps every
   # terminal; if `wait` ever returns on its own it is because the keeper already exited, and there
-  # is then nothing left to hold. TWO THINGS MAKE IT RETURN, and only one of them removes the
-  # room: an explicit `down`, and — since #48 — a close recorded `decided`, whose teardown the
-  # keeper takes before reaping and exiting. On that second path THE ROOM, THE RECORD AND THE
-  # TRANSCRIPT ALL SURVIVE; measured, on a real held room. So a returning hold shell no longer
-  # implies a `down`, and an operator whose foreground `up --hold` came back to a prompt has not
-  # lost anything — the four-trigger list in `_keeper_loop`'s header is the one place that
-  # enumerates this. Without --hold the function simply returns here and the detached keeper
-  # outlives the caller, as it always has.
+  # is then nothing left to hold. That is the general statement and it is the safe one to keep —
+  # `_keeper_loop`'s header enumerates the four ways a keeper exits, and SKILL.md's "Room
+  # lifetime" section carries the operator-facing copy of the same list; keep the two in step.
+  #
+  # Since #48 the commonest of those is worth naming here, because it is the one an operator will
+  # meet and misread: a close recorded `decided` asks the keeper to reap, so it reaps, exits, and
+  # this `wait` returns. ON THAT PATH THE ROOM, THE RECORD AND THE TRANSCRIPT ALL SURVIVE —
+  # measured, on a real held room — so a returning hold shell does not mean the room was removed,
+  # and nothing has been lost. (Nor does a plain `down`, which keeps the room too; only
+  # `down --purge` deletes anything.) Without --hold the function simply returns here and the
+  # detached keeper outlives the caller, as it always has.
   if [ "$hold" = 1 ]; then
     printf '\n[hold] this shell owns the room; its death (Ctrl-C, closed pane, crash, kill) tears it down.\n'
     printf '       run without --hold for a room that outlives this shell (bounded by its directory).\n'

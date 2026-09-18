@@ -1197,15 +1197,15 @@ v_decide() {
   # did not run is never reported as one that did, and that governs the REASON as much as the
   # outcome. Exit 5 is the same in all three — the terminals are up and `down` is the remedy —
   # so the code stays one value and only the sentence differs.
-  local td=0
+  local td=0 tdf=""
   if ! command -v _keeper_teardown >/dev/null 2>&1; then td=3
-  else _keeper_teardown "$ROOM"; td=$?
+  else _keeper_teardown "$ROOM"; td=$?; tdf=$(_keeper_teardown_file "$ROOM")
   fi
   if [ "$td" != 0 ]; then
     printf '%s\n' "$out"
     case "$td" in
       1) echo "council decide: the record is written (decided) and the room was told, but its terminals could NOT be closed — this room has no live keeper to do the reaping, so the participants' sessions are still up. The close stands; 'council.sh down --room $(basename "$ROOM")' closes them and keeps the record." >&2 ;;
-      2) echo "council decide: the record is written (decided) and the room was told, but its terminals could NOT be closed — the teardown request could not be written to the room's state directory, so its keeper will never see it and the participants' sessions are still up. The error above says why. The close stands; 'council.sh down --room $(basename "$ROOM")' closes them and keeps the record." >&2 ;;
+      2) echo "council decide: the record is written (decided) and the room was told, but its terminals could NOT be closed — the teardown request could not be written to $tdf, so its keeper will never see it and the participants' sessions are still up. The close stands; 'council.sh down --room $(basename "$ROOM")' closes them and keeps the record." >&2 ;;
       *) echo "council decide: the record is written (decided) and the room was told, but no teardown was asked for — this caller has no keeper machinery in scope (lib/up.sh was not sourced), so the participants' sessions are still up. The close stands; 'council.sh down --room $(basename "$ROOM")' closes them and keeps the record." >&2 ;;
     esac
     return 5
@@ -1218,8 +1218,17 @@ v_decide() {
   # no path is printed", every clause of it false, the path having gone to stdout — and stderr on
   # a dead pipe returned 141. `origin/main` ended on the stdout `printf` and returned 0, so this
   # was a regression introduced with the teardown, not an inherited shape. The three branches
-  # above all return explicitly; this one is the only tail in the skill's verbs that a write
-  # could speak for. `council_up`'s tail carries the same warning for the same reason.
+  # above all return explicitly. `council_up`'s tail carries the same warning for the same reason.
+  #
+  # WHAT IS PARTICULAR HERE IS THAT THE WRITE IS ADVISORY, not that no other tail ends on a write.
+  # An earlier revision of this comment claimed the latter and it is false: `v_protocol`,
+  # `v_agenda`, `v_decision`, `v_floor` and `v_claims` all end on a write to stdout. The
+  # difference is what the write IS — those emit the verb's own output, where a failed write is
+  # arguably a real failure, while this one is a note about the terminals appended after the
+  # record path has already gone out. `v_decision` is the one worth a second look rather than a
+  # reassurance: its tail is a bare `cat`, which returns 1 on a closed stdout, and SKILL.md tells
+  # supervisors to trust `decision`'s exit 0 as the signal that the record exists — so its rc 1
+  # collides with its own documented "no decision yet". Pre-existing, not touched here; filed as #193.
   return 0
 }
 

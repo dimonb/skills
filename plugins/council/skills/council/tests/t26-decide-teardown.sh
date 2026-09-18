@@ -130,6 +130,19 @@ printf '0' > "$RC/state/keeper.pid"
 ok "a pid file holding 0 is not a keeper: refused" 1 "$rc"
 ok "...and still no marker written" no "$([ -e "$RC/state/teardown" ] && echo yes || echo no)"
 
+# THE DIAGONAL: no keeper AND a state directory that would also be refused. Liveness is checked
+# FIRST, so this must answer "no live keeper" (1) and not "could not be written" (2) — with no
+# keeper nothing will ever reap whatever the directory looks like, and reporting the write is
+# reporting a cause that was never reached. Without this the reorder is untested: moving
+# `_room_dirs_sane` back above the liveness pair leaves the rest of this file green.
+RCS="$COUNCIL_TEST_ROOT/t26c-sym"; rm -rf "$RCS" "$RCS-real"
+mkdir -p "$RCS" "$RCS-real/state" || exit 1
+ln -s "$RCS-real/state" "$RCS/state"
+printf '%s' "$DEADPID" > "$RCS-real/state/keeper.pid"
+( . "$SKILL/lib/up.sh"; _keeper_teardown "$RCS" ) 2>/dev/null; rc=$?
+ok "a dead keeper behind a symlinked state/: refused as NO KEEPER, not as a failed write" 1 "$rc"
+ok "...and still no marker written" no "$([ -e "$RCS-real/state/teardown" ] && echo yes || echo no)"
+
 # ================================================================================================
 echo "--- D. the shipped verb: a decided close asks for the seats, and says so ---"
 # Through council.sh, because the call site is what was missing — the hand-off has to be wired into
@@ -278,9 +291,10 @@ echo "--- H. a --hold room takes the marker too, while its owner is still holdin
 # code is what showed that.
 #
 # THE CONSUMED MARKER IS WHAT NAMES THE TRIGGER. Both of the keeper's reaping paths leave the same
-# `reaped-*` files, so those alone cannot tell a teardown from an owner death; only the teardown
-# path `rm`s the marker. "Seats reaped AND marker gone" is the one combination the canary path
-# cannot produce.
+# `reaped-*` files, so those alone cannot tell a teardown from an owner death; of the two, only
+# the teardown path `rm`s the marker. "Seats reaped AND marker gone" is therefore the one
+# combination the canary path cannot produce. (`relaunch` clears the marker too — no case here
+# relaunches, but a case that did could not use this discriminator.)
 RH="$COUNCIL_TEST_ROOT/t26h"; rm -rf "$RH"
 T26H_MARK="$COUNCIL_TEST_ROOT/t26-marks/h"; mkdir -p "$T26H_MARK" || exit 1
 ( SKILL="$SKILL"; . "$SKILL/lib/up.sh"
@@ -288,13 +302,23 @@ T26H_MARK="$COUNCIL_TEST_ROOT/t26-marks/h"; mkdir -p "$T26H_MARK" || exit 1
   _KEEPER_OWNER_HOLD=1
   _mkroom "$RH" a b || exit 1
   unset _KEEPER_OWNER_HOLD
-  printf 'up\n' > "$T26H_MARK/ready"
+  # The ready file carries the CANARY FD, not a word, and that is this case's premise assertion.
+  # `_keeper_ensure` sets `_KEEPER_CANARY_WFD` in the calling shell when and only when the hold
+  # branch ran, so a non-empty integer here is the proof that this really is a held room.
+  printf '%s\n' "${_KEEPER_CANARY_WFD:-}" > "$T26H_MARK/ready"
   wait ) &                       # the owner: holds the canary write end until the keeper exits
 HOWNER=$!
 ROOM_KEEPERS+=("$RH/state/keeper.pid")
 ok "the --hold room came up" yes "$(wait_file "$T26H_MARK/ready" "$PATIENCE")"
 KH=$(kpid_of "$RH/state/keeper.pid")
-ok "...with a keeper carrying a canary" yes "$([ -n "$KH" ] && kill -0 "$KH" 2>/dev/null && echo yes || echo no)"
+ok "...with a live keeper" yes "$([ -n "$KH" ] && kill -0 "$KH" 2>/dev/null && echo yes || echo no)"
+# ASSERT THE PREMISE, because without this the case silently stops testing what it is for. The
+# old check here was `kill -0` alone and was LABELLED "carrying a canary", which it did not
+# establish: measured, deleting `_KEEPER_OWNER_HOLD=1` from the fixture above left this whole file
+# passing 74/74 against the very mutation case H exists to kill. A room that is quietly detached
+# is a room this case cannot distinguish from the thing it is testing.
+ok "...whose canary is actually armed — the premise of this case" yes \
+   "$(read -r _wfd < "$T26H_MARK/ready" 2>/dev/null; case "${_wfd:-}" in ''|*[!0-9]*) echo no ;; *) echo yes ;; esac)"
 ok "...and an owner still holding it open" yes "$(kill -0 "$HOWNER" 2>/dev/null && echo yes || echo no)"
 ok "nothing is reaped while the owner lives and no marker exists" no \
    "$([ -e "$T26H_MARK/reaped-a" ] && echo yes || echo no)"
@@ -386,18 +410,73 @@ else
   say_floor msg '[]' "No objections." >/dev/null
   say_floor msg '[]' "Record it."     >/dev/null
   KK=$(kpid_of "$RK/state/keeper.pid")
-  chmod 500 "$RK/state" || { echo "  FAIL K: could not make state/ read-only"; FAILURES=$((FAILURES+1)); }
+  # RESTORE THE MODE FROM A TRAP, chained onto the helpers' own handler rather than replacing it.
+  # t23 carries this same guard and says why: a test killed between the two chmods leaves a
+  # mode-500 directory that `rm -rf` CANNOT remove, so run-all.sh's EXIT trap fails and the whole
+  # run root leaks permanently — and nothing ever reuses or cleans that path. The suite's 600 s
+  # ceiling group-kills a wedged test, so it is a reachable path, not a hypothetical one.
+  # Reproduced here before it was added: abort between the chmods, `rm: … Directory not empty`,
+  # root left behind. Copying t23's chmod without t23's trap is exactly how it came back.
+  _t26_restore_state() { local rc=$?; chmod 700 "$RK/state" 2>/dev/null; ( exit $rc ); _council_test_cleanup; }
+  trap _t26_restore_state EXIT
+  chmod 500 "$RK/state" || { echo "  FAIL K: could not make state/ read-only"; exit 1; }
   errk="$COUNCIL_TEST_ROOT/t26k.err"
   outk=$(COUNCIL_ME=a bash "$CLI" decide 2>"$errk"); rc=$?
   chmod 700 "$RK/state"
+  trap _council_test_cleanup EXIT
   ok "an unwritable state/ still exits 5, like any teardown that did not happen" 5 "$rc"
   ok "...still printing the record path, because the close stands" "$RK/board/decision.md" "$outk"
   ok "...saying the request could not be WRITTEN" yes "$(has "$(cat "$errk")" 'could not be written to')"
   # The whole point: it must NOT claim the room has no keeper, because the keeper is right there.
   ok "...and NOT blaming a missing keeper" no "$(has "$(cat "$errk")" 'no live keeper')"
+  # And the suppressor has to be in front of the redirection, or bash's own diagnostic for the
+  # MARKER write lands above council's sentence. Since the message no longer says "the error above
+  # says why", a silent revert would leave that raw line unexplained.
+  #
+  # Matched on the PATH, not on "Permission denied" alone, and the difference is the whole
+  # assertion: this fixture makes `state/` unwritable, so `c_send`'s own `state/<me>.seq` and
+  # `.lamport` bumps fail too and leak their own "Permission denied" (lib.sh:696-697 writes them
+  # through `c_atomic` with no status check — which is also why the close still reaches the
+  # teardown instead of failing earlier). A bare "Permission denied" test therefore passes or
+  # fails for a reason that has nothing to do with the suppressor. Caught by this assertion
+  # reporting the wrong thing on its first run.
+  ok "...with no raw shell diagnostic for the marker write above it" no \
+     "$(has "$(cat "$errk")" 'teardown: Permission denied')"
   ok "the keeper really was alive throughout" yes "$([ -n "$KK" ] && kill -0 "$KK" 2>/dev/null && echo yes || echo no)"
   ok "the room is closed regardless" decided "$(cat "$RK/board/status" 2>/dev/null)"
 fi
+
+# ================================================================================================
+echo "--- L. a caller with no keeper machinery in scope says THAT, not 'no live keeper' ---"
+# The third arm of the exit-5 branch, and the only one `council.sh decide` cannot reach —
+# council.sh always sources lib/up.sh for this verb, which is exactly why it needs a test here:
+# nothing else in the tree exercises the sentence, and a later refactor of that sourcing would
+# make it CLI-reachable with nothing watching. The distinction matters because "no live keeper"
+# is a claim about the ROOM, while this is a fact about the CALLER, and the room in this case has
+# a perfectly good keeper.
+RL="$COUNCIL_TEST_ROOT/t26l"
+mkroom_faked "$RL" l a b c
+export COUNCIL_ROOM="$RL" ROOM="$RL"
+echo "Should the log keep one lane per author?" > "$RL/agenda.md"
+prop=$(say_floor propose '[]' "Keep the history as one lane per author.")
+obj=$(say_floor  object  '["'"$prop"'-1"]' "Then a reader scans N directories on every poll.")
+say_floor amend '["'"$prop"'-1","'"$obj"'-1"]' "One lane per author; readers probe upward from a cursor." >/dev/null
+say_floor msg '[]' "Agreed."        >/dev/null
+say_floor msg '[]' "No objections." >/dev/null
+say_floor msg '[]' "Record it."     >/dev/null
+KL=$(kpid_of "$RL/state/keeper.pid")
+errl="$COUNCIL_TEST_ROOT/t26l.err"
+# lib.sh + verbs.sh + policy.sh, deliberately WITHOUT lib/up.sh — a library caller, not the CLI.
+outl=$( COUNCIL_ROOM="$RL" COUNCIL_ME=a SKILL="$SKILL" bash -c '
+  set -uo pipefail
+  . "$SKILL/lib/lib.sh"; . "$SKILL/lib/verbs.sh"; . "$SKILL/lib/policy.sh"
+  v_decide' 2>"$errl" ); rc=$?
+ok "a library caller without lib/up.sh exits 5" 5 "$rc"
+ok "...still printing the record path" "$RL/board/decision.md" "$outl"
+ok "...saying the machinery is not in scope" yes "$(has "$(cat "$errl")" 'no keeper machinery in scope')"
+ok "...and NOT blaming the room for a missing keeper" no "$(has "$(cat "$errl")" 'no live keeper')"
+ok "the room's keeper really was alive" yes "$([ -n "$KL" ] && kill -0 "$KL" 2>/dev/null && echo yes || echo no)"
+ok "...and nothing was reaped, since nobody was asked" no "$([ -e "$MARK/l/reaped-a" ] && echo yes || echo no)"
 
 # ================================================================================================
 printf '\nt26-decide-teardown: %s checks, %s failed\n' "$CHECKS" "$FAILURES"
