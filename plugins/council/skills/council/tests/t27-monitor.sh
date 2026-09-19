@@ -189,9 +189,17 @@ export COUNCIL_ROOM="$RQ" ROOM="$RQ"
 
 # THE LIVENESS APPEND RIDES THE QUIET LINE, AND ONLY THE QUIET LINE. Until this fixture carried a
 # pin, `_seat_liveness` returned 1 here and the append at the end of the quiet branch was dead
-# under the whole suite: routing it into `$alarms` instead — which wakes the 60-second alarm loop
-# with the name of a command that discards a seat's context, and bypasses `--only-changed` for as
-# long as the seat thinks — changed nothing that any assertion could see.
+# under the whole suite: routing it into `$alarms` instead — which bypasses `--only-changed` for
+# as long as the seat thinks, with the name of a command that discards a seat's context — changed
+# nothing that any assertion could see.
+#
+# WHICH ASSERTION CATCHES WHAT, because these three are not interchangeable: the routing is caught
+# by "carries the liveness note" and "still does not bypass the filter". The third, "never reaches
+# --alarms-only", canNOT catch it — the `alarms_only` gate added in the same commit keeps this
+# whole branch from running in that mode, so `$alarms` stays empty there however the note is
+# routed. It is a backstop against the MODE regressing, duplicating the assertion above it, and
+# an earlier version of this comment claimed the routing would "wake the 60-second alarm loop",
+# which that same commit's own gate had already made impossible.
 printf 'fake-container\n' > "$RQ/state/container-tmux"
 printf '#!/bin/sh\n' > "$RQ/state/launch-$(bash "$CLI" floor | sed -n 's/.*floor=\([^ ]*\).*/\1/p').sh"
 sessions_none
