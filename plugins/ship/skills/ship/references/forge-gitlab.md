@@ -79,7 +79,25 @@ change (core §7.A covers that convention). Where issues are used:
 ```bash
 unset OAUTH_TOKEN; export GITLAB_HOST=<host>
 glab api "projects/$PROJECT/issues/N"
+
+# ENUMERATE the open issues — the duplicate and class check of core §5.11 rung 2, and the
+# near-duplicate check of core §7.A. --paginate --output ndjson because `glab api` has no --jq
+# and pages arrays (§3); without both, the list truncates silently and the check becomes
+# the keyword search it exists to replace.
+glab api --paginate --output ndjson \
+  "projects/$PROJECT/issues?state=opened&per_page=100" \
+  | jq -r '[.iid, ([.labels[]] | join(",")), .title] | @tsv'
+
+# a keyword search is a SUPPLEMENT to that enumeration, never the check — it matches words,
+# so a near-duplicate phrased differently does not come back
 glab issue list --search "<keywords>"
+
+# read a candidate in full before commenting a scenario onto it
+glab api "projects/$PROJECT/issues/N" | jq -r '.title, .description'
+
+# rung 2 — add the scenario to an issue that is already open (body through a file)
+glab api --method POST "projects/$PROJECT/issues/N/notes" -f "body=$(cat "$BODY")"
+
 glab issue create --title "<title>" --assignee "$ME" --label "<kind>" \
   -d "$(cat "$BODY")" --yes
 glab api --method PUT "projects/$PROJECT/issues/N" -f assignee_ids="<id>"
