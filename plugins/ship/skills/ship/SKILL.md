@@ -411,6 +411,17 @@ passes it — the absent file does not fail safe, it fails open.)
           "severity": "blocking", "category": "correctness", "origin": "original",
           "summary": "…", "failure_scenario": "…",
           "status": "open|fixed|withdrawn", "note": "why it is still open" }
+      ],
+      "deferred": [
+        { "id": "impl-5", "fp": "sha256(...)", "rung": 1,
+          "rung_1": "taken — one line in a file the diff already touches",
+          "rung_2": null, "rung_3": null,
+          "outcome": "fixed in 4f2a1c9" },
+        { "id": "impl-6", "fp": "sha256(...)", "rung": 2,
+          "rung_1": "would need a new gate — machinery",
+          "rung_2": "third instance of the class #123 names",
+          "rung_3": null,
+          "outcome": "scenario commented on #123" }
       ]
     }
   },
@@ -420,7 +431,9 @@ passes it — the absent file does not fail safe, it fails open.)
 ```
 
 `reviews` is the **gate ledger**: only a `clean` entry, un-invalidated per §3.3/§5.10,
-clears a stage. `iteration` / `deadline` are enforced FIRST on every wake (§6).
+clears a stage. Its `deferred` array is the written record §5.11 requires — one entry per finding
+the ladder placed, carrying the rung it landed on, why each rung above it was ruled out, and at
+rung 1 that it was taken. `iteration` / `deadline` are enforced FIRST on every wake (§6).
 
 ---
 
@@ -672,7 +685,8 @@ round 3: …
   runbook section, or a paragraph of comment explaining itself — that is new machinery, it
   enters the next round's scope, and it is how one measured diff went from 2 970 to 5 900
   lines and bought 66 extra findings on a gate the review itself had written. A finding that
-  can only be answered with new machinery is a **new change**: one line in the backlog.
+  can only be answered with new machinery is a **new change**, and where it goes is §5.11 —
+  which is also where this rule is reconciled with fixing a one-line defect in place.
   **Watch the diff size across rounds** — a diff growing while under review is this rule
   being broken.
 - **Prose is ONE pass, after the code stops moving.** Docs, spec artifacts, task lists,
@@ -684,8 +698,8 @@ round 3: …
 - **Once a change is already applied and running** (an infrastructure change rolled out
   mid-flight), only two axes stay admissible: does the written record disagree with what is
   actually deployed, and does this break a *repeat* rollout, a rebuild, or onboarding.
-  Everything else is a backlog line. On one change, 55 of 85 rounds reviewed code that was
-  already live.
+  Everything else leaves the change down the ladder of §5.11. On one change, 55 of 85 rounds
+  reviewed code that was already live.
 - **Non-convergence** — round `max-rounds` still has confirmed blockers: do **not** hand off
   as ready, do **not** loosen the bar, do **not** take a fourth round, and never reclassify a
   finding to get past the gate. Write them to the ledger as open, `record state=needs-human`,
@@ -754,6 +768,7 @@ Review (impl) — mode: delta — axes: correctness, security, spec-conformance,
 Round 1: 7 candidates -> 3 confirmed, fixed in 4f2a1c9. Round 2: clean.
 Security (engine): no issues found in this diff.
 Optional (non-blocking): 4 — listed below, no action required.
+Deferred: 2 — fixed here 1; scenario onto #123; new issues none.
 ```
 
 - Keep it to **four lines or so**: counts and the mode token, not finding contents.
@@ -766,6 +781,11 @@ Optional (non-blocking): 4 — listed below, no action required.
   - findings in either case → `Security (<engine|charter>): N finding(s), fixed in <sha>`.
 - **Optional findings**: batch them ALL into ONE comment (`file:line` plus one line each),
   ending "No action required." Never one comment per nit.
+- **Deferred findings**: ONE line giving the disposition by rung (§5.11) — how many were fixed
+  in the change, which open issues received a scenario, which issues were created. Numbers and
+  issue references, never contents: the reasons live in the ledger and in the created issue.
+  A stage that deferred nothing says `Deferred: none`, because an absent line and a stage that
+  never worked the ladder look the same.
 - **Escalated blockers**: one comment listing each with `file:line`, the failure scenario, and
   why it is unfixed.
 - Embed a hidden marker for idempotency — `<!-- ship-review:stage=<stage>:sha=<head> -->` —
@@ -804,6 +824,149 @@ A verdict is bound to a **head sha**.
 - The spec entry's head is **never** compared to the merge head: the spec round is about the
   artifacts, and implementation is *supposed* to move the head past it. What invalidates it is
   the **artifacts** changing.
+
+### 5.11 Filing what a round defers — the ladder
+
+A finding that leaves a round without being fixed has one destination today, and it is the most
+expensive one: a new ticket. **Invert the default — a new issue is the last resort, not the
+first.** A finding that leaves a round is placed by working the rungs below in order, and each
+rung is ruled out **in writing** before the next is reached. A round that files N issues has N
+recorded reasons why rungs 1 and 2 did not fit.
+
+**What is on the ladder.** Every finding that leaves a review round without being fixed in that
+round — however it got there. §5.7 sends some away explicitly (answering it would need new
+machinery; the change is already applied and running), and a round may judge an optional finding
+worth more than the batched comment of §5.9. Do not read that as a closed list: the entry
+condition is *leaving the round*, not the reason. The one exclusion is the ordinary optional
+finding — nitpick, style, naming, micro-perf — which goes into that one comment and nowhere else.
+
+**When it is worked.** ONCE per stage, at the point the stage record is posted — not per round.
+Filing mid-stage files findings a later round refutes or a later fix obviates, and it is how one
+change produces several tickets for a defect it went on to fix itself. Rung 1 is the exception by
+nature: a fix happens in the round that confirmed the finding, so by the time the record is
+written only rungs 2 and 3 remain to work.
+
+**A stage that escalates does not work the ladder.** At `max-rounds` the stage posts §5.7's
+escalation record, which is not a stage record, and stops — so rungs 2 and 3 are not worked and no
+`Deferred:` line is due. That is deliberate: the change is terminal until a human acts (§7.H) and
+the surviving blockers reach them through the ledger and that record, so filing tickets there would
+place work on a change somebody is about to re-run. What the stage still owes is the written
+record: its deferrals stay in the ledger's `deferred` array with their rung unreached, and the
+escalation record says so — *the ladder was not worked because the stage escalated; N deferrals are
+held in the ledger* — because a human reading the PR sees records, not kinds of record, and an
+absent line would look like a stage that deferred nothing. **The collector is §7.C step 5 / §7.E
+step 6**, which work the ladder over an unreached deferral carried from an earlier run as well as
+over this stage's own; that is what makes "the re-run inherits them" a mechanism rather than a hope.
+
+#### Rung 1 — fix it in the change already in flight
+
+If the finding can be fixed inside the change in flight **and the fix passes the test below**,
+fix it and file nothing.
+
+**This is in tension with §5.7 — "a fix changes the defective lines and nothing more" — and
+neither rule repeals the other.** What §5.7 forbids is a fix that adds *machinery*: a gate, a
+runbook section, a paragraph of comment explaining itself. It was bought with a measured diff
+that grew from 2 970 to 5 900 lines under review and returned 66 further findings on a gate the
+review itself had written, and it stands unchanged. A one-line correction inside lines the diff
+already touches is a different act, and §5.7 was never aimed at it. The test is what keeps the
+two apart, so apply it instead of judging the fix "small":
+
+1. **Does it touch only files this diff already touches?** A new file, or a file this change has
+   not otherwise altered, is not this change.
+2. **Does it add any new machinery?** A gate, a script, a config key, a test harness, a section
+   of prose justifying itself — any yes sends the finding down the ladder whatever its size.
+   This question *is* §5.7, asked before the fix rather than discovered after it.
+3. **Do the discovered check commands (§2.4) stay green?**
+4. **Is it one revert away from undone**, with nothing else to unwind?
+
+All four must hold. Three of four is rung 2. **"It is only a few lines" is not one of the four,
+and neither is confidence** — the reason this is a test and not an adjective is that "small" is a
+judgement an author makes about their own work, and the costliest defects measured here were
+one-line diffs their authors were sure of. When it is genuinely unclear whether a fix passes,
+that uncertainty is the answer: go to rung 2.
+
+**A fix taken under this rung is still recorded** — in the ledger's `deferred` entry, with the sha
+in its `outcome`, and in the deferral line of the stage record (§5.9). **`deferred` is the
+authority for where the ladder put a finding, and the finding's own `status` follows it** — a rung-1
+placement sets `status: fixed` on its entry in the findings array, so the two never disagree about
+whether it was answered. A fixed finding that leaves no trace is how the same defect gets re-found
+in round four by a reviewer with no memory of round two.
+
+#### Rung 2 — a comment on an issue that is already open
+
+The finding is a new instance, scenario, measurement or counterexample for something already
+open. This is the common case, and nothing in this skill produces it today — the class-collapses
+on record were done by hand.
+
+**Find that issue by ENUMERATING, not by searching.** A forge's issue search matches words, so a
+near-duplicate phrased differently does not match it — which is how most observed duplicate pairs
+got through, including two tickets for one race filed six days apart by different runs. What
+works is to **list every open issue with its title and labels and match the component yourself**:
+the module, the script, the verb, the file the finding names. The reference file carries the
+per-forge listing, and the listing must cover *every* issue in whatever it enumerates — a default
+page size that silently truncates turns this check into the search it replaces. A keyword search
+is a supplement to the enumeration, never the check.
+
+**Say what you enumerated, because "every open issue" does not scale silently.** A title and its
+labels cost on the order of twenty tokens, so a few hundred open issues is one paginated call and
+a few thousand tokens — cheaper than the duplicate it prevents, and that is the size this rung is
+written for. Thousands of open issues is a different problem: a tracker in the tens of thousands
+is one real listing of hundreds of thousands of tokens, which is not a read an agent can do at
+every stage record. Past the point where the full listing is impractical, **scope the enumeration
+by the repo's own partition** — the area label, the component, or the path prefix the finding
+names — read *that* partition in full, and record in the deferral entry that the scoping is what
+replaced the full read. A scoped enumeration is still an enumeration; a bare keyword search is
+not. **What the scoping gives up** is a duplicate that sits outside the partition you chose, which
+is the case for filing under the wrong area in the first place — so widen the partition when the
+finding could plausibly belong to two.
+
+**Then match the CLASS, not only the instance.** A finding that is the N-th instance of a class
+an open issue already names belongs on that issue as another scenario, not on a sibling of its
+own. The shapes recur — *a verb reports a cause it did not establish*, *a peer-writable value
+removes an operator-facing signal*, *a test pins a mechanism the code does not promise* — and one
+ticket a human decides once beats four they must first recognise as one. An issue whose own title
+says it collects a family is asking for exactly this.
+
+Comment the scenario onto it in the shape a finding takes (§5.4): what fails, where, and the
+concrete path. Do not re-title the issue and do not re-scope it — the comment adds evidence, and
+whoever owns the issue decides what that evidence means.
+
+> **A limitation, not an exemption.** Rungs 2 and 3 publish to whatever surface the tracker is,
+> which on a public repo is a public one. So does §5.7's non-convergence record, and so does
+> §5.9's escalated-blocker comment — three routes, all of them already there, all of them posting
+> an unfixed finding's concrete failure scenario from an unattended run. `ship` has no private
+> disclosure path on either forge and §2.7 does not read a repo's `SECURITY.md`, so there is
+> nothing here that withholds a finding whose failure path would itself be a working reproduction
+> of an unpatched defect. **This paragraph records that gap; it does not close it and it grants no
+> one permission to route a finding away from a tracker.** Closing it is its own change.
+
+#### Rung 3 — a new issue
+
+Only a class no open issue names, or an area none covers. Record in the issue body why rungs 1
+and 2 did not fit — one line each — so the next reader can check that judgement instead of
+repeating the work behind it.
+
+Then it is an ordinary created issue and §7.A's rules apply: the repo's working language, the
+labels that repo requires, reuse over invention, and report anything created.
+
+**`no-create` forbids this rung outright**, and so does a stage that cannot ask §7.A step 3's
+confirmation — a scheduled wake (§6). §9's confirmation gate named issue creation when §7.A was
+the only place ship created one; this rung is the second, and it does not inherit an exemption
+nobody wrote. **Neither case stops the stage and neither case drops the finding**: it stays at its
+written record — its `deferred` entry with `rung_3` marked unfiled and the reason, and the count on
+the `Deferred:` line — and the run carries on. A change that has cleared its review is not parked
+over a ticket that was never filed, and the next interactive run files it: an unreached rung is
+collected by §7.C step 5 / §7.E step 6 like any other carried deferral, so this is a mechanism and
+not a capability nobody exercises.
+
+#### Where the repo tracks work some other way
+
+The ladder is about *placement*, and it does not assume a forge. Where a repo keeps an umbrella
+issue with a checklist, a file of deferred work, or no tracker at all (§7.A), rung 3 becomes that
+repo's own convention and rung 2 becomes the same enumerate-and-match over whatever it does keep.
+Where labels do not exist, skip the label step — labels are not a precondition for filing. What
+does not change is the order and the writing-down: fix it here, add it to what exists, create
+something new, with each rejected rung recorded.
 
 ---
 
@@ -862,7 +1025,9 @@ On each wake, in order:
 
 ### 7.A — `need-issue` (interactive only)
 
-1. Search existing issues for near-duplicates before creating one.
+1. Check for near-duplicates before creating one, and check the way §5.11's rung 2 says to —
+   enumerate every open issue and match the component yourself. A keyword search misses a
+   near-duplicate phrased differently, which is the whole reason that rung does not rely on one.
 2. If the idea is fuzzy and a spec engine offers an explore mode, use it to sharpen scope
    first — a sharper issue makes a sharper change.
 3. Draft the issue (title + body, in the repo's working language). Show it and **ask one
@@ -924,7 +1089,9 @@ Skipped entirely in a no-spec repo.
    exists, not by hand-editing. Re-validate, commit, push.
 4. Scoped rounds (§5.7) until a round returns no confirmed blocker, or escalate at
    `max-rounds`.
-5. Post the record (§5.9). Record the clean verdict.
+5. Work the ladder (§5.11) over everything this stage deferred, **plus any deferral carried from
+   an earlier run whose rung was never reached** — this step is where those are collected. Then
+   post the record (§5.9) and record the clean verdict and the ladder's disposition.
 6. `record state=apply` → §7.D.
 
 This stage is WORK, not a wait. If you find yourself scheduling a re-wake from it, you have
@@ -958,8 +1125,10 @@ mis-read the state.
 4. Fix every confirmed blocker sequentially in ship's own context. Re-run the check commands
    and the touched components' tests; commit; push.
 5. Scoped rounds (§5.7) until clean, or escalate at `max-rounds` → `needs-human`.
-6. Post the stage record plus the batched optional comment (§5.9). Record the clean verdict
-   and any sweep.
+6. Work the ladder (§5.11) over everything this stage deferred — once, here, not per round —
+   **plus any deferral carried from an earlier run whose rung was never reached**; this step is
+   where those are collected. Then post the stage record plus the batched optional comment
+   (§5.9). Record the clean verdict, any sweep, and the ladder's disposition.
 7. `record state=archive` → §7.F in a spec-engine repo; in a no-spec repo go straight to §7.G
    and record NOTHING here — see §2.8: `ready-to-merge` is stamped when §7.G ends, never on the
    way in, because a supervisor reads it as the change having become a person's move.
@@ -979,7 +1148,14 @@ Only in a spec-engine repo whose law puts the archive in the implementation chan
    the change directory. Do not sync or move by hand.
 2. Run the validator and the check commands; commit; push.
 3. Final check on the archived head (§5.10): one `final-archive` subagent, or a scoped impl
-   round if the commit carried anything beyond the sync-and-move.
+   round if the commit carried anything beyond the sync-and-move. **The two branches differ on
+   deferral.** The `final-archive` charter is about the archive commit itself — a delta that did
+   not sync, a directory that moved incompletely — so a finding there is fixed here, never
+   placed; this stage defers nothing on that branch. The scoped-impl-round branch is an ordinary
+   impl round over real code and defers like any other, so **work the ladder (§5.11) over what it
+   deferred, plus any deferral carried from an earlier run whose rung was never reached** — the
+   same collection §7.E step 6 does, because this is the last stage that reviews code and a
+   deferral left unplaced here is one nothing downstream collects.
 4. → §7.G.
 
 ### 7.G — `ready-to-merge` → hand off, or merge
@@ -1049,7 +1225,8 @@ Threads and comments authored by `$ME` are our own records and never block anyth
 ## 9. Confirmation gates & autonomy
 
 - **Create an issue / start a brand-new change** — interactive confirm (§7.A). `no-create`
-  skips creation entirely.
+  skips creation entirely. This governs **both** places ship creates an issue: §7.A for the
+  change's own, and §5.11 rung 3 for a deferred finding, which states what it does instead.
 - **Foreign assignee or foreign PR/MR** — clarify, never take over.
 - **Ambiguous bare number** — ask which kind.
 - **Merge** — only per §2.6. A clean self-review is not a go-ahead and must never be treated
@@ -1109,6 +1286,11 @@ change whose run was still in progress. Poll until nothing is pending or running
 - **Review only in subagents** (§5.1), strictly read-only, dispatched concurrently, with a
   barrier before ship edits anything.
 - **Verify before fixing** (§5.5). Refuted means dropped — never "fix it anyway to be safe".
+- **A finding that leaves the change works the ladder** (§5.11): fix it here if it passes the
+  four-question test, else a scenario on an issue that is already open, else a new issue — and
+  each rejected rung is written down. Find the existing issue by **enumerating every open issue
+  and matching the component**, never by the forge's text search, which misses a near-duplicate
+  phrased differently. Work the ladder once per stage, at the record, not per round.
 - **Bounded, scoped rounds; `max-rounds` is the stop condition, not "until clean"** (§5.7).
   Blocking requires a *live* failure. A fix touches the defective lines and adds no new
   machinery. Prose gets one pass after the code freezes. A failed round is not a round.
