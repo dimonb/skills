@@ -47,16 +47,17 @@ SKILL="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"
 [ -f "$SKILL/lib/up.sh" ] || { echo "t19: cannot find up.sh under $SKILL" >&2; exit 1; }
 
 # The keeper period for every room this file builds through `mkroom`/`ensure`. Production is five
-# seconds and stays five seconds; here it is a twentieth, because this file's waits were sized
+# seconds and stays five seconds; here it is a tenth, because this file's waits were sized
 # against that constant and were therefore its whole runtime. Not inherited from _helpers.sh:
 # this file deliberately runs its own rig (see `read_pid`'s header for the argument), so it sets
-# its own. `${:-}` so an outer override still wins, which is what makes an A/B measurement of
+# its own, a tenth of production's (see _helpers.sh for why a tenth and not a hundredth).
+# `${:-}` so an outer override still wins, which is what makes an A/B measurement of
 # this change possible on one box.
 #
 # CASE G DOES NOT USE THIS VALUE and must not: its premise is a keeper superseded DURING its
 # canary read, which needs the read still to be blocked while this shell mutates the pid file.
 # It drives `_keeper_loop` directly with a long period of its own, stated at the call site.
-export COUNCIL_KEEPER_POLL_INTERVAL="${COUNCIL_KEEPER_POLL_INTERVAL:-0.05}"
+export COUNCIL_KEEPER_POLL_INTERVAL="${COUNCIL_KEEPER_POLL_INTERVAL:-0.5}"
 
 ROOT=$(mktemp -d) || exit 1
 KEEPERS=()   # every keeper we spawn, reaped in the trap: they detach and reparent, so nothing
@@ -101,8 +102,8 @@ alive()     { [ -n "$1" ] || { no_pid; return; }; kill -0 "$1" 2>/dev/null && ec
 # This is what the file's `sleep 7  # longer than the five-second poll` comments became. Two
 # things were wrong with those and only one of them was speed: seven seconds against a
 # five-second period is 1.4 polls of margin, which reads as generous and is not, and the other
-# 5.6 seconds established nothing. Against this file's 0.05s period the default window below is
-# twenty polls — so the evidence goes UP as the wait goes down.
+# 5.6 seconds established nothing. Against this file's 0.5s period the window used below is
+# six polls — so the evidence goes UP as the wait goes down.
 #
 # Duplicated from _helpers.sh rather than sourced, for the same reason `read_pid` above is: this
 # file runs its own rig on purpose. Keep the two in step by hand; they are six lines each.
@@ -208,7 +209,7 @@ printf 'abc' > "$ROOT/room-c-malformed/state/keeper.pid"
 # that goes — which is the failure this case is for. Built from `c_shapes` rather than listed
 # again: a shape added above must be waited on, and a second hand-kept list would not be.
 c_pids=(); for s in "${c_shapes[@]}"; do c_pids+=("${C_ROOMS[$s]}"); done
-hold 1 "${c_pids[@]}"
+hold 3 "${c_pids[@]}"
 for s in "${c_shapes[@]}"; do
   ok "a '$s' pid file left the keeper running" alive "$(alive "${C_ROOMS[$s]}")"
 done
@@ -278,7 +279,7 @@ ok "the pid file still names it" "$e1" "$(read_pid "$ROOM_E/state/keeper.pid")"
 # inside a subshell that then exited, so it reparents and `kill -0` tells the truth about it.
 E1_DONE="$ROOT/e1.stepped-down"
 ( SKILL="$SKILL"; . "$SKILL/lib/up.sh"
-  _keeper_loop "$ROOM_E" "$ROOM_E/state/keeper.pid" "" 0.05 a b; printf 'yes' > "$E1_DONE" ) >/dev/null 2>&1 &
+  _keeper_loop "$ROOM_E" "$ROOM_E/state/keeper.pid" "" 0.5 a b; printf 'yes' > "$E1_DONE" ) >/dev/null 2>&1 &
 e_loop=$!; track "$e_loop"
 ok "a loop whose file names another pid steps down, dead or not" yes "$(wait_file "$E1_DONE" 60)"
 # Kill BEFORE reaping, and never `wait` on it bare. On the failure path the loop is still polling a
@@ -309,7 +310,7 @@ for i in 1 2 3; do
 done
 # Past many polls, so a newborn that read the stale pid is gone — and the window ends early on
 # the first one that does.
-hold 1 "${E_ROOMS[1]}" "${E_ROOMS[2]}" "${E_ROOMS[3]}"
+hold 3 "${E_ROOMS[1]}" "${E_ROOMS[2]}" "${E_ROOMS[3]}"
 for i in 1 2 3; do
   ok "replacement $i survived its predecessor's stale pid" alive "$(alive "${E_ROOMS[$i]}")"
 done
@@ -407,7 +408,7 @@ ok "a replacement was forked and claimed the room" yes \
    "$([ -n "$h1" ] && [ "$h1" != "$h0" ] && echo yes || echo no)"
 # Past many polls: a newborn that read the stale pid steps down on its FIRST pass, before any
 # sleep, so this window is generous by a wide margin and ends the moment it is not.
-hold 1 "$h1"
+hold 3 "$h1"
 ok "the replacement survived the provoked window" alive "$(alive "$h1")"
 
 printf '\n'

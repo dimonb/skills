@@ -34,7 +34,7 @@ SKILL="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"
 # premise about how long a poll takes; the one case in the suite that does is t19 case G, and it
 # passes its own period at the call site rather than inheriting one. `${:-}` so an outer override
 # still wins, which is what makes an A/B measurement possible on one box.
-export COUNCIL_KEEPER_POLL_INTERVAL="${COUNCIL_KEEPER_POLL_INTERVAL:-0.05}"
+export COUNCIL_KEEPER_POLL_INTERVAL="${COUNCIL_KEEPER_POLL_INTERVAL:-0.5}"
 
 ROOT=$(mktemp -d) || exit 1
 KEEPERS=()   # every keeper we spawn, reaped in the trap: they detach and reparent, so nothing

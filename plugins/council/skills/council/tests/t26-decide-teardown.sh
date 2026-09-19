@@ -47,8 +47,9 @@ has() { printf '%s' "$1" | grep -q -- "$2" && printf yes || printf no; }
 wait_file() { local f="$1" n="${2:-80}" i; for ((i=0;i<n;i++)); do [ -e "$f" ] && { echo yes; return; }; sleep 0.1; done; echo no; }
 wait_gone_file() { local f="$1" n="${2:-80}" i; for ((i=0;i<n;i++)); do [ -e "$f" ] || { echo gone; return; }; sleep 0.1; done; echo there; }
 wait_gone() { local p="$1" n="${2:-80}" i; for ((i=0;i<n;i++)); do kill -0 "$p" 2>/dev/null || { echo gone; return; }; sleep 0.1; done; echo alive; }
-# The keeper polls on a five-second cycle, so every wait here has to allow more than one turn of
-# it. 8s is that with room to spare on a loaded machine, and a failure costs 8s rather than hanging.
+# The keeper polls on the period _helpers.sh sets (a tenth of production's five seconds), so every
+# wait here has to allow more than one turn of it. 8s is that with room to spare on a loaded
+# machine, and a failure costs 8s rather than hanging.
 PATIENCE=80
 
 MARK="$COUNCIL_TEST_ROOT/t26-marks"; rm -rf "$MARK"; mkdir -p "$MARK" || exit 1
@@ -204,7 +205,7 @@ ok "...saying the terminals are left live" yes "$(has "$(cat "$erre")" 'LEFT LIV
 ok "...and naming the verb that closes them" yes "$(has "$(cat "$erre")" 'council.sh down --room t26e')"
 # Give the keeper more than a poll cycle to prove it is not going anywhere. `hold` spends that
 # window checking, so a keeper that DOES go reds here immediately instead of six seconds later.
-hold 1 "$KE"
+hold 3 "$KE"
 ok "the keeper is still there" yes "$([ -n "$KE" ] && kill -0 "$KE" 2>/dev/null && echo yes || echo no)"
 ok "...and nothing was reaped" no "$([ -e "$MARK/e/reaped-a" ] && echo yes || echo no)"
 
@@ -227,8 +228,12 @@ KF=$(kpid_of "$RF/state/keeper.pid")
 kill_keeper "$RF/state/keeper.pid"
 ok "the keeper is gone before the close" gone "$(wait_gone "$KF" "$PATIENCE")"
 errf="$COUNCIL_TEST_ROOT/t26f.err"
-# HOLD THE ROOM'S BELLS OPEN ACROSS THE CLOSE. This case has deliberately removed the only process
-# that normally does, and `decide` still rings every peer (`c_send`'s trailing `c_ring` loop). A
+# HOLD THE ROOM'S BELLS OPEN ACROSS THE CLOSE. This case has deliberately killed the keeper, which
+# is what holds EVERY bell open for the life of a room. It is not the only reader a bell can have —
+# a participant sitting in `recv` holds its OWN, through `c_bell_open` — and that is visible right
+# here: `decide` runs as `--me a` and arms a's bell, so of the three rings below only b's and c's
+# ever blocked. This room has no live participants, so with the keeper gone those two have nobody.
+# And `decide` still rings every peer (`c_send`'s trailing `c_ring` loop). A
 # ring is a DETACHED writer — `( printf '.' > "$f" & )` — so with no reader it blocks in open(2)
 # for ever; and because it is forked inside the verb's `>/dev/null` scope, it inherits the copy of
 # the caller's ORIGINAL stdout that bash saved on fd 10, which is this line's command-substitution
@@ -573,7 +578,7 @@ for shape in dir symlink-to-dir; do
   # The keeper must be left alone: a refused request is not a teardown. Once per shape, so this
   # is the wait the loop multiplies — `hold` makes it one second of polling instead of six of
   # sleeping, and reds at once on the shape that does slip through.
-  hold 1 "$KD"
+  hold 3 "$KD"
   ok "...the keeper is untouched, since nothing was asked of it" yes \
      "$([ -n "$KD" ] && kill -0 "$KD" 2>/dev/null && echo yes || echo no)"
   ok "...and nothing was reaped" no "$([ -e "$MARK/m-$shape/reaped-a" ] && echo yes || echo no)"

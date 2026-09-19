@@ -3,7 +3,8 @@
 # The gate; must be green before every commit. Runs the static checks (scripts/check.sh) and then
 # every pure, fast suite — driver, flow, adapters, policy, knobs — so a regression in any of them
 # reds a commit. Whole target measured at 8.9s wall, warm and otherwise idle (gate 2.4s; driver
-# 1.3s, flow 2.3s, adapters 1.9s, policy 0.9s, knobs 0.1s), and more under load. The figure lives
+# 1.3s, flow 2.3s, adapters 1.9s, policy 0.9s, knobs 0.1s), and more under load — re-measured at
+# 8.9s after #203 added check 13, so that check costs nothing worth recording. The figure lives
 # here and not in a prose log because a wall-clock number recorded elsewhere goes stale silently
 # and then gets used to justify a decision — so re-measure it here when you add a suite, rather
 # than adjusting it by arithmetic.
@@ -27,20 +28,30 @@ check:
 # check` does not run those two (only their registration and invocation are gated at commit time;
 # every other suite runs there in full).
 #
-# MEASURED at 12-13 min wall on an otherwise idle machine, at ~28% CPU — two readings on the same
-# box, 13:26 and then 12:18 with SIX MORE checks, so run-to-run variance is larger than what a
-# handful of cases adds. Take the range as the figure; it is dominated by
-# deliberate SLEEPING (the report's 3s motion diff per live slot, the confirmation polls, the
-# canary waits), not by work, so it scales with the number of fixture SLOTS rather than with the
-# number of cases or with the box. The figure said "~2-3 min" for a long time and went stale
-# silently, which is the failure AGENTS.md warns about: re-measure this line when you add or grow
-# a suite, and do not adjust it by arithmetic. CI runs the same target, so a change that lengthens
-# it lengthens every PR.
+# MEASURED at PLACEHOLDER_MAKETEST wall (load average PLACEHOLDER_LOAD at the start; this box also
+# drives a fleet, so a quiet one will be faster and a busier one slower). It was 12-13 min at ~28%
+# CPU before #203, and BOTH halves of that changed:
 #
-# This figure has now gone stale twice inside one change: it read ~2-3 min while a suite was
-# added, was re-measured at 11:58, and that reading was itself taken before the same suite grew
-# again. If you are adding or growing a test, this line is part of your change. AGENTS.md points
-# here rather than carrying its own number, so this is the place to update.
+#   * the sleeping is gone. The suites used to wait on three production constants a faked backend
+#     does not need — the report's motion diff, the keeper's poll, and `tell`'s settle delay — and
+#     those are knobs now, set by the suites and unchanged in production. Three test files were
+#     also holding a command substitution open on a backgrounded `sleep` (see #109); that was 60s
+#     in each of two of them;
+#   * the files of each slow suite now run CONCURRENTLY, so the wall clock is the LONGEST FILE
+#     plus scheduling rather than the sum. That makes the figure below depend on the slowest file
+#     and on the core count, which the old one did not — `COUNCIL_TEST_JOBS=1` and
+#     `SHIPYARD_TEST_JOBS=1` restore the old serial behaviour if you need the old shape back.
+#
+# So the thing to watch is no longer the total: it is whether a file you are adding lands in the
+# top few. `t16-tell-knobs` is the current floor at ~39s, and it is close to irreducible — the
+# remaining time is three confirmation windows whose DURATIONS are what its assertions check.
+#
+# The figure said "~2-3 min" for a long time and went stale silently, which is the failure
+# AGENTS.md warns about: re-measure this line when you add or grow a suite, and do not adjust it
+# by arithmetic. It has now gone stale twice inside one change, and #203 was expected to be the
+# most likely thing to make it stale again. If you are adding or growing a test, this line is part
+# of your change. AGENTS.md points here rather than carrying its own number, so this is the place
+# to update. CI runs the same target on every push and pull request.
 test:
 	@bash shared/driver/tests/run-all.sh
 	@bash shared/flow/tests/run-all.sh

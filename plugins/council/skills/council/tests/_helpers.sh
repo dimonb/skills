@@ -25,10 +25,29 @@ fi
 export POLICY_MAILBOX_DIR="${POLICY_MAILBOX_DIR:-$COUNCIL_TEST_ROOT/ship-escalations}"
 
 # THE KEEPER'S POLL PERIOD, for every room this suite builds. Production is five seconds and
-# stays five seconds (`lib/up.sh`, `_keeper_ensure`); this is a twentieth of it, which is what
-# makes t16, t19 and t26 finish in seconds instead of minutes. It is not a shortcut around a
-# slow test: those files' waits were sized against the production constant, so the constant was
-# their runtime — `sleep 7  # longer than the five-second poll` and its neighbours.
+# stays five seconds (`lib/up.sh`, `_keeper_ensure`); this is a TENTH of it, which is what makes
+# t16, t19 and t26 finish in seconds instead of minutes. It is not a shortcut around a slow test:
+# those files' waits were sized against the production constant, so the constant was their
+# runtime — `sleep 7  # longer than the five-second poll` and its neighbours.
+#
+# A TENTH AND NOT A HUNDREDTH, AND THAT IS MEASURED RATHER THAN CAUTIOUS. #203 asked for
+# "hundredths of a second"; 0.05 was tried first and is wrong at this suite's scale, for a reason
+# that is invisible in a single test and decisive in a parallel run:
+#
+#   * the keeper's loop body forks TWICE per iteration — `$(_keeper_pid …)` is a command
+#     substitution, and a detached room's wait is `sleep`, another process;
+#   * a parallel run of this suite has ~38 keepers alive at once (counted with `ps` during one).
+#
+# So the period does not buy one process's patience, it multiplies: ~15 polling forks a second at
+# the production five, ~150 at 0.5, and ~1500 at 0.05. At 0.05 the keepers saturate the run queue
+# of the box they are being timed on, and what that cost was not slowness — it was t16's
+# canary-reap cases failing because a keeper was not scheduled to notice its owner's death inside
+# a SIXTY-second ceiling. Measured both ways on one box: 2 of 2 parallel runs red at 0.05, 2 of 2
+# green at the production 5. 0.5 keeps nine tenths of the win (a keeper-bound wait drops from <=5s
+# to <=0.5s) at a tenth of the churn.
+#
+# If you are tempted to shorten it again, the thing to check first is not one file's runtime — it
+# is `ps | grep -c 'sleep 0'` during a full parallel run.
 #
 # SHRINKING IT IS SAFE FOR EVERY CASE THAT HAS NO OPINION ABOUT THE PERIOD, WHICH IS MOST OF
 # THEM, AND IT IS NOT SAFE FOR THE REST — so the exceptions do not inherit it. t19 case G's whole
@@ -40,7 +59,7 @@ export POLICY_MAILBOX_DIR="${POLICY_MAILBOX_DIR:-$COUNCIL_TEST_ROOT/ship-escalat
 # `${:-}` so an outer override still wins: that is what makes an A/B measurement of this change
 # possible (run the suite with COUNCIL_KEEPER_POLL_INTERVAL=5 to get the old timings on today's
 # box), and it matches how POLICY_MAILBOX_DIR above is set.
-export COUNCIL_KEEPER_POLL_INTERVAL="${COUNCIL_KEEPER_POLL_INTERVAL:-0.05}"
+export COUNCIL_KEEPER_POLL_INTERVAL="${COUNCIL_KEEPER_POLL_INTERVAL:-0.5}"
 
 # TWO RECV BOUNDS, AND THEY ARE NOT INTERCHANGEABLE. `recv --timeout N` is used for two different
 # measurements, and a single value for both is what made the t9* files load-sensitive: one of them
@@ -74,8 +93,8 @@ RECV_NOTHING="${COUNCIL_TEST_RECV_NOTHING:-1}"
 # unavoidable. What it must not be is a fixed `sleep` sized against a production constant. Two
 # things were wrong with that and only one of them was speed: `sleep 7` against a five-second
 # poll gave the keeper 1.4 poll periods to misbehave in — a thin margin that reads as a generous
-# one — and it learned nothing during the other 5.6 seconds. At this suite's 0.05s keeper period
-# the default window below is twenty times the poll, so the margin goes UP as the wait goes down.
+# one — and it learned nothing during the other 5.6 seconds. At this suite's 0.5s keeper period
+# the default window below is six times the poll, so the margin goes UP as the wait goes down.
 #
 # The window is in whole seconds and deliberately far longer than the period it outwaits: under
 # the load a full `make test` puts on a box a keeper can be scheduled late, and a window sized to

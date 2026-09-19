@@ -795,10 +795,12 @@ elif [ ! -f "$CT_WF" ]; then
 else
   # The single-quoted assignment, on one line, exactly as check-test.sh declares it.
   guarded=$(sed -n "s/^GUARDED='\([^']*\)'.*/\1/p" "$CT_FILE" | head -1)
-  # The `paths:` entries: quoted list items in the workflow. They are read from the whole file
-  # rather than from inside the `pull_request:` block, because this file has one `paths:` list and
-  # a YAML-block parse in sed would be the fragile half of this check.
-  filter=$(sed -n "s/^ *- *'\([^']*\)'.*/\1/p" "$CT_WF")
+  # The `paths:` entries: QUOTED list items in the workflow, in either quote style. Read from the
+  # whole file rather than from inside the `pull_request:` block, because this file has one
+  # `paths:` list and a YAML-block parse in sed would be the fragile half of this check. Quoted
+  # is what keeps `- name: Check out the repository` in the steps out of the result; accepting
+  # both styles is so a reformat reds nothing rather than reddening confusingly.
+  filter=$(sed -n -e "s/^ *- *'\([^']*\)'.*/\1/p" -e 's/^ *- *"\([^"]*\)".*/\1/p' "$CT_WF")
   if [ -z "$guarded" ]; then
     fail "could not read \$GUARDED out of $CT_FILE — the check-test path filter cannot be checked"
   elif [ -z "$filter" ]; then

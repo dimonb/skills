@@ -1,9 +1,10 @@
 name: check-test
 
 # `make check-test` proves that every assertion in `scripts/check.sh` actually FIRES — it injects
-# one violation per probe, requires the gate to red, and restores. That is the only thing standing
-# between a gate that works and a gate that is decoration, so it is never thinned and never
-# sampled: it runs in FULL or not at all.
+# one violation per probe, requires the gate to red, and restores. It is what stands between a
+# gate that works and a gate that is decoration: no other check in this repo asserts that
+# check.sh's arms FIRE, which was true when this was written and which nothing keeps true. So it
+# is never thinned and never sampled: it runs in FULL or not at all.
 #
 # IT IS A SEPARATE WORKFLOW FROM ci.yml FOR TWO REASONS.
 #
