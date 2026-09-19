@@ -406,3 +406,52 @@ it. Say in the change which parts you verified by running and which you reasoned
   fix, in two of three shipped scenarios, and shipped a test pinning the loss as correct. The
   counterexample was one case branch away, and the sentence had been read and agreed with by both
   the author and the supervisor before a reviewer caught it. The gate cannot see any of this either.
+
+## When a rule here is wrong for the case in front of you
+
+Every rule above was written after something cost. That is the reason to follow them and it is also
+the reason this section exists: a rule written from the cases somebody already hit cannot have
+anticipated every case, and an agent that follows a rule into a stupid outcome has served the
+letter of this file and nothing else. So **a rule here may be deviated from** — under a procedure,
+not under a feeling.
+
+**First, the thing that is not a deviation at all.** If a human is reachable, ask. The owner saying
+"commit it directly" about one change is an instruction, not an exception, and it moves nothing for
+the next change. This section is for the unattended case — a `ship` child with nobody in its
+terminal, a scheduled run, a session that would otherwise stall waiting for an answer nobody is
+coming to give. Where escalating is possible, escalating beats deviating, every time.
+
+**The bar, and it is a test rather than a judgement.** All four:
+
+* **Name the rule and name the concrete cost of following it here.** Not "this seems unnecessary",
+  not "it is only a small change" — what specifically goes wrong, in this case, if the rule is
+  obeyed. A cost you cannot state in a sentence is a cost you have not established.
+* **Check that you are not standing in the case the rule was written for.** Each rule above carries
+  its incident; read it. The most expensive defects measured in this repo were one-line diffs whose
+  authors were confident, and confidence is precisely the feeling these rules exist to overrule.
+* **Say so in the artifact, where a reader of that artifact will see it** — the commit message, the
+  PR body, the review record. Not only in a session transcript that ends. A deviation nobody can
+  find later is indistinguishable from not having known the rule.
+* **File the rule's defect.** If a rule was wrong here it will be wrong again: it needs a bound, an
+  exception, or a rewrite. Put that where the rule is stated, with this case as the evidence. A
+  deviation that leaves the rule untouched is one the next agent has to rediscover.
+
+**What may never be deviated from**, because the failure is irreversible or reaches outside this
+repo, and no in-the-moment judgement can undo it:
+
+* **Rule zero.** A leak that is committed cannot be un-published, and a commit message cannot be
+  scrubbed without rewriting history. There is no case where publishing a private identifier is the
+  reasonable call.
+* **The attribution rules.** They are the owner's standing instruction, not this repo's to waive.
+* **`make check` green before a commit**, and **English everywhere**. Both are cheap to obey and
+  both have already been silently broken once by somebody sure it did not matter.
+* **Anything that merges, pushes, closes or deletes on somebody else's behalf** without the
+  go-ahead that act requires.
+
+**And the trap, which is this section itself.** It is the most dangerous paragraph in this file,
+because it is the one an agent reaches for exactly when a rule is inconvenient — and inconvenience
+is what a load-bearing rule feels like from the inside. A rule that is tedious, slow, ceremonial or
+annoying is not thereby wrong; that is the rule working, and the cost is the point. If the reason
+to deviate is that following it would take longer, the bar above is not met and the answer is no.
+The cases this section is for are the ones where obeying the rule produces a **worse outcome by the
+rule's own purpose** — not a slower one.
