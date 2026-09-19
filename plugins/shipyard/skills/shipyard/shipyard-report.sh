@@ -606,6 +606,54 @@ slot_pending() {
   printf '%s' "$n"
 }
 
+# slot_unsettled <slot> — how many mailbox records for this slot are NOT provably closed.
+#
+# THIS IS A DIFFERENT QUESTION FROM slot_pending, and the difference is the whole point.
+# `slot_pending` answers "how many open escalations should the esc column show", so it counts only
+# a record it can READ, whose kind is on the escalation allow-list, and whose status is `pending`.
+# Every one of those conditions is a way for a record to go uncounted — right for a column, wrong
+# for a gate standing in front of `git worktree remove -f -f`.
+#
+# MEASURED: that filter run on a truncated or non-JSON record prints an empty string, so
+# `slot_pending` reads 0. `shipyard-ask.sh` is what writes the record, so a child killed mid-write,
+# or any corruption, leaves a question that is open in fact, invisible in the column, and unable to
+# hold the teardown. AGENTS.md: untrusted evidence may annotate an operator-facing signal and never
+# suppress one. The hold is such a signal, so this fails CLOSED — anything unreadable counts.
+#
+# WHAT IS PREVENTED here, and what is only NAMED. The rule asks for both, and for the two not to be
+# blurred. PREVENTED: an unreadable record, an unknown kind, a missing status, and an unreachable
+# mailbox can no longer silence the hold. NOT PREVENTED, deliberately:
+#   * `answered` counts as settled, so a reply the operator has given but the child has not yet
+#     consumed does not hold the teardown. Widening the lock to a state the operator has already
+#     acted on is a separate change, not this one.
+#   * a child that writes no record at all is indistinguishable from one with nothing to ask —
+#     there is no evidence to fail closed on.
+#   * the record stays INVISIBLE in the escalation view and in the esc column, which read it
+#     through filters that skip what they cannot parse (#197). This function makes such a slot
+#     survive and say so; it does not make the question answerable, and for a child that is not
+#     merged and finished it changes nothing at all.
+#   * the other locks also rest on child-written evidence (the pipeline stage, the PR number, the
+#     screen). Those AUTHORISE a teardown rather than suppress a signal, which is the other half of
+#     the rule; the content gate inside shipyard-down.sh is what stands behind them.
+# That is the set of routes this function was checked against. Nothing here, and nothing in the
+# gate, enforces that the set is complete.
+slot_unsettled() {
+  local slot="$1" mb n=0 f st
+  # Cannot ask at all -> 1, never 0. An unreachable mailbox must not read as "nothing is owed":
+  # that is the unanswerable-question-as-confident-negative shape #139 is about, one level up.
+  mb=$(shipyard_mailbox 2>/dev/null) || { printf 1; return; }
+  [ -d "$mb" ] || { printf 0; return; }
+  shopt -s nullglob
+  for f in "$mb/$slot-"*.json; do
+    st=$(jq -r '.status // "pending"' "$f" 2>/dev/null) || st=""
+    case "$st" in
+      done|answered) ;;
+      *)             n=$((n+1)) ;;
+    esac
+  done
+  printf '%s' "$n"
+}
+
 # The turn marker is interpolated rather than written out: shared/adapters is the one place it is
 # spelled, so a client renaming it does not leave this column quietly printing a footer line as if
 # it were the child's last word.
@@ -674,6 +722,11 @@ for slot in "${SLOTS[@]}"; do
   iid=$(slot_iid "$slot")
   mr_label="—"; [ -n "$iid" ] && mr_label="!$iid"
   pend=$(slot_pending "$slot")
+  # The esc COLUMN's count and the teardown's HOLD are different questions and are read from
+  # different functions on purpose — see slot_unsettled. A record this report cannot parse raises
+  # the second and not the first, so `esc —` beside a held slot is correct rather than a
+  # contradiction; the HELD block says so in words.
+  unsettled=$(slot_unsettled "$slot")
   esc="—"; [ "$pend" != 0 ] && esc="⚠️ $pend"
   total_pend=$((total_pend+pend))
 
@@ -691,7 +744,7 @@ for slot in "${SLOTS[@]}"; do
       done|ready-to-merge)
         gone_state="no MR yet"
         [ -n "$iid" ] && gone_state=$(mr_state "$iid")
-        if autodown_consider "$slot" "$iid" "$gone_state" "$gone_stage" "" "$pend"; then
+        if autodown_consider "$slot" "$iid" "$gone_state" "$gone_stage" "" "$unsettled"; then
           ROWS+=("| $slot | $mr_label | — | 🧹 torn down | $gone_state / $gone_stage | $esc | — | terminal and worktree removed |")
           SIG+=("$slot|$mr_label|term=0|$gone_state|$gone_stage|$pend|reaped")
           continue
@@ -755,7 +808,7 @@ for slot in "${SLOTS[@]}"; do
   # Cleared every iteration, not just assigned: these are plain shell variables in one long
   # loop, so a value left over from the previous slot would otherwise decide this one's row.
   reap_note=""; before_refused=${#REAP_REFUSED[@]}; before_held=${#REAP_HELD[@]}
-  if autodown_consider "$slot" "$iid" "$state" "$stage" "$addr" "$pend"; then
+  if autodown_consider "$slot" "$iid" "$state" "$stage" "$addr" "$unsettled"; then
     # The row says what happened to a terminal that WAS live when this tick began, so the
     # teardown is never silent, and the SIG carries `term=0` — a teardown is news, and it is
     # the one thing --only-changed must not swallow.
@@ -991,7 +1044,15 @@ fi
 # EVERY tick it holds, not once. Left to the signature it would be announced the first time and
 # then suppressed for as long as it lasted, which is the one tick shape the report is supposed to
 # be loudest about — the header line is the only trace the incident left behind.
+# A HELD or REFUSED slot bypasses the silence outright, like STALLED above and for the same
+# reason: both are states where a destructive act is being attempted and declined every tick, and
+# where the operator owes an action nobody else can take. Leaving them to the signature made them
+# news EXACTLY ONCE — and AGENTS.md now forbids letting state the supervised party writes decide
+# whether an operator-facing signal appears at all, which a per-slot signature partly is. The cost
+# is a repeated block for as long as the condition lasts; that is the STALLED trade, taken
+# knowingly, and neither state is the normal case.
 if [ "$ONLY_CHANGED" = 1 ] && [ "$TERMINAL" = 0 ] && [ "${#STALLED[@]}" -eq 0 ] \
+   && [ "${#REAP_HELD[@]}" -eq 0 ] && [ "${#REAP_REFUSED[@]}" -eq 0 ] \
    && [ "$NOSIG_RC" = 0 ] && [ -z "$PINNED_ELSEWHERE" ] && [ "$GAP" = 0 ] && [ -n "$SIGFILE" ]; then
   NOW_SIG=$(printf '%s\n' "${SIG[@]}")
   if [ -f "$SIGFILE" ] && [ "$NOW_SIG" = "$(cat "$SIGFILE" 2>/dev/null)" ]; then
@@ -1127,7 +1188,9 @@ fi
     echo "### ✋ HELD — finished and merged, but somebody is owed an answer"
     for x in "${REAP_HELD[@]}"; do
       sl=${x%%|*}; n=${x#*|}
-      echo "- \`$sl\` — merged and finished; its teardown is HELD by $n open escalation(s)."
+      echo "- \`$sl\` — merged and finished; its teardown is HELD by $n unsettled mailbox record(s)."
+      echo "  That count is NOT the esc column's: a record this report could not parse counts here"
+      echo "  and not there, because the hold fails closed while the column reports what it can read."
       echo "  Nothing was removed. Answer it — the escalation block below carries the command — and the"
       echo "  slot tears itself down on the next tick. Tearing it down first destroys the session that"
       echo "  asked, and the reply then reports success to a child that is no longer there."

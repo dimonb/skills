@@ -493,5 +493,43 @@ b_tick -- 71 >/dev/null
 b_tick -- 71 >/dev/null
 ok "B12: ...while an ANSWERED one does not hold it"  1 "$(grep -c '^71$' "$DOWN_CALLS")"
 
+# --- B13: an UNREADABLE record must hold too, and the hold must not be silenceable ----------
+# AGENTS.md: untrusted evidence may annotate an operator-facing signal, never suppress one.
+# `slot_pending`'s jq prints an empty string for a truncated or non-JSON record (measured), so the
+# esc column reads 0 — and `shipyard-ask.sh` is what writes that record, so a child killed
+# mid-write can silence its own protection and be destroyed while its question is open. The hold
+# therefore reads `slot_unsettled`, which fails closed. Two halves, because the rule is per OUTPUT:
+# the teardown must not happen, AND the operator must be told on every tick it is held, not once.
+b_reset
+b_slot 72 872 ready-to-merge
+printf '1 ship-72\n' >"$B_WINS"; printf 'ship-72\n' >"$B_ENUM"
+printf '872\tMERGED\n' >"$B_STATES"
+printf '{"kind":"question","status":"pending"' >"$B_GIT/ship-escalations/72-1.json"   # truncated
+b13a=$(b_tick -- 72)
+b13b=$(b_tick -- 72)
+ok "B13: an unreadable record holds the teardown"    0 "$(grep -c . "$DOWN_CALLS")"
+ok "B13: ...and says so"                             1 "$(printf '%s' "$b13b" | grep -c 'HELD — finished and merged')"
+# The esc column genuinely reads 0 here — that is the defect being guarded against, and the block
+# explains the discrepancy rather than hiding it. Asserting it keeps the two counts from being
+# quietly unified later, which would reopen the hole.
+ok "B13: ...while the esc column still reads none"   1 "$(printf '%s' "$b13b" | grep -c '^| 72 .*| — | — |')"
+ok "B13: ...and the block explains the difference"   1 "$(printf '%s' "$b13b" | grep -c 'could not parse counts here')"
+
+# --- B14: the hold survives --only-changed silence ------------------------------------------
+# The per-slot signature is partly built from values the child writes, so leaving the hold to it
+# would let the supervised party decide whether the supervisor is told. A held slot must break the
+# silence on EVERY tick, like STALLED — news once is not enough for a state that needs an action.
+b_reset
+b_slot 73 873 ready-to-merge
+printf '1 ship-73\n' >"$B_WINS"; printf 'ship-73\n' >"$B_ENUM"
+printf '873\tMERGED\n' >"$B_STATES"
+printf '{"kind":"question","status":"pending"}\n' >"$B_GIT/ship-escalations/73-1.json"
+b_tick -- --only-changed 73 >/dev/null
+b_tick -- --only-changed 73 >/dev/null
+b14=$(b_tick -- --only-changed 73)
+ok "B14: a held slot breaks --only-changed silence every tick" 1 \
+   "$(printf '%s' "$b14" | grep -c 'HELD — finished and merged')"
+ok "B14: ...and still tears nothing down"            0 "$(grep -c . "$DOWN_CALLS")"
+
 printf '\n%s: %d checks, %d failures\n' "$(basename "$0")" "$CHECKS" "$FAILURES"
 [ "$FAILURES" -eq 0 ]
