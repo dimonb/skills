@@ -242,6 +242,30 @@ external clears a stage, and no stage waits on an actor nobody starts. What ends
 Design discussion for a change belongs in its issue and PR description; the multi-change arc
 is tracked in GSD's `.planning/` roadmap. There is no per-change spec artifact (above).
 
+### Small changes go without ceremony
+
+That path is for changes that alter **behaviour**. A change whose whole content a reader can check
+at a glance does not need an issue, a branch or a pull request: commit it straight to `main`.
+
+The qualification is a **test, not a size**, because "small" is a judgement an author makes about
+their own work, and this repo has measured how that goes — the defects that cost the most here were
+one-line diffs their authors were confident about. All three must hold:
+
+* **it changes no behaviour any user or agent could observe** — a comment, a stale count, a typo, a
+  prose correction, or a CI step that changes how the gate is *run* and not what it *asserts*;
+* **`make check` is green** — that is not waived by anything on this page;
+* **one `git revert` undoes it completely**, with nothing else to unwind.
+
+Fail one and it takes the full path. "It is only a few lines" is not one of the three, and neither
+is "I am confident": a change that touches what a script *does* is behaviour even when the diff is
+shorter than this paragraph. When it is genuinely unclear which side a change falls on, that
+uncertainty is itself the answer — open the issue.
+
+The docs-only exception in the Rules below is the same instinct written as a path rule, and stays
+as it is; this section is what it generalises to. Neither removes the owner's freedom to say
+"commit it directly" about any particular change — that is a decision about one change, and it
+does not move the line for the next one.
+
 ## How to add a skill
 
 A plugin may hold **several** skills, so a new skill usually joins an existing plugin rather
