@@ -331,9 +331,9 @@ _canary_fifo() { # <room> -> a freshly created fifo path on stdout, or rc 1
 # has been superseded must reap nothing, and a marker left by the room this path once served
 # would otherwise close the terminals of the room that replaced it. It goes BEFORE the canary
 # read because that read blocks for up to one poll period (five seconds by default), and a
-# detached room has no canary at all
-# — putting it after would make a detached room wait out its own `sleep`, and would make a `--hold` room
-# NEVER NOTICE A TEARDOWN AT ALL. Not "late", and not "only on owner death": both `continue`s
+# detached room has no canary at all — putting it after would make a detached room wait out its
+# own `sleep`, and would make a `--hold` room NEVER NOTICE A TEARDOWN AT ALL. Not "late", and not
+# "only on owner death": both `continue`s
 # above jump straight back to the `while` test, and the EOF branch reaps and returns, so a check
 # placed below that block is unreachable in a held room for the room's whole life — `decide`
 # reports the seats are going, exits 0, and nothing ever happens. That was measured by mutation,
