@@ -1148,7 +1148,14 @@ Only in a spec-engine repo whose law puts the archive in the implementation chan
    the change directory. Do not sync or move by hand.
 2. Run the validator and the check commands; commit; push.
 3. Final check on the archived head (§5.10): one `final-archive` subagent, or a scoped impl
-   round if the commit carried anything beyond the sync-and-move.
+   round if the commit carried anything beyond the sync-and-move. **The two branches differ on
+   deferral.** The `final-archive` charter is about the archive commit itself — a delta that did
+   not sync, a directory that moved incompletely — so a finding there is fixed here, never
+   placed; this stage defers nothing on that branch. The scoped-impl-round branch is an ordinary
+   impl round over real code and defers like any other, so **work the ladder (§5.11) over what it
+   deferred, plus any deferral carried from an earlier run whose rung was never reached** — the
+   same collection §7.E step 6 does, because this is the last stage that reviews code and a
+   deferral left unplaced here is one nothing downstream collects.
 4. → §7.G.
 
 ### 7.G — `ready-to-merge` → hand off, or merge
