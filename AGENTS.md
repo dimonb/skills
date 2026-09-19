@@ -195,6 +195,37 @@ When no anchorable shape exists, the honest answer is to drop the arm. An exempt
 evidence is worth less than not having it, and a classifier that is right about two states beats
 one that guesses at five.
 
+## Untrusted evidence may annotate an operator-facing signal, never suppress one
+
+Both skills let an operator's alarm, glyph, exit code or push be shaped by state that an agent
+under supervision can write — a roster field, a container pin, a pane, a timestamp. That is fine
+for *informing* the operator and never for *deciding whether they are told at all*.
+
+> **For each thing a supervisor reads, ask what decides whether it APPEARS.** A peer-writable value
+> that changes how a line reads is acceptable. One that decides whether the line exists is the
+> supervised party holding the switch on the supervision.
+
+Three instances, all measured, all caught by review rather than by the author:
+
+* a stall classifier read off the pane granted a WAITING *exemption*, and the exemption was enabled
+  by peer-writable room state — so a seat could silence the supervisor's alarm **about itself**;
+* the fix unsuppressed the **alarm** and left the **push** — the same event's other output — gated
+  on that same state for another round. Hence *per output*, not per feature: the first draft of this
+  rule said "alarm", was applied to the alarm, and missed the push;
+* a later change added a "terminals still up" alarm that one in-room write removes outright — the
+  very incident the alarm existed to report.
+
+**The room is not a trust boundary** (see council's SKILL.md), so this is not a hypothetical about
+a hostile participant: an ordinary agent writes room state as part of doing its job.
+
+Where suppression cannot be prevented outright — because every input is state the supervised party
+can reach — make it **self-revealing** instead: arrange that the only way to silence the signal is
+to write something the supervisor sees anyway. Weaker than preventing it, and much stronger than
+pretending it is prevented. Say at the code which of the two you achieved, and name the routes that
+still bypass it; a guard whose limits are undocumented gets trusted past them.
+
+The gate cannot see any of this.
+
 ## How work happens here
 
 One change is one issue, one branch, one pull request:

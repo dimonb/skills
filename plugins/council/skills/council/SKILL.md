@@ -48,7 +48,8 @@ producing polite agreement.
   cursor/<me>/<peer>         ← exactly ONE writer per cursor (me)
   bell/<peer>.fifo       the doorbell
   board/decision.md      the output; board/status holds decided|unresolved
-  state/                 counters, launchers, the pinned terminal container, keeper pid
+  state/                 counters, launchers, the pinned terminal container, keeper pid,
+                         and `teardown` — a decided close's request that the keeper reap
 ```
 
 It lives in the **shared git dir** so one path resolves from every worktree of the repo,
@@ -235,9 +236,17 @@ full `--timeout` (**540 s** by default) with the record already finished on disk
 
 | exit | what it means |
 |---|---|
-| 0 | the record is written **and** the announcement was written. |
-| 4 | the record is written, the announcement was **not**. The close stands: `board/status` is set and `decision` serves the record; no seat was rung, so each learns at its own next poll. |
+| 0 | the record is written, the announcement was written, **and** — on a close recorded `decided` — the teardown below was asked for. A close recorded `unresolved` deliberately asks for none. |
+| 5 | the record is written and the announcement went out, but the **terminals could not be closed**: no live keeper to do the reaping, or the request could not be written (the message names the path). The close stands; `down` closes them. A third cause exists only for a *library* caller that sourced `verbs.sh` without `lib/up.sh` and so has no keeper machinery in scope — `council.sh decide` cannot produce it, because the entrypoint always sources it. |
+| 4 | the record is written, the announcement was **not**. The close stands: `board/status` is set and `decision` serves the record; no seat was rung, so each learns at its own next poll. No teardown is asked for on this path, so the terminals are still up. |
 | 1 | the record itself could not be written. **The room is not closed** and nothing was announced; no path is printed. |
+
+**The three things that can fail are reported apart, on purpose.** The record is the deliverable,
+so neither a lost announcement nor a teardown that could not happen is allowed to read as a failed
+close — and neither is allowed to hide inside the other's code either. 1 is "there is no record";
+4 is "there is a record and the room does not know"; 5 is "there is a record, the room knows, and
+the seats are still up". The record path is on stdout on every one of those but 1, because it is
+the room's output whatever else went wrong.
 
 Exit 0 says the announcement reached the log, which is not quite the same as every seat having
 read it: while an **opening barrier round** is still open, a lane is withheld whole from the other
@@ -288,6 +297,70 @@ room survives both an unreadable log and an unreadable roster.
 **`floor` answers from an unread log at exit 0 in both cases**, so do not use it to decide whose
 turn it is while a room is in either state.
 
+### A decided room closes its own terminals
+
+**The decision is the deliverable, not the chat.** A room that reaches `decided` asks for its
+participant terminals to be closed, as the last act of `decide`. Everything durable stays exactly
+as `down` (without `--purge`) leaves it — the room directory, `board/decision.md`, `board/status`,
+the lanes and the cursors — so `council.sh decision` and `council.sh transcript` serve the room
+afterwards just as before. Only `--purge` deletes anything.
+
+The reason it is the room's job and not the operator's is not that operators are careless. **The
+moment a room decides is the moment its OUTPUT arrives**, and the output is what the operator
+turns to; a reminder printed there has to be read at exactly the moment attention has moved to the
+record. The case that produced this left three agent sessions running for about eleven hours,
+twice in one day, the second time after the operator had said out loud they would close them.
+
+**`decide` does not do the reaping — it asks the room's keeper to.** That is forced by the shape
+of the verb: `decide` takes `--me`, so a **participant** runs it, and the seat closing the room is
+closing its own terminal. A reap written inline races the process that began it. The keeper
+already runs in its own process group, already holds the room's roster, and already closes every
+participant terminal and exits — that is what `up --hold` uses when its owner dies — so this is a
+fourth trigger on machinery that already existed rather than a second teardown path. It is a
+**request**: the keeper polls, so the terminals go within one poll (about five seconds) rather
+than at once. That is the right side to err on. The close announcement rings every seat first, so
+each learns now rather than at its own timeout, and closing the terminals ahead of it would leave
+it ringing nobody.
+
+Three consequences worth knowing:
+
+* **An `unresolved` close does not tear down — and `--force` is NOT the switch.** A room that did
+  *not* converge is one the same close escalates to the shared mailbox as needs-human, and it is
+  the room a person is most likely to want to walk into, so its seats stay up and the close says
+  so, naming `down`. The rule is about a room whose question is answered; it does not reach one
+  that failed to answer it. **The gate is the recorded status, not the flag.** `--force` does one
+  thing only — it lifts the not-ripe refusal — so on a room that has already converged it is a
+  no-op: the record still comes out `decided` and the seats still go. There is no flag that means
+  "write the record and keep the seats"; if that is ever wanted it belongs on a separate
+  `--keep-seats`, not on `--force`.
+* **A teardown that cannot happen is reported, not pretended.** That is exit 5 above, and it names
+  which of the three causes it was: no live keeper, a request that could not be written, or a
+  caller with no keeper machinery in scope. Nothing is written when there is no keeper — a marker
+  no keeper will ever take would sit waiting for whichever keeper the room is given next.
+* **But that report is about the room's bookkeeping, never about a terminal actually closing**, and
+  the difference matters because [the room is not a trust
+  boundary](#the-room-is-not-a-trust-boundary). Whether exit 5 *appears* is decided by
+  `state/keeper.pid` and by `state/` being writable, which are room state any participant can
+  write. A pid file naming a live process that is not this room's keeper — a seat's own doing, or
+  just `down` leaving a stale pid the OS then recycles — makes the close report success while
+  nothing ever reaps. So `decide` says the keeper **has been asked**, which is all it establishes;
+  it does not say the seats are gone. Neither prevented nor made self-revealing here, and
+  `_keeper_teardown`'s header names the three routes. Nothing reports the difference today
+  (`rooms` does not probe the backend); tracked separately.
+* **`relaunch` cancels a teardown no keeper has taken yet.** Putting a seat back up says the room
+  is in use again, and it outranks a close that asked for the seats to go — it has to, or the seat
+  it launches is reaped within a poll of starting. That covers the keeper that died before taking
+  the request *and* the live keeper still inside its five-second poll window. What it cannot
+  cancel is a reap already **in flight**: the keeper consumes the request before it starts
+  closing, so from that moment there is nothing left to clear and `relaunch` cannot see it. That
+  window is the length of one reap — measured at 84–383 ms for three seats on a live tmux backend
+  — and a `relaunch` landing inside it can leave the room without a keeper until the next one
+  repairs it. It is tracked separately rather than papered over here.
+
+`down` is unchanged and still the way to close a room by hand: an unresolved one, one whose
+teardown could not happen, or any room at all before it decides. `down --purge` remains the only
+thing that deletes a record.
+
 ## Verbs
 
 ```bash
@@ -296,7 +369,9 @@ council.sh status | claims | verdict | order | transcript | floor
 council.sh agenda | protocol | decision   # the room's own files, through the entrypoint
 council.sh say <peer> "..."        # out of band, into that participant's terminal
 council.sh relaunch <peer>         # put one seat back up, mid-room
-council.sh decide [--force]        # write the ADR and close the room
+council.sh decide [--force]        # write the ADR and close the room; a close recorded DECIDED
+                                   # then closes its own terminals, an UNRESOLVED one leaves
+                                   # them up (--force only lifts the not-ripe refusal)
 council.sh down [--purge]          # close terminals; the room (the record) survives
 council.sh rooms                   # what exists and where each room stands
 ```
@@ -313,15 +388,26 @@ terminal because it is you.
 ### Room lifetime: detached (default) or `--hold`
 
 By default `up` **launches the room and returns**. The room is detached: it outlives the shell
-that started it and lives until its directory is removed — an explicit `down`/`--purge`, or the
-directory going away. This is the right mode for a room you want to leave running and revisit
-from another shell, and it is the historical behaviour.
+that started it and its **live** side lasts until something ends it: `down` (which closes the seats
+and the keeper but **keeps** the room), `down --purge` or a deletion by hand (which removes the
+directory as well), or the room deciding, which closes its own terminals
+([above](#a-decided-room-closes-its-own-terminals)) and likewise leaves everything durable behind.
+Only `--purge` and a hand deletion take the record with them. This is the right
+mode for a room you want to leave running and revisit from another shell.
 
 `up --hold` instead **stays in the foreground as the room's owner**, and binds the room's life to
 this shell: when it dies for *any* reason — Ctrl-C, the pane closing, a crash, even SIGKILL — the
 room's keeper closes every participant terminal and exits, so no background console is left
 orphaned. Use it for a short session tied to one terminal, where walking away should tear the
 room down rather than strand agents in it.
+
+**A held room also ends when it decides, and that returns your shell.** A participant closing the
+room asks the keeper to reap ([above](#a-decided-room-closes-its-own-terminals)); the keeper is
+this shell's own background job, so when it reaps and exits, the `wait` above returns and
+`up --hold` comes back to a prompt. **Nothing is lost when that happens** — the room directory,
+the record and the transcript all survive, exactly as on the detached path; only the live seats
+are gone, which is what the close asked for. So a held shell returning is the normal end of a room
+that reached a decision, not a sign that something tore it down.
 
 The mechanism, in one paragraph, because it is the kind of thing that rots silently: the owner
 holds the write end of a small **canary pipe** and the keeper inherits the read end, so the
@@ -331,6 +417,16 @@ reads as "parent alive" and cannot be reaped after the fact, so death has to be 
 polled for. The keeper runs in its own process group, so the very Ctrl-C that kills the owner
 does not also kill the keeper before it can do the reaping. `down` and `--purge` still tear a
 room down exactly as before; the canary is an added trigger, not a replacement.
+
+The keeper's loop has **four** ways to return, and it is worth keeping them straight because only
+three of them end the live room. Its directory going away — a backstop rather than the usual
+cause, since *both* forms of `down` signal the keeper first and a signal beats a five-second poll,
+and a plain `down` does not remove the directory at all; a `--hold` room's owner dying, seen as the EOF
+above, on which it reaps; **a decided `decide` asking it to reap**
+([above](#a-decided-room-closes-its-own-terminals)), which applies to a detached room as much as
+to a held one; and its pid file naming another keeper, on which it steps down and reaps
+**nothing** — the room at that path belongs to whoever superseded it, and reaping there would
+close the replacement's terminals.
 
 **One entrypoint, on purpose.** A participant's permission allowlist matches the literal
 start of a command, so eight scripts would need eight grants and the first lap of every
@@ -766,6 +862,25 @@ worth knowing: a room whose
 turn budget ran out reports `unresolved` and exits 0 before anyone has written a record, so
 `council.sh decision` (exit 0 only with a record) is the signal to trust when you need to know
 that the room's output exists.
+
+**A `decided` close that exited 0 leaves nothing outstanding**, because asking for the teardown is
+its last act ([above](#a-decided-room-closes-its-own-terminals)) — read the record and move on.
+Any other ending can leave the seats up, and `decide`'s **exit code** is what says so: the table
+under ["Closing a room tells it"](#closing-a-room-tells-it-and-decide-says-so-when-it-could-not)
+is the authoritative list, and each of those paths names `council.sh down` in its own message.
+
+Two cautions for a supervisor rather than a participant. That message goes to **whoever ran
+`decide`**, which is `--me`-gated to a seat — so a supervisor watching from outside sees the
+record say `decided` and does *not* see the sentence, which is exactly the room-2 case that
+produced this issue. And `board/status` alone cannot tell you which ending it was: it reads
+`decided` on a clean close, on an exit 4 whose announcement was lost, and on an exit 5 whose
+teardown could not happen. **`rooms` will not tell you either** — it reports each room's verdict and
+never probes the backend, so a decided room with live seats and one without print identically. What
+does ask the backend is [`say`](#what-say-establishes-and-what-each-answer-means): `council.sh say
+<peer> "…"` answers **exit 3** when that seat has no live terminal, and **exit 4** when the room was
+launched on the *other* backend — which is the caveat that makes reading `tmux ls` by hand
+unreliable here, since `COUNCIL_BACKEND=auto` resolves per process and the seats may be in the
+other container entirely. The cost of asking is that `say` types into the seat if it *is* alive.
 
 **Exit codes here mean status, not success.** `verdict` returns 1 on a live room and 2 on
 a stuck one. It also returns **1 having printed nothing at all** when the room's ROSTER
