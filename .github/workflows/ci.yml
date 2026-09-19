@@ -28,14 +28,7 @@ jobs:
       - name: Check out the repository
         uses: actions/checkout@v7
 
-      # ubuntu-latest already ships all of these; installing them explicitly documents the suites'
-      # dependency surface and keeps the workflow correct on a leaner runner image.
-      - name: Install suite dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends jq make perl python3
-
-      # The static gate plus the four fast suites (driver, flow, adapters, policy).
+      # The static gate plus every fast, pure suite; the Makefile's `check` recipe is the list.
       - name: make check
         run: make check
 
@@ -43,7 +36,7 @@ jobs:
       - name: make check-test
         run: make check-test
 
-      # All six suites' fast subsets (driver, flow, adapters, policy, shipyard, council) — where a
-      # runtime error surfaces.
+      # Every suite's fast subset, the two slow ones included — this is where a runtime error in
+      # those surfaces, since `make check` deliberately does not run them.
       - name: make test
         run: make test
