@@ -77,9 +77,9 @@ council.sh <verb> [options]
 
   Looking on
     status  [--only-changed]       the supervisor block; exit 0 = the room is closed
-            [--alarms-only]        --only-changed stays silent while the floor, verdict,
-                                   turn count and open objections are all unmoved; it never
-                                   silences a tick carrying an alarm, and never a closed room
+            [--alarms-only]        --only-changed stays silent while the room's meaningful
+                                   state is unmoved; it never silences a tick carrying an
+                                   alarm, and never a closed room
                                    --alarms-only prints the alarms alone, for a fast loop
     terminals                      how many seats still hold a terminal: <live>/<total>,
                                    `?` if that could not be determined, `-` if the room was

@@ -86,20 +86,23 @@ for e in "$REAL_SKILL"/lib/*; do
 done
 SESSIONS="$COUNCIL_TEST_ROOT/t27-sessions"       # what the backend lists, one name per line
 SESSIONS_RC="$COUNCIL_TEST_ROOT/t27-sessions-rc" # ...and the status it answers with
-: > "$SESSIONS"; printf '0\n' > "$SESSIONS_RC"
+SESSIONS_CALLS="$COUNCIL_TEST_ROOT/t27-sessions-calls"  # one line per enumeration, for cost tests
+: > "$SESSIONS"; printf '0\n' > "$SESSIONS_RC"; : > "$SESSIONS_CALLS"
 cat >"$SHADOW/lib/term.sh" <<SHADOWEOF
 # The shipped terminal with only the enumeration replaced. Pinned to tmux so the pin cases mean
 # the same thing here as on a machine running agterm — \`auto\` would resolve against whatever the
 # developer happens to have up.
 COUNCIL_BACKEND=tmux
 . "$REAL_SKILL/lib/term.sh"
-ct_sessions() { cat "$SESSIONS" 2>/dev/null; return "\$(cat "$SESSIONS_RC" 2>/dev/null || printf 0)"; }
+ct_sessions() { printf 'call\\n' >> "$SESSIONS_CALLS"; cat "$SESSIONS" 2>/dev/null; return "\$(cat "$SESSIONS_RC" 2>/dev/null || printf 0)"; }
 SHADOWEOF
 SCLI="$SHADOW/council.sh"
 
 # Drive the shadow backend: `sessions <name>...` lists those sessions and answers 0;
 # `sessions_unreachable` answers non-zero, which is the case a live tmux cannot be made to give.
 sessions()             { printf '%s\n' "$@" > "$SESSIONS"; printf '0\n' > "$SESSIONS_RC"; }
+calls_reset()          { : > "$SESSIONS_CALLS"; }
+calls_count()          { wc -l < "$SESSIONS_CALLS" | tr -d ' '; }
 sessions_none()        { : > "$SESSIONS"; printf '0\n' > "$SESSIONS_RC"; }
 sessions_unreachable() { : > "$SESSIONS"; printf '1\n' > "$SESSIONS_RC"; }
 
@@ -184,6 +187,46 @@ out=$(bash "$CLI" status --only-changed 2>/dev/null)
 ok "...and holding it does not"          0 "${#out}"
 export COUNCIL_ROOM="$RQ" ROOM="$RQ"
 
+# THE LIVENESS APPEND RIDES THE QUIET LINE, AND ONLY THE QUIET LINE. Until this fixture carried a
+# pin, `_seat_liveness` returned 1 here and the append at the end of the quiet branch was dead
+# under the whole suite: routing it into `$alarms` instead — which wakes the 60-second alarm loop
+# with the name of a command that discards a seat's context, and bypasses `--only-changed` for as
+# long as the seat thinks — changed nothing that any assertion could see.
+printf 'fake-container\n' > "$RQ/state/container-tmux"
+printf '#!/bin/sh\n' > "$RQ/state/launch-$(bash "$CLI" floor | sed -n 's/.*floor=\([^ ]*\).*/\1/p').sh"
+sessions_none
+blk=$(bash "$SCLI" status 2>/dev/null)
+ok "the quiet line carries the liveness note" 1 "$(printf '%s' "$blk" | grep -c '^quiet:.*terminal is GONE')"
+out=$(bash "$SCLI" status --alarms-only 2>/dev/null)
+ok "...and it still never reaches --alarms-only" 0 "${#out}"
+bash "$SCLI" status --only-changed >/dev/null 2>&1
+out=$(bash "$SCLI" status --only-changed 2>/dev/null)
+ok "...and still does not bypass the filter"     0 "${#out}"
+
+# THE `_is_seat` HALF OF THE QUIET GATE. A roster `c_peers` refuses leaves `$floor` unusable, and
+# without the gate the annotation named an empty seat — the same "  has been held for 7200s"
+# defect this change fixed in `_stall_escalate`. Reachable without an adversary: `up` writes
+# roster.json with a plain `>`, so an interrupted run truncates it.
+cp "$RQ/roster.json" "$RQ/roster.bak"
+jq '.order = "not-a-list"' "$RQ/roster.bak" > "$RQ/roster.json"
+blk=$(bash "$SCLI" status 2>/dev/null)
+ok "an uncheckable floor earns no quiet line" 0 "$(printf '%s' "$blk" | grep -c '^quiet:')"
+mv "$RQ/roster.bak" "$RQ/roster.json"
+
+# AND IT MUST NOT PAY FOR ONE EITHER. The quiet branch composes its line with `_seat_liveness`,
+# which sources term.sh (re-resolving the backend — on agterm a control-socket probe) and
+# enumerates the container. Left ungated, the documented 60-second alarm loop paid that every tick
+# for the whole time a seat was thinking, to build a sentence the mode then discarded. Asserted by
+# counting enumerations rather than by timing, so it is deterministic.
+sessions_none
+calls_reset
+bash "$SCLI" status --alarms-only >/dev/null 2>&1
+ok "--alarms-only asks the backend nothing on a quiet room" 0 "$(calls_count)"
+calls_reset
+bash "$SCLI" status >/dev/null 2>&1
+ok "...while the block does ask it"                         1 "$(calls_count)"
+rm -f "$RQ/state/container-tmux" "$RQ"/state/launch-*.sh
+
 # Past the hard threshold it IS an alarm again, and that one does everything the quiet line does
 # not.
 a=$(COUNCIL_STALL_SECS=100 bash "$CLI" status --alarms-only 2>/dev/null)
@@ -267,11 +310,17 @@ age_messages "$R3" 7200
 cs=$(COUNCIL_STALL_SECS=100 bash "$SCLI" status --alarms-only 2>/dev/null)
 ok "a closed room still raises STALL"        1 "$(printf '%s' "$cs" | grep -c '🛑 STALL')"
 ok "...on the ordinary arm"                  1 "$(printf '%s' "$cs" | grep -c 'has held the floor for')"
-# The seat has no launcher (mkroom writes none) and the backend lists nothing, so an unguarded
-# read WOULD produce a GONE sentence here — which is what makes these two assertions bite.
-ok "...but prescribes no relaunch"           0 "$(printf '%s' "$cs" | grep -c 'council.sh relaunch %s\|before running council.sh relaunch')"
+# THE SEAT NEEDS A LAUNCHER for this to bite. Without one, `_seat_liveness` takes the `--me`
+# branch, whose wording contains no relaunch prescription at all — so the assertion passed
+# whether or not the guard existed, and only its companion below did any work. Measured: dropping
+# the closed-room half of the gate left this one green until the launcher was added.
+printf '#!/bin/sh\n' > "$R3/state/launch-$holder.sh"
+cs=$(COUNCIL_STALL_SECS=100 bash "$SCLI" status --alarms-only 2>/dev/null)
+ok "...but prescribes no relaunch"           0 "$(printf '%s' "$cs" | grep -c 'before running council.sh relaunch')"
 ok "...and claims nothing about a terminal"  0 "$(printf '%s' "$cs" | grep -c 'terminal is GONE')"
-rm -f "$R3/state/container-tmux"
+# Both removed: section 6 asserts the never-launched answer on this room, and a launcher left
+# behind would make it rc 2 / `?` — correctly, which is exactly why it has to go.
+rm -f "$R3/state/container-tmux" "$R3"/state/launch-*.sh
 
 # --- 6. the terminals verb ---------------------------------------------------------------
 out=$(bash "$CLI" terminals 2>/dev/null); rc=$?
@@ -325,7 +374,7 @@ ok "a closed room with live seats alarms" 1 "$(printf '%s' "$out" | grep -c '2 o
 # so a suppressed one is a supervisor told nothing, once, at the only moment it mattered.
 bash "$SCLI" status --only-changed >/dev/null 2>&1
 out=$(bash "$SCLI" status --only-changed 2>/dev/null)
-ok "...on every tick, through --only-changed" 1 "$(printf '%s' "$out" | grep -c 'terminals are still up')"
+ok "...on every tick, through --only-changed" 1 "$(printf '%s' "$out" | grep -cE '[0-9]+ of [0-9]+ terminals are still up')"
 
 # 9b. An honest empty answer from a backend that DID answer — a legitimately torn-down room. No
 #     alarm is owed, but the tick must still SAY what it read: a zero comes through a pin inside
@@ -334,6 +383,7 @@ sessions_none
 ok "terminals counts zero once they are gone" "0/3" "$(bash "$SCLI" terminals 2>/dev/null)"
 out=$(bash "$SCLI" status --alarms-only 2>/dev/null)
 ok "a torn-down room raises no alarm" 0 "$(printf '%s' "$out" | grep -c 'terminals are still up')"
+ok "...and the block line stays off the alarm channel" 0 "$(printf '%s' "$out" | grep -c '^terminals:')"
 blk=$(bash "$SCLI" status 2>/dev/null)
 ok "...but the block says what it read"  1 "$(printf '%s' "$blk" | grep -c '^terminals: none of 3')"
 ok "...and that a zero is not proof"     1 "$(printf '%s' "$blk" | grep -c 'not proof')"
@@ -389,7 +439,7 @@ rm -f "$R3/state/container-tmux"
 sessions "council-$RN-a" "council-$RN-b"
 printf 'fake-container\n' > "$R3/state/container-tmux"
 out=$(bash "$SCLI" status --alarms-only 2>/dev/null)
-ok "9f: baseline — the pin is there and seats are up" 1 "$(printf '%s' "$out" | grep -c 'terminals are still up')"
+ok "9f: baseline — the pin is there and seats are up" 1 "$(printf '%s' "$out" | grep -cE '[0-9]+ of [0-9]+ terminals are still up')"
 rm -f "$R3"/state/container-*
 printf '#!/bin/sh\n' > "$R3/state/launch-a.sh"
 out=$(bash "$SCLI" status --alarms-only 2>/dev/null)
@@ -404,6 +454,7 @@ out=$(bash "$SCLI" status --alarms-only 2>/dev/null)
 # threshold, so `--alarms-only` correctly carries a 🛑 STALL here and an emptiness check would
 # pass for the wrong reason (and would go red the day the fixture's age changed).
 ok "removing the launchers too gets the silence back" 0 "$(printf '%s' "$out" | grep -c 'could not be determined')"
+ok "...and its block line stays off the alarm channel" 0 "$(printf '%s' "$out" | grep -c '^terminals:')"
 blk=$(bash "$SCLI" status 2>/dev/null)
 ok "...but the block still says what it read"     1 "$(printf '%s' "$blk" | grep -c '^terminals: this room carries no container pin')"
 
@@ -471,6 +522,11 @@ sessions_none
 cp "$RS/roster.json" "$RS/roster.bak"
 jq '.mode = "roundtable"' "$RS/roster.bak" > "$RS/roster.json"
 out=$(COUNCIL_STALL_SECS=100 bash "$SCLI" status --alarms-only 2>/dev/null)
+# The first of these is the HISTORICAL string and is now unreachable by construction — a label
+# with spaces and a dash can have no `state/launch-<peer>.sh`, so even an ungated read would take
+# the launcher-less branch and never print it. It is kept as a regression tripwire for the exact
+# text that reached an operator's console, and the assertion BELOW it is the one that bites:
+# measured, dropping `_is_seat` reds only the second.
 ok "a barrier label is never called a seat" 0 "$(printf '%s' "$out" | grep -c 'relaunch — (barrier)')"
 ok "...and no terminal claim is made of it" 0 "$(printf '%s' "$out" | grep -c 'terminal is GONE')"
 mv "$RS/roster.bak" "$RS/roster.json"

@@ -691,11 +691,15 @@ _stall_escalate() {
 # _room_terminals — how many of this room's seats still hold a terminal.
 #
 # Echoes "<live><TAB><total>" and returns 0 when the backend ANSWERED and the answer may be
-# believed. Returns 2 when the room was launched with terminals but the read could not be
-# resolved (the backend did not answer, or the pin says these sessions were launched on the
-# OTHER backend). Returns 1 when the room carries no container pin at all, i.e. was never
-# launched by this skill and so has no terminals to count — the same guard, and the same
-# reasoning, as `_floor_screen`'s.
+# believed. Returns 2 when the room WAS launched but the read could not be resolved — the backend
+# did not answer, the pin says these sessions were launched on the OTHER backend, or the pin has
+# gone while the launchers remain. Returns 1 only when the room carries neither a pin NOR a
+# launcher, i.e. was never given terminals and so has none to count.
+#
+# THAT IS NO LONGER `_floor_screen`'s GUARD, though it started as a copy of it: `_floor_screen`
+# still returns 1 on any missing pin, because a pane it cannot capture is simply a pane it cannot
+# capture, while a COUNT that silently reads zero is an operator-facing signal going quiet. The
+# two now differ on purpose; do not re-unify them without reading the paragraph below.
 #
 # RC 2 EXISTS SO THAT AN UNANSWERABLE READ FAILS OPEN. Two consumers read it: the closed-room
 # alarm in `v_status`, which must still fire in a wording that says it could not tell, and
@@ -715,7 +719,11 @@ _stall_escalate() {
 #     place. Nothing in this function closes that, and no arrangement of its inputs can: they all
 #     live in the room. `v_status` therefore does not treat a zero as proof — it says so on the
 #     block instead of falling silent.
-#   * the PIN's EXISTENCE. Deleted, this answers rc 1 (`_floor_screen` has the same shape).
+#   * the PIN's EXISTENCE, and — since the split — the LAUNCHERS'. A pin deleted on its own is
+#     rc 2 and alarms, because `drv_launch` always writes a pin, so launchers without one mean the
+#     pin went missing rather than that nothing was ever started. Deleting the launchers as well
+#     gets back to rc 1 and a block line. That is a cost of N+1 writes instead of one, not a
+#     closed route, and it is why the paragraph above says self-revealing rather than prevented.
 # The durable fix for the last two is a launch record written OUTSIDE the room, the same move
 # `_status_sigfile` already makes for the signature and the same one `_floor_wait_state`'s header
 # names for its own inputs. That is a change to `up`, `relaunch` and `down`, so it is filed
@@ -787,9 +795,11 @@ EOF
 
 # v_terminals — how many of this room's seats still hold a terminal, in one short token.
 #
-# `<live>/<total>` when the backend answered and the answer may be believed, `?` when the room
-# was launched with terminals but the read could not be resolved, and `-` when the room carries
-# no container pin at all. The exit status repeats that: 0 for a believable answer, 1 for `?`.
+# `<live>/<total>` when the backend answered and the answer may be believed, `?` when the room was
+# launched but the read could not be resolved — which includes a container pin that has gone while
+# the launchers remain — and `-` only when the room carries neither a pin nor a launcher, i.e. was
+# never given terminals. The exit status repeats that: 0 for a believable answer, 1 for `?`.
+# (`-` is rc 0: "nothing to count" is an answer, not a failure to read.)
 #
 # IT EXISTS SO `rooms` NEED NOT ASK THE QUESTION A SECOND WAY. That listing runs before a room
 # is resolved and never sources lib.sh, so it has no roster reader — and re-deriving the
@@ -990,14 +1000,16 @@ v_status() {
       0) if [ "${term_live:-0}" -gt 0 ]; then
            alarms="$alarms ⚠️ this room is closed but $term_live of $term_total terminals are still up — council.sh down releases them"
          else
-           term_line="terminals: none of $term_total seats is listed — but that count came through a container pin inside the room, so a zero is not proof. If council.sh down has not been run here, run it."
+           term_line="terminals: none of $term_total seats is listed — which is what a decided room looks like once it has closed its own seats. The count came through a container pin inside the room, so a zero is not proof; reach for council.sh down if the close reported it could not reap (exit 5), or if you never saw it close."
          fi ;;
       2) alarms="$alarms ⚠️ this room is closed and whether its terminals are still up could not be determined — run council.sh down to be sure" ;;
-      # No pin at all. A room never launched by this skill has no terminals to release, which is
-      # every hand-built and test room — so this is a line on the block, not an alarm. It is on the
-      # block rather than absent because a DELETED pin lands here too, and that is a route to
-      # silence (`_room_terminals`' header names it): saying what was read costs one line.
-      *) term_line="terminals: this room carries no container pin, so it was never given any — or the pin is gone. council.sh down is harmless either way." ;;
+      # Neither a pin NOR a launcher. A room never launched by this skill has no terminals to
+      # release, which is every hand-built and test room — so this is a line on the block, not an
+      # alarm. A pin deleted on its own no longer lands here: with launchers still present that is
+      # rc 2 and alarms. What still reaches this arm is a room whose pin and launchers have BOTH
+      # gone, which is the residue of the suppression route `_room_terminals`' header names — so
+      # the line says what was read rather than nothing.
+      *) term_line="terminals: this room carries no container pin and no launchers, so it was never given any — or both are gone. council.sh down is harmless either way." ;;
     esac
   fi
   # The held time comes from the last turn-consuming message's `sent_ms`, so it is only as good
@@ -1110,21 +1122,33 @@ v_status() {
     # in the shared adapters already reads queued/running/idle. That is a real change to make, and
     # it is filed rather than half-made here.
     #
-    # So this goes on the BLOCK, never into `$alarms`: it does not bypass `--only-changed`, does
-    # not break the slow loop's silence, and does not wake the 60-second alarm loop. It is a line
-    # a supervisor reads when the block is printing anyway — at which point a low threshold costs
-    # nothing, which is why 300s stays. It is an annotation threshold now, not an alarm threshold.
+    # So this goes on the BLOCK, never into `$alarms`: it does not bypass the filter the way an
+    # alarm does, and it never wakes the 60-second alarm loop. It is NOT invisible to
+    # `--only-changed`, though — the quiet STATE is a signature term (see where `$sig` is built),
+    # so entering or leaving it breaks silence exactly once while holding it stays quiet. Without
+    # that the line would be unreachable through the very loop this skill tells a supervisor to
+    # arm, because a quiet room moves none of the other terms by definition. A low threshold then
+    # costs nothing, which is why 300s stays: an annotation threshold, not an alarm threshold.
     #
     # The guards are unchanged and still right: not on a closed room, not during an open barrier
     # round (where a long-held floor is normal and `OPEN ROUND:` already says so), and now not for
     # a `$floor` that is not a seat.
-    quiet_line="quiet: $floor has held the floor for ${held}s with nothing arriving — under the ${COUNCIL_STALL_SECS:-900}s stall threshold, and a long think looks exactly like this, so it is a thing to notice rather than a thing that is wrong."
-    live_note=$(_seat_liveness "$floor") || live_note=""
-    [ -n "$live_note" ] && quiet_line="$quiet_line $live_note"
+    # SKIPPED ENTIRELY IN --alarms-only, because this branch's only output is a block line that
+    # mode never prints — and `_seat_liveness` is not free: it sources term.sh (re-resolving the
+    # backend, which on agterm is a control-socket probe) and enumerates the container. Left
+    # ungated, the documented 60-second alarm loop paid one backend enumeration a minute, for the
+    # whole time a seat was thinking, to compose a sentence it then discarded.
+    if [ "$alarms_only" = 0 ]; then
+      quiet_line="quiet: $floor has held the floor for ${held}s with nothing arriving — under the ${COUNCIL_STALL_SECS:-900}s stall threshold, and a long think looks exactly like this, so it is a thing to notice rather than a thing that is wrong."
+      live_note=$(_seat_liveness "$floor") || live_note=""
+      [ -n "$live_note" ] && quiet_line="$quiet_line $live_note"
+    fi
   fi
   openct=$(printf '%s' "$g" | jq -r '.open | length' 2>/dev/null)
-  # --only-changed: stay silent unless the meaningful state moved — the floor, the verdict, the
-  # turn count, the open-objection count, or the alarm set.
+  # --only-changed: stay silent unless the meaningful state moved. THE TERMS ARE THE LINE THAT
+  # BUILDS `$sig` BELOW — read them there rather than from a list here. A list is the enumerable
+  # shape this repo treats as a latent defect: the count went stale in the very commit that added
+  # the quiet term, in three places at once, so the fix is to stop keeping a second copy of it.
   #
   # AN ALARM IS NEVER SUPPRESSED, and it is in the CONDITION rather than in the signature. Both
   # spellings break silence when an alarm ARRIVES; only this one keeps breaking it while the alarm
@@ -1173,11 +1197,16 @@ v_status() {
     # and the thing it is competing with for attention is the alarm itself. Silence here is not
     # the silence `--only-changed` can produce — it means "asked, nothing wrong", on every tick,
     # with no memory between them and so nothing that could go stale and suppress a standing
-    # alarm. Note the two flags are independent: `--only-changed` can still suppress this mode's
-    # tick, and it too refuses to suppress one carrying an alarm.
+    # alarm. The two flags are NOT independent, and the sentence that used to stand here saying so
+    # was falsified by the guard thirty lines above it: in this mode the `--only-changed` block is
+    # skipped entirely, so no tick is read against a signature and none is written. That is the
+    # point — only a tick that could print a block may write the block loop's memory.
     #
-    # WHAT THIS MODE SAVES IS OUTPUT, NOT LOG WALKING. It skips the transcript render below, and
-    # that is all: `v_verdict --json` and `_graph_seen` above are full-log passes run before any
+    # WHAT THIS MODE SAVES IS OUTPUT, PLUS ONE BACKEND READ — NOT LOG WALKING. The quiet branch
+    # above is skipped here, so this mode does not source term.sh or enumerate the container for a
+    # line it cannot print; that is the only cost it avoids that leaves the process. The rest it
+    # does not: it skips the transcript render below, and that is all, because
+    # `v_verdict --json` and `_graph_seen` above are full-log passes run before any
     # flag branch. Measured at 1200 lane messages, the transcript read is about a tenth of the
     # verb and skipping it saves ~7%. Said plainly because the sentence here used to call the
     # transcript the only per-line cost, which would have someone arm this loop believing it
@@ -1200,8 +1229,10 @@ v_status() {
     printf 'verdict: %s (nothing new for %s turns, lap %s)\n' "$verd" \
       "$(printf '%s' "$j" | jq -r .since_last_claim)" "$(printf '%s' "$j" | jq -r .lap)"
     printf 'phase: %s\n' "$phase"
-    # The two non-alarm annotations. On the block only: neither breaks --only-changed's silence
-    # and neither reaches --alarms-only, which is what keeps the 60-second loop an alarm channel.
+    # The two non-alarm annotations. On the block only, and neither reaches --alarms-only, which
+    # is what keeps the 60-second loop an alarm channel. `quiet_line`'s STATE is in the
+    # --only-changed signature, so its arrival and departure each break silence once; `term_line`
+    # rides a closed room's tick, which is never suppressed anyway.
     [ -n "$term_line" ]  && printf '%s\n' "$term_line"
     [ -n "$quiet_line" ] && printf '%s\n' "$quiet_line"
     [ -n "$round_line" ] && printf '%s\n' "$round_line"

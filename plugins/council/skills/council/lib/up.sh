@@ -155,10 +155,12 @@ _keeper_teardown_file() { printf '%s/state/teardown' "$1"; }
 #
 # None of the open ones is prevented here and nothing detects them. What is NOT lost is the evidence
 # underneath: the seats are still there and (on the first route) the marker stays on disk. What is
-# missing is a verb that reports it — `rooms` does not probe the backend, which is #190. Until it
-# does (#194 tracks this), this signal is trustworthy only about the room's own bookkeeping, not about whether a
-# terminal actually closed, and the sentence it prints is worded for that: it says the keeper HAS
-# BEEN ASKED, not that the seats are gone.
+# missing was a verb that reports it; `v_terminals` and `status`'s closed-room alarm are now that
+# read, and `rooms` carries it as a `term` column (#194 tracks what remains). They ask the BACKEND,
+# so they answer a different question from this signal and inherit the container pin's
+# forgeability instead. THIS signal stays trustworthy only about the room's own bookkeeping, not
+# about whether a terminal actually closed, and the sentence it prints is worded for that: it says
+# the keeper HAS BEEN ASKED, not that the seats are gone.
 _keeper_teardown() { # <room> -> 0 asked, 1 no live keeper to ask, 2 the request could not be written
   local room="$1" pid f
   # Liveness first: with no keeper nothing will ever reap, whatever the directory looks like.
@@ -723,7 +725,8 @@ council_rooms() {
     # `decided` and was never taken down looks identical here to one that was, and that is the
     # second half of #21 — two terminals stayed up unnoticed because nothing in any listing
     # mentioned them. `terminals` answers in one token (`<live>/<total>`, `?` when the backend
-    # could not be asked, `-` for a room that was never launched with any); its own exit status
+    # could not be asked, `-` for a room with neither a pin nor a launcher, i.e. one that was
+    # never given any); its own exit status
     # is a STATUS like every other verb's here, so it is deliberately not branched on.
     term=$(COUNCIL_ROOM="$d" bash "$SKILL/council.sh" terminals 2>/dev/null) || true
     [ -n "$term" ] || term="?"

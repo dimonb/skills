@@ -345,8 +345,11 @@ Three consequences worth knowing:
   just `down` leaving a stale pid the OS then recycles — makes the close report success while
   nothing ever reaps. So `decide` says the keeper **has been asked**, which is all it establishes;
   it does not say the seats are gone. Neither prevented nor made self-revealing here, and
-  `_keeper_teardown`'s header names the three routes. Nothing reports the difference today
-  (`rooms` does not probe the backend); tracked separately.
+  `_keeper_teardown`'s header names the routes found so far — and says itself to read them as
+  that and never as the set. What the room's own bookkeeping cannot report, three reads of the
+  backend now can: `status`'s closed-room alarm, `council.sh terminals`, and `rooms`' `term`
+  column. All three inherit the container pin's forgeability, so they narrow the question rather
+  than closing it.
 * **`relaunch` cancels a teardown no keeper has taken yet.** Putting a seat back up says the room
   is in use again, and it outranks a close that asked for the seats to go — it has to, or the seat
   it launches is reaped within a poll of starting. That covers the keeper that died before taking
@@ -803,8 +806,9 @@ watch left running is a watch that ends when the room does.
 
 `--only-changed` is what makes it liveable. A room spends most of its life with one seat
 thinking, so without the flag this prints the same block every ten minutes for hours and the one
-tick that matters drowns in it. With it the tick is silent until the floor, the verdict, the turn
-count or the open-objection count actually moves.
+tick that matters drowns in it. With it the tick is silent until the room's meaningful state
+moves — the terms are assembled where `$sig` is built in `v_status`, which is the one place they
+are listed.
 
 **It cannot hide an alarm, and that is the point.** Any tick carrying one prints in full, every
 time it holds — not once when it arrives. A stalled room *changes nothing by definition*, so a
@@ -845,9 +849,10 @@ up` fires on the very tick the loops stop, and on every later tick. `council.sh 
 `term` column so several rooms' seats are visible at a glance, and `council.sh terminals` asks for
 one room directly. `council.sh down --room <room>` is still the way to release them.
 
-**A zero is reported, not trusted.** The count is taken through the container pin, a file inside
-the room, so a room whose pin has been retargeted or removed reads as empty exactly like one that
-was properly torn down. The closing tick therefore always *says* what it read — `terminals: none
+**A zero is reported, not trusted.** On a room that closed cleanly a zero is the expected
+answer — `decide` reaped the seats itself. But the count is taken through the container pin, a
+file inside the room, so a room whose pin has been retargeted reads as empty in exactly the same
+way. (A pin *removed* while the launchers remain is a different answer: that one alarms.) The closing tick therefore always *says* what it read — `terminals: none
 of N seats is listed … a zero is not proof` — rather than falling silent, and when the read cannot
 be resolved at all it raises the alarm instead. Silence on that tick is the one outcome the block
 will not produce.
@@ -892,7 +897,7 @@ a person.
 
 | line | default | where it goes | pushes? |
 |---|---|---|---|
-| `quiet: …` | `COUNCIL_STALL_WARN_SECS`, 300s | the **block only** — never the alarms line, never `--alarms-only`, never breaks `--only-changed`'s silence | no |
+| `quiet: …` | `COUNCIL_STALL_WARN_SECS`, 300s | the **block only** — never the alarms line, never `--alarms-only`. Entering or leaving the quiet state breaks `--only-changed`'s silence **once**; holding it does not | no |
 | `🛑 STALL` | `COUNCIL_STALL_SECS`, 900s | the alarms line: both loops, and it bypasses every filter | yes, one `notice` to the mailbox |
 
 The early line exists because the wedges that actually cost rooms were **323s and 344s**, well
@@ -1020,9 +1025,13 @@ Two cautions for a supervisor rather than a participant. That message goes to **
 record say `decided` and does *not* see the sentence, which is exactly the room-2 case that
 produced this issue. And `board/status` alone cannot tell you which ending it was: it reads
 `decided` on a clean close, on an exit 4 whose announcement was lost, and on an exit 5 whose
-teardown could not happen. **`rooms` will not tell you either** — it reports each room's verdict and
-never probes the backend, so a decided room with live seats and one without print identically. What
-does ask the backend is [`say`](#what-say-establishes-and-what-each-answer-means): `council.sh say
+teardown could not happen. **`rooms` does tell you**, since the monitor
+work landed: its `term` column runs `council.sh terminals` per room, so a decided room with live
+seats reads `term 3/3` where a torn-down one reads `term 0/3`. Prefer that, or `council.sh
+terminals` for one room — both read the backend without touching the seats, and both inherit the
+container pin's forgeability (`_room_terminals`' header names the routes). The per-seat probe is
+[`say`](#what-say-establishes-and-what-each-answer-means), and its cost is in the next sentence,
+so reach for it when you need a single seat's answer rather than the room's: `council.sh say
 <peer> "…"` answers **exit 3** when that seat has no live terminal, and **exit 4** when the room was
 launched on the *other* backend — which is the caveat that makes reading `tmux ls` by hand
 unreliable here, since `COUNCIL_BACKEND=auto` resolves per process and the seats may be in the
