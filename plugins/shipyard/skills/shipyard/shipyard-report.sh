@@ -9,10 +9,14 @@
 # --only-changed prints NOTHING while the meaningful state is the same as the last
 # printed report, so a child parked in idle-wait for hours stops generating identical
 # tables. Meaningful = slot, MR iid, terminal present, MR state, pipeline stage, open
-# escalation count, the ctx BAND, the WAIT CLASS, and the REAP class (torn down / refused /
-# held — see the autodown block; a teardown or a hold is news exactly once, like a wait) (see the stall section below —
-# entering or leaving a stated wait is news, and it is news exactly once, which is what
+# escalation count, the ctx BAND, the WAIT CLASS, and the REAP class (see the stall section
+# below — entering or leaving a stated wait is news, and it is news exactly once, which is what
 # makes suppressing the stall block for it cost the operator nothing).
+# THE REAP CLASSES DO NOT RIDE THE SIGNATURE. A torn-down, held or refused slot bypasses this
+# filter outright, like STALLED, so it is printed on every tick the condition lasts — see the
+# bypass block near the end of the file for why a per-slot signature is the wrong owner of that
+# decision. The class is still in the signature above, which is what makes the tick it CLEARS
+# news as well.
 # Deliberately NOT meaningful: the timestamp, the
 # `last line` column (elapsed time / token counts change every tick), the raw ctx
 # figure — only its band — and ▶️/⏸, which flips
@@ -52,10 +56,11 @@
 #    protects a worktree is the one that runs. An open escalation HOLDS it: a child that stopped
 #    to ask is idle because it is waiting for you, and destroying it makes the answer
 #    undeliverable. See the block where SHIPYARD_AUTODOWN is read for every lock and why
-#    `closed` is not a trigger. This is the one thing in this script that
-#    CHANGES THE FLEET rather than observing it — the script's other writes are its own mailbox
-#    bookkeeping (report-sig / -stall / -tick / -merged) — and what it removed, what it refused
-#    and what it held each get their own block;
+#    `closed` is not a trigger. It is the one thing here that REMOVES A SLOT rather than
+#    observing it; the script's other side effects are its own mailbox bookkeeping
+#    (report-sig / -stall / -tick / -merged), the agterm sidebar glyphs it repaints, and the
+#    pending notices its escalation tail closes. What it removed, refused or held each get their
+#    own block, and all three bypass --only-changed;
 #  * a motionless slot is asked WHY before the stall clock is consulted (shipyard_wait_state in
 #    shipyard-lib.sh). A child that CANNOT move (a stated capacity wait) and one nobody ASKED to
 #    move (finished, or blocked on a human) get their own row and their own block, and are exempt
@@ -296,13 +301,15 @@ REAPED=()        # slots this tick tore down
 REAP_REFUSED=()  # slots that got as far as the teardown and were refused, with the reason
 REAP_HELD=()     # slots held back by an open escalation — finished, but somebody is owed an answer
 
-# autodown_consider <slot> <iid> <state> <stage> <addr> <pending> — the locks above, in cost order,
-# then the teardown. Echoes nothing; it reports through three globals, which is also why it is
-# never called inside a `$( )`: MERGED_ROWS, REAPED and REAP_REFUSED would be appended to in a
-# subshell and lost, and the consecutive count would never advance past one.
+# autodown_consider <slot> <iid> <state> <stage> <addr> <pending> — the locks above, in cost
+# order, then the teardown. Echoes nothing; it reports through globals — MERGED_ROWS, REAPED,
+# REAP_REFUSED and REAP_HELD — which is also why it is never called inside a `$( )`: every one of
+# them would be appended to in a subshell and lost, and the consecutive count would never advance
+# past one. (Named rather than counted: this sentence read "three globals" for exactly as long as
+# it took the next round to add a fourth.)
 #
 # Returns 0 ONLY when the slot was actually torn down, so the caller can stop rendering it as
-# a live row. Every other outcome — not eligible, not enough ticks, refused — returns 1.
+# a live row. Every other outcome — not eligible, not enough ticks, held, refused — returns 1.
 #
 # <addr> empty means the slot has no terminal on the backend this run resolved, which is NOT
 # the same fact as the child being gone; that difference is exactly what lock 3's
@@ -312,6 +319,16 @@ autodown_consider() {
   local prev_m prev_iid prev_n seen=1 sig out down_rc=0
   [ "$AUTODOWN" = 1 ] || return 1
   [ -n "$MERGEDFILE" ] || return 1
+  # A slot name is a terminal name with `ship-` stripped (`shipyard_slots`), and nothing
+  # validates it. One containing `/` reaches the locks and the removal target DIFFERENTLY: the
+  # mailbox glob `$mb/$slot-*.json` is a flat-directory match and misses it, while `slot_stage`,
+  # `slot_iid`, the worktree test below and `shipyard-down.sh`'s own `wt_of` all collapse the
+  # path and resolve the VICTIM slot's real worktree. Measured on tmux, which accepts `ship-7/`
+  # as a window name and lists it verbatim: slot `7/` was not held, and the teardown it would
+  # have run targets slot `7`. Refusing here keeps the AUTOMATIC path away from a name it cannot
+  # reason about; validating slot names at the boundary would fix the manual path too, and is
+  # filed rather than done here (that is a change to a function with other callers).
+  case "$slot" in *"/"*) return 1 ;; esac
   # Lock 2 first, because it is a file read and lock 1's value costs a forge call on the
   # no-terminal path. Both are already in hand for a live slot, so the order costs nothing
   # there and saves a query per tick for every gone slot whose child never finished.
@@ -319,43 +336,20 @@ autodown_consider() {
   [ "$state" = merged ] || return 1
   [ -n "$iid" ] || return 1
 
-  # Lock 2b: AN OPEN ESCALATION IS A HOLD, and it is passed in rather than read out of the
-  # caller's `$pend`, which merely happens to be in scope at both call sites.
-  #
-  # This is the fifth place in this file to ask whether a slot is idle, and it was very nearly
-  # the only one to get the answer wrong. The other four all treat a pending escalation as
-  # "blocked on a human, do not conclude": the wait classifier and the stall clock exempt such a
-  # slot BECAUSE ITS IDLENESS IS EXPECTED, the sidebar badges it `blocked --blink`, and the
-  # in-flight test refuses to call the fleet drained over it. Lock 3 reads that same expected
-  # idleness through `drv_signal` as "nobody is at the terminal" — so without this line a child
-  # that stopped to ask a question, and was then merged by the operator, is destroyed BECAUSE it
-  # was waiting for them.
-  #
-  # Measured, on a rig driving this script: the same tick printed `🧹 TORN DOWN — terminal and
-  # worktree removed` and, four lines below it, `Reply: shipyard-answer.sh <id> "<answer>"` for
-  # the question it had just orphaned. And the reply does not fail loudly — `shipyard-answer.sh`
-  # only falls back to `shipyard-tell.sh` for a notice, so for a pending QUESTION it exits 0 and
-  # claims "the child session will pick it up within ~5s" about a session that no longer exists.
-  #
-  # The state is stable, not a race: `shipyard-ask.sh` leaves `status: pending` when it TIMES
-  # OUT, the launcher tells the child in as many words to carry on past a `PENDING:` reply, and
-  # nothing but an operator answering ever clears the record — ship's own plugin has no
-  # reference to the mailbox at all, so its stage can reach `ready-to-merge` with a question
-  # still open. (A `notice` also counts here, but the report's own tail closes notices each
-  # tick, so that arm holds a slot for one tick at most.)
-  if [ "${pending:-0}" != 0 ]; then
-    REAP_HELD+=("$slot|$pending")
-    return 1
-  fi
-
   if [ -f "$MERGEDFILE" ]; then
-    # FIELD-EXACT, not a substring. `grep -F "$slot<TAB>"` matched this slot's name anywhere in
+    # FIELD-EXACT AND STRING-EXACT. `grep -F "$slot<TAB>"` matched this slot's name anywhere in
     # the row — rows are `slot<TAB>iid<TAB>seen`, so the tab follows the IID as well, and slot
     # `7` read slot `50`'s row whenever slot 50's PR number ended in `917`. The victim then
     # re-reads a foreign iid every tick, never accumulates past one, and is silently never torn
     # down. It self-heals once the colliding row leaves the file — except when that slot's own
     # teardown keeps being refused, which is the one case where nothing says so.
-    prev_m=$(awk -F'\t' -v s="$slot" '$1==s{print;exit}' "$MERGEDFILE" 2>/dev/null)
+    #
+    # The value travels through the ENVIRONMENT and both sides are forced to strings, because
+    # `awk -v` is neither. `-v` processes escape sequences in the value, so a slot named `\062`
+    # read slot `2`'s row; and a bare `$1==s` is a NUMERIC comparison when both sides look like
+    # numbers, so `7` matched a row keyed `07`. Both measured. ENVIRON does no escape processing,
+    # and `""` on each side forces the string compare the sentence above claims.
+    prev_m=$(SLOT="$slot" awk -F'\t' '$1""==ENVIRON["SLOT"]""{print;exit}' "$MERGEDFILE" 2>/dev/null)
     prev_iid=$(printf '%s' "$prev_m" | cut -f2)
     prev_n=$(printf '%s' "$prev_m" | cut -f3)
     # The iid must MATCH, not merely exist. A slot number is reused across fleets and the
@@ -384,6 +378,47 @@ autodown_consider() {
     esac
   else
     shipyard_absence_report "$slot" >/dev/null 2>&1 || return 1
+  fi
+
+  # AN OPEN ESCALATION IS A HOLD, and it is passed in rather than read out of the caller's own
+  # variables, which merely happen to be in scope at both call sites.
+  #
+  # Every other place in this file that asks whether a slot is idle — the wait classifier, the
+  # stall clock, the sidebar badge and the in-flight test — treats a pending escalation as
+  # "blocked on a human, do not conclude" — the stall clock exempts such a slot BECAUSE ITS
+  # IDLENESS IS EXPECTED, and the in-flight test refuses to call the fleet drained over it. This
+  # was very nearly the only one to get it wrong. Lock 3, just above, reads that same expected
+  # idleness through `drv_signal` as "nobody is at the terminal" — so without this a
+  # child that stopped to ask a question, and was then merged by the operator, is destroyed
+  # BECAUSE it was waiting for them.
+  #
+  # Measured, on a rig driving this script: the same tick printed `🧹 TORN DOWN — terminal and
+  # worktree removed` and, four lines below it, `Reply: shipyard-answer.sh <id> "<answer>"` for
+  # the question it had just orphaned. And the reply does not fail loudly — `shipyard-answer.sh`
+  # only falls back to `shipyard-tell.sh` for a notice, so for a pending QUESTION it exits 0 and
+  # claims "the child session will pick it up within ~5s" about a session that no longer exists.
+  #
+  # The state is stable, not a race: `shipyard-ask.sh` leaves `status: pending` when it TIMES
+  # OUT, the launcher tells the child in as many words to carry on past a `PENDING:` reply, and
+  # nothing but an operator answering ever clears the record — ship's own plugin has no
+  # reference to the mailbox at all, so its stage can reach `ready-to-merge` with a question
+  # still open. (A `notice` also counts here, but the report's own tail closes notices each
+  # tick, so that arm holds a slot for one tick at most.)
+  #
+  # PLACED LAST, after the count and after lock 3, and the position is load-bearing twice over.
+  # It used to sit before the count, which meant a held slot appended no row and the
+  # unconditional rewrite dropped its consecutive observations — so answering a question cost two
+  # further ticks while the block promised the next one, and the block also fired for slots that
+  # were not going to be torn down this tick at all, including a child that was visibly mid-turn.
+  # Both measured. Here, HELD means every other condition is already satisfied and the answer is
+  # the only thing outstanding, which is exactly what the block tells the operator.
+  if [ "${pending:-0}" != 0 ]; then
+    # Both counts, so the block can tell the operator which case they are in: `$pending` is the
+    # fail-closed one and `$shown` is what the escalation block below will actually display. They
+    # agree for a readable record and differ for an unreadable one, and only the second case
+    # warrants the explanation about the esc column.
+    REAP_HELD+=("$slot|$pending|$(slot_pending "$slot")")
+    return 1
   fi
 
   # Lock 4, and the act. NO FLAGS, and never --force: shipyard-down.sh's gates are the gates.
@@ -621,8 +656,19 @@ slot_pending() {
 # suppress one. The hold is such a signal, so this fails CLOSED — anything unreadable counts.
 #
 # WHAT IS PREVENTED here, and what is only NAMED. The rule asks for both, and for the two not to be
-# blurred. PREVENTED: an unreadable record, an unknown kind, a missing status, and an unreachable
-# mailbox can no longer silence the hold. NOT PREVENTED, deliberately:
+# blurred. PREVENTED: an unreadable record, an unknown kind, a missing status, and a mailbox
+# directory that exists but cannot be read (see the `-r`/`-x` test — an earlier version of this
+# list claimed that case and did not have it). NOT PREVENTED, deliberately or otherwise:
+#   * FALSE evidence, as opposed to unreadable evidence. The mailbox is the child's own write
+#     channel and nothing binds a record to the slot that wrote it, so a child writing
+#     `status: done` on its own still-open record — or on a peer's — releases the hold with no
+#     operator-visible trace. `shipyard-ask.sh` writes `done` on its normal path, so this is one
+#     line of the child's own tool away. The hold fails closed on evidence it cannot READ, and
+#     trusts evidence it can.
+#   * a record keyed on a name this report never globs. The filename is `$(shipyard_slot)-N.json`
+#     evaluated in the CHILD's cwd, and `SHIPYARD_SLOT` is scrubbed from the launch environment,
+#     so a child that asks from outside its worktree writes `<repo-basename>-N.json`, which no
+#     slot's glob matches. No hostility required.
 #   * `answered` counts as settled, so a reply the operator has given but the child has not yet
 #     consumed does not hold the teardown. Widening the lock to a state the operator has already
 #     acted on is a separate change, not this one.
@@ -637,12 +683,49 @@ slot_pending() {
 #     the rule; the content gate inside shipyard-down.sh is what stands behind them.
 # That is the set of routes this function was checked against. Nothing here, and nothing in the
 # gate, enforces that the set is complete.
+# slot_unsettled_files <slot> — the paths slot_unsettled counted, one per line.
+#
+# Separate from the count rather than folded into it: the count is read in a condition and the
+# paths are read in a render block, and a function that returns both through one string would be
+# parsed by both callers. It re-walks the glob, which costs one extra pass over a handful of
+# files and only for a slot that is actually held.
+slot_unsettled_files() {
+  local slot="$1" mb f st
+  mb=$(shipyard_mailbox 2>/dev/null) || return 0
+  [ -d "$mb" ] || return 0
+  { [ -r "$mb" ] && [ -x "$mb" ]; } || { printf '%s (unreadable mailbox directory)\n' "$mb"; return 0; }
+  shopt -s nullglob
+  for f in "$mb/$slot-"*.json; do
+    st=$(jq -r '.status // "pending"' "$f" 2>/dev/null) || st=""
+    case "$st" in
+      done|answered) ;;
+      '')            printf '%s (unreadable — cannot be answered)\n' "$f" ;;
+      *)             printf '%s (%s)\n' "$f" "$st" ;;
+    esac
+  done
+}
+
 slot_unsettled() {
   local slot="$1" mb n=0 f st
-  # Cannot ask at all -> 1, never 0. An unreachable mailbox must not read as "nothing is owed":
-  # that is the unanswerable-question-as-confident-negative shape #139 is about, one level up.
+  # Cannot ask at all -> 1, never 0. An unanswerable question must not read as "nothing is
+  # owed": that is the confident-negative shape #139 is about, one level up.
+  #
+  # HONEST SCOPE of this first arm: it fires only for a `git rev-parse --git-common-dir` failure
+  # that appears MID-RUN. If the mailbox is unresolvable when the run starts, `$MERGEDFILE` is
+  # empty too and `autodown_consider` returns before it ever reads this count — measured: no
+  # teardown and no hold, because nothing was asked. The arm is kept for the mid-run case and
+  # because a fail-closed default is the right shape here, not because it covers what an earlier
+  # version of this comment claimed.
   mb=$(shipyard_mailbox 2>/dev/null) || { printf 1; return; }
   [ -d "$mb" ] || { printf 0; return; }
+  # THE ONE THAT ACTUALLY FIRES, and the one this function shipped without. A directory that
+  # exists but cannot be read passes `-d`, and bash's glob over it then yields NO MATCHES
+  # SILENTLY — nullglob removes the word and the count stays 0 while a pending record sits
+  # inside, still readable by path. Measured at modes 111 and 000 under bash 5 and /bin/bash 3.2:
+  # both returned 0 with a `status: pending` record present. `shipyard_mailbox_ensure` still
+  # succeeds and `report-merged` still works (traversal needs only +x), so nothing else refuses
+  # either, and the slot is torn down with its question open.
+  { [ -r "$mb" ] && [ -x "$mb" ]; } || { printf 1; return; }
   shopt -s nullglob
   for f in "$mb/$slot-"*.json; do
     st=$(jq -r '.status // "pending"' "$f" 2>/dev/null) || st=""
@@ -818,9 +901,9 @@ for slot in "${SLOTS[@]}"; do
   fi
   # Refused: the gate said no, or the absence could not be corroborated. The count is kept so
   # the next tick retries — a dirty worktree gets committed, a blip passes — and the reason
-  # goes into the SIG so a persistent refusal is news once rather than every tick, the same
-  # treatment the stated-wait classes get. The block itself is rendered whenever it is
-  # non-empty, so any tick that prints at all carries it.
+  # goes into the SIG so that the tick a refusal CLEARS is news too. The block itself no longer
+  # depends on the signature: a refused or held slot bypasses --only-changed outright, so it is
+  # printed on every tick the condition lasts (see the bypass block).
   [ "${#REAP_REFUSED[@]}" -gt "$before_refused" ] && reap_note="reap-refused"
   [ "${#REAP_HELD[@]}" -gt "$before_held" ] && reap_note="reap-held"
 
@@ -981,7 +1064,17 @@ fi
 [ -n "$TICKFILE" ] && printf '%s\n' "$RUN_EPOCH" >"$TICKFILE" 2>/dev/null
 
 TERMINAL=0
-[ "$inflight" -eq 0 ] && [ "$total_pend" -eq 0 ] && TERMINAL=1
+# `$total_pend` AND the held count, because the two answer the same question from different
+# sources and the teardown now uses the wider one. `total_pend` comes from `slot_pending`, which
+# cannot see a record it fails to parse; a slot held by exactly such a record would otherwise let
+# the run declare the fleet drained WHILE holding it — measured: the tick printed "nothing in
+# flight (all merged/closed) — monitor stopped" directly above a HELD block promising a next tick
+# that would never come, and exited 0. A parseable pending question kept the loop alive on the
+# same fixture, so the two counts disagreed precisely where it mattered.
+#
+# This can keep a monitor running indefinitely over an unclearable hold, which is why it is not
+# the whole fix: the HELD block names the records holding the slot so the operator can clear one.
+[ "$inflight" -eq 0 ] && [ "$total_pend" -eq 0 ] && [ "${#REAP_HELD[@]}" -eq 0 ] && TERMINAL=1
 
 # The SECOND exit, and it needs the same corroboration for the same reason. Named slots do not
 # reach the discovery branch above, so `shipyard-report.sh --only-changed 22 61` against a backend
@@ -1044,15 +1137,31 @@ fi
 # EVERY tick it holds, not once. Left to the signature it would be announced the first time and
 # then suppressed for as long as it lasted, which is the one tick shape the report is supposed to
 # be loudest about — the header line is the only trace the incident left behind.
-# A HELD or REFUSED slot bypasses the silence outright, like STALLED above and for the same
-# reason: both are states where a destructive act is being attempted and declined every tick, and
-# where the operator owes an action nobody else can take. Leaving them to the signature made them
-# news EXACTLY ONCE — and AGENTS.md now forbids letting state the supervised party writes decide
-# whether an operator-facing signal appears at all, which a per-slot signature partly is. The cost
-# is a repeated block for as long as the condition lasts; that is the STALLED trade, taken
-# knowingly, and neither state is the normal case.
+# A REAPED, HELD or REFUSED slot bypasses the silence outright, like STALLED above and for the
+# same reason: each is a state where a destructive act has just happened, or is being attempted
+# and declined every tick, and where the operator owes an action nobody else can take. Leaving
+# them to the signature made them news EXACTLY ONCE — and AGENTS.md now forbids letting state the
+# supervised party writes decide whether an operator-facing signal appears at all, which a
+# per-slot signature partly is ($SIGFILE lives in the shared mailbox every child writes into).
+#
+# REAPED is here for the strongest version of that argument and was missing from the first
+# attempt: it reports an act that has ALREADY closed a terminal and removed a worktree. On the
+# natural path a reap always moves the signature, so this changes nothing there; what it removes
+# is the forged-file route, where a child writes the predicted post-reap signature and the
+# teardown then happens with zero bytes printed.
+#
+# The cost is a repeated block for as long as the condition lasts; that is the STALLED trade,
+# taken knowingly, and neither held nor refused is the normal case. Worth knowing before taking
+# it again: #182 is open against exactly this trade on this supervisor — a stall alarm that
+# repeats verbatim trains the operator to skim it — so if that lands, these blocks should move to
+# whatever de-duplication it introduces rather than keep a second precedent alive.
+#
+# NOT closed by any of this: an ad-hoc `shipyard-report.sh --only-changed <slot>` run beside the
+# monitor performs the teardown and consumes the only 🧹 block, leaving the monitor to show a
+# table the slot has merely vanished from. The same hazard is documented for $MERGEDFILE above.
 if [ "$ONLY_CHANGED" = 1 ] && [ "$TERMINAL" = 0 ] && [ "${#STALLED[@]}" -eq 0 ] \
    && [ "${#REAP_HELD[@]}" -eq 0 ] && [ "${#REAP_REFUSED[@]}" -eq 0 ] \
+   && [ "${#REAPED[@]}" -eq 0 ] \
    && [ "$NOSIG_RC" = 0 ] && [ -z "$PINNED_ELSEWHERE" ] && [ "$GAP" = 0 ] && [ -n "$SIGFILE" ]; then
   NOW_SIG=$(printf '%s\n' "${SIG[@]}")
   if [ -f "$SIGFILE" ] && [ "$NOW_SIG" = "$(cat "$SIGFILE" 2>/dev/null)" ]; then
@@ -1187,13 +1296,29 @@ fi
     echo
     echo "### ✋ HELD — finished and merged, but somebody is owed an answer"
     for x in "${REAP_HELD[@]}"; do
-      sl=${x%%|*}; n=${x#*|}
-      echo "- \`$sl\` — merged and finished; its teardown is HELD by $n unsettled mailbox record(s)."
-      echo "  That count is NOT the esc column's: a record this report could not parse counts here"
-      echo "  and not there, because the hold fails closed while the column reports what it can read."
-      echo "  Nothing was removed. Answer it — the escalation block below carries the command — and the"
-      echo "  slot tears itself down on the next tick. Tearing it down first destroys the session that"
-      echo "  asked, and the reply then reports success to a child that is no longer there."
+      sl=${x%%|*}; rest=${x#*|}; n=${rest%%|*}; shown=${rest#*|}
+      echo "- \`$sl\` — merged, finished and otherwise ready; its teardown is HELD by $n unsettled mailbox record(s)."
+      # NAME THE FILES. Without this the block's only remedy was "answer it", which is false for
+      # exactly the records the hold was widened to catch: `shipyard-escalations.sh` skips a
+      # record whose kind it cannot parse, so for an unparseable one the escalation block below
+      # is EMPTY, `shipyard-answer.sh` cannot write it (jq fails on the same bytes), and nothing
+      # named the file. That combination is an unclearable hold announced by two instructions
+      # that cannot be followed — measured — and naming the path is what makes it clearable.
+      # `while read`, not `for … in $( )`: the lines carry spaces (the path plus a parenthesised
+      # reason), and word-splitting turned each one into a column of fragments.
+      slot_unsettled_files "$sl" | while IFS= read -r hf; do echo "    $hf"; done
+      if [ "$shown" = "$n" ]; then
+        echo "  Answer it — the escalation block below carries the command."
+        echo "  It then tears itself down on the next tick."
+      else
+        # The counts differ, so at least one record is unreadable. Say that, rather than the
+        # blanket sentence an earlier version printed even when the two agreed.
+        echo "  $shown of those are readable escalations; the rest this report could not parse."
+        echo "  An unreadable record does NOT appear in the escalation block below and cannot be"
+        echo "  answered — look at the file named above and remove or repair it (#197)."
+      fi
+      echo "  Nothing was removed. Tearing it down by hand first destroys the session that asked, and"
+      echo "  the reply then reports success to a child that is no longer there."
     done
   fi
   if [ "${#REAP_REFUSED[@]}" -gt 0 ]; then

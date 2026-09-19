@@ -70,6 +70,17 @@
 #      corroborates, and whose work is merged and finished IS torn down. That shape is the one
 #      that accumulates — it is not enumerated in discovery mode, so only a named-slot monitor
 #      ever sees it again.
+#   B11 a stale count under a REUSED slot does not fire — the iid guard, which had no test.
+#   B12 an open escalation HOLDS the teardown, and ONE tick after the answer it fires (the hold
+#      is evaluated last, so a held slot keeps accumulating its consecutive count).
+#   B13 an UNREADABLE record holds it too, the block names the file, and the monitor does not
+#      declare the fleet drained while holding.
+#   B14 the hold survives --only-changed on every tick, not once.
+#   B15 a teardown that REMOVED the slot and then exited non-zero is reported as torn down.
+#   B16 the counter lookup does not read a longer slot's row, or one whose iid ends in this
+#      slot's name.
+# That list is maintained by hand and has already gone stale once, when two fix rounds added
+# B11-B14 and left it ending at B10. The file below is the authority.
 #
 # WHAT A GREEN RUN DOES NOT PROVE. Part B's `gh` is a fake, so nothing here proves the forge
 # really answers MERGED for a merged PR; both parts fake `tmux`, so nothing proves a real
@@ -77,7 +88,8 @@
 # arm of the backend is not exercised at all. No case runs the report against the real
 # `shipyard-down.sh`, so the two halves meet only through the argv Part B records.
 #
-# THREE LINES MUTATION TESTING FOUND UNGUARDED, named here rather than left to be rediscovered:
+# LINES MUTATION TESTING FOUND UNGUARDED, named rather than left to be rediscovered (not a
+# count: the first version of this sentence said THREE and was already missing five):
 # the in-flight accounting of a reaping tick (both call sites can be made to count a reaped slot
 # in flight with everything below still green); lock 3's absence arm on the no-terminal path
 # (making `shipyard_absence_report` never refuse changes nothing here, because shipyard-down.sh's
@@ -246,10 +258,21 @@ done
 DOWN_CALLS="$T17TMP/down-calls"
 DOWN_RC_FILE="$T17TMP/down-rc"
 : >"$DOWN_CALLS"; printf '0\n' >"$DOWN_RC_FILE"
+# The recorder. `$DOWN_REMOVE` is what lets a case distinguish the two meanings of a non-zero
+# exit: without it the fake always keeps the worktree, so "refused" and "removed it and then
+# failed its fleet-level cleanup" were indistinguishable and the whole worktree-corroboration
+# arm was unasserted — three separate mutations of it left the entire suite green.
 cat >"$FARM/shipyard-down.sh" <<'FAKEDOWN'
 #!/usr/bin/env bash
 printf '%s\n' "$*" >>"$DOWN_CALLS"
 rc=$(cat "$DOWN_RC_FILE" 2>/dev/null || echo 0)
+if [ "${DOWN_REMOVE:-0}" = 1 ]; then
+  rm -rf "$B_ROOT/.claude/worktrees/ship-$1"
+  echo "closed t17b:1"
+  echo "removed worktree $B_ROOT/.claude/worktrees/ship-$1"
+  [ "$rc" != 0 ] && echo "warning: could not verify that every shipyard slot is gone" >&2
+  exit "$rc"
+fi
 if [ "$rc" != 0 ]; then
   echo "refused: ship-$1 has uncommitted or untracked changes" >&2
   exit "$rc"
@@ -258,7 +281,8 @@ echo "closed t17b:1"
 echo "removed worktree /nowhere"
 FAKEDOWN
 chmod +x "$FARM/shipyard-down.sh"
-export DOWN_CALLS DOWN_RC_FILE
+DOWN_REMOVE=0
+export DOWN_CALLS DOWN_RC_FILE DOWN_REMOVE
 
 B_ROOT="$T17TMP/b/repo"; B_GIT="$T17TMP/b/gitdir"
 B_STATES="$T17TMP/b/forge-states"   # <iid> TAB OPEN|MERGED|CLOSED, rewritten per tick
@@ -482,12 +506,21 @@ b_tick -- 71 >/dev/null
 b12=$(b_tick -- 71)
 ok "B12: an open question holds the teardown"        0 "$(grep -c . "$DOWN_CALLS")"
 ok "B12: ...and the hold is rendered, not silent"    1 "$(printf '%s' "$b12" | grep -c 'HELD — finished and merged')"
-ok "B12: ...naming the remedy as answering it"       1 "$(printf '%s' "$b12" | grep -c 'tears itself down on the next tick')"
-ok "B12: ...and no teardown is claimed"              0 "$(printf '%s' "$b12" | grep -c 'TORN DOWN — merged, finished')"
-# ...and the control: the SAME slot with the record answered IS torn down, so the hold is what
-# the escalation does and not some other property of the fixture.
+ok "B12: ...naming the remedy as answering it"       1 "$(printf '%s' "$b12" | grep -c 'It then tears itself down on the next tick')"
+# ...and that promise is now TRUE, which is the whole point of evaluating the hold LAST. While
+# held the slot still accumulates its consecutive-merged count, so ONE tick after the answer
+# tears it down. It used to take two — the hold returned before the count was recorded and the
+# unconditional rewrite dropped it — and a block that promises the next tick while delivering the
+# one after is what sends an operator to shipyard-down.sh by hand.
 printf '{"kind":"question","status":"answered","slot":"71","text":"migrate or defer?"}\n' \
   >"$B_GIT/ship-escalations/71-1.json"
+: >"$DOWN_CALLS"
+b_tick -- 71 >/dev/null
+ok "B12: ...and ONE tick after the answer tears it down" 1 "$(grep -c '^71$' "$DOWN_CALLS")"
+ok "B12: ...and no teardown is claimed"              0 "$(printf '%s' "$b12" | grep -c 'TORN DOWN — merged, finished')"
+# ...and the control, from a CLEAN count: the same slot with the record answered is torn down on
+# the ordinary two ticks, so the hold is what the escalation does rather than some other property
+# of the fixture.
 b_reset
 b_tick -- 71 >/dev/null
 b_tick -- 71 >/dev/null
@@ -513,7 +546,19 @@ ok "B13: ...and says so"                             1 "$(printf '%s' "$b13b" | 
 # explains the discrepancy rather than hiding it. Asserting it keeps the two counts from being
 # quietly unified later, which would reopen the hole.
 ok "B13: ...while the esc column still reads none"   1 "$(printf '%s' "$b13b" | grep -c '^| 72 .*| — | — |')"
-ok "B13: ...and the block explains the difference"   1 "$(printf '%s' "$b13b" | grep -c 'could not parse counts here')"
+ok "B13: ...and the block explains the difference"   1 "$(printf '%s' "$b13b" | grep -c 'this report could not parse')"
+# The remedy must be one that WORKS for this record. The escalation block cannot show it (its
+# allow-list skips an unparseable kind) and shipyard-answer.sh cannot write it (jq fails on the
+# same bytes), so the only real remedy is the file itself — naming it is what turns an
+# unclearable hold into a clearable one, and the block must not promise the two that cannot work.
+ok "B13: ...and names the unreadable file"           1 "$(printf '%s' "$b13b" | grep -c '72-1.json (unreadable')"
+ok "B13: ...and does not promise the escalation block" 0 \
+   "$(printf '%s' "$b13b" | grep -c 'the escalation block below carries the command')"
+# And the monitor must not declare the fleet drained while holding a slot. slot_pending reads 0
+# for this record, so before the held count joined the terminal test the same tick printed
+# "monitor stopped" directly above a block promising a next tick that would never come, then
+# exited 0 — a permanently leaked worktree with no reachable remedy.
+ok "B13: ...and the monitor does not stop over it"   0 "$(printf '%s' "$b13b" | grep -c 'monitor stopped')"
 
 # --- B14: the hold survives --only-changed silence ------------------------------------------
 # The per-slot signature is partly built from values the child writes, so leaving the hold to it
@@ -530,6 +575,53 @@ b14=$(b_tick -- --only-changed 73)
 ok "B14: a held slot breaks --only-changed silence every tick" 1 \
    "$(printf '%s' "$b14" | grep -c 'HELD — finished and merged')"
 ok "B14: ...and still tears nothing down"            0 "$(grep -c . "$DOWN_CALLS")"
+
+# --- B15: a teardown that REMOVED the slot and then exited non-zero ------------------------
+# shipyard-down.sh folds its fleet-level lifecycle cleanup into the per-slot exit status, so it
+# exits 1 AFTER the terminal and worktree are gone whenever that cleanup cannot be verified —
+# reachable with no blip at all, on the LAST slot, which is the one this path reaches. Reading
+# the status alone printed "NOTHING was removed" one line under a quoted "removed worktree".
+# Three mutations of the corroboration that replaced it (reverting the worktree test, swapping
+# the REAPED field order, deleting the NOTE) each left the WHOLE suite green; this is their kill
+# test. The count assertion is what kills the field-order swap.
+b_reset
+b_slot 74 874 ready-to-merge
+mkdir -p "$B_ROOT/.claude/worktrees/ship-74"
+printf '1 ship-74\n' >"$B_WINS"; printf 'ship-74\n' >"$B_ENUM"
+printf '874\tMERGED\n' >"$B_STATES"
+printf '1\n' >"$DOWN_RC_FILE"; DOWN_REMOVE=1; export DOWN_REMOVE
+b_tick -- 74 >/dev/null
+b15=$(b_tick -- 74)
+ok "B15: a removed-then-warned teardown is reported as torn down" 1 \
+   "$(printf '%s' "$b15" | grep -c 'TORN DOWN — merged, finished')"
+ok "B15: ...and NOT as awaiting removal"             0 "$(printf '%s' "$b15" | grep -c 'AWAITING REMOVAL')"
+ok "B15: ...naming the unverified cleanup"           1 "$(printf '%s' "$b15" | grep -c 'AFTER removing the slot')"
+ok "B15: ...with the right consecutive count"        1 "$(printf '%s' "$b15" | grep -c 'on 2 consecutive ticks')"
+DOWN_REMOVE=0; export DOWN_REMOVE; printf '0\n' >"$DOWN_RC_FILE"
+
+# --- B16: the counter lookup must not read another slot's row ------------------------------
+# The awk lookup replaced `grep -F "$slot<TAB>"`, which matched anywhere in the row — and rows
+# carry the iid after a second tab, so slot `7` read slot `50`'s row whenever slot 50's PR number
+# ended in `917`. B11 pins the iid guard beside it but seeds a row both implementations read
+# identically, so reverting the lookup itself left the suite green.
+#
+# SEEDING THE ROW IS NOT ENOUGH, and getting that wrong is what made the first version of this
+# case vacuous: the file is rewritten from this tick's rows, so a planted row is gone after one
+# tick and both implementations agree on tick 1 anyway. The collision has to be REGENERATED every
+# tick, which needs the colliding slot to be live and to keep writing its row. Slot 50 is
+# therefore merged, terminal-staged AND held by an open question — the hold is evaluated after
+# the count, so it appends its row for ever and is never torn down.
+b_reset
+b_slot 7 907 ready-to-merge
+b_slot 50 917 ready-to-merge
+printf '1 ship-50\n2 ship-7\n' >"$B_WINS"; printf 'ship-50\nship-7\n' >"$B_ENUM"
+printf '907\tMERGED\n917\tMERGED\n' >"$B_STATES"
+printf '{"kind":"question","status":"pending","slot":"50"}\n' >"$B_GIT/ship-escalations/50-1.json"
+# argv order puts slot 50's row first in the file, which is where a substring match finds it.
+b_tick -- 50 7 >/dev/null
+b_tick -- 50 7 >/dev/null
+ok "B16: a foreign row whose iid ends in this slot is not read" 1 "$(grep -c '^7$' "$DOWN_CALLS")"
+ok "B16: ...and the held colliding slot is not torn down"      0 "$(grep -c '^50$' "$DOWN_CALLS")"
 
 printf '\n%s: %d checks, %d failures\n' "$(basename "$0")" "$CHECKS" "$FAILURES"
 [ "$FAILURES" -eq 0 ]

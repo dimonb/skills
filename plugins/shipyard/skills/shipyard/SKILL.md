@@ -154,7 +154,14 @@ list in the command).
 per-slot code a named run does, so a slot that is merged, finished, unattended and gate-clear is
 TORN DOWN by it — terminal and worktree — exactly as described in Step 6. That is the intended
 behaviour, not an accident; what was wrong was a heading promising a monitor. `SHIPYARD_AUTODOWN=0`
-keeps a run purely observational if that is what you want.
+removes the teardown.
+
+It does NOT make a run inert, and the first draft of this very paragraph claimed it did. With the
+teardown off the report still writes its four mailbox bookkeeping files — including **truncating**
+`report-merged`, which resets the consecutive-merged counts of every slot the run did not name —
+repaints each child's sidebar glyph, and closes pending notices through its escalation tail. Run
+it ad hoc beside a live monitor and you delay that monitor's teardowns by a tick and consume any
+notice raised since its last one.
 
 ## Step 1. Launch (with dedup)
 
@@ -354,6 +361,14 @@ prints a loud `🛑 STALLED` block, bypassing `--only-changed`, once an idle slo
 escalation has not moved for 30 minutes (`SHIPYARD_STALL_SECS` to tune). Treat that block as
 an alarm, not as a status line — and work the order it prints, which is Step 5's: git,
 then a nudge, then compaction.
+
+**Four blocks bypass `--only-changed`**, for the same reason: `🛑 STALLED`, `🛑 NO SIGNAL`, and —
+added with the automatic teardown — `✋ HELD` and `✋ AWAITING REMOVAL`. The last two report a
+destructive act being attempted and declined on every tick, and an action only you can take, so
+they repeat for as long as the condition lasts rather than being news once. That repetition is a
+deliberate trade and a contested one: #182 is open against exactly it (a verbatim block that
+repeats trains the operator to skim it), so if that lands these should move to whatever
+de-duplication it introduces.
 
 **But motionless is not the same as stuck, and the report asks WHY before it consults that
 clock.** Two of the three reasons a healthy child stops moving are not failures at all: it
@@ -971,10 +986,13 @@ is gone and the backend corroborates that — the report calls `shipyard-down.sh
 It calls it **unchanged, with no flags and never `--force`**, so every gate below is the gate
 that runs; a slot the gate refuses is named in the report's `✋ AWAITING REMOVAL` block with the
 exact command, and nothing is removed. `SHIPYARD_AUTODOWN=0` turns it off and leaves teardown
-entirely manual. **An open escalation holds it**: a child that stopped to ask you something is
+entirely manual. **An open escalation THAT THIS REPORT CAN SEE holds it**: a child that stopped to ask you something is
 idle *because it is waiting for you*, and tearing it down destroys the session that asked —
 after which `shipyard-answer.sh` still exits 0 and claims the child will pick the answer up.
-Held slots get their own block; answer the question and the slot tears itself down next tick.
+Held slots get their own `✋ HELD` block naming the records that hold them; answer the question
+and the slot tears itself down on the next tick. A record the report cannot PARSE holds it too and
+cannot be answered — the block names the file to look at, because the escalation view skips it
+(#197).
 
 This applies to `/shipyard` with no arguments too — discovery mode reaches the same code.
 
@@ -1042,7 +1060,7 @@ starts a fresh watcher for its own parent session.
 | slot | terminal/worktree key (number or slug) |
 | MR | `!<number>` once the MR/PR exists |
 | term | tmux window index, or the agterm session-id prefix |
-| session | ▶️ running / ⏸ idle-wait (snapshot diff) / ⛔ no terminal — or, when a motionless slot's reason is known, `⏳ rate-limited`, `⏳ overloaded`, `✅ finished` or `🙋 needs you` (Step 2). `🧹 torn down` means THIS tick removed the slot's terminal and worktree (Step 6) — it is the report's own act, not something the child did to itself |
+| session | ▶️ running / ⏸ idle-wait (snapshot diff) / ⛔ no terminal — or, when a motionless slot's reason is known, `⏳ rate-limited`, `⏳ overloaded`, `✅ finished` or `🙋 needs you` (Step 2). `🧹 torn down` means this tick removed the slot's worktree, and its terminal if one was still there (Step 6) — it is the report's own act, not something the child did to itself |
 | MR state / stage | forge state (opened/merged/closed) + ship's pipeline stage |
 | esc | open escalations for this slot |
 | ctx | child context usage as `<pct>% · <tokens>`, read from its transcript; `⚠️` ≥65%, `🛑` ≥80%. A bare `<pct>%` is the client's own footer figure, used when no transcript was found. Two non-readings, neither meaning healthy: `—` = nothing measurable yet; `❓ <tokens>` = the figure exceeds every window this script knows, so the percentage would be invented — resolve it with `SHIPYARD_CTX_WINDOW` or a new `CTX_WINDOWS` entry before acting (Step 5) |

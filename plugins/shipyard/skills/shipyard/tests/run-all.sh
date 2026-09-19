@@ -15,14 +15,16 @@
 #
 # Most tests are pure functions over fixture files and environment variables. The continuity
 # suite also starts one short detached watcher against a fake `agtermctl`, proves idempotency,
-# and reaps it through the real lifecycle cleanup. TWO files deliberately drop the fixture rule,
-# each because the defect it closes IS git's answer, so a faked git would only replay the belief
-# under test: t12 (the teardown gate — real repositories, real squash merges, real worktrees) and
-# t17 Part A (what `worktree remove` actually does — a real bare origin, a real clone and real
-# registered worktrees, faking only the terminal backend). Nothing uses the network or fixtures
-# outside its own mktemp directory.
+# and reaps it through the real lifecycle cleanup. Two files deliberately drop the fixture rule
+# for their ASSERTIONS, each because the defect it closes IS git's answer, so a faked git would
+# only replay the belief under test: t12 (the teardown gate — real repositories, real squash
+# merges, real worktrees) and t17 Part A (what `worktree remove` actually does — a real bare
+# origin, a real clone and real registered worktrees, faking only the terminal backend). t5 and
+# t6 also shell out to real git, but only as scaffolding: neither asserts anything about what
+# git answered. Those are the files checked when this sentence was last written, and nothing in
+# the gate keeps the list complete — read the files rather than trusting the sentence.
 #
-# This sentence is part of the change that adds a third. It read "t12 is the one deliberate
+# Updating it is part of whatever change adds the next one. It read "t12 is the one deliberate
 # exception" until t17 landed, and the change that ADDED the second exception is the one that
 # left it claiming there was none — the repeat defect AGENTS.md names by name.
 #

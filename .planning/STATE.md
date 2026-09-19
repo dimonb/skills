@@ -9,7 +9,7 @@ standing** — teardown's only legitimate triggers are a merge or a close.
 | slot | branch | head | PR | stage | the next action it would have taken |
 |---|---|---|---|---|---|
 | `ship-48` | `fix/council-decide-tears-down-room` | `71d58b6` | **#183** | impl-review | verify by RUNNING that the record and both stderr lines are fully written before the deciding seat's own terminal goes |
-| `ship-181` | `feat/shipyard-merged-slot-teardown` | `d681d97` | — | issue-ready | open the PR; the design is settled (option B, see below) |
+| `ship-181` | `feat/shipyard-merged-slot-teardown` | see PR | **#185** | impl-review | round 3, scoped to round 2's fix diff, then hand over at ready-to-merge |
 | `ship-21` | `feat/council-monitor-protocol` | `2d41161` | **#184** | impl-review | finish the round |
 
 To resume: re-arm the two monitors (`shipyard-report.sh --only-changed 48 181 21` with

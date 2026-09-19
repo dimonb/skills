@@ -212,9 +212,11 @@ read `merged` on `SHIPYARD_AUTODOWN_TICKS` consecutive ticks (default and minimu
 stage is terminal, nobody is at the terminal and no escalation is open, the report calls
 `shipyard-down.sh` — unchanged, with no flags and never `--force` — which closes the terminal and
 removes the worktree. **The branch is never touched**, so the work is recoverable from it either
-way. Anything the gate declines, and any slot held by an open question, is named in its own block
-with the exact command. Set it to `0` to keep teardown entirely manual; that also makes a
-no-argument `/shipyard` run purely observational.
+way. Anything the gate declines is named in its own block with the exact command; a slot held by an
+open question gets its own block naming the records that hold it. Set it to `0` to keep teardown entirely manual; that also makes a
+no-argument `/shipyard` run non-destructive — though not inert: the report still writes its
+mailbox bookkeeping (and truncates the consecutive-merged counts of slots it did not name),
+repaints sidebar glyphs, and closes pending notices.
 
 `SHIPYARD_CTX_WINDOW` pins the context window, in tokens as a plain integer, that the `ctx`
 percentage is measured against. Without it the window is inferred from the largest total the

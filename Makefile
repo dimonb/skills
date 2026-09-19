@@ -27,12 +27,17 @@ check:
 # check` does not run those two (only their registration and invocation are gated at commit time;
 # every other suite runs there in full).
 #
-# MEASURED at 11:58 wall on an otherwise idle machine, at 33% CPU — i.e. it is dominated by
+# MEASURED at 13:26 wall on an otherwise idle machine, at 29% CPU — i.e. it is dominated by
 # deliberate SLEEPING (the report's 3s motion diff per live slot, the confirmation polls, the
 # canary waits), not by work, so it scales with the number of fixture slots rather than with the
 # box. The figure said "~2-3 min" for a long time and went stale silently, which is the failure
 # AGENTS.md warns about: re-measure this line when you add or grow a suite, and do not adjust it
 # by arithmetic. CI runs the same target, so a change that lengthens it lengthens every PR.
+#
+# This figure has now gone stale twice inside one change: it read ~2-3 min while a suite was
+# added, was re-measured at 11:58, and that reading was itself taken before the same suite grew by
+# four more cases. If you are adding or growing a test, this line is part of your change. AGENTS.md
+# points here rather than carrying its own number, so this is the only place to update.
 test:
 	@bash shared/driver/tests/run-all.sh
 	@bash shared/flow/tests/run-all.sh
