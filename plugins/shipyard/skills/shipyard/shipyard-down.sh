@@ -10,11 +10,22 @@
 #   shipyard-down.sh <slot> --force          tear down even when the gates below refuse
 #   shipyard-down.sh --list                  what is safe to tear down right now
 #
+# THIS SCRIPT IS ALSO THE AUTOMATIC PATH. shipyard-report.sh calls it, unchanged and without
+# --force, once a slot's PR/MR has read `merged` on enough consecutive ticks and the child is
+# finished (see the report's own block for the full trigger). That is why every gate below is
+# the gate: there is no second, looser teardown for the monitor to take.
+#
 # Safety gates (each one refuses, and says what to look at):
 #   * uncommitted or untracked changes in the worktree;
 #   * content that is not provably in the base branch already;
 #   * a question that could not be asked at all — no base branch to compare against,
-#     or a tree git could not read.
+#     or a tree git could not read;
+#   * a terminal that was NOT closed by this run and whose absence could not be
+#     corroborated (#139). `shipyard_target` resolves against whatever backend THIS
+#     process picked, so one failed agterm socket probe under SHIPYARD_BACKEND=auto used
+#     to skip the kill SILENTLY and remove the worktree of a child alive in the other
+#     backend. `shipyard_absence_report` — the same question `tell` and `compact` already
+#     ask — answers 0 only when the backend ANSWERED and does not list the slot.
 # --force overrides all of them. There is no gate on the MR state: the report knows
 # that, and a slot can also be legitimately torn down after a CLOSE.
 #
@@ -163,9 +174,39 @@ for slot in "${SLOTS[@]}"; do
     esac
   fi
 
+  killed=0
   if shipyard_target "$slot" >/dev/null 2>&1; then
     where=$(shipyard_where "$slot")
-    shipyard_kill "$slot" && echo "closed $where"
+    shipyard_kill "$slot" && { echo "closed $where"; killed=1; }
+  fi
+
+  # #139(1): THE KILL THAT DID NOT HAPPEN MUST NOT LET THE WORKTREE GO. Until now an
+  # unresolvable target skipped the kill silently and the removal proceeded, so under
+  # SHIPYARD_BACKEND=auto one failed socket probe took the worktree of a child that was alive
+  # and mid-review in the other backend — and the run printed only `removed worktree …`.
+  # `shipyard_absence_report` is the question `tell` and `compact` already ask before they say
+  # anything about a missing child: it returns 0 only when the backend ANSWERED and does not
+  # list the slot, and 1 — with the whole diagnostic on stderr — for every answer that is not
+  # an answer. Asking it here rather than building a second corroboration is the point: one
+  # question, one implementation.
+  #
+  # ASKED ONLY WHEN THIS RUN CLOSED NOTHING, which is exactly #139's case plus the narrower
+  # one where the kill itself failed. A successful kill needs no corroboration — this process
+  # just performed the absence — and asking anyway would put an enumeration between the close
+  # and the removal on the commonest healthy path, where a backend that has not yet caught up
+  # would answer `listed` and refuse the teardown the operator just asked for. Crying wolf on
+  # the happy path is what this file spent a long time removing.
+  #
+  # The rc-0 diagnostic is CAPTURED and discarded on purpose: it is worded for a caller that
+  # did not expect the absence ("error: no live terminal …"), and here the absence is the
+  # thing being asked for. Only the refusal is printed.
+  if [ "$killed" = 0 ] && [ "$FORCE" != 1 ]; then
+    if ! absence=$(shipyard_absence_report "$slot" 2>&1); then
+      echo "refused: ship-$slot's terminal was not closed and its absence could not be corroborated" >&2
+      printf '%s\n' "$absence" >&2
+      echo "         the worktree was left in place; --force overrides this once you have looked" >&2
+      rc=1; continue
+    fi
   fi
 
   if [ -d "$WT" ]; then

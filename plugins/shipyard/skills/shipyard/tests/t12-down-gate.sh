@@ -1,9 +1,12 @@
 #!/usr/bin/env bash
 # t12-down-gate.sh — the teardown safety gate (shipyard-down-gate.sh).
 #
-# NOTHING HERE IS FAKED, with one named exception. Every other file in this suite drives pure
-# functions over fixtures, or fakes git on PATH; this one must not, because the defect it closes
-# IS git's answer. The old guard asked `@{upstream}..HEAD` and a fake git would have returned
+# NOTHING HERE IS FAKED, with one named exception. Most files in this suite drive pure functions
+# over fixtures, or fake git on PATH; this one must not, because the defect it closes IS git's
+# answer. (t17 Part A also drops the fixture rule for its assertions, for the same reason — what
+# `worktree remove` actually does to a worktree. This sentence said "every other file" until t17
+# landed; run-all.sh carries the maintained version of the list and says plainly that nothing
+# keeps it complete.) The old guard asked `@{upstream}..HEAD` and a fake git would have returned
 # whatever the fixture author believed that means — which is exactly the belief that was wrong.
 # So each case builds a real bare "origin", a real clone, real commits, a real `merge --squash`,
 # a real branch deletion and a real worktree, and asks the real git. Cases A and C each print the

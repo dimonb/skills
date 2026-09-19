@@ -15,11 +15,18 @@
 #
 # Most tests are pure functions over fixture files and environment variables. The continuity
 # suite also starts one short detached watcher against a fake `agtermctl`, proves idempotency,
-# and reaps it through the real lifecycle cleanup. t12 is the one deliberate exception to the
-# fixture rule: the teardown gate's whole defect was a wrong belief about what git answers, so
-# it builds real repositories, real squash merges and real worktrees and asks the real git — a
-# faked git there would only replay the belief. Nothing uses the network or fixtures outside
-# its own mktemp directory.
+# and reaps it through the real lifecycle cleanup. Two files deliberately drop the fixture rule
+# for their ASSERTIONS, each because the defect it closes IS git's answer, so a faked git would
+# only replay the belief under test: t12 (the teardown gate — real repositories, real squash
+# merges, real worktrees) and t17 Part A (what `worktree remove` actually does — a real bare
+# origin, a real clone and real registered worktrees, faking only the terminal backend). t5 and
+# t6 also shell out to real git, but only as scaffolding: neither asserts anything about what
+# git answered. Those are the files checked when this sentence was last written, and nothing in
+# the gate keeps the list complete — read the files rather than trusting the sentence.
+#
+# Updating it is part of whatever change adds the next one. It read "t12 is the one deliberate
+# exception" until t17 landed, and the change that ADDED the second exception is the one that
+# left it claiming there was none — the repeat defect AGENTS.md names by name.
 #
 # SCOPE IS DELIBERATELY NARROW, and the rule is about PROVENANCE, not about counting: every
 # property asserted here traces to a defect this code actually shipped or a live failure this
@@ -40,7 +47,7 @@ DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # One single-line array: the gate (scripts/check.sh check 10) reads registrations from a
 # single-line `tests` array and reds loudly if a test file here is not listed, so a test cannot
 # silently stop running. Splitting this across lines hides the tail from that extraction.
-tests=(t1-totals.sh t2-window.sh t3-probe.sh t4-band.sh t5-agent.sh t6-codex-ctx.sh t7-continuity.sh t8-backend-adapter.sh t9-admission.sh t10-continuity-canary.sh t11-slot-graph.sh t12-down-gate.sh t13-wait.sh t14-signal.sh t15-iid-fallback.sh t16-tell-knobs.sh)
+tests=(t1-totals.sh t2-window.sh t3-probe.sh t4-band.sh t5-agent.sh t6-codex-ctx.sh t7-continuity.sh t8-backend-adapter.sh t9-admission.sh t10-continuity-canary.sh t11-slot-graph.sh t12-down-gate.sh t13-wait.sh t14-signal.sh t15-iid-fallback.sh t16-tell-knobs.sh t17-autodown.sh)
 
 rc=0
 for t in "${tests[@]}"; do

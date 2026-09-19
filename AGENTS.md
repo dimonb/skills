@@ -263,7 +263,7 @@ than creating one. Either way:
 
 ```bash
 make check        # the static gate + every fast suite (~9s); run before every commit
-make test         # every suite's fast subset — ~2-3 min
+make test         # every suite's fast subset — the Makefile carries the measured figure
 make check-test   # proves the gate's assertions actually fail when violated (needs a clean tree)
 ```
 
