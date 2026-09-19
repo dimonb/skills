@@ -166,10 +166,23 @@ ok "...so alarms read as none"           1 "$(printf '%s' "$blk" | grep -c 'alar
 out=$(bash "$CLI" status --alarms-only 2>/dev/null)
 ok "the quiet line never reaches --alarms-only" 0 "${#out}"
 
-# And it must NOT break --only-changed's silence, for the same reason.
-bash "$CLI" status --only-changed >/dev/null 2>&1
+# But it must be NEWS EXACTLY ONCE, not never. A quiet room moves none of the other signature
+# terms — that is what quiet means — so without a quiet bit in the signature the annotation lands
+# on a block the filter then suppresses for the whole wedge, and the 300s signal never reaches the
+# loop this skill tells a supervisor to arm. Entering the state breaks silence once; holding it
+# does not. Same treatment shipyard gives a wait class.
+RQ2="$COUNCIL_TEST_ROOT/t27q2"; rm -rf "$RQ2"
+mkroom "$RQ2" a b c
+export COUNCIL_ROOM="$RQ2" ROOM="$RQ2"
+bash "$CLI" status --only-changed >/dev/null 2>&1          # settle while not yet quiet
 out=$(bash "$CLI" status --only-changed 2>/dev/null)
-ok "...and does not break the filter's silence" 0 "${#out}"
+ok "not yet quiet: the filter is silent" 0 "${#out}"
+age_room "$RQ2" 400                                         # cross into quiet
+out=$(bash "$CLI" status --only-changed 2>/dev/null)
+ok "entering quiet breaks silence once"  1 "$(printf '%s' "$out" | grep -c '^quiet:')"
+out=$(bash "$CLI" status --only-changed 2>/dev/null)
+ok "...and holding it does not"          0 "${#out}"
+export COUNCIL_ROOM="$RQ" ROOM="$RQ"
 
 # Past the hard threshold it IS an alarm again, and that one does everything the quiet line does
 # not.
@@ -368,6 +381,32 @@ ok "...and the alarm still fires" 1 "$(printf '%s' "$out" | grep -c 'could not b
 mv "$R3/roster.bak" "$R3/roster.json"
 rm -f "$R3/state/container-tmux"
 
+# 9f. NO PIN IS TWO ANSWERS. A room with launchers but no container pin was launched by this
+#     skill (`drv_launch` always writes the pin) and has since lost it — damage, or a participant
+#     removing it. That is "cannot tell", which alarms; only a room with no launchers either is
+#     "never had any", which is a block line. Before the split, one `rm state/container-*` took
+#     the closed-room alarm off the alarm channel entirely.
+sessions "council-$RN-a" "council-$RN-b"
+printf 'fake-container\n' > "$R3/state/container-tmux"
+out=$(bash "$SCLI" status --alarms-only 2>/dev/null)
+ok "9f: baseline — the pin is there and seats are up" 1 "$(printf '%s' "$out" | grep -c 'terminals are still up')"
+rm -f "$R3"/state/container-*
+printf '#!/bin/sh\n' > "$R3/state/launch-a.sh"
+out=$(bash "$SCLI" status --alarms-only 2>/dev/null)
+ok "a launched room with no pin still alarms" 1 "$(printf '%s' "$out" | grep -c 'could not be determined')"
+ok "...and terminals says ?"                  "?" "$(bash "$SCLI" terminals 2>/dev/null)"
+# ...and the honest limit: remove the launchers too and it is back to a block line. The test
+# asserts the limit rather than pretending the route is closed — removing this assertion is how
+# a later reader comes to believe the guard is stronger than it is.
+rm -f "$R3"/state/launch-*.sh
+out=$(bash "$SCLI" status --alarms-only 2>/dev/null)
+# Asserted on the TERMINAL alarm specifically, not on emptiness: this room is aged past the stall
+# threshold, so `--alarms-only` correctly carries a 🛑 STALL here and an emptiness check would
+# pass for the wrong reason (and would go red the day the fixture's age changed).
+ok "removing the launchers too gets the silence back" 0 "$(printf '%s' "$out" | grep -c 'could not be determined')"
+blk=$(bash "$SCLI" status 2>/dev/null)
+ok "...but the block still says what it read"     1 "$(printf '%s' "$blk" | grep -c '^terminals: this room carries no container pin')"
+
 # --- 10. the seat-liveness sentences ------------------------------------------------------
 # ALIVE-and-idle-at-a-prompt and GONE look identical from inside the room and need opposite
 # remedies, so these sentences are the most dangerous strings in the change: one of them names a
@@ -414,9 +453,14 @@ sessions_none
 rm -f "$RS/state/launch-$FLOOR.sh"
 out=$(COUNCIL_STALL_SECS=100 bash "$SCLI" status --alarms-only 2>/dev/null)
 ok "a launcher-less seat still reports GONE" 1 "$(printf '%s' "$out" | grep -c 'terminal is GONE')"
-ok "...names it as never given a terminal"   1 "$(printf '%s' "$out" | grep -c 'never GIVEN one')"
 ok "...points at the human"                  1 "$(printf '%s' "$out" | grep -c 'waiting on a person')"
 ok "...and prescribes no relaunch"           0 "$(printf '%s' "$out" | grep -c 'before running council.sh relaunch')"
+# THE BRANCH IS CHOSEN BY A FILE IN THE ROOM, so the sentence must name both readings rather than
+# leading with the benign one. A participant that deletes a launcher would otherwise get the
+# monitor to explain away a seat it had just killed — and `relaunch`'s own refusal corroborates
+# the story, so nothing contradicts it.
+ok "...names the removal reading too"        1 "$(printf '%s' "$out" | grep -c 'the launcher was removed')"
+ok "...and tells the operator to settle it"  1 "$(printf '%s' "$out" | grep -c 'check how this room was started')"
 printf '#!/bin/sh\n' > "$RS/state/launch-$FLOOR.sh"
 
 # 10e. THE BARRIER LABEL. During an open barrier round `$floor` is the label `— (barrier)`, not a

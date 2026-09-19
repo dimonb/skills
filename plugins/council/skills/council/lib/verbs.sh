@@ -727,9 +727,25 @@ _stall_escalate() {
 # A caller that adds a third read should hoist the source into `v_status`, outside every
 # command substitution, where the `command -v` guard would actually bite.
 _room_terminals() {
-  local f pinned=0 list erc=0 peers peer name s live=0 total=0
+  local f pinned=0 launched=0 list erc=0 peers peer name s live=0 total=0
   for f in "$ROOM"/state/container-*; do [ -f "$f" ] && pinned=1; done
-  [ "$pinned" = 1 ] || return 1
+  if [ "$pinned" != 1 ]; then
+    # NO PIN IS TWO DIFFERENT ANSWERS, and conflating them cost the alarm. `drv_launch` always
+    # writes the pin, so a room that has LAUNCHERS but no pin was launched by this skill and has
+    # since lost the pin — damage, or a participant removing it — which is "cannot tell" (rc 2,
+    # the alarm), not "never had any" (rc 1, a block line). Before this split, `rm state/container-*`
+    # was a single write that took the closed-room alarm off the `--alarms-only` channel entirely.
+    #
+    # WHAT THIS BUYS, STATED HONESTLY: it raises the cost from one write to N+1, and it does not
+    # close the route — the launchers are in the room too, so removing them as well gets back to
+    # rc 1. That is the shape this repo's law asks for where suppression cannot be prevented:
+    # make it self-revealing rather than claim a guard that is not there. It is only PARTLY
+    # self-revealing even so, because rc 1 still prints a block line rather than an alarm.
+    # Closing it needs the out-of-room launch record (#186).
+    for f in "$ROOM"/state/launch-*.sh; do [ -f "$f" ] && launched=1; done
+    [ "$launched" = 1 ] && return 2
+    return 1
+  fi
   if ! command -v ct_sessions >/dev/null 2>&1; then
     [ -n "${SKILL:-}" ] && [ -f "$SKILL/lib/term.sh" ] || return 2
     . "$SKILL/lib/term.sh" || return 2
@@ -844,18 +860,25 @@ EOF
   # absence says nothing, because the confident negative is the expensive one here: it is
   # what sends a supervisor to `relaunch` on a seat that is alive and mid-turn.
   ct_absence_class "$erc" "$list" "$name" >/dev/null 2>&1 || return 1
-  # A SEAT WITH NO LAUNCHER WAS NEVER GIVEN A TERMINAL, so its absence means something else
-  # entirely. `council up` skips `_write_launcher` for the seat the human took with `--me`, which
-  # still sits in the roster and still takes its turn — so without this branch the commonest
-  # healthy path in a human-in-the-room scenario (a person thinking for longer than the threshold)
-  # printed a confident GONE and prescribed a command `relaunch` then refuses. The launcher is the
-  # record `relaunch` itself reads for this, and nothing ever deletes one.
+  # A SEAT WITH NO LAUNCHER MAY NEVER HAVE BEEN GIVEN A TERMINAL, so its absence can mean
+  # something else entirely. `council up` skips `_write_launcher` for the seat the human took with
+  # `--me`, which still sits in the roster and still takes its turn — so without this branch the
+  # commonest healthy path in a human-in-the-room scenario (a person thinking for longer than the
+  # threshold) printed a confident GONE and prescribed a command `relaunch` then refuses.
   #
-  # BOTH BRANCHES KEEP THE "terminal is GONE" WORDS, and only the advice differs. Withholding the
-  # absence on a missing launcher would let a deleted launcher silence a genuinely dead seat —
-  # trading a wrong remedy for no signal, which is the worse direction.
+  # THE LAUNCHER IS A FILE IN THE ROOM, so this branch is chosen by state a participant can write,
+  # and the wording must not pick a side. An earlier draft of this comment said "nothing ever
+  # deletes one" — false, and false in the direction that matters: nothing in this SKILL deletes
+  # one, and every participant holds the room as a writable root. So the sentence names both
+  # readings and tells the operator to settle it by looking at how the room was started, rather
+  # than leading with the benign one. `relaunch` refuses such a seat either way, so the advice is
+  # the same whichever it is; what would be wrong is implying which.
+  #
+  # BOTH BRANCHES KEEP THE "terminal is GONE" WORDS, and only the advice differs — that is the
+  # part this branch must not get wrong. Withholding the absence on a missing launcher would let
+  # one deletion silence a genuinely dead seat, trading a wrong remedy for no signal.
   if [ ! -f "$ROOM/state/launch-$peer.sh" ]; then
-    printf 'its terminal is GONE — the %s backend answered and does not have it. But this seat has no launcher, so it was never GIVEN one: it is the seat taken with `--me` and the room is waiting on a person (council.sh relaunch refuses such a seat), or somebody removed the launcher.' \
+    printf 'its terminal is GONE — the %s backend answered and does not have it. This seat also has no launcher in the room: either it was never given a terminal (the seat taken with `--me`, and the room is waiting on a person), or the launcher was removed. council.sh relaunch refuses it either way, so check how this room was started.' \
       "$(ct_backend)"
     return 0
   fi
@@ -1122,7 +1145,14 @@ v_status() {
   # turn. The signature is the BLOCK loop's memory; only a tick that could have printed a block
   # may write it.
   if [ "$only_changed" = 1 ] && [ "$alarms_only" = 0 ] && sigfile=$(_status_sigfile); then
-    sig="$floor|$verd|$t|$openct"
+    # THE QUIET STATE IS IN THE SIGNATURE, and without it the annotation was unreachable through
+    # the very loop this skill tells a supervisor to arm. A quiet room by definition moves none of
+    # the other four terms — that is what quiet means — so the line landed on a block that this
+    # filter then suppressed on every tick but the one that happened to follow a turn. It is a
+    # BIT, not the text: entering or leaving the quiet state breaks silence exactly once rather
+    # than every tick for as long as it lasts, which is the same treatment shipyard's reporter
+    # gives a wait class and the right one for something that is explicitly not an alarm.
+    sig="$floor|$verd|$t|$openct|${quiet_line:+q}"
     if [ -z "$alarms" ] && [ -z "$(c_recorded_status)" ] \
        && [ -f "$sigfile" ] && [ "$sig" = "$(cat "$sigfile" 2>/dev/null)" ]; then
       return 1   # the room is open, carries no alarm, and nothing worth saying has moved
