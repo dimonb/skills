@@ -1074,9 +1074,13 @@ git checkout -- .github/workflows/check-test.yml
 # 33b — the same arm from the other side: $GUARDED grows and the filter does not. This is the
 # likelier way round in practice, and it is a DIFFERENT mutation — 33 deletes from the filter, this
 # adds to the guarded list — so neither substitutes for the other.
-perl -pi -e "s{^GUARDED='([^']*)'}{GUARDED='\$1 docs'}" scripts/check-test.sh
+# The injected name must be one NO filter entry can cover. `docs` was used here and stopped being
+# a valid probe the moment `docs/**` was deliberately added to the filter: check 13 then found the
+# entry, reddened nothing, and this probe recorded `not proven` — failing the whole run over an
+# arm that is in fact fine. A token that exists nowhere cannot acquire that problem.
+perl -pi -e "s{^GUARDED='([^']*)'}{GUARDED='\$1 _probe-guarded-tree'}" scripts/check-test.sh
 expect_fail "check 13: a path added to \$GUARDED but not to the filter" \
-  "path filter has no 'docs/**'"
+  "path filter has no '_probe-guarded-tree/**'"
 git checkout -- scripts/check-test.sh
 
 # 33b2 — check 13's REFUSAL arm. `paths-ignore:` is the same YAML shape as `paths:` with the

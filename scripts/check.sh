@@ -813,7 +813,11 @@ else
   # covered. Green gate, silent gap, in the check whose whole purpose is that the gate-of-the-gate
   # cannot be skipped. Rather than teach a sed to parse YAML scopes, this declines to reason about
   # a construct it cannot distinguish: if the word appears anywhere in the file, red.
-  if grep -q 'paths-ignore' "$CT_WF"; then
+  # ANCHORED ON THE KEY, not on the word. An unanchored match would red on PROSE — including the
+  # sentence just above that names the construct, and the one in the workflow's own header that
+  # explains the refusal, which is the natural next edit somebody makes. That red would be
+  # permanent, on a correct file, with full coverage intact.
+  if grep -qE '^[[:space:]]*paths-ignore:' "$CT_WF"; then
     fail "$CT_WF uses paths-ignore, which check 13 cannot tell from paths — it reads entries, not the key they sit under, so an inverted filter would read as full coverage"
   fi
   if [ -z "$guarded" ]; then
