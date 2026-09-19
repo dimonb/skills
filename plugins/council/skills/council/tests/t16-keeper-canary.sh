@@ -61,6 +61,22 @@ ok() { # <label> <expected> <actual>
 wait_file() { local f="$1" n="${2:-60}" i; for ((i=0;i<n;i++)); do [ -e "$f" ] && { echo yes; return; }; sleep 0.1; done; echo no; }
 # Poll for a pid to be gone, up to <deciseconds>. Prints "gone"/"alive".
 wait_gone() { local p="$1" n="${2:-60}" i; for ((i=0;i<n;i++)); do kill -0 "$p" 2>/dev/null || { echo gone; return; }; sleep 0.1; done; echo alive; }
+
+# THE CANARY-REAP CEILING. The owner dies -> the write end closes -> the keeper's read EOFs -> it
+# reaps and exits. That sequence is GUARANTEED to happen; the only question is when, and a keeper
+# that has to be scheduled, fork a reap and exit can be late on a box running the whole suite at
+# once. The waits below used 80 and 5 deciseconds — eight seconds and HALF A SECOND — and the half
+# second in particular is not a bound, it is a race.
+#
+# Measured: case A red under a parallel `make test` ("keeper exited after owner SIGKILL", plus both
+# reap markers), green on the same tree run alone. A bound this file already had the answer to —
+# t10-continuity-canary carries the identical mechanism and raised its ceiling to 600 for exactly
+# this reason, with the reasoning written down, and this file was not updated with it.
+#
+# It stays a ceiling and not a deadline: it is only ever PAID by a case that is failing, so
+# widening it costs a passing run nothing and a genuine never-reap still fails it — a leaked keeper
+# runs for ever, so no ceiling makes that pass.
+REAP_WAIT=600   # 60s at 0.1s/poll
 pgid_of() { ps -o pgid= -p "$1" 2>/dev/null | tr -d ' '; }
 
 # An owner process: build a room whose keeper carries the canary (`_KEEPER_OWNER_HOLD=1`), fake
@@ -102,9 +118,9 @@ ok "keeper is in its own process group" yes \
 # No terminal has been closed yet — the owner is still alive.
 ok "no reap while the owner lives" no "$([ -e "$MARK_A/reaped-alice" ] && echo yes || echo no)"
 kill -9 "$opid_a" 2>/dev/null
-ok "keeper exited after owner SIGKILL" gone "$(wait_gone "$kpid_a" 80)"
-ok "reaped alice" yes "$(wait_file "$MARK_A/reaped-alice" 5)"
-ok "reaped bob"   yes "$(wait_file "$MARK_A/reaped-bob" 5)"
+ok "keeper exited after owner SIGKILL" gone "$(wait_gone "$kpid_a" "$REAP_WAIT")"
+ok "reaped alice" yes "$(wait_file "$MARK_A/reaped-alice" "$REAP_WAIT")"
+ok "reaped bob"   yes "$(wait_file "$MARK_A/reaped-bob" "$REAP_WAIT")"
 
 # ---------------------------------------------------------------------------------------------
 echo "── case B: a signal to the OWNER's process group does not reach the keeper ──"
@@ -126,10 +142,10 @@ ok "keeper group differs from owner group" yes \
    "$([ -n "$(cat "$MARK_B/keeper.pgid" 2>/dev/null)" ] && [ "$(cat "$MARK_B/keeper.pgid")" != "$opgid_b" ] && echo yes || echo no)"
 # Signal the owner's GROUP (negative pid). Safe: the keeper and this test are in other groups.
 kill -TERM -- "-$opgid_b" 2>/dev/null
-ok "keeper exited after owner-group SIGTERM" gone "$(wait_gone "$kpid_b" 80)"
-ok "reaped x" yes "$(wait_file "$MARK_B/reaped-x" 5)"
-ok "reaped y" yes "$(wait_file "$MARK_B/reaped-y" 5)"
-ok "reaped z" yes "$(wait_file "$MARK_B/reaped-z" 5)"
+ok "keeper exited after owner-group SIGTERM" gone "$(wait_gone "$kpid_b" "$REAP_WAIT")"
+ok "reaped x" yes "$(wait_file "$MARK_B/reaped-x" "$REAP_WAIT")"
+ok "reaped y" yes "$(wait_file "$MARK_B/reaped-y" "$REAP_WAIT")"
+ok "reaped z" yes "$(wait_file "$MARK_B/reaped-z" "$REAP_WAIT")"
 
 # ---------------------------------------------------------------------------------------------
 echo "── case C: WITHOUT --hold the room is detached, exactly as before ──"
@@ -157,7 +173,7 @@ sleep 1
 ok "keeper survives the starter's exit" yes "$(kill -0 "$kpid_c" 2>/dev/null && echo yes || echo no)"
 ok "detached keeper reaps nothing" no "$([ -e "$MARK_C/reaped-p" ] && echo yes || echo no)"
 rm -rf "$ROOM_C"                              # the directory-bound death trigger, unchanged
-ok "keeper exits when the room directory is removed" gone "$(wait_gone "$kpid_c" 90)"
+ok "keeper exits when the room directory is removed" gone "$(wait_gone "$kpid_c" "$REAP_WAIT")"
 
 # ---------------------------------------------------------------------------------------------
 echo "── case D: a launched backend daemon does not inherit the canary write end ──"
@@ -218,7 +234,7 @@ ok "up --hold created a room + keeper via the real CLI" yes "$(wait_file "$E_KP"
 e_kpid=$(cat "$E_KP" 2>/dev/null); [ -n "$e_kpid" ] && KEEPERS+=("$e_kpid")
 ok "the --hold owner is still holding (blocked on wait)" yes "$(kill -0 "$e_owner" 2>/dev/null && echo yes || echo no)"
 kill -TERM "$e_owner" 2>/dev/null
-ok "killing the --hold owner reaps its keeper" gone "$(wait_gone "$e_kpid" 100)"
+ok "killing the --hold owner reaps its keeper" gone "$(wait_gone "$e_kpid" "$REAP_WAIT")"
 rm -rf "$E_REPO"
 
 # ---------------------------------------------------------------------------------------------

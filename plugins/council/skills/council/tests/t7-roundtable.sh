@@ -250,12 +250,26 @@ echo "the turn count is the room's, not the reader's: $tp for a withheld seat an
 R2="$COUNCIL_TEST_ROOT/t7b"; rm -rf "$R2"
 mkroom "$R2" a b c
 ROOM="$R2"; export COUNCIL_ROOM="$R2"
-jq '.mode="roundtable" | .round_deadline_ms=1000 | .round_quorum=2' "$R2/roster.json" > "$R2/r.tmp" && mv "$R2/r.tmp" "$R2/roster.json"
+# THE DEADLINE IS MOVED BETWEEN THE TWO READS RATHER THAN WAITED OUT. `c_barrier` reads
+# `round_deadline_ms` from the roster on every call, so "before the deadline" and "after the
+# deadline" are two roster values, not two moments — and expressing them that way removes the
+# only fixed timing in this case.
+#
+# It used to be one deadline of 1000 ms with a `sleep 1.5` in the middle, which made the first
+# read's margin — all the wall clock the two `send` calls above it may take — exactly one second.
+# That is comfortable on an idle box and not comfortable at all once the suite's files run
+# concurrently: measured red here under a parallel `make test`, green on the same tree run alone,
+# reporting a round that closed early when what actually happened is that the round legitimately
+# timed out while the test was still forking. The same shape is t25's, and #114 carries the class.
+#
+# Both assertions are unchanged and so is the mechanism: the first read is before the deadline and
+# the second is after it. The margin goes from one second to a minute, and the 1.5 s goes to zero.
+jq '.mode="roundtable" | .round_deadline_ms=60000 | .round_quorum=2' "$R2/roster.json" > "$R2/r.tmp" && mv "$R2/r.tmp" "$R2/roster.json"
 COUNCIL_ME=a bash "$CLI" send --act propose "position a" >/dev/null
 COUNCIL_ME=b bash "$CLI" send --act propose "position b" >/dev/null
 st=$(COUNCIL_ME=a bash -c '. '"$SKILL"'/lib/lib.sh; c_barrier')
 [ "$st" = open ] || { echo "FAIL the round closed before the deadline with 2 of 3"; fail=1; }
-sleep 1.5
+jq '.round_deadline_ms=1' "$R2/roster.json" > "$R2/r.tmp" && mv "$R2/r.tmp" "$R2/roster.json"
 st=$(COUNCIL_ME=a bash -c '. '"$SKILL"'/lib/lib.sh; c_barrier')
 [ "$st" = closed ] || { echo "FAIL the round did not close on the deadline with a quorum: $st"; fail=1; }
 got=$(COUNCIL_ROOM="$R2" COUNCIL_ME=c bash "$CLI" recv --peek | jq -r '.id' | paste -sd, -)
