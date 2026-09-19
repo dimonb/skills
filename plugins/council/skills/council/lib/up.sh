@@ -330,8 +330,9 @@ _canary_fifo() { # <room> -> a freshly created fifo path on stdout, or rc 1
 # AFTER the step-down check for the same reason the canary's second check exists: a keeper that
 # has been superseded must reap nothing, and a marker left by the room this path once served
 # would otherwise close the terminals of the room that replaced it. It goes BEFORE the canary
-# read because that read blocks for up to five seconds, and a detached room has no canary at all
-# — putting it after would make a detached room wait on `sleep 5`, and would make a `--hold` room
+# read because that read blocks for up to one poll period (five seconds by default), and a
+# detached room has no canary at all
+# — putting it after would make a detached room wait out its own `sleep`, and would make a `--hold` room
 # NEVER NOTICE A TEARDOWN AT ALL. Not "late", and not "only on owner death": both `continue`s
 # above jump straight back to the `while` test, and the EOF branch reaps and returns, so a check
 # placed below that block is unreachable in a held room for the room's whole life — `decide`
@@ -342,8 +343,21 @@ _canary_fifo() { # <room> -> a freshly created fifo path on stdout, or rc 1
 # would be taken again by whatever keeper the room is given next — `relaunch` forks one — and a
 # seat put back up would then be killed within five seconds of starting, which reads as the
 # relaunch having silently failed.
-_keeper_loop() { # <room> <pid-file> <canary-read-fd-or-empty> <peer>...
-  local room="$1" keep="$2" cfd="$3"; shift 3
+#
+# THE POLL PERIOD IS ONE VALUE USED AT BOTH SITES BELOW, and it arrives as an ARGUMENT rather
+# than being read here. The two sites are the canary `read -t` (a `--hold` room) and the `sleep`
+# fallback (a detached one) — the same period seen from the two kinds of room, so a knob that
+# moved one and not the other would make them silently disagree about how long a keeper may take
+# to notice a teardown, which is worse than no knob at all.
+#
+# It is a parameter and not a `knob_interval` call in this body for one reason: this function
+# runs INSIDE the forked keeper, which `_keeper_ensure` detaches with `exec >/dev/null 2>&1`.
+# A warning about an unusable operator value printed from here would go to /dev/null — which is
+# the failure `shared/knobs` exists to prevent, arrived at from the other side. So the knob is
+# read in `_keeper_ensure`, in the foreground, where the operator's terminal still gets the
+# warning, and the effective value is handed down. The two test call sites in t19 pass their own.
+_keeper_loop() { # <room> <pid-file> <canary-read-fd-or-empty> <poll-interval> <peer>...
+  local room="$1" keep="$2" cfd="$3" poll="$4"; shift 4
   local rc named tdn
   tdn=$(_keeper_teardown_file "$room")
   while [ -d "$room" ]; do
@@ -354,7 +368,7 @@ _keeper_loop() { # <room> <pid-file> <canary-read-fd-or-empty> <peer>...
       return 0
     fi
     if [ -n "$cfd" ]; then
-      read -t 5 -u "$cfd" _ 2>/dev/null; rc=$?
+      read -t "$poll" -u "$cfd" _ 2>/dev/null; rc=$?
       [ "$rc" -eq 0 ] && continue
       [ "$rc" -gt 128 ] && continue
       # EOF: the owner is gone. Ask once more whether we are still this room's keeper, because the
@@ -367,7 +381,10 @@ _keeper_loop() { # <room> <pid-file> <canary-read-fd-or-empty> <peer>...
       _keeper_reap "$room" "$@"
       return 0
     fi
-    sleep 5
+    # THE SAME `$poll` as the `read -t` above, deliberately — this is the detached room's view of
+    # the one keeper period, not a second constant that happens to match. Do not give it its own
+    # knob or its own literal: the header says why.
+    sleep "$poll"
   done
 }
 
@@ -387,8 +404,14 @@ _keeper_loop() { # <room> <pid-file> <canary-read-fd-or-empty> <peer>...
 # owner is the last writer, EOF unambiguously means owner-gone. Nothing here reads $PPID.
 _keeper_ensure() { # <room-dir> <peer>...
   local room="$1"; shift
-  local keep="$room/state/keeper.pid" p pid
+  local keep="$room/state/keeper.pid" p pid poll
   pid=$(_keeper_pid "$keep") && kill -0 "$pid" 2>/dev/null && return 0
+  # The keeper's poll period, read HERE and not in the loop: the fork below detaches the keeper's
+  # stderr to /dev/null, so this is the last point at which an operator can be told their value
+  # was unusable. Five seconds is the production answer and is not being changed — the knob
+  # exists so the suite can stop paying it (see `_keeper_loop`'s header).
+  poll=$(knob_interval "${COUNCIL_KEEPER_POLL_INTERVAL:-}" 5) \
+    || echo "council: COUNCIL_KEEPER_POLL_INTERVAL is not a usable positive number — using 5" >&2
   _KEEPER_CANARY_WFD=""   # a global (read by _ct_launch_owned); cleared here so a prior call's fd never leaks in
   local cr="" cw="" boot=""
   if [ -n "${_KEEPER_OWNER_HOLD:-}" ]; then
@@ -448,7 +471,7 @@ _keeper_ensure() { # <room-dir> <peer>...
   ( exec >/dev/null 2>&1 <&-
     [ -n "$cw" ] && exec {cw}>&-      # the keeper never writes the canary; only the owner keeps that end
     for p in "$@"; do exec {fd}<> "$room/bell/$p.fifo"; done
-    _keeper_loop "$room" "$keep" "$cr" "$@" ) &
+    _keeper_loop "$room" "$keep" "$cr" "$poll" "$@" ) &
   pid=$!
   [ "$had_m" = 1 ] || set +m
   [ -n "$cw" ] && exec {cr}<&-        # the owner never reads the canary; keep only the write end open here

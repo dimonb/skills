@@ -34,7 +34,8 @@
 # silence for, and it is the only thing in the ctx column that does.
 #
 # Design notes:
-#  * running-vs-idle comes from a snapshot DIFF (two captures 3s apart). That answers "is this
+#  * running-vs-idle comes from a snapshot DIFF (two captures $SHIPYARD_MOTION_INTERVAL apart,
+#    3s by default). That answers "is this
 #    child MOVING", which is what this column is for, and it is a different question from "is a
 #    turn in flight" — a turn marker holds steady across a long tool call, and motion says nothing
 #    about whether a turn was ever started. `adp_turn_state` in shared/adapters answers the second
@@ -220,6 +221,19 @@ TICKFILE=""
 MERGEDFILE=""
 MAILBOX_DIR="(mailbox unresolved)"   # named once in the HELD block; the records are basenames
 STALL_SECS="${SHIPYARD_STALL_SECS:-1800}"   # 30 min of no movement, idle, nothing asked of you
+
+# How long the motion diff waits between its two captures. THREE SECONDS IS THE PRODUCTION
+# ANSWER and is not being changed: it is long enough that a child between two tool calls still
+# reads as moving, and short enough that a report of a whole fleet is not itself the pause.
+#
+# It is a knob because the shipyard suite pays it ~46 times over in one file (t17 runs this
+# script once per tick against a FAKE backend whose capture is a fixed file, so the wait
+# measures nothing there and cost 118 of the suite's ~825 seconds). A test sets it to
+# hundredths; production never does. The separation is the point — making the DEFAULT fast to
+# make tests fast would trade a real signal for a cheap number, which is the failure this knob
+# exists to avoid rather than to enable.
+MOTION_INTERVAL=$(knob_interval "${SHIPYARD_MOTION_INTERVAL:-}" 3) \
+  || echo "warning: SHIPYARD_MOTION_INTERVAL is not a usable positive number — using 3" >&2
 # ENSURE, not just resolve: if the directory is missing the stall table cannot be
 # written, `since` resets to now on every run, and the watchdog silently never
 # fires. A watchdog that fails closed is worse than none — it looks armed.
@@ -875,7 +889,7 @@ for slot in "${SLOTS[@]}"; do
   fi
 
   a=$(shipyard_capture "$slot")
-  sleep 3
+  sleep "$MOTION_INTERVAL"
   b=$(shipyard_capture "$slot")
   [ "$a" = "$b" ] && run="⏸ idle/wait" || run="▶️ running"
 
