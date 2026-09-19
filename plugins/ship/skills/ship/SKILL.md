@@ -851,8 +851,12 @@ escalation record, which is not a stage record, and stops — so rungs 2 and 3 a
 `Deferred:` line is due. That is deliberate: the change is terminal until a human acts (§7.H) and
 the surviving blockers reach them through the ledger and that record, so filing tickets there would
 place work on a change somebody is about to re-run. What the stage still owes is the written
-record: its deferrals stay in the ledger's `deferred` array with their rung unreached, so the
-re-run inherits them instead of re-deriving them.
+record: its deferrals stay in the ledger's `deferred` array with their rung unreached, and the
+escalation record says so — *the ladder was not worked because the stage escalated; N deferrals are
+held in the ledger* — because a human reading the PR sees records, not kinds of record, and an
+absent line would look like a stage that deferred nothing. **The collector is §7.C step 5 / §7.E
+step 6**, which work the ladder over an unreached deferral carried from an earlier run as well as
+over this stage's own; that is what makes "the re-run inherits them" a mechanism rather than a hope.
 
 #### Rung 1 — fix it in the change already in flight
 
@@ -882,9 +886,11 @@ one-line diffs their authors were sure of. When it is genuinely unclear whether 
 that uncertainty is the answer: go to rung 2.
 
 **A fix taken under this rung is still recorded** — in the ledger's `deferred` entry, with the sha
-in its `outcome`, and in the deferral line of the stage record (§5.9). A fixed finding that leaves
-no trace is how the same defect gets re-found in round four by a reviewer with no memory of round
-two.
+in its `outcome`, and in the deferral line of the stage record (§5.9). **`deferred` is the
+authority for where the ladder put a finding, and the finding's own `status` follows it** — a rung-1
+placement sets `status: fixed` on its entry in the findings array, so the two never disagree about
+whether it was answered. A fixed finding that leaves no trace is how the same defect gets re-found
+in round four by a reviewer with no memory of round two.
 
 #### Rung 2 — a comment on an issue that is already open
 
@@ -949,7 +955,9 @@ the only place ship created one; this rung is the second, and it does not inheri
 nobody wrote. **Neither case stops the stage and neither case drops the finding**: it stays at its
 written record — its `deferred` entry with `rung_3` marked unfiled and the reason, and the count on
 the `Deferred:` line — and the run carries on. A change that has cleared its review is not parked
-over a ticket that was never filed, and the next interactive run can file it.
+over a ticket that was never filed, and the next interactive run files it: an unreached rung is
+collected by §7.C step 5 / §7.E step 6 like any other carried deferral, so this is a mechanism and
+not a capability nobody exercises.
 
 #### Where the repo tracks work some other way
 
@@ -1081,8 +1089,9 @@ Skipped entirely in a no-spec repo.
    exists, not by hand-editing. Re-validate, commit, push.
 4. Scoped rounds (§5.7) until a round returns no confirmed blocker, or escalate at
    `max-rounds`.
-5. Work the ladder (§5.11) over everything this stage deferred, then post the record (§5.9).
-   Record the clean verdict and the ladder's disposition.
+5. Work the ladder (§5.11) over everything this stage deferred, **plus any deferral carried from
+   an earlier run whose rung was never reached** — this step is where those are collected. Then
+   post the record (§5.9) and record the clean verdict and the ladder's disposition.
 6. `record state=apply` → §7.D.
 
 This stage is WORK, not a wait. If you find yourself scheduling a re-wake from it, you have
@@ -1117,8 +1126,9 @@ mis-read the state.
    and the touched components' tests; commit; push.
 5. Scoped rounds (§5.7) until clean, or escalate at `max-rounds` → `needs-human`.
 6. Work the ladder (§5.11) over everything this stage deferred — once, here, not per round —
-   then post the stage record plus the batched optional comment (§5.9). Record the clean
-   verdict, any sweep, and the ladder's disposition.
+   **plus any deferral carried from an earlier run whose rung was never reached**; this step is
+   where those are collected. Then post the stage record plus the batched optional comment
+   (§5.9). Record the clean verdict, any sweep, and the ladder's disposition.
 7. `record state=archive` → §7.F in a spec-engine repo; in a no-spec repo go straight to §7.G
    and record NOTHING here — see §2.8: `ready-to-merge` is stamped when §7.G ends, never on the
    way in, because a supervisor reads it as the change having become a person's move.
