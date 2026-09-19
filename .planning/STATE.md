@@ -1,6 +1,70 @@
 # STATE — session memory
 
+## ✅ ALL THREE SHIPPED (2026-09-19) — the fleet is empty and both skills are installable
+
+The three changes that were in flight at the pause are merged, their slots torn down through the
+content gate, their branches deleted, and both plugins released. Nothing is in flight.
+
+| slot | PR | squash | what it does |
+|---|---|---|---|
+| `ship-48` | **#183** | `fe955ff` | council: a decided room closes its own terminals |
+| `ship-181` | **#185** | `84d0473` | shipyard: a merged slot tears itself down |
+| `ship-21` | **#184** | `d37cdc6` | council: a monitor protocol for supervising a room |
+| — | **#201** | `6d40e77` | release: council 0.5.0, shipyard 0.6.0 |
+
+**Installation verified by running it**, not by reading: `claude plugin install shipyard@dimonb-skills`
+from the published repository installed shipyard **and resolved its declared `ship` dependency by
+itself**, and after #201 merged, `plugin update` moved council 0.4.0 → 0.5.0 and shipyard
+0.5.1 → 0.6.0. That last step is what #201 existed for: four changes had landed with neither
+manifest moving, so an existing install compared two identical version strings and found nothing to
+do. A *fresh* install was never affected — it takes the default branch's content — which is exactly
+why a stale manifest is easy to miss.
+
+### The measurement, over eleven review rounds
+
+Worth more than the three changes: **every blocking finding sat in what a fix round ADDED, never in
+the original defect.** Twenty-one confirmed blockers on #184 alone, zero refuted, all in code the
+change itself introduced. Three corollaries, each measured rather than supposed:
+
+* **A fix round can defeat its own sibling.** Twice. On #185 one round-2 fix moved the escalation
+  hold to last so a held slot keeps its count, and another added the held array to the terminal
+  test; the first emptied the array on the FIRST merged tick, so the monitor stopped anyway — worse
+  than before the hold existed. The remedy was a count summed before any gate.
+* **Nine tests written in these changes were VACUOUS** — they passed against the very mutant they
+  existed to kill — and every one was caught by MUTATING, never by running. One had silently
+  stopped asserting its own premise: delete one line from its fixture and it still passed 74/74.
+  The practice that follows: verify each new assertion reds on ITS OWN premise, and never read a
+  green suite after deleting a line as evidence the line is dead.
+* **After round 1 the recurring defect stops being logic and becomes a sentence** the same commit
+  falsifies — enumerations ("three routes", "the only tail", "four blocks bypass") contradicted by
+  their own diff, and solution-space absolutes. One of those ("that assertion cannot be made to
+  bite") was disproved by a reviewer with a single fixture line.
+
+Two real defects found this way, neither cosmetic: `>` follows a symlink, so a teardown request
+pointed at `/dev/null` reported success while the keeper never reaped; and the fix written to
+satisfy the untrusted-evidence rule was **itself an injection vector**, printing a child-written
+filename and status raw into operator text, where a crafted name forged a whole teardown line and a
+raw escape erased the real block.
+
+### Filed, not folded in
+
+`#186`–`#200` came out of these three changes — the ones an operator meets in normal use are
+**#188** (the stall alarm fires on healthy long turns, measured 24–84 min), **#195** (the documented
+stall recovery, "submit the draft already in the box", does not submit; `shipyard-tell` does), and
+**#172** (a dead agent in a live terminal reads as an idle child). The release body says so, so the
+version number is not read as a claim of soundness.
+
+### Two environment lessons from this run
+
+* **A shared account limit stops every child at once.** All three died within eight minutes of each
+  other, each with a directive left unsubmitted in its input box, and the panes said only that a
+  window had run out — which reads as live even hours later.
+* **A supervisor's own background polls were killed as "low on memory" while 45% was free.** Worth
+  checking the figure before tearing anything down on that signal.
+
 ## ⏸ PAUSED (2026-09-14, by the owner) — three changes in flight, nothing lost
+
+**Resolved — all three shipped on 2026-09-19; kept for what the three changes were and why.**
 
 Verified rather than assumed: all three worktrees **clean**, all three branches **pushed and level
 with origin**, no line of work living only on disk. Terminals and worktrees deliberately **left
