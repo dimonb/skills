@@ -76,7 +76,14 @@ council.sh <verb> [options]
     decision                                           the record, once the room has closed
 
   Looking on
-    status  [--room <name>]        the supervisor block; exit 0 = the room is closed
+    status  [--only-changed]       the supervisor block; exit 0 = the room is closed
+            [--alarms-only]        --only-changed stays silent while the room's meaningful
+                                   state is unmoved; it never silences a tick carrying an
+                                   alarm, and never a closed room
+                                   --alarms-only prints the alarms alone, for a fast loop
+    terminals                      how many seats still hold a terminal: <live>/<total>,
+                                   `?` if that could not be determined, `-` if the room was
+                                   never launched with any
     claims                         the argument graph
     verdict [--json]               verdict: exit 0 closed, 1 open, 2 stuck
                                    (1 with NO output = the roster could not be read)
@@ -204,8 +211,11 @@ case "$VERB" in
   # and every `status` would otherwise pay for that. The helpers test `command -v` for each, so a
   # caller that sources only verbs.sh degrades to the plain stall alarm instead of erroring.
   status) . "$SKILL/lib/verbs.sh"; . "$SKILL/lib/policy.sh"; . "$SKILL/lib/agent-adapters.sh"
-          v_status ;;
-  # `decide` closes a room that decided, and a decided room closes its own terminals (#48). It
+          v_status "$@" ;;
+  # Sources term.sh itself, on demand, inside _room_terminals — the same deferral `status` uses,
+  # so a room with no container pin never resolves a terminal backend to be told it has none.
+  terminals) . "$SKILL/lib/verbs.sh"; v_terminals ;;
+  # `decide` closes a room that decided, and a decided room closes its own terminals (#183). It
   # does not do the reaping — the seat running this is `--me`-gated to a participant, so it would
   # be closing its own terminal — it asks the room's KEEPER, which already runs in its own process
   # group and already does exactly this when a `--hold` room's owner dies. That machinery lives in

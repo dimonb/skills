@@ -345,8 +345,11 @@ Three consequences worth knowing:
   just `down` leaving a stale pid the OS then recycles — makes the close report success while
   nothing ever reaps. So `decide` says the keeper **has been asked**, which is all it establishes;
   it does not say the seats are gone. Neither prevented nor made self-revealing here, and
-  `_keeper_teardown`'s header names the three routes. Nothing reports the difference today
-  (`rooms` does not probe the backend); tracked separately.
+  `_keeper_teardown`'s header names the routes found so far — and says itself to read them as
+  that and never as the set. What the room's own bookkeeping cannot report, a backend read can —
+  `status`'s closed-room alarm, `council.sh terminals` and `rooms`' `term` column all surface the
+  same `_room_terminals` read, and all inherit the container pin's forgeability, so they narrow
+  the question rather than closing it.
 * **`relaunch` cancels a teardown no keeper has taken yet.** Putting a seat back up says the room
   is in use again, and it outranks a close that asked for the seats to go — it has to, or the seat
   it launches is reaped within a poll of starting. That covers the keeper that died before taking
@@ -366,6 +369,8 @@ thing that deletes a record.
 ```bash
 council.sh up --scenario debate --agents claude,codex,agy "question"   # or @file
 council.sh status | claims | verdict | order | transcript | floor
+council.sh status --only-changed | --alarms-only   # the two supervisor monitors
+council.sh terminals               # <live>/<total> seats still holding one; ? unknown; - never had any
 council.sh agenda | protocol | decision   # the room's own files, through the entrypoint
 council.sh say <peer> "..."        # out of band, into that participant's terminal
 council.sh relaunch <peer>         # put one seat back up, mid-room
@@ -778,9 +783,159 @@ it.)*
 
 ## Supervising a room
 
+**Arm two monitors, then stop watching.** A room is meant to run unattended, and until this
+section had a procedure it did not: the primitives were all here and the numbered step telling
+anyone to arm them was not, so four rooms in one evening were supervised by four hand-rolled
+loops with four different blind spots (#21). The shape below is `shipyard`'s, because that skill
+had already paid for it — a slow status loop that **ends itself** when the work does, and a fast
+one for anything needing a person. The primitives differ; the protocol does not.
+
+**1. The status loop — the block, every ten minutes, and it exits by itself.**
+
+```bash
+SCRIPT=<skill>/council.sh
+while true; do
+  bash "$SCRIPT" status --room <room> --only-changed && { echo "__room closed — exiting monitor__"; break; }
+  sleep 600
+done
+```
+
+`status` already exits **0 when the room is finished** and 1 while it is open, so the `&&` is
+the whole termination condition — there is no separate "is it done yet" call to get wrong, and a
+watch left running is a watch that ends when the room does.
+
+`--only-changed` is what makes it liveable. A room spends most of its life with one seat
+thinking, so without the flag this prints the same block every ten minutes for hours and the one
+tick that matters drowns in it. With it the tick is silent until the room's meaningful state
+moves — the terms are assembled where `$sig` is built in `v_status`, which is the one place they
+are listed.
+
+**It cannot hide an alarm, and that is the point.** Any tick carrying one prints in full, every
+time it holds — not once when it arrives. A stalled room *changes nothing by definition*, so a
+filter that suppressed a standing alarm would go quiet exactly when the room needs a person;
+that is the failure this loop is a fix for, in a hand-rolled monitor that printed on verdict
+changes while the verdict sat still. A **closed** room is always printed too, since that is the
+tick the loop exits on.
+
+**2. The alarm loop — anything needing a person, at a minute's cadence.**
+
+```bash
+SCRIPT=<skill>/council.sh
+while true; do
+  bash "$SCRIPT" status --room <room> --alarms-only && break
+  sleep 60
+done
+```
+
+`--alarms-only` prints the alarms and nothing else, and **prints nothing at all when there are
+none** — so this stays silent until something actually needs you. Ten minutes is too slow for a
+seat sitting on a permission prompt; a minute is not. It keeps no state between ticks, so unlike
+the loop above there is nothing here that could go stale and swallow a standing alarm.
+
+**It takes the same `&& break` as loop 1, and for a sharper reason than tidiness.** `status`'s
+exit code is the same in this mode, so the loop ends itself when the room closes — and a loop
+without that clause never ends: a finished room's floor keeps ageing, so it stays past the stall
+threshold for ever, and this channel would report that once a minute until somebody noticed. If
+you do stop one by hand, `TaskStop` (or whatever your runtime calls it) is the way.
+
+**3. Check that a closed room let go of its terminals.** A room that reaches `decided` now closes
+its own ([above](#a-decided-room-closes-its-own-terminals)), so usually there is nothing to do —
+but that close can fail, and its own exit table says so: no live keeper, or a request that could
+not be written, exits **5** and reports it once, at the moment your attention is on the record.
+Both monitor loops exit on the closing tick, so nothing after that would remind you either.
+
+That is what the closed-room alarm is for: `⚠️ this room is closed but N of M terminals are still
+up` fires on the very tick the loops stop, and on every later tick. `council.sh rooms` carries a
+`term` column so several rooms' seats are visible at a glance, and `council.sh terminals` asks for
+one room directly. `council.sh down --room <room>` is still the way to release them.
+
+**A zero is reported, not trusted, and what it MEANS depends on how the room closed.** After a
+`decided` close a zero is the expected answer — the keeper `decide` asked has reaped them. After an
+`unresolved` one it is not: that close leaves the seats up on purpose, so a zero there says
+something else released them, or the pin no longer names them. Either way the count is taken
+through the container pin, a file inside the room, so a room whose pin has been retargeted reads
+as empty in exactly the same way. (A pin *removed* while the launchers remain is a different
+answer again: that one alarms.) The closing tick therefore always *says* what it read — `terminals: none
+of N seats is listed … a zero is not proof` — rather than falling silent, and when the read cannot
+be resolved at all it raises the alarm instead. Silence on that tick is the one outcome the block
+will not produce.
+
+### What the alarms can tell you apart, and what they cannot
+
+A seat that is **ALIVE and idle at a prompt** and a seat that is **GONE** look identical from
+inside the room — a floor held, nothing arriving — and they need opposite remedies. The prompt is
+answered **in place**, and the seat carries on with everything it has read; `relaunch` is for a
+seat that is genuinely dead, and it **discards everything that seat has read**. Using the second
+on the first throws away the argument that seat was holding.
+
+**Which of the two the alarm can name today:**
+
+| | can it tell? | how |
+|---|---|---|
+| the seat's terminal is **gone** | **partly — evidence, not proof** | the backend is asked which sessions exist, and an absence is reported only when it answered and no pin says these seats were launched on a different backend. Neither check establishes *which* container was enumerated, and the pin (`<room>/state/container-<backend>`) is a file inside the room — so a participant can point the read at an empty container and make a live seat look gone |
+| the seat's terminal is **up** | **partly — same read, same limit** | a session named `council-<room>-<peer>` is listed. Anything that can reach the backend can create that name, so this is a reason not to reach for `relaunch` first, not proof of identity |
+| a terminal that is up is **at a prompt** rather than working | **no** | no committed pane capture separates a prompt from a think. `adp_turn_state` (shared adapters, used by `say`) reads running/idle/queued, but `idle` cannot tell a permission prompt from a finished turn, so it would not answer this either |
+| a terminal that is up is in an announced **capacity wait** | **partly** | `status` quotes a `rate_limited`-style banner where the client's chrome makes it forgery-proof — two of the three agent kinds have a committed pane capture, the third gets no annotation at all |
+
+So the alarm says what a live seat and a dead seat **look like** (*"a session named … is listed,
+which is what a live seat looks like — so do not reach for relaunch first"* / *"its terminal is
+GONE … which is what a dead seat looks like … look at the terminal before running
+`council.sh relaunch`"*), and when the read cannot be corroborated it says nothing rather than
+guessing. Two things that wording is doing deliberately:
+
+* **it never issues the destructive command as an instruction.** A wrong confident *gone* is the
+  expensive error — it is the one that sends a supervisor to `relaunch` on a live seat mid-turn,
+  discarding everything that seat has read.
+* **the corroboration rules out the two accidental misreads** — a backend that did not answer,
+  and a run resolved to the other backend. It does not rule out a room file that has been
+  rewritten. Making this a verdict rather than evidence needs an identity a participant cannot
+  forge: the backend-assigned handle (a tmux window id, an agterm session UUID) recorded outside
+  the room at launch. That is filed, not done here.
+
+A seat the room never gave a terminal — the one a human took with `--me` — is named as exactly
+that rather than as a dead seat, because `relaunch` refuses it and the room is simply waiting on
+a person.
+
+**One alarm and one annotation — and the difference is not a matter of degree.**
+
+| line | default | where it goes | pushes? |
+|---|---|---|---|
+| `quiet: …` | `COUNCIL_STALL_WARN_SECS`, 300s | the **block only** — never the alarms line, never `--alarms-only`. Entering or leaving the quiet state breaks `--only-changed`'s silence **once**; holding it does not | no |
+| `🛑 STALL` | `COUNCIL_STALL_SECS`, 900s | the alarms line: both loops, and it bypasses every filter | yes, one `notice` to the mailbox |
+
+The early line exists because the wedges that actually cost rooms were **323s and 344s**, well
+under the 900s threshold, so nothing fired for either. It was first written as an alarm, and that
+was wrong: **single turns on real rooms were then measured at 24, 51, 55 and 84 minutes** — every
+one a healthy seat thinking, and every one of them past a 300-second alarm. That is the
+alarm-on-the-commonest-healthy-path failure this repo has been bitten by three times, and it is
+the one that teaches an operator to skim.
+
+**Raising the number could not fix it, and that is the useful part.** Past that measurement the
+threshold would sit above 5000s — above the 900s stall tier it exists to sit below, which is not a
+tier but dead code. The two states are simply not separable by held time: a 323-second prompt
+wedge and a 5040-second think are the same number to this clock. So **held time is the wrong
+instrument, not a mistuned one**, and the honest form of the early signal is a line on the block
+that a supervisor reads when the block is printing anyway. At that point a low threshold costs
+nothing, which is why 300s stays — as an annotation threshold, not an alarm threshold.
+
+What *would* separate them is turn state: the failure this was asked for was a seat that **ended
+its turn** at a prompt, i.e. idle rather than running, and `adp_turn_state` in the shared adapters
+already reads that. Wiring it in is a change of its own and is filed rather than half-made here.
+
+The `🛑 STALL` alarm keeps the mailbox push to itself, for a mechanical reason as well as a
+judgement one: `_stall_escalate` de-duplicates on `[stall:<peer>:<turns>]`, so a push from an
+earlier tier would consume the key the real alarm needs and silence it. Both lines are skipped
+during an open barrier round, where a long-held floor is normal; the quiet line is also skipped on
+a closed room, and on a closed room the `STALL` alarm still fires (a closure is two files a
+participant can forge, so withholding it would buy that silence) but makes no claim about any
+seat's terminal.
+
+### Reading the block
+
 `council.sh status` is the block to read: whose floor and for how long, what is on the
 table, what is open, the verdict, and the alarms (`STUCK`, `STALL`, turn conflicts, budget
-exhausted, and **"this room's state could not be computed"** — that last one means the room's
+exhausted, **"this room is closed but N of M terminals are still up"**, and
+**"this room's state could not be computed"** — that last one means the room's
 participant list could not be read, so the lines above it are incomplete and none of them
 should be believed; the diagnostic on stderr says what could not be read, and
 `council.sh decision` still prints the record if the room had already closed).
@@ -791,8 +946,10 @@ seat's clock is wrong, so the figure cannot be trusted even though the stall is 
 alarm used to guess — *"it may be sitting on a permission prompt"* — and the guess mattered because
 the two likeliest causes need opposite moves: a seat on a permission or first-launch trust prompt
 needs that prompt answered **in place**, while `council.sh relaunch` is for a seat that is
-genuinely dead and discards everything that seat has read. The alarm now names both and guesses
-between neither.
+genuinely dead and discards everything that seat has read. The alarm names both rather than
+guessing between them, and then narrows to one where the backend can settle it — see
+["What the alarms can tell you apart"](#what-the-alarms-can-tell-you-apart-and-what-they-cannot)
+above for which half of that question this skill can actually answer.
 
 Where it can, it adds a second sentence quoting the seat's own client, read through the shared
 modules shipyard's stall watchdog already uses: `adp_wait_class` (`shared/adapters`) for the class
@@ -823,13 +980,10 @@ A `STALL` also **pushes**: one `notice` into the shared escalation mailbox — t
 fire-and-forget channel an `unresolved` close uses (`.git/ship-escalations/`, which a shipyard
 parent's escalation monitor already polls). What that buys is durability and audience: the alarm
 stops being a line in a console someone has to be reading, and reaches a supervisor who never
-looked at this room. **It does not make the room self-reporting** — something still has to run
-`council.sh status`, and nothing in this repo does so unattended (#21). Until it does, that
-something is you:
-
-```bash
-while true; do council.sh status --room <name> >/dev/null 2>&1; sleep 300; done &
-```
+looked at this room. **It still does not make the room self-reporting** — something has to run
+`council.sh status` for the alarm to be reached at all, which is what the two monitors at the top
+of this section are for. Arm them; the push is what covers the supervisor who is not watching
+*this* room's console.
 
 The push is de-duplicated within one room — the room matched on the mailbox entry's own `slot`
 field, and within that, on the floor holder and the turn count — so polling does not accrue
@@ -874,9 +1028,13 @@ Two cautions for a supervisor rather than a participant. That message goes to **
 record say `decided` and does *not* see the sentence, which is exactly the room-2 case that
 produced this issue. And `board/status` alone cannot tell you which ending it was: it reads
 `decided` on a clean close, on an exit 4 whose announcement was lost, and on an exit 5 whose
-teardown could not happen. **`rooms` will not tell you either** — it reports each room's verdict and
-never probes the backend, so a decided room with live seats and one without print identically. What
-does ask the backend is [`say`](#what-say-establishes-and-what-each-answer-means): `council.sh say
+teardown could not happen. **`rooms` does tell you**, since the monitor
+work landed: its `term` column runs `council.sh terminals` per room, so a decided room with live
+seats reads `term 3/3` where a torn-down one reads `term 0/3`. Prefer that, or `council.sh
+terminals` for one room — both read the backend without touching the seats, and both inherit the
+container pin's forgeability (`_room_terminals`' header names the routes). The per-seat probe is
+[`say`](#what-say-establishes-and-what-each-answer-means), and its cost is in the next sentence,
+so reach for it when you need a single seat's answer rather than the room's: `council.sh say
 <peer> "…"` answers **exit 3** when that seat has no live terminal, and **exit 4** when the room was
 launched on the *other* backend — which is the caveat that makes reading `tmux ls` by hand
 unreliable here, since `COUNCIL_BACKEND=auto` resolves per process and the seats may be in the

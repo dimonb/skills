@@ -15,7 +15,14 @@ council.sh status          # whose turn, what is on the table, what is still ope
 council.sh relaunch codex  # one participant died or wedged — put that seat back up
 council.sh decide          # write the decision record and close the room — a room that decided
                            # then closes its own participant terminals, keeping the record
+council.sh down            # release the terminals of a room that closed some other way
 ```
+
+Supervising a room is two loops, and the skill tells you to arm them rather than leaving you to
+invent your own: a ten-minute `status --only-changed` block that **exits by itself** when the
+room finishes, and a one-minute `status --alarms-only` check that prints nothing until something
+needs a person. Neither can be talked into silence by a room that has stopped — an alarm always
+breaks the filter, on every tick it holds.
 
 ## Why a room and not a chat
 
@@ -87,13 +94,23 @@ Until you do, the participant holds the floor and looks, from the room, exactly 
 session. Answer it once per directory — **in place**. Relaunching that seat only asks the same
 question again, with everything it has read thrown away.
 
-`council.sh status` will not tell the two apart for you — a trust prompt and a dead seat still read
-as the same `🛑 STALL` — but it no longer guesses, and it now names which remedy belongs to which
-cause instead. Where the seat's own client announced a capacity limit it quotes that too, with the
-line it matched, so you can see a seat that will resume by itself before reaching for `relaunch`.
-A `STALL` also writes one notice into the shared escalation mailbox, which turns a line in a
-console into a record a supervisor elsewhere will see — though something still has to run
-`status`; nothing does so on a timer yet.
+`council.sh status` narrows it and says how far. It asks the terminal backend whether the seat's
+session exists, so the alarm can say what a **gone** seat and an **up** seat look like — and when
+the backend cannot be asked, or the pin says this run resolved the wrong backend, it says nothing
+rather than guess, because a wrong confident *gone* is what sends you to `relaunch` on a live seat
+mid-turn. It is **evidence, not proof**, and the wording says so: the session list is matched by
+name inside a container named by a file in the room, so a participant can point that read
+somewhere else. It never issues `relaunch` as an instruction. What it cannot tell you at all is
+what a terminal that IS up is doing — a trust prompt and hard thinking both read as a held floor.
+The one exception is a client that announced a capacity limit, which `status` quotes with the line
+it matched.
+
+One alarm and one annotation, and the difference matters: `🛑 STALL` at 900s goes to both monitors
+and writes a notice into the shared escalation mailbox; the earlier `quiet:` line at 300s goes on
+the block only. It was an alarm until single turns were measured at 24 to 84 minutes — all
+healthy, all past 300s — and raising the threshold past that would put it above the stall tier it
+sits below. Held time cannot separate a wedge from a long think, so the early signal is a thing to
+notice rather than a thing that is wrong.
 
 Nothing here edits an agent's settings file for you.
 
