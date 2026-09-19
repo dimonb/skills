@@ -52,7 +52,10 @@ assert_inert "a crafted state/<peer>.seq" "$M"
 fresh
 M="$R/PWNED-cursor"; rm -f "$M"
 payload "$M" > "$R/cursor/b/a"
-COUNCIL_ME=b bash "$CLI" recv --timeout 1 >/dev/null 2>&1
+# $RECV_NOTHING: the room is `fresh`, so nothing has been posted and this drain has nothing to
+# wait for — a generous bound would be spent in full on every run for no margin. What is asserted
+# is a side effect (the payload did not run), not what came back. See _helpers.sh.
+COUNCIL_ME=b bash "$CLI" recv --timeout "$RECV_NOTHING" >/dev/null 2>&1
 assert_inert "a crafted cursor/<me>/<peer>" "$M"
 
 # --- 4. a crafted roster round_deadline_ms must not run anything ----------------
@@ -175,7 +178,7 @@ lane12() { local i; for i in 1 2 3 4 5 6 7 8 9 10 11 12; do
 # two readings disagree about, and `grep '"text":"msg-9"'` cannot match msg-10 or later.
 fresh; lane12
 printf '010' > "$R/cursor/b/a"
-out=$(COUNCIL_ME=b bash "$CLI" recv --timeout 1 2>/dev/null)
+out=$(COUNCIL_ME=b bash "$CLI" recv --timeout "$RECV_WAIT" 2>/dev/null)
 if printf '%s' "$out" | grep -q '"text":"msg-9"'; then
   echo "FAIL a leading-zero cursor was read as octal (msg-9 re-delivered past cursor 10)"; fail=1
 elif printf '%s' "$out" | grep -q '"text":"msg-11"'; then
@@ -189,7 +192,7 @@ fi
 # and the lane goes deaf for good -- with no error a supervisor would see.
 fresh; lane12
 printf '08' > "$R/cursor/b/a"
-out=$(COUNCIL_ME=b bash "$CLI" recv --timeout 1 2>/dev/null)
+out=$(COUNCIL_ME=b bash "$CLI" recv --timeout "$RECV_WAIT" 2>/dev/null)
 if printf '%s' "$out" | grep -q '"text":"msg-9"'; then
   echo "ok   an 08 cursor was not fatal and delivered from 9 on"
 else

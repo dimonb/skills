@@ -118,7 +118,7 @@ fi
 # and the disagreement looks like a bug somewhere else entirely.
 fresh a b c
 forge a 1 b msg '[]' "which reader are you?"
-via_recv=$(COUNCIL_ME=c bash "$CLI" recv --timeout 1 2>/dev/null \
+via_recv=$(COUNCIL_ME=c bash "$CLI" recv --timeout "$RECV_WAIT" 2>/dev/null \
              | jq -r 'select(.text == "which reader are you?") | .from')
 via_all=$(bash "$CLI" order 2>/dev/null \
              | jq -r 'select(.text == "which reader are you?") | .from')

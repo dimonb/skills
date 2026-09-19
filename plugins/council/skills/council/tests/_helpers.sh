@@ -24,6 +24,92 @@ fi
 # outer override still wins.
 export POLICY_MAILBOX_DIR="${POLICY_MAILBOX_DIR:-$COUNCIL_TEST_ROOT/ship-escalations}"
 
+# THE KEEPER'S POLL PERIOD, for every room this suite builds. Production is five seconds and
+# stays five seconds (`lib/up.sh`, `_keeper_ensure`); this is a TENTH of it, which is what makes
+# t16, t19 and t26 finish in seconds instead of minutes. It is not a shortcut around a slow test:
+# those files' waits were sized against the production constant, so the constant was their
+# runtime — `sleep 7  # longer than the five-second poll` and its neighbours.
+#
+# A TENTH AND NOT A HUNDREDTH, AND THAT IS MEASURED RATHER THAN CAUTIOUS. #203 asked for
+# "hundredths of a second"; 0.05 was tried first and is wrong at this suite's scale, for a reason
+# that is invisible in a single test and decisive in a parallel run:
+#
+#   * the keeper's loop body forks TWICE per iteration — `$(_keeper_pid …)` is a command
+#     substitution, and a detached room's wait is `sleep`, another process;
+#   * a parallel run of this suite has ~38 keepers alive at once (counted with `ps` during one).
+#
+# So the period does not buy one process's patience, it multiplies: ~15 polling forks a second at
+# the production five, ~150 at 0.5, and ~1500 at 0.05. At 0.05 the keepers saturate the run queue
+# of the box they are being timed on, and what that cost was not slowness — it was t16's
+# canary-reap cases failing because a keeper was not scheduled to notice its owner's death inside
+# a SIXTY-second ceiling. Measured both ways on one box: 2 of 2 parallel runs red at 0.05, 2 of 2
+# green at the production 5. 0.5 keeps nine tenths of the win (a keeper-bound wait drops from <=5s
+# to <=0.5s) at a tenth of the churn.
+#
+# If you are tempted to shorten it again, the thing to check first is not one file's runtime — it
+# is `ps | grep -c 'sleep 0'` during a full parallel run.
+#
+# SHRINKING IT IS SAFE FOR EVERY CASE THAT HAS NO OPINION ABOUT THE PERIOD, WHICH IS MOST OF
+# THEM, AND IT IS NOT SAFE FOR THE REST — so the exceptions do not inherit it. t19 case G's whole
+# premise is a keeper superseded DURING its canary read, which needs the read still to be
+# blocked while the test mutates the pid file; it drives `_keeper_loop` directly and passes its
+# own long period, and says so there. Any future case whose premise is "inside one poll" must do
+# the same rather than rely on this value.
+#
+# `${:-}` so an outer override still wins: that is what makes an A/B measurement of this change
+# possible (run the suite with COUNCIL_KEEPER_POLL_INTERVAL=5 to get the old timings on today's
+# box), and it matches how POLICY_MAILBOX_DIR above is set.
+export COUNCIL_KEEPER_POLL_INTERVAL="${COUNCIL_KEEPER_POLL_INTERVAL:-0.5}"
+
+# TWO RECV BOUNDS, AND THEY ARE NOT INTERCHANGEABLE. `recv --timeout N` is used for two different
+# measurements, and a single value for both is what made the t9* files load-sensitive: one of them
+# wants a generous bound and the other cannot have one.
+#
+#   * RECV_WAIT — WAITING FOR SOMETHING. The messages are on disk and the case asserts what comes
+#     back. A generous bound costs NOTHING on the happy path, because `recv` returns as soon as it
+#     has them; it is only ever paid when the thing never arrives, which is a real failure. What a
+#     tight bound buys instead is a case that reds because a loaded box took longer to fork `bash`
+#     and `jq` than to answer the question — measured on t9d, green alone and red under a
+#     concurrent run of the suite.
+#
+#   * RECV_NOTHING — ASSERTING NOTHING ARRIVES. There is no event to wait for, so the full window
+#     is paid on EVERY run by construction, and lengthening it lengthens the suite for nothing
+#     while shortening it genuinely weakens the assertion. It stays short, and that shortness is a
+#     deliberate trade rather than an oversight: a message the reader withholds for longer than
+#     this would be released and this case would miss it.
+#
+# Named apart so a reader cannot take one for the other — the same discipline that keeps
+# `knob_uint` and `knob_interval` separate in shared/knobs. A case that fits neither takes its own
+# number and says why.
+RECV_WAIT="${COUNCIL_TEST_RECV_WAIT:-15}"
+RECV_NOTHING="${COUNCIL_TEST_RECV_NOTHING:-1}"
+
+# hold <seconds> <pid>... — the window an assertion that NOTHING HAPPENED has to wait out, spent
+# CHECKING rather than sleeping. Returns early the moment any of the pids is gone, so the case
+# below it reds at once instead of after the full wait; otherwise it returns when the window is
+# up and the checks that follow run against a keeper that has had its chances and declined them.
+#
+# A negative has no event to wait for, so this is the one shape in the suite where a window is
+# unavoidable. What it must not be is a fixed `sleep` sized against a production constant. Two
+# things were wrong with that and only one of them was speed: `sleep 7` against a five-second
+# poll gave the keeper 1.4 poll periods to misbehave in — a thin margin that reads as a generous
+# one — and it learned nothing during the other 5.6 seconds. At this suite's 0.5s keeper period
+# the default window below is six times the poll, so the margin goes UP as the wait goes down.
+#
+# The window is in whole seconds and deliberately far longer than the period it outwaits: under
+# the load a full `make test` puts on a box a keeper can be scheduled late, and a window sized to
+# the period alone is how a suite starts failing for reasons that are not about the code (#164).
+hold() { # <seconds> <pid>...
+  local secs="$1"; shift
+  local i n p
+  n=$(( secs * 20 ))                       # 0.05s per probe
+  for ((i=0;i<n;i++)); do
+    for p in "$@"; do kill -0 "$p" 2>/dev/null || return 0; done
+    sleep 0.05
+  done
+  return 0
+}
+
 # EVERY room's keeper, not just the last one. A test may build several — t7 builds two — and a
 # single variable here left the earlier keepers running. Each holds one fifo per participant open
 # and loops for as long as its room exists, so they have to be tracked to be stopped.
@@ -52,8 +138,10 @@ kill_keeper() { # <pid-file> [signal]
 }
 
 # Take the keepers down and remove the root this test owns. A keeper polls `while [ -d "$room" ]`
-# (lib/up.sh), so removing the root reaps them within five seconds anyway; killing them first
-# makes it immediate and also covers a root this test does not own. Nothing else will ever do it:
+# (lib/up.sh), so removing the root reaps them within one poll period anyway — five seconds in
+# production, a tenth of that for this suite (see COUNCIL_KEEPER_POLL_INTERVAL above); killing
+# them first makes it immediate and also covers a root this test does not own. Nothing else will
+# ever do it:
 # one root per run means no later run reuses this path, so a root left behind here is a directory
 # and a live process that survive until the machine reboots.
 #

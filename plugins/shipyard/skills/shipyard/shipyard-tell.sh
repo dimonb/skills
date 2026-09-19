@@ -162,11 +162,30 @@ CONFIRM_SECS=$(knob_uint "${SHIPYARD_TELL_CONFIRM_SECS:-}" 10) \
 CONFIRM_INTERVAL=$(knob_interval "${SHIPYARD_TELL_CONFIRM_INTERVAL:-}" 0.5) \
   || echo "warning: SHIPYARD_TELL_CONFIRM_INTERVAL is not a usable positive number — using 0.5" >&2
 
+# The settle delay between typing and submitting, one second by default and NOT being changed:
+# a client needs a moment to register the typed line before Enter, and submitting into a box the
+# client has not caught up with is how a directive goes nowhere.
+#
+# `_DELAY`, deliberately, and not `_SECS` or `_INTERVAL`: in this plugin `_SECS` names a window
+# that is polled and `_INTERVAL` names the sleep BETWEEN two samples (which is what `knob_interval`
+# is documented as), and this is neither — it is a one-shot pause before a single action. The
+# `_DELAY` suffix is the existing spelling for exactly that here; `shipyard-continuity.sh` already
+# carries nine of them, one of them `_SETTLE_DELAY`. Those are private test seams and this one is
+# operator-facing, hence no leading underscore.
+#
+# It is a knob because `t16-tell-knobs` runs this script fourteen times against a faked backend
+# where nothing has to settle at all — thirteen of that file's forty-four seconds, and with the
+# rest of #203 done that file is the shipyard suite's critical path. `knob_interval` validates it:
+# a one-shot `sleep` has the same two failure modes as a polled one (every spelling of zero makes
+# it a no-op, a bare `.` makes it error), and zero here is a legitimate value only for a test.
+SETTLE_DELAY=$(knob_interval "${SHIPYARD_TELL_SETTLE_DELAY:-}" 1) \
+  || echo "warning: SHIPYARD_TELL_SETTLE_DELAY is not a usable positive number — using 1" >&2
+
 # The pre-send sample. It is what lets a turn seen LATER count as one our submit started, and what
 # stops a queued hint left over from an earlier send being read as being about this one.
 STATES=("$(adp_turn_state "$(shipyard_capture "$SLOT")")")
 shipyard_type "$SLOT" "$LINE" || { echo "error: typing into $WHERE failed" >&2; exit 1; }
-sleep 1
+sleep "$SETTLE_DELAY"
 shipyard_submit "$SLOT" || { echo "error: submitting to $WHERE failed" >&2; exit 1; }
 
 DEADLINE=$(( $(date +%s) + CONFIRM_SECS ))

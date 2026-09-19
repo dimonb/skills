@@ -27,6 +27,15 @@ export LC_ALL=C
 SKILL="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"
 [ -f "$SKILL/lib/up.sh" ] || { echo "t16: cannot find up.sh under $SKILL" >&2; exit 1; }
 
+# The keeper period for every room this file builds. Production is five seconds and stays five
+# seconds; this file is not about the period — it is about WHICH EVENTS end a keeper (owner EOF,
+# a group signal, the directory going) — and at five seconds every one of those `wait_gone`s
+# spent most of its time waiting for the next poll rather than for the event. Nothing here has a
+# premise about how long a poll takes; the one case in the suite that does is t19 case G, and it
+# passes its own period at the call site rather than inheriting one. `${:-}` so an outer override
+# still wins, which is what makes an A/B measurement possible on one box.
+export COUNCIL_KEEPER_POLL_INTERVAL="${COUNCIL_KEEPER_POLL_INTERVAL:-0.5}"
+
 ROOT=$(mktemp -d) || exit 1
 KEEPERS=()   # every keeper we spawn, reaped in the trap: they detach and reparent, so nothing
 OWNERS=()    # else would. Owners block on `wait`, so a failed case could leave one running too.
@@ -52,6 +61,22 @@ ok() { # <label> <expected> <actual>
 wait_file() { local f="$1" n="${2:-60}" i; for ((i=0;i<n;i++)); do [ -e "$f" ] && { echo yes; return; }; sleep 0.1; done; echo no; }
 # Poll for a pid to be gone, up to <deciseconds>. Prints "gone"/"alive".
 wait_gone() { local p="$1" n="${2:-60}" i; for ((i=0;i<n;i++)); do kill -0 "$p" 2>/dev/null || { echo gone; return; }; sleep 0.1; done; echo alive; }
+
+# THE CANARY-REAP CEILING. The owner dies -> the write end closes -> the keeper's read EOFs -> it
+# reaps and exits. That sequence is GUARANTEED to happen; the only question is when, and a keeper
+# that has to be scheduled, fork a reap and exit can be late on a box running the whole suite at
+# once. The waits below used 80 and 5 deciseconds — eight seconds and HALF A SECOND — and the half
+# second in particular is not a bound, it is a race.
+#
+# Measured: case A red under a parallel `make test` ("keeper exited after owner SIGKILL", plus both
+# reap markers), green on the same tree run alone. A bound this file already had the answer to —
+# t10-continuity-canary carries the identical mechanism and raised its ceiling to 600 for exactly
+# this reason, with the reasoning written down, and this file was not updated with it.
+#
+# It stays a ceiling and not a deadline: it is only ever PAID by a case that is failing, so
+# widening it costs a passing run nothing and a genuine never-reap still fails it — a leaked keeper
+# runs for ever, so no ceiling makes that pass.
+REAP_WAIT=600   # 60s at 0.1s/poll
 pgid_of() { ps -o pgid= -p "$1" 2>/dev/null | tr -d ' '; }
 
 # An owner process: build a room whose keeper carries the canary (`_KEEPER_OWNER_HOLD=1`), fake
@@ -93,9 +118,9 @@ ok "keeper is in its own process group" yes \
 # No terminal has been closed yet — the owner is still alive.
 ok "no reap while the owner lives" no "$([ -e "$MARK_A/reaped-alice" ] && echo yes || echo no)"
 kill -9 "$opid_a" 2>/dev/null
-ok "keeper exited after owner SIGKILL" gone "$(wait_gone "$kpid_a" 80)"
-ok "reaped alice" yes "$(wait_file "$MARK_A/reaped-alice" 5)"
-ok "reaped bob"   yes "$(wait_file "$MARK_A/reaped-bob" 5)"
+ok "keeper exited after owner SIGKILL" gone "$(wait_gone "$kpid_a" "$REAP_WAIT")"
+ok "reaped alice" yes "$(wait_file "$MARK_A/reaped-alice" "$REAP_WAIT")"
+ok "reaped bob"   yes "$(wait_file "$MARK_A/reaped-bob" "$REAP_WAIT")"
 
 # ---------------------------------------------------------------------------------------------
 echo "── case B: a signal to the OWNER's process group does not reach the keeper ──"
@@ -117,10 +142,10 @@ ok "keeper group differs from owner group" yes \
    "$([ -n "$(cat "$MARK_B/keeper.pgid" 2>/dev/null)" ] && [ "$(cat "$MARK_B/keeper.pgid")" != "$opgid_b" ] && echo yes || echo no)"
 # Signal the owner's GROUP (negative pid). Safe: the keeper and this test are in other groups.
 kill -TERM -- "-$opgid_b" 2>/dev/null
-ok "keeper exited after owner-group SIGTERM" gone "$(wait_gone "$kpid_b" 80)"
-ok "reaped x" yes "$(wait_file "$MARK_B/reaped-x" 5)"
-ok "reaped y" yes "$(wait_file "$MARK_B/reaped-y" 5)"
-ok "reaped z" yes "$(wait_file "$MARK_B/reaped-z" 5)"
+ok "keeper exited after owner-group SIGTERM" gone "$(wait_gone "$kpid_b" "$REAP_WAIT")"
+ok "reaped x" yes "$(wait_file "$MARK_B/reaped-x" "$REAP_WAIT")"
+ok "reaped y" yes "$(wait_file "$MARK_B/reaped-y" "$REAP_WAIT")"
+ok "reaped z" yes "$(wait_file "$MARK_B/reaped-z" "$REAP_WAIT")"
 
 # ---------------------------------------------------------------------------------------------
 echo "── case C: WITHOUT --hold the room is detached, exactly as before ──"
@@ -148,7 +173,7 @@ sleep 1
 ok "keeper survives the starter's exit" yes "$(kill -0 "$kpid_c" 2>/dev/null && echo yes || echo no)"
 ok "detached keeper reaps nothing" no "$([ -e "$MARK_C/reaped-p" ] && echo yes || echo no)"
 rm -rf "$ROOM_C"                              # the directory-bound death trigger, unchanged
-ok "keeper exits when the room directory is removed" gone "$(wait_gone "$kpid_c" 90)"
+ok "keeper exits when the room directory is removed" gone "$(wait_gone "$kpid_c" "$REAP_WAIT")"
 
 # ---------------------------------------------------------------------------------------------
 echo "── case D: a launched backend daemon does not inherit the canary write end ──"
@@ -165,7 +190,18 @@ canary_probe() { # <expose-wfd:1|0> <pidfile> -> prints eof|timeout|data
   local expose="$1" pidfile="$2" cr cw boot rc r d f
   d=$(mktemp -d); f="$d/.canary"; mkfifo "$f"
   exec {boot}<>"$f"; exec {cr}<"$f"; exec {cw}>"$f"; exec {boot}>&-; rm -f "$f"; rmdir "$d" 2>/dev/null
-  ct_launch() { sleep 30 & echo "$!" >> "$pidfile"; return 0; }   # faked daemonizing backend
+  # The faked daemonizing backend. Its stdio is detached and its OTHER inherited fds are not,
+  # which is the whole point: what this case asks is whether the daemon kept a copy of the canary
+  # WRITE END, and that is a `{cw}` fd, untouched by the three redirections below.
+  #
+  # WITHOUT `>/dev/null` THIS CASE COST SIXTY SECONDS AND MEASURED NOTHING WITH THEM. `canary_probe`
+  # is called inside `$( )`, and a command substitution does not return when its command does — it
+  # returns when the last writer to its pipe closes. The backgrounded `sleep` inherited that pipe,
+  # so each probe blocked for the sleep's full 30s AFTER the verdict had already been printed, and
+  # the two calls were 60 of this file's 63 seconds. Nothing was being established in that time:
+  # the `read -t 3` above had already answered. (Measured: 63s before, ~3s after, same verdicts.)
+  # t20 backgrounds its killer with the same three redirections, for the same reason.
+  ct_launch() { sleep 30 </dev/null >/dev/null 2>&1 & echo "$!" >> "$pidfile"; return 0; }
   if [ "$expose" = 1 ]; then _KEEPER_CANARY_WFD="$cw"; else unset _KEEPER_CANARY_WFD; fi
   _ct_launch_owned peerA /tmp /dev/null
   exec {cw}>&-                       # owner death: drop the only intended writer
@@ -198,7 +234,7 @@ ok "up --hold created a room + keeper via the real CLI" yes "$(wait_file "$E_KP"
 e_kpid=$(cat "$E_KP" 2>/dev/null); [ -n "$e_kpid" ] && KEEPERS+=("$e_kpid")
 ok "the --hold owner is still holding (blocked on wait)" yes "$(kill -0 "$e_owner" 2>/dev/null && echo yes || echo no)"
 kill -TERM "$e_owner" 2>/dev/null
-ok "killing the --hold owner reaps its keeper" gone "$(wait_gone "$e_kpid" 100)"
+ok "killing the --hold owner reaps its keeper" gone "$(wait_gone "$e_kpid" "$REAP_WAIT")"
 rm -rf "$E_REPO"
 
 # ---------------------------------------------------------------------------------------------
@@ -207,6 +243,20 @@ echo "── case F: no owner-liveness path reads \$PPID (acceptance) ──"
 # use it, and a naive grep would flag exactly the lines that promise its absence. What must be
 # zero is $PPID in the CODE — reading a reparented process's parent tells you nothing on macOS.
 ok "up.sh code (comments stripped) reads no PPID" 0 "$(sed 's/#.*//' "$SKILL/lib/up.sh" | grep -c 'PPID')"
+
+# ---------------------------------------------------------------------------------------------
+echo "── case G: the PRODUCTION default is still five seconds (acceptance) ──"
+# #203 made the keeper period a knob so THIS FILE could stop paying it, and the one way that goes
+# wrong is somebody making a test fast by moving the default instead of the test. Asserted here
+# rather than trusted, and asserted in the file that benefits: nothing else covers it — the knob
+# READER has its own suite (shared/knobs), which tests `knob_interval` and not what a caller
+# passes it.
+#
+# A source-text assertion, and the limit is worth stating: it pins the literal in the call, so it
+# catches `5` becoming `0.05` and would NOT catch `_keeper_ensure` ceasing to consult the knob at
+# all. Case F above is the same idiom with the same limit.
+ok "the keeper poll still defaults to 5s in production" 1 \
+   "$(grep -Fc 'knob_interval "${COUNCIL_KEEPER_POLL_INTERVAL:-}" 5' "$SKILL/lib/up.sh")"
 
 printf '\n'
 if [ "$FAILURES" -eq 0 ]; then echo "t16 PASS ($CHECKS checks)"; else echo "t16 FAIL ($FAILURES/$CHECKS)"; exit 1; fi

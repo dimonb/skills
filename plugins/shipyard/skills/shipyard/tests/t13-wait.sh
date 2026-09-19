@@ -248,9 +248,34 @@ tmux() {
 }
 gh() { printf 'OPEN\n'; return 0; }
 export -f git tmux gh
+# backdate_stall <seconds> — push every row of the stall table that far into the past.
+#
+# THE ELAPSED TIME IS THE ASSERTION IN RUNS A2 AND B, AND IT USED TO BE AN ACCIDENT. The report
+# alarms when `now - since >= SHIPYARD_STALL_SECS`, and with a threshold of one second what
+# carried a slot over it was how long the PREVIOUS report run took — three seconds of motion diff
+# per live slot, three slots, twice. That is not a number either case states, and #203 deleted it:
+# the diff's wait is a knob now, this file sets it to a hundredth, and both assertions went with
+# it. B failed outright in CI; A2 was worse, because it asserts a COUNT OF ZERO and so went on
+# passing whether or not the code it guards exists — the exact vacuity its own comment was written
+# to close, reintroduced from the other side.
+#
+# So the time becomes data. The rows are `slot<TAB>signature<TAB>since` and only the third field
+# moves: the signature must survive, or the report reads the row as a different slot and restarts
+# the clock, which would be a fixture that silently asserts nothing again.
+backdate_stall() { # <seconds>
+  local f="$FAKE_GIT/ship-escalations/report-stall"
+  [ -f "$f" ] || { echo "  FAIL backdate_stall: no stall table yet — the fixture asserts nothing"; FAILURES=$((FAILURES + 1)); return 1; }
+  awk -F'\t' -v t="$(( $(date +%s) - $1 ))" 'BEGIN{OFS="\t"} NF>=3 {print $1,$2,t}' "$f" >"$f.tmp" \
+    && mv "$f.tmp" "$f"
+}
+
 run_report() {  # <stall-secs> [extra args...]; prints the whole report
   local ss="$1"; shift
-  SHIPYARD_STALL_SECS="$ss" SHIPYARD_BACKEND=tmux SHIPYARD_SESSION=t13ex \
+  # SHIPYARD_MOTION_INTERVAL: the report waits three seconds between its two captures, PER SLOT,
+  # and this runs three slots per call. The wait decides nothing here — the faked `capture-pane`
+  # above returns a fixed string, so both captures are the same bytes at any interval, and no
+  # check in this file reads the ▶️/⏸ column. Production's default is untouched (#203).
+  SHIPYARD_MOTION_INTERVAL="${SHIPYARD_MOTION_INTERVAL:-0.01}" SHIPYARD_STALL_SECS="$ss" SHIPYARD_BACKEND=tmux SHIPYARD_SESSION=t13ex \
     bash "$REPORT" "$@" 41 42 43 2>/dev/null
 }
 
@@ -280,15 +305,22 @@ ok "A: neither block ever prescribes compaction" 0 \
    "$(printf '%s' "$outA" | sed -n '/### ⏳ WAITING —/,$p' | grep -c 'shipyard-compact.sh')"
 
 # --- run A2: the SUPERVISION GAP, and this ordering is what makes the assertion mean something.
-# Run A has just seeded stall clocks, and the threshold here is 1s while ~9s of wall time has
-# passed — so WITHOUT the rebase slot 43 would cross it and alarm. Nothing stalling is therefore
-# evidence the clocks restarted, not an artefact of a fresh mailbox. (The previous version of this
-# check ran first against an empty mailbox, where no clock had accumulated and it could not fail.)
+# Run A has just seeded stall clocks; back-date them past the 1s threshold, so WITHOUT the rebase
+# slot 43 would cross it and alarm. Nothing stalling is therefore evidence the clocks restarted,
+# not an artefact of a fresh mailbox. (The previous version of this check ran first against an
+# empty mailbox, where no clock had accumulated and it could not fail — and the version before
+# this one took its elapsed time from how long run A happened to sleep, which had the same defect
+# the moment that sleep became a knob. See backdate_stall.)
+backdate_stall 60
 printf '%s\n' "$(( $(date +%s) - 345600 ))" >"$FAKE_GIT/ship-escalations/report-tick"
 outA2=$(run_report 1)
 ok "A2: the gap is announced"               1 "$(printf '%s' "$outA2" | grep -c 'supervision resumed after')"
 ok "A2: ...with a plausible figure"         1 "$(printf '%s' "$outA2" | grep -c 'resumed after 5760 min')"
 ok "A2: a restarted clock cannot be stalled" 0 "$(printf '%s' "$outA2" | grep -c '🛑 STALLED')"
+
+# Back-date again: A2's announced gap rebased every clock to now, so run B needs its own elapsed
+# time for the same reason and by the same means.
+backdate_stall 60
 
 # --- run B: no gap now, and a 1s threshold, so the slot announcing NOTHING must alarm.
 # An open escalation is also written for slot 42 first, so the `pend` guard is exercised rather

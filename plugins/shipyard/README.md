@@ -197,7 +197,15 @@ Environment knobs: `SHIPYARD_AGENT`, `SHIPYARD_BACKEND`, `SHIPYARD_WORKSPACE`, `
 `SHIPYARD_ENV_PASS`, `SHIPYARD_ENV_SCRUB`, `SHIPYARD_SLOT`, `SHIPYARD_FORCE`, `SHIPYARD_DRY`,
 `SHIPYARD_MAX_SLOTS`, `SHIPYARD_MEM_MIN_FREE_PCT`, `SHIPYARD_STALL_SECS`, `SHIPYARD_CTX_WINDOW`,
 `SHIPYARD_TELL_MAXLINE`, `SHIPYARD_TELL_CONFIRM_SECS`, `SHIPYARD_TELL_CONFIRM_INTERVAL`,
-`SHIPYARD_ASK_TIMEOUT`, `SHIPYARD_DOWN_FETCH`, `SHIPYARD_AUTODOWN`, `SHIPYARD_AUTODOWN_TICKS`.
+`SHIPYARD_TELL_SETTLE_DELAY`, `SHIPYARD_MOTION_INTERVAL`, `SHIPYARD_ASK_TIMEOUT`,
+`SHIPYARD_DOWN_FETCH`, `SHIPYARD_AUTODOWN`, `SHIPYARD_AUTODOWN_TICKS`.
+
+The last two of the `TELL`/`MOTION` group are timing: `SHIPYARD_MOTION_INTERVAL` (default 3) is
+how long the report waits between the two captures of its motion diff, paid once per live slot
+per report, and `SHIPYARD_TELL_SETTLE_DELAY` (default 1) is how long `tell` waits between
+typing a directive and submitting it, so the client registers the line first. Both exist so the
+test suites can stop paying a wait a faked backend has no use for; the defaults are the
+production values and are not changed by setting them.
 
 `SHIPYARD_MAX_SLOTS` (default `2`) and `SHIPYARD_MEM_MIN_FREE_PCT` (default `10`) are the two
 admission-gate knobs — the concurrency cap and the macOS free-memory floor a launch must clear.

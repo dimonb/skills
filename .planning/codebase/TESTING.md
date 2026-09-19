@@ -25,7 +25,9 @@ Current state, in `scripts/check.sh`:
   named by a `Makefile` recipe (so a suite cannot run nowhere), and each must appear in
   `$GATED_SUITES` (so a suite cannot be `make`-wired yet never registration-checked).
 - `make check` RUNS every fast, pure suite (the Makefile's `check` recipe is the list); `make
-  test` adds shipyard and council; CI runs `make check`, `make check-test` and `make test`.
+  test` adds shipyard and council; CI runs `make check` and `make test`; a second, concurrent
+  workflow (`check-test.yml`) runs `make check-test` — always on a push to `main`, and on a pull
+  request only when the derived path filter matches.
 
 **Consequence for this project:** "green tests" no longer means a manual per-phase run. Adding a
 suite means two edits — `$GATED_SUITES` and a `Makefile` recipe — and the gate reds until both are

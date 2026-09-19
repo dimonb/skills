@@ -17,6 +17,8 @@
 # 11. every vendored copy of a shared module is byte-identical to its module's one canonical source
 # 12. every test runner on disk under plugins/ or shared/ is invoked by a Makefile recipe AND
 #     declared in $GATED_SUITES, so no whole suite runs nowhere or escapes check 10
+# 13. the check-test CI job's pull-request path filter covers every path check-test.sh guards, so
+#     the gate-of-the-gate cannot be skipped by a change that could break what it proves
 set -uo pipefail
 cd "$(dirname "$0")/.."
 ROOT_P=$(pwd -P)          # physical repo root; see the symlink containment check below
@@ -760,6 +762,78 @@ else
     # guard, not a claim that anything is invoked. Check 9's identical guard uses the same name.
     [ "$scanned" -gt 0 ] \
       || fail "found no test runner under plugins/ or shared/ (moved? renamed?)"
+  fi
+fi
+
+# ------------------ 13. the check-test job's PR path filter covers everything its probes mutate
+# `make check-test` runs on every push to main and, on a PULL REQUEST, only when the change
+# touches a path that could affect what it proves (see .github/workflows/check-test.yml for why).
+# That filter is the whole of the risk in skipping it, so it is DERIVED rather than written by
+# hand: the derivation is `$GUARDED` in scripts/check-test.sh — the paths that file restores with
+# `git checkout --`, i.e. an upper bound on what its probes mutate — and this check asserts the
+# filter still covers it.
+#
+# WHAT IT CATCHES: a path added to `$GUARDED` and not to the filter. That is the direction this
+# goes quiet in — a future probe mutates a new tree, the author adds it to `$GUARDED` because
+# otherwise the restore misses it, and nothing would otherwise connect that to a CI filter in
+# another file.
+#
+# WHAT IT DOES NOT CATCH, so a green gate is not read as more: it does not verify that `$GUARDED`
+# is itself complete. A probe that mutates a path outside it and restores it by hand satisfies
+# both this check and check-test's own end-of-run cleanliness assertion. That one is judgement,
+# and it is stated in check-test.yml too.
+#
+# Both inputs are read with a LOUD failure if either cannot be read: a filter check that abstains
+# is worse than none, because the job it guards is the one that proves the rest of this file is
+# not decoration.
+CT_FILE=scripts/check-test.sh
+CT_WF=.github/workflows/check-test.yml
+if [ ! -f "$CT_FILE" ]; then
+  fail "scripts/check-test.sh is missing — cannot check the check-test job's path filter"
+elif [ ! -f "$CT_WF" ]; then
+  fail "$CT_WF is missing — the gate-of-the-gate has no workflow to run it"
+else
+  # The single-quoted assignment, on one line, exactly as check-test.sh declares it.
+  guarded=$(sed -n "s/^GUARDED='\([^']*\)'.*/\1/p" "$CT_FILE" | head -1)
+  # The `paths:` entries: QUOTED list items in the workflow, in either quote style. Read from the
+  # whole file rather than from inside the `pull_request:` block, because this file has one
+  # `paths:` list and a YAML-block parse in sed would be the fragile half of this check. Quoted
+  # is what keeps `- name: Check out the repository` in the steps out of the result; accepting
+  # both styles is so a reformat reds nothing rather than reddening confusingly.
+  #
+  # IT REQUIRES THE ENTRIES TO BE QUOTED, and YAML does not. An unquoted `- scripts/**` matches
+  # neither expression, drops out of `$filter`, and reds the corresponding `$GUARDED` entry over
+  # a filter that does in fact cover it. That direction is SAFE — a false red, fixed by adding
+  # quotes — and it is written down here so the red is not instead 'fixed' by loosening this.
+  filter=$(sed -n -e "s/^ *- *'\([^']*\)'.*/\1/p" -e 's/^ *- *"\([^"]*\)".*/\1/p' "$CT_WF")
+  # A REFUSAL, NOT AN ANALYSIS. `paths-ignore:` is the same YAML shape as `paths:` with the
+  # opposite meaning, and the scrape above reads entries without reference to the key they sit
+  # under — so changing that one word would leave this check reading the identical eight entries,
+  # reporting full coverage, and the job skipped on EXACTLY the paths it was proving were
+  # covered. Green gate, silent gap, in the check whose whole purpose is that the gate-of-the-gate
+  # cannot be skipped. Rather than teach a sed to parse YAML scopes, this declines to reason about
+  # a construct it cannot distinguish: if the word appears anywhere in the file, red.
+  # ANCHORED ON THE KEY, not on the word. An unanchored match would red on PROSE — including the
+  # sentence just above that names the construct, and the one in the workflow's own header that
+  # explains the refusal, which is the natural next edit somebody makes. That red would be
+  # permanent, on a correct file, with full coverage intact.
+  if grep -qE '^[[:space:]]*paths-ignore:' "$CT_WF"; then
+    fail "$CT_WF uses paths-ignore, which check 13 cannot tell from paths — it reads entries, not the key they sit under, so an inverted filter would read as full coverage"
+  fi
+  if [ -z "$guarded" ]; then
+    fail "could not read \$GUARDED out of $CT_FILE — the check-test path filter cannot be checked"
+  elif [ -z "$filter" ]; then
+    fail "could not read any path filter out of $CT_WF — a pull request would skip check-test entirely"
+  else
+    for g in $guarded; do
+      # A file entry must appear verbatim; a directory entry is covered by `<dir>/**`.
+      if [ -f "$g" ]; then want="$g"; else want="$g/**"; fi
+      printf '%s\n' "$filter" | grep -qxF -- "$want" \
+        || fail "check-test guards '$g' but $CT_WF's path filter has no '$want' — a pull request touching it would skip the gate-of-the-gate"
+    done
+    # No separate arm for "the filter names the workflow that carries it": `$GUARDED` includes
+    # `.github` (check-test's probes mutate this very file), so the loop above already requires
+    # `.github/**`, which covers it. If `.github` ever leaves that list, this needs its own arm.
   fi
 fi
 

@@ -4,6 +4,11 @@ name: CI
 # suite that ERRORS at runtime — not just one that stops being registered — reds something the
 # change has to pass. Local `make check` stays fast and deliberately does not run the slow suites;
 # this workflow is where their runtime errors get caught (issue #91, decision C of #84).
+#
+# `make check-test` is NOT here. It lives in check-test.yml, as a SEPARATE workflow, so it runs
+# CONCURRENTLY with this one instead of after it, and so it can be skipped on a pull request that
+# cannot affect what it proves. That file carries the reasoning and the path filter; this one is
+# the part every change pays.
 
 on:
   push:
@@ -22,7 +27,7 @@ concurrency:
 
 jobs:
   gate:
-    name: make check + check-test + test
+    name: make check + test
     runs-on: ubuntu-latest
     steps:
       - name: Check out the repository
@@ -31,10 +36,6 @@ jobs:
       # The static gate plus every fast, pure suite; the Makefile's `check` recipe is the list.
       - name: make check
         run: make check
-
-      # Proves each gate assertion actually fires; needs a clean tree, which a fresh checkout is.
-      - name: make check-test
-        run: make check-test
 
       # Every suite's fast subset, the two slow ones included — this is where a runtime error in
       # those surfaces, since `make check` deliberately does not run them.
