@@ -49,10 +49,59 @@ DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # silently stop running. Splitting this across lines hides the tail from that extraction.
 tests=(t1-totals.sh t2-window.sh t3-probe.sh t4-band.sh t5-agent.sh t6-codex-ctx.sh t7-continuity.sh t8-backend-adapter.sh t9-admission.sh t10-continuity-canary.sh t11-slot-graph.sh t12-down-gate.sh t13-wait.sh t14-signal.sh t15-iid-fallback.sh t16-tell-knobs.sh t17-autodown.sh)
 
+# --- the files run CONCURRENTLY -----------------------------------------------------------------
+# Every file here builds its own fixture root under `mktemp -d` and removes it, fakes its own
+# backend, and names its own terminal session, so no two share mutable state — which is what makes
+# this safe and is the property to check before adding a file that does not.
+#
+# SHIPYARD_TEST_JOBS overrides the width; 1 restores the old serial behaviour exactly, which is
+# what to reach for when interleaved work makes a flake hard to read. The cap exists because these
+# are not CPU-bound — they wait on child processes and on `sleep` — so more workers than cores
+# still helps, but not without limit, and an unbounded fan-out on a box already driving a fleet is
+# how a suite becomes the reason its own assertions fail.
+#
+# OUTPUT IS BUFFERED PER FILE and printed whole, in the order of the array above, so a failure
+# reads exactly as it did when this loop was serial. Interleaving the lines live would be faster
+# to write and much worse to read.
+#
+# DUPLICATED, not shared with the council runner, and deliberately: the two runners are not one
+# algorithm — that one wraps each file in `timeout` and `nice` and has a `--full` arm, this one has
+# neither — so what would be shared is scheduling boilerplate, not an answer to a question both
+# ask. It also keeps this suite runnable from an installed plugin, which has no repo `scripts/`
+# beside it. Scope checked today: these two runners and no other. If a THIRD runner needs the same
+# scheduling, or if these two converge so the differences above go away, move it to `shared/`.
+#
+# `jobs -pr` counts what is still running. It is read inside `$( )`, which is a subshell — the job
+# table is inherited for reporting, so the count is this shell's (measured in the council helpers'
+# EXIT trap, same idiom). `wait -n` would be tidier and is bash 4.3+; this stays on the 3.2-safe
+# spelling because nothing else in this runner needs a newer shell.
+NPROC=$( { command -v nproc >/dev/null 2>&1 && nproc; } || sysctl -n hw.ncpu 2>/dev/null || echo 4 )
+JOBS="${SHIPYARD_TEST_JOBS:-$NPROC}"
+case "$JOBS" in ''|*[!0-9]*) JOBS=1 ;; esac
+[ "$JOBS" -ge 1 ] || JOBS=1
+[ "$JOBS" -le 8 ] || JOBS=8
+
+OUTDIR=$(mktemp -d "${TMPDIR:-/tmp}/shipyard-tests.XXXXXXXX") || exit 1
+trap 'rm -rf "$OUTDIR"' EXIT
+
+i=0
+for t in "${tests[@]}"; do
+  while [ "$(jobs -pr | wc -l)" -ge "$JOBS" ]; do sleep 0.05; done
+  ( bash "$DIR/$t" >"$OUTDIR/$i.out" 2>&1; printf '%s' "$?" >"$OUTDIR/$i.rc" ) &
+  i=$((i + 1))
+done
+wait
+
 rc=0
+i=0
 for t in "${tests[@]}"; do
   printf '\n──── %s ────\n' "$t"
-  bash "$DIR/$t" || rc=1
+  cat "$OUTDIR/$i.out" 2>/dev/null
+  # A missing .rc means the worker itself died (killed, out of memory) — which is a failure, and
+  # one that would otherwise be reported as a pass over a file whose output is also missing.
+  st=$(cat "$OUTDIR/$i.rc" 2>/dev/null) || st=""
+  if [ "$st" != 0 ]; then printf 'FAILED: %s\n' "$t"; rc=1; fi
+  i=$((i + 1))
 done
 printf '\n%s\n' "$([ $rc = 0 ] && echo 'all tests passed' || echo 'THERE ARE FAILURES')"
 exit $rc
