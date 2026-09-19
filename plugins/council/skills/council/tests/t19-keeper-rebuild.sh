@@ -355,9 +355,12 @@ canary_eof() { # <mark-dir> <pid-file-content: "self"|a pid> <n> -> prints reape
     printf 'in\n' > "$mark/running"
     # FIVE SECONDS, NOT THIS FILE'S FAST PERIOD, AND THAT IS THE CASE. The premise is a keeper
     # superseded DURING its canary read, so the read must still be blocked while the shell below
-    # writes the pid file and drops the last writer. At 0.05s the read would time out and
-    # `continue` before either happened, the loop would take the step-down at the TOP of the next
-    # pass, and G1 would go green having exercised the path case D already covers — a case that
+    # writes the pid file and drops the last writer. Stated as the PROPERTY rather than against
+    # whatever the file's fast period happens to be today, so the exemption survives the next
+    # change to that value: at ANY period shorter than the window this shell needs to do those two
+    # things, the read times out and `continue`s before either happens, the loop takes the
+    # step-down at the TOP of the next pass, and G1 goes green having exercised the path case D
+    # already covers — a case that
     # passes while testing nothing, which is this repo's most expensive failure shape. The period
     # is passed explicitly rather than inherited for exactly that reason (see `_keeper_loop`).
     _keeper_loop "$room" "$room/state/keeper.pid" "$cr" 5 a b

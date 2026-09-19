@@ -67,6 +67,15 @@ if [ -n "$dirty" ]; then
   exit 2
 fi
 
+# The tree as it was ADMITTED, so the assertion at the bottom reports what this run changed
+# rather than what it found. The entry guard above is scoped to $GUARDED and the assertion is
+# not — deliberately, since its whole job is to catch a probe mutating something OUTSIDE that
+# list — and without this snapshot the two scopes disagree: an uncommitted AGENTS.md or
+# .planning/ edit (an ordinary state here) is admitted at the start and then blamed on a probe
+# five minutes later, with the remedy line naming the wrong fix. An alarm that fires on the
+# normal case is one the reader learns to ignore.
+PRE_STATUS=$(git status --porcelain --untracked-files=all)
+
 SCRATCH=$(mktemp -d)
 # Built from code points rather than written out, for the reason enprobe gives below: a literal
 # would put the very bytes under test into this file. `ö` is Latin, so check 8 permits it either
@@ -1070,6 +1079,15 @@ expect_fail "check 13: a path added to \$GUARDED but not to the filter" \
   "path filter has no 'docs/**'"
 git checkout -- scripts/check-test.sh
 
+# 33b2 — check 13's REFUSAL arm. `paths-ignore:` is the same YAML shape as `paths:` with the
+# opposite meaning, and check 13 reads entries without reference to the key they sit under — so
+# without this arm that one-word edit would leave the check reading the identical entries,
+# reporting full coverage, and the job skipped on exactly the paths it was proving were covered.
+perl -pi -e 's/^    paths:$/    paths-ignore:/' .github/workflows/check-test.yml
+expect_fail "check 13: paths-ignore is refused rather than misread" \
+  "uses paths-ignore"
+git checkout -- .github/workflows/check-test.yml
+
 # 33c — and the two loud arms, so a filter check that ABSTAINS can never be mistaken for one that
 # passed. A check that goes quiet over the job proving every other check is not decoration is the
 # worst shape this file guards against.
@@ -1098,11 +1116,16 @@ make check >/dev/null 2>&1 || { echo "gate not green after restore"; exit 1; }
 # So assert it here, on the run that would introduce it. `--untracked-files=all` for the same
 # reason the guard at the top uses it: `git diff` cannot see a file that was never in git, and a
 # stray probe file is the commonest way this fails.
-left=$(git status --porcelain --untracked-files=all)
+post=$(git status --porcelain --untracked-files=all)
+# Only what THIS RUN changed: subtract the snapshot taken at admission. An empty snapshot makes
+# `grep -vxF -f` pass every line through, which is the right answer — on a clean tree every
+# remaining entry is new.
+left=$(printf '%s\n' "$post" | grep -vxF -f <(printf '%s\n' "$PRE_STATUS") | grep -v '^$')
 if [ -n "$left" ]; then
   echo "check-test left the tree dirty — a probe mutated something it does not restore:"
   printf '%s\n' "$left"
   echo "add its path to \$GUARDED (and to the CI filter check 13 derives from it), or restore it inline"
+  echo "(paths already dirty when this run started are excluded, so every line above is this run's)"
   exit 1
 fi
 echo "check-test: OK"

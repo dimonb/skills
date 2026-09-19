@@ -46,7 +46,10 @@ o1=$(sid object  "[\"$p\"]"      "A reader would scan N directories on every pol
 a1=$(sid amend   "[\"$p\",\"$o1\"]" "AMEND-THREE a reader probes upward from its cursor instead.") || exit 1
 o2=$(sid object  "[\"$p\"]"      "The janitor has no deadline.") || exit 1
 a2=$(sid amend   "[\"$p\",\"$o2\"]" "AMEND-FOUR the janitor finishes within 24 h.") || exit 1
-for i in 1 2 3 4; do sid msg '[]' "Nothing further from me ($i)." >/dev/null; done || exit 1
+# The guard goes INSIDE the loop: `done || exit 1` only ever sees the LAST iteration's status,
+# so a refused send in any earlier one would be swallowed — which is the very defect `sid` was
+# hardened against three lines above.
+for i in 1 2 3 4; do sid msg '[]' "Nothing further from me ($i)." >/dev/null || exit 1; done
 
 [ "$(bash "$CLI" verdict | cut -d' ' -f1)" = ready-to-decide ] || {
   echo "FAIL expected ready-to-decide"; bash "$CLI" claims; exit 1; }
@@ -121,7 +124,7 @@ Background a reader does not need before the decision itself.
 * another constraint
 AGENDA
 sid propose '[]' "One lane per author, total order by Lamport clock." >/dev/null || exit 1
-for i in 1 2 3; do sid msg '[]' "Agreed ($i)." >/dev/null; done || exit 1
+for i in 1 2 3; do sid msg '[]' "Agreed ($i)." >/dev/null || exit 1; done
 OUT2=$(COUNCIL_ME=$(decider) bash "$CLI" decide) || { echo "FAIL decide refused in the long-agenda room"; exit 1; }
 
 # This room's proposal carried with NO amendment — the most common successful outcome, and a

@@ -215,10 +215,14 @@ the day it landed, so it ran in no automated invocation at all while looking ent
 Beyond those static checks, `make check` also runs the fast driver, flow, adapter and policy
 suites, so a regression in any of the four reds a commit; the slower shipyard and council suites
 run under `make test`, and `make check` gates only their registration, invocation and declaration
-(above). CI (`.github/workflows/ci.yml`) then runs all three —
-`make check`, `make check-test` and `make test` — on every push to `main` and every pull request,
-so those suites' runtime errors surface in CI; locally, where `make check` stays fast, they still
-surface at `make test` time rather than at commit time.
+(above). CI runs `make check` and `make test` in one workflow
+(`.github/workflows/ci.yml`) on every push to `main` and every pull request, and `make check-test`
+in a SEPARATE, concurrent workflow (`.github/workflows/check-test.yml`) — unconditionally on every
+push to `main`, and on a pull request only when the change touches a path that could affect what
+it proves. That filter is derived from `$GUARDED` in `scripts/check-test.sh` and asserted by
+check 13; the workflow file carries the reasoning and the one standing exception. So those suites'
+runtime errors surface in CI; locally, where `make check` stays fast, they still surface at
+`make test` time rather than at commit time.
 
 `make check-test` exists because a gate that has never failed can be vacuous and look
 identical to one that works. It proves every assertion in the gate — a clean baseline, then each

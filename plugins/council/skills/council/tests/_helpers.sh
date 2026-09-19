@@ -139,7 +139,7 @@ kill_keeper() { # <pid-file> [signal]
 
 # Take the keepers down and remove the root this test owns. A keeper polls `while [ -d "$room" ]`
 # (lib/up.sh), so removing the root reaps them within one poll period anyway — five seconds in
-# production, a twentieth of that for this suite (see COUNCIL_KEEPER_POLL_INTERVAL above); killing
+# production, a tenth of that for this suite (see COUNCIL_KEEPER_POLL_INTERVAL above); killing
 # them first makes it immediate and also covers a root this test does not own. Nothing else will
 # ever do it:
 # one root per run means no later run reuses this path, so a root left behind here is a directory

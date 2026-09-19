@@ -20,20 +20,31 @@ name: check-test
 # ON A PUSH TO `main` IT RUNS UNCONDITIONALLY, with no filter at all. That is the backstop: a
 # filter that turns out to be too narrow costs one late red at merge rather than a silent gap.
 #
-# THE FILTER IS DERIVED, NOT GUESSED. It is exactly `$GUARDED` from scripts/check-test.sh — the
-# list of paths that file restores with `git checkout --`, i.e. an upper bound on everything its
-# probes mutate — with each directory spelt `<dir>/**`. That list already carries `scripts` (the
-# gate and the probes themselves) and `.github` (which is why editing THIS file re-runs the job it
-# decides). `scripts/check.sh` check 13 asserts the correspondence entry by entry and reds if
-# `$GUARDED` grows without the filter growing with it, and `make check-test` itself now asserts
-# that it left the WHOLE tree clean, which keeps `$GUARDED` honest in the other direction: a probe
-# that mutates a path outside it reds the run that added it.
+# THE FILTER IS DERIVED, NOT GUESSED. It is `$GUARDED` from scripts/check-test.sh with each
+# directory spelt `<dir>/**`, PLUS `docs/**`. `scripts/check.sh` check 13 asserts the `$GUARDED`
+# half entry by entry and reds if that list grows without this filter growing with it.
+#
+# `$GUARDED` IS AN UPPER BOUND ON WHAT THE PROBES RESTORE WITH GIT — NOT ON WHAT THEY MUTATE, and
+# the difference is `docs/`. About twenty probes `mkdir -p docs`, write `docs/_probe.md` or
+# `docs/stray/SKILL.md`, and remove them inline; `docs/` is untracked, so it cannot be in
+# `$GUARDED` — `git checkout -- .claude docs Makefile` ABORTS on the unmatched pathspec and
+# restores NOTHING, which under check-test's `2>/dev/null || true` would silently turn the whole
+# restore into a no-op. Measured, not reasoned: `git checkout -- docs` exits 1 with 'pathspec
+# did not match any file(s) known to git'. So `docs/**` is in the filter and deliberately not in
+# `$GUARDED`, and that is the one standing exception rather than an oversight.
 #
 # WHAT NOTHING ENFORCES, stated plainly rather than left to be discovered: check 13 compares this
-# filter against `$GUARDED`, and `$GUARDED` is a hand-maintained list. The end-of-run cleanliness
-# assertion makes an out-of-list mutation loud, but only for a probe that leaves a trace on disk —
-# a probe that mutates a file outside `$GUARDED` and restores it by hand would satisfy both and be
-# invisible here. If you write one, add its path to `$GUARDED` anyway.
+# filter against `$GUARDED`, and `$GUARDED` is a hand-maintained list, so an entry here that no
+# `$GUARDED` line derives — `docs/**` is exactly that — is checked by nobody. The end-of-run
+# cleanliness assertion makes an out-of-list mutation loud, but only for a probe that leaves a
+# trace on disk; one that restores by hand, as the `docs/` probes do, satisfies both and is
+# invisible here. A new probe touching a NEW tree needs a line in `$GUARDED` (if the tree is
+# tracked) or a line here and a sentence in this paragraph (if it is not).
+#
+# THIS JOB MUST NOT BE CONFIGURED AS A REQUIRED STATUS CHECK. A path-filtered workflow that does
+# not run reports nothing at all — not a skip — so a required check on it sits at 'Expected —
+# waiting for status' for ever on any pull request the filter excludes. Require the CI workflow,
+# which has no filter. (Not live today: this repo has no branch protection and no rulesets.)
 
 on:
   push:
@@ -48,6 +59,7 @@ on:
       - 'shared/**'
       - 'Makefile'
       - '.github/**'
+      - 'docs/**'
 
 permissions:
   contents: read

@@ -800,7 +800,22 @@ else
   # `paths:` list and a YAML-block parse in sed would be the fragile half of this check. Quoted
   # is what keeps `- name: Check out the repository` in the steps out of the result; accepting
   # both styles is so a reformat reds nothing rather than reddening confusingly.
+  #
+  # IT REQUIRES THE ENTRIES TO BE QUOTED, and YAML does not. An unquoted `- scripts/**` matches
+  # neither expression, drops out of `$filter`, and reds the corresponding `$GUARDED` entry over
+  # a filter that does in fact cover it. That direction is SAFE — a false red, fixed by adding
+  # quotes — and it is written down here so the red is not instead 'fixed' by loosening this.
   filter=$(sed -n -e "s/^ *- *'\([^']*\)'.*/\1/p" -e 's/^ *- *"\([^"]*\)".*/\1/p' "$CT_WF")
+  # A REFUSAL, NOT AN ANALYSIS. `paths-ignore:` is the same YAML shape as `paths:` with the
+  # opposite meaning, and the scrape above reads entries without reference to the key they sit
+  # under — so changing that one word would leave this check reading the identical eight entries,
+  # reporting full coverage, and the job skipped on EXACTLY the paths it was proving were
+  # covered. Green gate, silent gap, in the check whose whole purpose is that the gate-of-the-gate
+  # cannot be skipped. Rather than teach a sed to parse YAML scopes, this declines to reason about
+  # a construct it cannot distinguish: if the word appears anywhere in the file, red.
+  if grep -q 'paths-ignore' "$CT_WF"; then
+    fail "$CT_WF uses paths-ignore, which check 13 cannot tell from paths — it reads entries, not the key they sit under, so an inverted filter would read as full coverage"
+  fi
   if [ -z "$guarded" ]; then
     fail "could not read \$GUARDED out of $CT_FILE — the check-test path filter cannot be checked"
   elif [ -z "$filter" ]; then

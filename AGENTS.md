@@ -300,8 +300,8 @@ a second" that is roughly **1500 polling forks a second** against 15 at the prod
 keepers saturated the run queue of the box they were being timed on, and the visible symptom was
 not slowness: it was canary-reap cases failing because a keeper could not be scheduled to notice
 its own owner's death inside a **sixty-second** ceiling. A/B on one box, parallel suite: 2 of 2
-runs red at 0.05, 2 of 2 green at the production 5. Shipped at a tenth of production rather than a
-twentieth — nine tenths of the win at a tenth of the churn.
+runs red at 0.05, 2 of 2 green at the production 5. Shipped at a tenth of production rather than
+the hundredth first tried — nine tenths of the win at a tenth of the churn.
 
 So when you add or shrink a timing knob for the tests' benefit: **multiply by the concurrency and
 by the loop body's cost before choosing**, and check `ps` during a full parallel run rather than
@@ -343,8 +343,12 @@ from both targets from the day it landed, so it ran in no automated invocation a
 run by hand, gated by nothing, for as long as it existed (#111).
 
 `make check` also runs the driver, flow, adapter and policy suites (all fast and pure), so a
-regression in any of the four reds a commit. CI (`.github/workflows/ci.yml`) then runs
-`make check`, `make check-test` and `make test` on every push to `main` and every pull request, so
+regression in any of the four reds a commit. CI runs `make check` and `make test` in one workflow
+(`.github/workflows/ci.yml`) on every push to `main` and every pull request, and `make check-test`
+in a SEPARATE, concurrent workflow (`.github/workflows/check-test.yml`) — unconditionally on every
+push to `main`, and on a pull request only when the change touches a path that could affect what
+it proves. That filter is derived from `$GUARDED` in `scripts/check-test.sh` and asserted by
+check 13; the workflow file carries the reasoning and the one standing exception. So
 the shipyard and council suites' **runtime** errors — not only their registration — red a check the
 change must pass. Locally those still surface at `make test`, run by hand like `make check-test`,
 since `make check` deliberately does not run them.

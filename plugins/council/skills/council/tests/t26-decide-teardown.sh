@@ -576,8 +576,8 @@ for shape in dir symlink-to-dir; do
      "$(ls "$RD"/state/teardown/.teardown.* >/dev/null 2>&1 && echo yes || echo no)"
   ok "...nor at its own name" no "$(ls "$RD"/state/.teardown.* >/dev/null 2>&1 && echo yes || echo no)"
   # The keeper must be left alone: a refused request is not a teardown. Once per shape, so this
-  # is the wait the loop multiplies — `hold` makes it one second of polling instead of six of
-  # sleeping, and reds at once on the shape that does slip through.
+  # is the wait the loop multiplies — `hold` polls instead of sleeping (three seconds against six),
+  # and reds at once on the shape that does slip through.
   hold 3 "$KD"
   ok "...the keeper is untouched, since nothing was asked of it" yes \
      "$([ -n "$KD" ] && kill -0 "$KD" 2>/dev/null && echo yes || echo no)"
