@@ -1124,6 +1124,20 @@ post=$(git status --porcelain --untracked-files=all)
 # Only what THIS RUN changed: subtract the snapshot taken at admission. An empty snapshot makes
 # `grep -vxF -f` pass every line through, which is the right answer — on a clean tree every
 # remaining entry is new.
+#
+# `-x` IS LOAD-BEARING AND DROPPING IT FAILS SILENTLY IN THE GREEN DIRECTION. The pattern file
+# holds one empty line whenever the snapshot is empty. With `-x` an empty pattern matches only an
+# empty line, so `-v` keeps every real entry; WITHOUT `-x` it matches every line, `-v` discards
+# all of them, and `$left` is unconditionally empty — this assertion then passes on any tree,
+# including one a probe left dirty, which is the single thing it exists to catch. Verified both
+# ways on GNU grep 3.12 and on BSD grep: with `-x`, two of two lines survive; without it, zero.
+# So do not "simplify" this to `grep -vF`.
+#
+# One residual, since a guard whose limits are undocumented gets trusted past them: subtraction is
+# by whole status LINE, so a probe that mutates a file which was ALREADY dirty at admission and
+# outside $GUARDED leaves the line unchanged (` M path` before and after) and is subtracted with
+# it. The entry guard above rules this out for every $GUARDED path; outside that list it is the
+# price of not crying wolf over an ordinary uncommitted edit.
 left=$(printf '%s\n' "$post" | grep -vxF -f <(printf '%s\n' "$PRE_STATUS") | grep -v '^$')
 if [ -n "$left" ]; then
   echo "check-test left the tree dirty — a probe mutated something it does not restore:"
