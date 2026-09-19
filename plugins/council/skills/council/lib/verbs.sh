@@ -693,8 +693,11 @@ _stall_escalate() {
 # Echoes "<live><TAB><total>" and returns 0 when the backend ANSWERED and the answer may be
 # believed. Returns 2 when the room WAS launched but the read could not be resolved — the backend
 # did not answer, the pin says these sessions were launched on the OTHER backend, or the pin has
-# gone while the launchers remain. Returns 1 only when the room carries neither a pin NOR a
-# launcher, i.e. was never given terminals and so has none to count.
+# gone while the launchers remain — the leading clause is the rule and the list is not closed;
+# every `return 2` in the body below is one of these, so read them there. Returns 1 only when the
+# room carries neither a pin NOR a launcher, i.e. was never given terminals and so has none to
+# count. (A room whose `up` failed to launch ANY seat has launchers and no pin, so it answers 2
+# rather than 1: wrong, and in the fail-open direction.)
 #
 # THAT IS NO LONGER `_floor_screen`'s GUARD, though it started as a copy of it: `_floor_screen`
 # still returns 1 on any missing pin, because a pane it cannot capture is simply a pane it cannot
@@ -720,8 +723,12 @@ _stall_escalate() {
 #     live in the room. `v_status` therefore does not treat a zero as proof — it says so on the
 #     block instead of falling silent.
 #   * the PIN's EXISTENCE, and — since the split — the LAUNCHERS'. A pin deleted on its own is
-#     rc 2 and alarms, because `drv_launch` always writes a pin, so launchers without one mean the
-#     pin went missing rather than that nothing was ever started. Deleting the launchers as well
+#     rc 2 and alarms, because `drv_launch` writes the pin BEFORE it starts anything on either
+#     backend — so a launcher beside a missing pin normally means the pin went missing rather than
+#     that nothing was started. Not always: with no backend resolving at all it returns before
+#     writing one, and `council_up` writes each launcher before trying to launch and continues past
+#     a failure, so a room whose `up` could not start a single seat has launchers and no pin. That
+#     room answers `?` rather than `-`, which is wrong but fails OPEN. Deleting the launchers as well
 #     gets back to rc 1 and a block line. That is a cost of N+1 writes instead of one, not a
 #     closed route, and it is why the paragraph above says self-revealing rather than prevented.
 # The durable fix for the last two is a launch record written OUTSIDE the room, the same move
@@ -915,7 +922,7 @@ _status_sigfile() {
 }
 
 v_status() {
-  local j verd g t floor held conf room_age alarms="" phase wait_ev="" wait_note=""
+  local j verd g t floor held conf room_age alarms="" phase wait_ev="" wait_note="" rec=""
   local only_changed=0 alarms_only=0 term_live="" term_total="" term_rc term_out="" live_note=""
   local out="" round_line="" openct sig sigfile TAB term_line="" quiet_line=""
   TAB=$(printf '\t')
@@ -981,7 +988,11 @@ v_status() {
   # so once, at the moment the operator's attention is on the record. This is the line that says
   # it again on every later tick. Also for a room closed by an older build, and for `--purge`-less
   # rooms closed some other way.
-  if [ -n "$(c_recorded_status)" ]; then
+  #
+  # CAPTURED once: the wording below differs by WHICH status was recorded, not merely by whether
+  # one was.
+  rec=$(c_recorded_status)
+  if [ -n "$rec" ]; then
     # CAPTURED, not read through a process substitution: `< <(_room_terminals)` throws the
     # function's exit status away and leaves `read`'s own, which cannot tell rc 1 (no terminals
     # to count) from rc 2 (could not tell) — and those two are exactly what this branch is for.
@@ -999,8 +1010,18 @@ v_status() {
     case "$term_rc" in
       0) if [ "${term_live:-0}" -gt 0 ]; then
            alarms="$alarms ⚠️ this room is closed but $term_live of $term_total terminals are still up — council.sh down releases them"
-         else
+         # THE TWO RECORDED STATUSES WANT OPPOSITE SENTENCES, and collapsing them was a
+         # narrowing introduced by a fix round: a `decided` close reaps its own seats, so a zero
+         # is the expected answer there — but an `unresolved` close deliberately LEAVES THEM UP
+         # ("a room that did not converge is one a person should be able to walk into"), exits 0
+         # and never 5. Told the decided story, an operator of an unresolved room reads the one
+         # shape that should send them to `down` as the normal one, and both offered triggers are
+         # false for them. The wording this replaced was unconditional and right for both; what
+         # was wrong was making it specific to one without branching on which.
+         elif [ "$rec" = decided ]; then
            term_line="terminals: none of $term_total seats is listed — which is what a decided room looks like once it has closed its own seats. The count came through a container pin inside the room, so a zero is not proof; reach for council.sh down if the close reported it could not reap (exit 5), or if you never saw it close."
+         else
+           term_line="terminals: none of $term_total seats is listed — but this room closed as $rec, and that close LEAVES the seats up on purpose, so a zero is not what it should look like: either something else released them, or the container pin no longer names them. The count came through a pin inside the room, so it is not proof either way — council.sh down is how to be sure."
          fi ;;
       2) alarms="$alarms ⚠️ this room is closed and whether its terminals are still up could not be determined — run council.sh down to be sure" ;;
       # Neither a pin NOR a launcher. A room never launched by this skill has no terminals to

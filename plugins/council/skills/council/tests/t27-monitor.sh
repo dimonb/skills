@@ -432,8 +432,8 @@ mv "$R3/roster.bak" "$R3/roster.json"
 rm -f "$R3/state/container-tmux"
 
 # 9f. NO PIN IS TWO ANSWERS. A room with launchers but no container pin was launched by this
-#     skill (`drv_launch` always writes the pin) and has since lost it — damage, or a participant
-#     removing it. That is "cannot tell", which alarms; only a room with no launchers either is
+#     skill (`drv_launch` writes the pin before starting anything, except when no backend
+#     resolves at all) and has since lost it — damage, or a participant removing it. That is "cannot tell", which alarms; only a room with no launchers either is
 #     "never had any", which is a block line. Before the split, one `rm state/container-*` took
 #     the closed-room alarm off the alarm channel entirely.
 sessions "council-$RN-a" "council-$RN-b"
@@ -457,6 +457,32 @@ ok "removing the launchers too gets the silence back" 0 "$(printf '%s' "$out" | 
 ok "...and its block line stays off the alarm channel" 0 "$(printf '%s' "$out" | grep -c '^terminals:')"
 blk=$(bash "$SCLI" status 2>/dev/null)
 ok "...but the block still says what it read"     1 "$(printf '%s' "$blk" | grep -c '^terminals: this room carries no container pin')"
+
+# 9g. A ZERO MEANS OPPOSITE THINGS BY RECORDED STATUS. `decide` reaps its own seats, so on a
+#     `decided` room a zero is the expected answer. An `unresolved` close deliberately LEAVES the
+#     seats up ("a room that did not converge is one a person should be able to walk into"),
+#     exits 0 and never 5 — so the decided wording is false in every clause for that room, and it
+#     steers the one operator who should reach for `down` away from it.
+RU="$COUNCIL_TEST_ROOT/t27u"; rm -rf "$RU"
+mkroom "$RU" a b c
+export COUNCIL_ROOM="$RU" ROOM="$RU"
+say_floor propose '[]' "Something nobody agrees on." >/dev/null
+holder=$(bash "$CLI" floor | sed -n 's/.*floor=\([^ ]*\).*/\1/p')
+COUNCIL_ME="$holder" bash "$CLI" decide --force >/dev/null 2>&1
+ok "9g: the room closed as unresolved" "unresolved" "$(cat "$RU/board/status" 2>/dev/null)"
+printf 'fake-container\n' > "$RU/state/container-tmux"
+sessions_none
+blk=$(bash "$SCLI" status 2>/dev/null)
+ok "an unresolved room's zero is not called expected" 0 "$(printf '%s' "$blk" | grep -c 'what a decided room looks like')"
+ok "...it says the close leaves seats up"             1 "$(printf '%s' "$blk" | grep -c 'LEAVES the seats up on purpose')"
+ok "...and still sends the operator to down"          1 "$(printf '%s' "$blk" | grep -c 'council.sh down is how to be sure')"
+# ...while a decided room keeps the other sentence, so this is a branch and not a rewording.
+export COUNCIL_ROOM="$R3" ROOM="$R3"
+printf 'fake-container\n' > "$R3/state/container-tmux"
+blk=$(bash "$SCLI" status 2>/dev/null)
+ok "a decided room's zero IS called expected"         1 "$(printf '%s' "$blk" | grep -c 'what a decided room looks like')"
+rm -f "$R3/state/container-tmux"
+rm -f "$RU/state/container-tmux"
 
 # --- 10. the seat-liveness sentences ------------------------------------------------------
 # ALIVE-and-idle-at-a-prompt and GONE look identical from inside the room and need opposite
@@ -521,16 +547,21 @@ printf '#!/bin/sh\n' > "$RS/state/launch-$FLOOR.sh"
 sessions_none
 cp "$RS/roster.json" "$RS/roster.bak"
 jq '.mode = "roundtable"' "$RS/roster.bak" > "$RS/roster.json"
+# The label needs a launcher for the dead-seat wording to be reachable at all; without one an
+# ungated read takes the launcher-less branch, whose text carries no relaunch prescription, and
+# the first assertion below passes whether or not the guard exists.
+printf '#!/bin/sh\n' > "$RS/state/launch-— (barrier).sh"
 out=$(COUNCIL_STALL_SECS=100 bash "$SCLI" status --alarms-only 2>/dev/null)
-# The first of these is the HISTORICAL string and is now unreachable by construction — a label
-# with spaces and a dash can have no `state/launch-<peer>.sh`, so even an ungated read would take
-# the launcher-less branch and never print it. It is kept as a regression tripwire for the exact
-# text that reached an operator's console, and the assertion BELOW it is the one that bites:
-# measured, dropping `_is_seat` reds only the second.
+# BOTH OF THESE BITE, and the fixture line above is what makes the first one do it. An earlier
+# version of this comment said the first was unfixable — that a label with spaces and a dash
+# "can have no `state/launch-<peer>.sh`" — which was an untested claim about a solution space,
+# written while justifying not fixing something, and false: the room is participant-writable, the
+# filename is legal, and writing it costs one line. Measured both ways: without the launcher,
+# dropping `_is_seat` reds only the second assertion; with it, both.
 ok "a barrier label is never called a seat" 0 "$(printf '%s' "$out" | grep -c 'relaunch — (barrier)')"
 ok "...and no terminal claim is made of it" 0 "$(printf '%s' "$out" | grep -c 'terminal is GONE')"
 mv "$RS/roster.bak" "$RS/roster.json"
-rm -f "$RS/state/container-tmux" "$RS/state/launch-$FLOOR.sh"
+rm -f "$RS/state/container-tmux" "$RS/state/launch-$FLOOR.sh" "$RS/state/launch-— (barrier).sh"
 
 printf '\n%s\n' "$([ "$fails" = 0 ] && echo 't27: all passed' || echo "t27: $fails FAILURES")"
 exit $([ "$fails" = 0 ] && echo 0 || echo 1)
