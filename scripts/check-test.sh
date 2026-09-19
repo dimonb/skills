@@ -41,7 +41,17 @@ RUNNER=$TESTS_DIR/run-all.sh
 # uncommitted Makefile work and the restore must bring it back. Every one of those probes reverts
 # with `git checkout --`, so an interrupt between the mutation and the revert is recovered by the
 # trap rather than leaving the repo without a working `make check`.
-GUARDED='.claude .agents plugins scripts .claude-plugin shared Makefile'
+#
+# `.github` joined for the same reason and on the same rule: check 13's probes mutate the
+# check-test workflow, so an interrupt between a mutation and its revert would otherwise leave the
+# repo with a broken or empty CI file and nothing to put it back.
+#
+# THIS LIST IS ALSO READ BY THE GATE. check.sh check 13 derives the check-test job's pull-request
+# path filter from it, so adding an entry here is a change the gate will insist you finish. And
+# the assertion at the very bottom of this file asserts the whole tree is clean when the run ends,
+# which is what keeps the list honest in the other direction: a probe that mutates a path outside
+# it reds the run that added it, instead of the next person's.
+GUARDED='.claude .agents plugins scripts .claude-plugin shared Makefile .github'
 
 # The guard comes FIRST and the trap is installed only after it passes. Installing the trap
 # earlier makes the guard's own early exit run the restore, which would discard exactly the
@@ -1041,8 +1051,58 @@ expect_fail "check 12 reds when the Makefile is missing" \
   "Makefile is missing"
 git checkout -- Makefile
 
+# 33 — check 13's coverage arm: a path this file GUARDS that the check-test CI job's pull-request
+# filter does not name. That job runs in full on every push to `main` and, on a pull request, only
+# when the change touches a path that could affect what it proves — so the filter is the whole of
+# the risk in skipping it, and the direction it goes quiet in is a probe being added that mutates a
+# NEW tree. The author adds that tree to $GUARDED (or the restore misses it) and nothing else would
+# connect it to a workflow file. Removing one entry from the filter is the honest reproduction.
+perl -ni -e "print unless m{^ *- 'shared/\\*\\*'\$}" .github/workflows/check-test.yml
+expect_fail "check 13: a \$GUARDED path the check-test job's filter does not cover" \
+  "path filter has no 'shared/**'"
+git checkout -- .github/workflows/check-test.yml
+
+# 33b — the same arm from the other side: $GUARDED grows and the filter does not. This is the
+# likelier way round in practice, and it is a DIFFERENT mutation — 33 deletes from the filter, this
+# adds to the guarded list — so neither substitutes for the other.
+perl -pi -e "s{^GUARDED='([^']*)'}{GUARDED='\$1 docs'}" scripts/check-test.sh
+expect_fail "check 13: a path added to \$GUARDED but not to the filter" \
+  "path filter has no 'docs/**'"
+git checkout -- scripts/check-test.sh
+
+# 33c — and the two loud arms, so a filter check that ABSTAINS can never be mistaken for one that
+# passed. A check that goes quiet over the job proving every other check is not decoration is the
+# worst shape this file guards against.
+: > .github/workflows/check-test.yml
+expect_fail "check 13: an unreadable path filter is loud, not silent" \
+  "could not read any path filter"
+git checkout -- .github/workflows/check-test.yml
+
+perl -pi -e "s{^GUARDED='[^']*'}{GUARDED_RENAMED=''}" scripts/check-test.sh
+expect_fail "check 13: an unreadable \$GUARDED is loud, not silent" \
+  "could not read \$GUARDED"
+git checkout -- scripts/check-test.sh
+
 echo
 echo "assertions proven: $pass   not proven: $nocatch"
 [ "$nocatch" -eq 0 ] || exit 1
 make check >/dev/null 2>&1 || { echo "gate not green after restore"; exit 1; }
+
+# THE WHOLE TREE, not just $GUARDED, and that difference is the point. Every probe above restores
+# with `git checkout -- $GUARDED`, so $GUARDED is an upper bound on what this file may mutate —
+# which is exactly the property check 13 derives the CI path filter from. Nothing enforced it:
+# a probe that mutated a path outside the list would restore nothing, leave the tree dirty, and
+# be noticed only by whoever ran `make check-test` NEXT and hit the dirty-tree guard at the top —
+# which in CI, on a fresh checkout every time, is nobody, ever.
+#
+# So assert it here, on the run that would introduce it. `--untracked-files=all` for the same
+# reason the guard at the top uses it: `git diff` cannot see a file that was never in git, and a
+# stray probe file is the commonest way this fails.
+left=$(git status --porcelain --untracked-files=all)
+if [ -n "$left" ]; then
+  echo "check-test left the tree dirty — a probe mutated something it does not restore:"
+  printf '%s\n' "$left"
+  echo "add its path to \$GUARDED (and to the CI filter check 13 derives from it), or restore it inline"
+  exit 1
+fi
 echo "check-test: OK"

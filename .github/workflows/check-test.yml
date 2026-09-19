@@ -1,0 +1,69 @@
+name: check-test
+
+# `make check-test` proves that every assertion in `scripts/check.sh` actually FIRES — it injects
+# one violation per probe, requires the gate to red, and restores. That is the only thing standing
+# between a gate that works and a gate that is decoration, so it is never thinned and never
+# sampled: it runs in FULL or not at all.
+#
+# IT IS A SEPARATE WORKFLOW FROM ci.yml FOR TWO REASONS.
+#
+# 1. CONCURRENCY. It is ~5 minutes of genuine CPU work (84 probes, each re-running the whole
+#    static gate, measured at 142% CPU) and it does not compress: the probes mutate the shared
+#    working tree, so parallelising them needs a copy of the tree per worker. Run in the same job
+#    as `make check` + `make test` it is serialised behind them; run as its own workflow it
+#    overlaps them, and a change's wall clock becomes the longer of the two rather than the sum.
+# 2. RELEVANCE. What it proves can only be broken by a change that touches the gate, its probes,
+#    the Makefile recipes those probes assert about, or a path a probe mutates. On a pull request
+#    that touches none of those, five minutes buys nothing.
+#
+# ON A PUSH TO `main` IT RUNS UNCONDITIONALLY, with no filter at all. That is the backstop: a
+# filter that turns out to be too narrow costs one late red at merge rather than a silent gap.
+#
+# THE FILTER IS DERIVED, NOT GUESSED. It is exactly `$GUARDED` from scripts/check-test.sh — the
+# list of paths that file restores with `git checkout --`, i.e. an upper bound on everything its
+# probes mutate — with each directory spelt `<dir>/**`. That list already carries `scripts` (the
+# gate and the probes themselves) and `.github` (which is why editing THIS file re-runs the job it
+# decides). `scripts/check.sh` check 13 asserts the correspondence entry by entry and reds if
+# `$GUARDED` grows without the filter growing with it, and `make check-test` itself now asserts
+# that it left the WHOLE tree clean, which keeps `$GUARDED` honest in the other direction: a probe
+# that mutates a path outside it reds the run that added it.
+#
+# WHAT NOTHING ENFORCES, stated plainly rather than left to be discovered: check 13 compares this
+# filter against `$GUARDED`, and `$GUARDED` is a hand-maintained list. The end-of-run cleanliness
+# assertion makes an out-of-list mutation loud, but only for a probe that leaves a trace on disk —
+# a probe that mutates a file outside `$GUARDED` and restores it by hand would satisfy both and be
+# invisible here. If you write one, add its path to `$GUARDED` anyway.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    paths:
+      - '.claude/**'
+      - '.agents/**'
+      - 'plugins/**'
+      - 'scripts/**'
+      - '.claude-plugin/**'
+      - 'shared/**'
+      - 'Makefile'
+      - '.github/**'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  check-test:
+    name: make check-test
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out the repository
+        uses: actions/checkout@v7
+
+      # Needs a clean tree, INCLUDING untracked files under the paths it restores, which a fresh
+      # checkout is.
+      - name: make check-test
+        run: make check-test
