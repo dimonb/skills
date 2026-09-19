@@ -66,11 +66,15 @@ unset GITHUB_TOKEN; export REPO=<owner>/<repo>
 gh issue view N --repo "$REPO" --json number,state,assignees,title,url
 
 # ENUMERATE the open issues — the duplicate and class check of core §5.11 rung 2, and the
-# near-duplicate check of §7.A. Raise --limit past the open count and confirm you got them
-# all: the default is 30, and a silently truncated list is the search this replaces.
+# near-duplicate check of core §7.A. Raise --limit past the open count and confirm you got
+# them all: the default is 30, and a silently truncated list is the search this replaces.
+# @tsv rather than raw interpolation, so a tab or newline in a title cannot forge a row.
 gh issue list --repo "$REPO" --state open --limit 1000 \
   --json number,title,labels \
-  --jq '.[] | "\(.number)\t\([.labels[].name] | join(","))\t\(.title)"'
+  --jq '.[] | [.number, ([.labels[].name] | join(",")), .title] | @tsv'
+
+# how many there are, so "confirm you got them all" has an instrument
+gh api "search/issues?q=repo:$REPO+is:issue+is:open&per_page=1" --jq .total_count
 
 # a keyword search is a SUPPLEMENT to that enumeration, never the check — it matches words,
 # so a near-duplicate phrased differently does not come back

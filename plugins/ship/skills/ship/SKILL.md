@@ -431,9 +431,9 @@ passes it — the absent file does not fail safe, it fails open.)
 ```
 
 `reviews` is the **gate ledger**: only a `clean` entry, un-invalidated per §3.3/§5.10,
-clears a stage. Its `deferred` array is the written record §5.11 requires — one entry per
-finding that left the change, carrying the rung it landed on and why each rung above it was
-ruled out. `iteration` / `deadline` are enforced FIRST on every wake (§6).
+clears a stage. Its `deferred` array is the written record §5.11 requires — one entry per finding
+the ladder placed, carrying the rung it landed on, why each rung above it was ruled out, and at
+rung 1 that it was taken. `iteration` / `deadline` are enforced FIRST on every wake (§6).
 
 ---
 
@@ -833,15 +833,26 @@ first.** A finding that leaves a round is placed by working the rungs below in o
 rung is ruled out **in writing** before the next is reached. A round that files N issues has N
 recorded reasons why rungs 1 and 2 did not fit.
 
-**What is on the ladder.** Two populations: a confirmed blocker the round sends away because
-answering it would need new machinery (§5.7), and any optional finding the round judges worth
-more than the batched comment of §5.9. Ordinary optional findings are **not** on the ladder —
-they go into that one comment and nowhere else.
+**What is on the ladder.** Every finding that leaves a review round without being fixed in that
+round — however it got there. §5.7 sends some away explicitly (answering it would need new
+machinery; the change is already applied and running), and a round may judge an optional finding
+worth more than the batched comment of §5.9. Do not read that as a closed list: the entry
+condition is *leaving the round*, not the reason. The one exclusion is the ordinary optional
+finding — nitpick, style, naming, micro-perf — which goes into that one comment and nowhere else.
 
 **When it is worked.** ONCE per stage, at the point the stage record is posted — not per round.
 Filing mid-stage files findings a later round refutes or a later fix obviates, and it is how one
 change produces several tickets for a defect it went on to fix itself. Rung 1 is the exception by
-nature: a fix happens in the round that confirmed the finding.
+nature: a fix happens in the round that confirmed the finding, so by the time the record is
+written only rungs 2 and 3 remain to work.
+
+**A stage that escalates does not work the ladder.** At `max-rounds` the stage posts §5.7's
+escalation record, which is not a stage record, and stops — so rungs 2 and 3 are not worked and no
+`Deferred:` line is due. That is deliberate: the change is terminal until a human acts (§7.H) and
+the surviving blockers reach them through the ledger and that record, so filing tickets there would
+place work on a change somebody is about to re-run. What the stage still owes is the written
+record: its deferrals stay in the ledger's `deferred` array with their rung unreached, so the
+re-run inherits them instead of re-deriving them.
 
 #### Rung 1 — fix it in the change already in flight
 
@@ -870,24 +881,38 @@ judgement an author makes about their own work, and the costliest defects measur
 one-line diffs their authors were sure of. When it is genuinely unclear whether a fix passes,
 that uncertainty is the answer: go to rung 2.
 
-**A fix taken under this rung is still recorded** — in the ledger with `status: fixed` and the
-sha that fixed it, and in the deferral line of the stage record (§5.9). A fixed finding that
-leaves no trace is how the same defect gets re-found in round four by a reviewer with no memory
-of round two.
+**A fix taken under this rung is still recorded** — in the ledger's `deferred` entry, with the sha
+in its `outcome`, and in the deferral line of the stage record (§5.9). A fixed finding that leaves
+no trace is how the same defect gets re-found in round four by a reviewer with no memory of round
+two.
 
 #### Rung 2 — a comment on an issue that is already open
 
 The finding is a new instance, scenario, measurement or counterexample for something already
-open. This is the common case and today it never happens.
+open. This is the common case, and nothing in this skill produces it today — the class-collapses
+on record were done by hand.
 
 **Find that issue by ENUMERATING, not by searching.** A forge's issue search matches words, so a
 near-duplicate phrased differently does not match it — which is how most observed duplicate pairs
 got through, including two tickets for one race filed six days apart by different runs. What
 works is to **list every open issue with its title and labels and match the component yourself**:
 the module, the script, the verb, the file the finding names. The reference file carries the
-per-forge listing, and the listing must cover *every* open issue — a default page size that
-silently truncates turns this check into the search it replaces. A keyword search is a supplement
-to the enumeration, never the check.
+per-forge listing, and the listing must cover *every* issue in whatever it enumerates — a default
+page size that silently truncates turns this check into the search it replaces. A keyword search
+is a supplement to the enumeration, never the check.
+
+**Say what you enumerated, because "every open issue" does not scale silently.** A title and its
+labels cost on the order of twenty tokens, so a few hundred open issues is one paginated call and
+a few thousand tokens — cheaper than the duplicate it prevents, and that is the size this rung is
+written for. Thousands of open issues is a different problem: a tracker in the tens of thousands
+is one real listing of hundreds of thousands of tokens, which is not a read an agent can do at
+every stage record. Past the point where the full listing is impractical, **scope the enumeration
+by the repo's own partition** — the area label, the component, or the path prefix the finding
+names — read *that* partition in full, and record in the deferral entry that the scoping is what
+replaced the full read. A scoped enumeration is still an enumeration; a bare keyword search is
+not. **What the scoping gives up** is a duplicate that sits outside the partition you chose, which
+is the case for filing under the wrong area in the first place — so widen the partition when the
+finding could plausibly belong to two.
 
 **Then match the CLASS, not only the instance.** A finding that is the N-th instance of a class
 an open issue already names belongs on that issue as another scenario, not on a sibling of its
@@ -900,6 +925,15 @@ Comment the scenario onto it in the shape a finding takes (§5.4): what fails, w
 concrete path. Do not re-title the issue and do not re-scope it — the comment adds evidence, and
 whoever owns the issue decides what that evidence means.
 
+> **A limitation, not an exemption.** Rungs 2 and 3 publish to whatever surface the tracker is,
+> which on a public repo is a public one. So does §5.7's non-convergence record, and so does
+> §5.9's escalated-blocker comment — three routes, all of them already there, all of them posting
+> an unfixed finding's concrete failure scenario from an unattended run. `ship` has no private
+> disclosure path on either forge and §2.7 does not read a repo's `SECURITY.md`, so there is
+> nothing here that withholds a finding whose failure path would itself be a working reproduction
+> of an unpatched defect. **This paragraph records that gap; it does not close it and it grants no
+> one permission to route a finding away from a tracker.** Closing it is its own change.
+
 #### Rung 3 — a new issue
 
 Only a class no open issue names, or an area none covers. Record in the issue body why rungs 1
@@ -908,6 +942,14 @@ repeating the work behind it.
 
 Then it is an ordinary created issue and §7.A's rules apply: the repo's working language, the
 labels that repo requires, reuse over invention, and report anything created.
+
+**`no-create` forbids this rung outright**, and so does a stage that cannot ask §7.A step 3's
+confirmation — a scheduled wake (§6). §9's confirmation gate named issue creation when §7.A was
+the only place ship created one; this rung is the second, and it does not inherit an exemption
+nobody wrote. **Neither case stops the stage and neither case drops the finding**: it stays at its
+written record — its `deferred` entry with `rung_3` marked unfiled and the reason, and the count on
+the `Deferred:` line — and the run carries on. A change that has cleared its review is not parked
+over a ticket that was never filed, and the next interactive run can file it.
 
 #### Where the repo tracks work some other way
 
@@ -1166,7 +1208,8 @@ Threads and comments authored by `$ME` are our own records and never block anyth
 ## 9. Confirmation gates & autonomy
 
 - **Create an issue / start a brand-new change** — interactive confirm (§7.A). `no-create`
-  skips creation entirely.
+  skips creation entirely. This governs **both** places ship creates an issue: §7.A for the
+  change's own, and §5.11 rung 3 for a deferred finding, which states what it does instead.
 - **Foreign assignee or foreign PR/MR** — clarify, never take over.
 - **Ambiguous bare number** — ask which kind.
 - **Merge** — only per §2.6. A clean self-review is not a go-ahead and must never be treated

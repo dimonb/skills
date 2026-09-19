@@ -81,7 +81,7 @@ unset OAUTH_TOKEN; export GITLAB_HOST=<host>
 glab api "projects/$PROJECT/issues/N"
 
 # ENUMERATE the open issues — the duplicate and class check of core §5.11 rung 2, and the
-# near-duplicate check of §7.A. --paginate --output ndjson because `glab api` has no --jq
+# near-duplicate check of core §7.A. --paginate --output ndjson because `glab api` has no --jq
 # and pages arrays (§3); without both, the list truncates silently and the check becomes
 # the keyword search it exists to replace.
 glab api --paginate --output ndjson \
