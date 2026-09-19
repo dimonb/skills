@@ -249,10 +249,17 @@ printf '\n── the delivery verdict ──\n'
 # 3a. THE SHIPPED FALSE POSITIVE, and the reason this file exists. The seat is idle throughout and
 #     the text is sitting in its box — which is what the capture shows, marker and all. The old
 #     read counted `[supervisor]` and found one more than before, so it printed `delivered`.
+#     CONFIRM_SECS=0 for the reason the header of §4 gives and case 3e beside this one already
+#     acts on: this case is about the VERDICT, not about the poll, so it uses the fast fixture. A
+#     window of zero means "take one post-send sample and decide", and one sample of a box holding
+#     unsent text is the whole of what is being asserted. It was missed when the convention was
+#     applied — the seat is idle to the deadline here, so the case paid the full ten-second default
+#     on every run and established nothing in it. Mutation-verified after the conversion: with the
+#     box excluded from the capture (the shipped defect this case exists for) it still reds.
 reset; : >"$PINS/container-tmux"
 pane "$IDLE" pre
 draft '[supervisor] hello' >"$PANES/last"
-out=$(run_say codex 'hello')
+out=$( COUNCIL_SAY_CONFIRM_SECS=0 run_say codex 'hello' )
 ok "3a: text left in the box is NOT delivered" 6   "$(rc_of "$out")"
 ok "3a: ...and says so in those words"         yes "$(has "$out" 'MAY BE SITTING UNSENT')"
 ok "3a: ...and never says delivered"           no  "$(has "$out" 'delivered')"
@@ -264,10 +271,12 @@ ok "3a: ...and reports the states it sampled"  yes "$(has "$out" 'Sampled: idle'
 #     itself: the caller types it into the box, and the box is in the capture. This is the
 #     standing rule in AGENTS.md — any predicate that reads a child's screen is forgeable by a
 #     child whose work IS that predicate — and it is why the read is anchored per line.
+#     CONFIRM_SECS=0 for the same reason as 3a: the assertion is what the reader makes of ONE
+#     screen whose box carries the marker, not how long it is willing to wait for a better one.
 reset; : >"$PINS/container-tmux"
 pane "$IDLE" pre
 draft '[supervisor] watch the footer flip to esc to interrupt before you carry on' >"$PANES/last"
-out=$(run_say codex 'watch the footer flip to esc to interrupt before you carry on')
+out=$( COUNCIL_SAY_CONFIRM_SECS=0 run_say codex 'watch the footer flip to esc to interrupt before you carry on' )
 ok "3b: a marker inside the BOX confirms nothing" 6 "$(rc_of "$out")"
 ok "3b: ...and still warns about the box"      yes "$(has "$out" 'MAY BE SITTING UNSENT')"
 
@@ -297,7 +306,10 @@ ok "3e: running before and after -> unconfirmed" 6 "$(rc_of "$out")"
 # 3f. A SUBMIT THAT FAILED is the one case where the text is DEFINITELY in the box, so it is said
 #     outright rather than folded into the sampled verdict.
 reset; : >"$PINS/container-tmux"; pane "$IDLE" pre; pane "$IDLE" last
-out=$( FAKE_SUBMIT_RC=1 run_say codex 'hello' )
+#     CONFIRM_SECS=0 for the same reason again, and here it is the clearest of the three: the
+#     submit FAILED, so there is nothing for a longer window to observe — polling a seat that was
+#     never sent to is ten seconds of watching a screen that cannot change.
+out=$( COUNCIL_SAY_CONFIRM_SECS=0 FAKE_SUBMIT_RC=1 run_say codex 'hello' )
 ok "3f: a failed submit -> exit 6"             6   "$(rc_of "$out")"
 ok "3f: ...and says the text is unsent"        yes "$(has "$out" 'sitting UNSENT')"
 ok "3f: ...and never says delivered"           no  "$(has "$out" 'delivered')"

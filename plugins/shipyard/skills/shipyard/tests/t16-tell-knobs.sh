@@ -76,7 +76,14 @@ export -f git tmux
 
 run_tell() { # <env assignments...> -> output, then a last line "rc=<n>"
   local out rc=0
-  out=$( env "$@" SHIPYARD_BACKEND=tmux SHIPYARD_SESSION=t16ex \
+  # SHIPYARD_TELL_SETTLE_DELAY: production waits a second between typing and submitting so the
+  # client registers the line. The backend here is FAKED — `tmux` is a shell function that prints
+  # a fixed string — so there is nothing to settle and the second measures nothing, fourteen times
+  # over: thirteen of this file's forty-four measured seconds. No case below reads it; the knobs
+  # under test are the two CONFIRM ones. `${:-}` so an outer value still wins, which is what makes
+  # an A/B measurement of #203 possible on one box.
+  out=$( env SHIPYARD_TELL_SETTLE_DELAY="${SHIPYARD_TELL_SETTLE_DELAY:-0.01}" \
+             "$@" SHIPYARD_BACKEND=tmux SHIPYARD_SESSION=t16ex \
          bash "$TELL" 41 "a directive" 2>&1 ) || rc=$?
   printf '%s\nrc=%s\n' "$out" "$rc"
 }

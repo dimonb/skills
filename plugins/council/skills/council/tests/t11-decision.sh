@@ -27,17 +27,26 @@ fail=0
 # The id of the message just sent. A peer's Nth message is `<peer>-N`, so a test that
 # hard-codes `-1` silently points at the wrong message once a peer speaks twice.
 sid() { # <act> <refs-json> <text>
-  say_floor "$1" "$2" "$3" >/dev/null || return $?
-  bash "$CLI" order --ids | tail -1
+  # LOUD, and this is not defensiveness. A refused send used to leave `sid` returning an empty
+  # id, which the caller assigns to `$p`/`$o1` without checking, and the next message then refs
+  # `[""]` — so the amendment attaches to nothing and the FIRST thing that complains is a
+  # content assertion forty lines below ("no 'As proposed' heading"), about a room whose real
+  # problem was a send three steps earlier. Observed exactly once, under a concurrent run of the
+  # suite, and it cost far more to diagnose than the message below costs to write.
+  say_floor "$1" "$2" "$3" >/dev/null \
+    || { echo "FAIL sid: a '$1' send was refused (rc $?) — every id after this is wrong" >&2; return 1; }
+  local id; id=$(bash "$CLI" order --ids | tail -1)
+  [ -n "$id" ] || { echo "FAIL sid: the room's order named no id after a '$1' send" >&2; return 1; }
+  printf '%s\n' "$id"
 }
 
 printf 'Which storage layout?\n' > "$R/agenda.md"
-p=$(sid  propose '[]'            "ITEM-ONE one lane per author. ITEM-TWO no locks. ITEM-FIVE a janitor sweeps orphaned tokens.")
-o1=$(sid object  "[\"$p\"]"      "A reader would scan N directories on every poll.")
-a1=$(sid amend   "[\"$p\",\"$o1\"]" "AMEND-THREE a reader probes upward from its cursor instead.")
-o2=$(sid object  "[\"$p\"]"      "The janitor has no deadline.")
-a2=$(sid amend   "[\"$p\",\"$o2\"]" "AMEND-FOUR the janitor finishes within 24 h.")
-for i in 1 2 3 4; do sid msg '[]' "Nothing further from me ($i)." >/dev/null; done
+p=$(sid  propose '[]'            "ITEM-ONE one lane per author. ITEM-TWO no locks. ITEM-FIVE a janitor sweeps orphaned tokens.") || exit 1
+o1=$(sid object  "[\"$p\"]"      "A reader would scan N directories on every poll.") || exit 1
+a1=$(sid amend   "[\"$p\",\"$o1\"]" "AMEND-THREE a reader probes upward from its cursor instead.") || exit 1
+o2=$(sid object  "[\"$p\"]"      "The janitor has no deadline.") || exit 1
+a2=$(sid amend   "[\"$p\",\"$o2\"]" "AMEND-FOUR the janitor finishes within 24 h.") || exit 1
+for i in 1 2 3 4; do sid msg '[]' "Nothing further from me ($i)." >/dev/null; done || exit 1
 
 [ "$(bash "$CLI" verdict | cut -d' ' -f1)" = ready-to-decide ] || {
   echo "FAIL expected ready-to-decide"; bash "$CLI" claims; exit 1; }
@@ -111,8 +120,8 @@ Background a reader does not need before the decision itself.
 * one constraint
 * another constraint
 AGENDA
-sid propose '[]' "One lane per author, total order by Lamport clock." >/dev/null
-for i in 1 2 3; do sid msg '[]' "Agreed ($i)." >/dev/null; done
+sid propose '[]' "One lane per author, total order by Lamport clock." >/dev/null || exit 1
+for i in 1 2 3; do sid msg '[]' "Agreed ($i)." >/dev/null; done || exit 1
 OUT2=$(COUNCIL_ME=$(decider) bash "$CLI" decide) || { echo "FAIL decide refused in the long-agenda room"; exit 1; }
 
 # This room's proposal carried with NO amendment — the most common successful outcome, and a

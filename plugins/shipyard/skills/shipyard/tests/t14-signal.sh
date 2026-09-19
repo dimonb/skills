@@ -30,11 +30,13 @@
 # lines asserts that a line exists and nothing about reachability or branch bodies, and six of
 # seven semantic mutations survived that idiom.
 #
-# COST: five report RUNS across three cases (4d's control twice, 4e, 4e2 twice) use a LIVE slot and
-# so pay the report's 3s motion diff each; measured 14-16s for the file, varying with machine and
-# load. That is why it sits in `make test` and not the per-commit gate. The live runs are not
-# optional — a torn-down fleet always prints a terminal report, so only a slot in flight can show
-# that --only-changed still filters at all.
+# COST: five report RUNS across three cases (4d's control twice, 4e, 4e2 twice) use a LIVE slot,
+# and each therefore pays the report's motion diff once. That diff is three seconds in production
+# and it used to be three seconds here too — 15 of the file's 34 measured seconds spent watching a
+# faked `capture-pane` return the same fixed string twice. `run_report` now sets
+# SHIPYARD_MOTION_INTERVAL (#203), which is why those runs are no longer what this file costs.
+# The live runs themselves are not optional — a torn-down fleet always prints a terminal report,
+# so only a slot in flight can show that --only-changed still filters at all.
 set -uo pipefail
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SKILL_DIR="$(cd "$DIR/.." && pwd)"
@@ -230,7 +232,11 @@ export -f git tmux gh
 run_report() { # <tmux-mode> [args...]; prints the report, then a last line "rc=<n>"
   local mode="$1" out rc=0; shift
   : >"$FLAKY"    # the flaky counter is per-run, never carried between cases
-  out=$( TMUX_MODE="$mode" SHIPYARD_BACKEND=tmux SHIPYARD_SESSION=t14ex \
+  # SHIPYARD_MOTION_INTERVAL: the report's two captures are three seconds apart per live slot in
+  # production. The faked `capture-pane` above returns a fixed string, so both captures are the
+  # same bytes at any interval and nothing here reads the ▶️/⏸ column; production's default is
+  # untouched (#203).
+  out=$( SHIPYARD_MOTION_INTERVAL="${SHIPYARD_MOTION_INTERVAL:-0.01}" TMUX_MODE="$mode" SHIPYARD_BACKEND=tmux SHIPYARD_SESSION=t14ex \
          bash "$REPORT" "$@" 2>/dev/null ) || rc=$?
   printf '%s\nrc=%s\n' "$out" "$rc"
 }

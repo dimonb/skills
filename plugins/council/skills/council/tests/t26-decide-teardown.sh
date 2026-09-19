@@ -202,8 +202,9 @@ ok "...printing the record path and nothing else on stdout" "$RE/board/decision.
 ok "...and asking for no teardown" no "$([ -e "$RE/state/teardown" ] && echo yes || echo no)"
 ok "...saying the terminals are left live" yes "$(has "$(cat "$erre")" 'LEFT LIVE')"
 ok "...and naming the verb that closes them" yes "$(has "$(cat "$erre")" 'council.sh down --room t26e')"
-# Give the keeper more than a poll cycle to prove it is not going anywhere.
-sleep 6
+# Give the keeper more than a poll cycle to prove it is not going anywhere. `hold` spends that
+# window checking, so a keeper that DOES go reds here immediately instead of six seconds later.
+hold 1 "$KE"
 ok "the keeper is still there" yes "$([ -n "$KE" ] && kill -0 "$KE" 2>/dev/null && echo yes || echo no)"
 ok "...and nothing was reaped" no "$([ -e "$MARK/e/reaped-a" ] && echo yes || echo no)"
 
@@ -226,7 +227,37 @@ KF=$(kpid_of "$RF/state/keeper.pid")
 kill_keeper "$RF/state/keeper.pid"
 ok "the keeper is gone before the close" gone "$(wait_gone "$KF" "$PATIENCE")"
 errf="$COUNCIL_TEST_ROOT/t26f.err"
+# HOLD THE ROOM'S BELLS OPEN ACROSS THE CLOSE. This case has deliberately removed the only process
+# that normally does, and `decide` still rings every peer (`c_send`'s trailing `c_ring` loop). A
+# ring is a DETACHED writer — `( printf '.' > "$f" & )` — so with no reader it blocks in open(2)
+# for ever; and because it is forked inside the verb's `>/dev/null` scope, it inherits the copy of
+# the caller's ORIGINAL stdout that bash saved on fd 10, which is this line's command-substitution
+# pipe. `$( )` returns when the last writer to that pipe closes, not when the command exits — so
+# the verb finished, wrote its record and its stderr, and this test still hung for ever, with two
+# blocked orphans per run.
+#
+# WHAT WAS ACTUALLY HOLDING THIS CASE UP BEFORE, because it was not the absence of the problem: at
+# the production five-second period the keeper's `sleep 5` is a CHILD that inherited its bell fds,
+# so killing the keeper left that orphan holding every bell open for up to five more seconds —
+# long enough for these rings to complete. The case passed on a leaked file descriptor. Shorten
+# the period and the orphan goes in 50 ms, the rings block, and the hang is permanent. So this is
+# not a symptom of the faster poll; it is a dependency the faster poll exposed, and the fix is to
+# say out loud what the fixture needs rather than to slow the suite back down until luck returns.
+#
+# The premise is untouched: a fifo held open by this shell is not a keeper. `_keeper_teardown`
+# still asks `_keeper_pid` + `kill -0`, still gets nothing, and still returns 1 — which is the
+# exit-5 arm every assertion below is about.
+#
+# (The blocking `c_ring` itself is a production hazard, not a test one — a `decide` against a
+# genuinely keeperless room leaks a stuck writer per peer — and it is #209 rather than something
+# fixed here, where the change is about how long the suite takes. The hang this line-block avoids
+# is the fourth instance on #109.)
+f_bells=()
+for _p in a b c; do
+  exec {_bf}<>"$RF/bell/$_p.fifo" && f_bells+=("$_bf")
+done
 outf=$(COUNCIL_ME=a bash "$CLI" decide 2>"$errf"); rc=$?
+for _bf in ${f_bells[@]+"${f_bells[@]}"}; do exec {_bf}>&-; done
 ok "the close exits 5, not 0 and not 4" 5 "$rc"
 ok "...still printing the record path, because the record is the output" "$RF/board/decision.md" "$outf"
 ok "...saying the terminals could NOT be closed" yes "$(has "$(cat "$errf")" 'could NOT be closed')"
@@ -539,8 +570,10 @@ for shape in dir symlink-to-dir; do
   ok "...and no temp left inside it" no \
      "$(ls "$RD"/state/teardown/.teardown.* >/dev/null 2>&1 && echo yes || echo no)"
   ok "...nor at its own name" no "$(ls "$RD"/state/.teardown.* >/dev/null 2>&1 && echo yes || echo no)"
-  # The keeper must be left alone: a refused request is not a teardown.
-  sleep 6
+  # The keeper must be left alone: a refused request is not a teardown. Once per shape, so this
+  # is the wait the loop multiplies — `hold` makes it one second of polling instead of six of
+  # sleeping, and reds at once on the shape that does slip through.
+  hold 1 "$KD"
   ok "...the keeper is untouched, since nothing was asked of it" yes \
      "$([ -n "$KD" ] && kill -0 "$KD" 2>/dev/null && echo yes || echo no)"
   ok "...and nothing was reaped" no "$([ -e "$MARK/m-$shape/reaped-a" ] && echo yes || echo no)"

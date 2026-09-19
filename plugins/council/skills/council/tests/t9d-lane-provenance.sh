@@ -48,7 +48,7 @@ craft() { # <lane> <seq> <field> <value-as-json>
 fresh
 ESC="$COUNCIL_TEST_ROOT/t9d-ESCAPED.txt"; rm -f "$ESC"
 craft a 1 from '"../../../t9d-ESCAPED.txt"'
-COUNCIL_ME=b bash "$CLI" recv --timeout 1 >/dev/null 2>&1
+COUNCIL_ME=b bash "$CLI" recv --timeout "$RECV_WAIT" >/dev/null 2>&1
 if [ -e "$ESC" ]; then
   echo "FAIL a crafted .from made the reader write outside the room ($ESC)"; fail=1
   rm -f "$ESC"
@@ -65,7 +65,7 @@ else echo "FAIL the cursor did not follow the lane: cursor/b/a=$cur (want 1)"; f
 # the wrong cursor — past messages the reader had never seen.
 fresh
 craft a 1 from '"b"'
-COUNCIL_ME=b bash "$CLI" recv --timeout 1 >/dev/null 2>&1
+COUNCIL_ME=b bash "$CLI" recv --timeout "$RECV_WAIT" >/dev/null 2>&1
 ca=$(cat "$R/cursor/b/a" 2>/dev/null || echo MISSING)
 if [ "$ca" = 1 ]; then echo "ok   a .from naming another peer still advanced only its own lane"
 else echo "FAIL grouping followed the crafted .from: cursor/b/a=$ca (want 1)"; fail=1; fi
@@ -81,7 +81,7 @@ for bad in '"noDashHere"' '"a-notanumber"' '17' 'null' '["a-1"]'; do
           hand:false,turn:null,round:null,text:"an honest later message",
           created_at:"test",sent_ms:0}' > "$R/lane/a/000002.json"
   printf '2' > "$R/state/a.seq"
-  out=$(COUNCIL_ME=b bash "$CLI" recv --timeout 1 2>/dev/null)
+  out=$(COUNCIL_ME=b bash "$CLI" recv --timeout "$RECV_WAIT" 2>/dev/null)
   if printf '%s' "$out" | grep -q "an honest later message"; then
     echo "ok   a crafted .id ($bad) did not stop the inbox"
   else
@@ -94,9 +94,11 @@ done
 # so the poisoned file was re-read forever. Drain twice and require the second to be empty.
 fresh
 craft a 1 id '"noDashHere"'
-COUNCIL_ME=b bash "$CLI" recv --timeout 1 >/dev/null 2>&1
+COUNCIL_ME=b bash "$CLI" recv --timeout "$RECV_WAIT" >/dev/null 2>&1
 cur=$(cat "$R/cursor/b/a" 2>/dev/null || echo MISSING)
-out2=$(COUNCIL_ME=b bash "$CLI" recv --timeout 1 2>/dev/null); rc2=$?
+# $RECV_NOTHING, not $RECV_WAIT: this one asserts the poisoned message does NOT come back, so
+# there is no event to wait for and the whole window is paid every run. See _helpers.sh.
+out2=$(COUNCIL_ME=b bash "$CLI" recv --timeout "$RECV_NOTHING" 2>/dev/null); rc2=$?
 if [ "$cur" = 1 ] && [ "$rc2" = 4 ] && [ -z "$out2" ]; then
   echo "ok   the poisoned message was consumed once and did not re-arrive"
 else
@@ -108,7 +110,7 @@ fi
 # transport's own working state, and a participant parses what recv prints.
 fresh
 say a msg '[]' "an ordinary message"
-out=$(COUNCIL_ME=b bash "$CLI" recv --timeout 1 2>/dev/null)
+out=$(COUNCIL_ME=b bash "$CLI" recv --timeout "$RECV_WAIT" 2>/dev/null)
 if printf '%s' "$out" | jq -e 'has("_lane") or has("_seq")' >/dev/null 2>&1; then
   echo "FAIL recv leaked internal bookkeeping: $out"; fail=1
 else
@@ -126,7 +128,7 @@ fresh
 } > "$R/lane/a/000001.json"
 printf '1' > "$R/state/a.seq"
 ESC2="$COUNCIL_TEST_ROOT/nope"; rm -f "$ESC2"
-out=$(COUNCIL_ME=b bash "$CLI" recv --timeout 1 2>/dev/null)
+out=$(COUNCIL_ME=b bash "$CLI" recv --timeout "$RECV_WAIT" 2>/dev/null)
 n=$(printf '%s' "$out" | grep -c . || true)
 cur=$(cat "$R/cursor/b/a" 2>/dev/null || echo MISSING)
 if [ ! -e "$ESC2" ] && [ "$n" = 2 ] && [ "$cur" = 1 ]; then
@@ -166,7 +168,9 @@ printf 'null' >> "$R/lane/a/000001.json"      # the bleed: no trailing newline
 round0 b 2 "b opening position"
 
 # c drains while the round is still open (2 of 3 posted): nothing may be released yet.
-COUNCIL_ME=c bash "$CLI" recv --timeout 1 >/dev/null 2>&1
+# $RECV_NOTHING for exactly that reason — this drain has nothing to arrive, so a generous bound
+# would be spent in full on every run and would buy no margin at all. See _helpers.sh.
+COUNCIL_ME=c bash "$CLI" recv --timeout "$RECV_NOTHING" >/dev/null 2>&1
 cb=$(cat "$R/cursor/c/b" 2>/dev/null || echo MISSING)
 if [ "$cb" = 0 ]; then
   echo "ok   the open barrier released nothing of b's to c"
@@ -176,7 +180,7 @@ fi
 
 # c posts its own position, which closes the round; both peers' positions must now arrive.
 COUNCIL_ME=c bash "$CLI" send --act propose "c opening position" >/dev/null 2>&1
-out=$(COUNCIL_ME=c bash "$CLI" recv --timeout 1 2>/dev/null)
+out=$(COUNCIL_ME=c bash "$CLI" recv --timeout "$RECV_WAIT" 2>/dev/null)
 got_a=$(printf '%s' "$out" | grep -c 'a opening position' || true)
 got_b=$(printf '%s' "$out" | grep -c 'b opening position' || true)
 if [ "$got_a" = 1 ] && [ "$got_b" = 1 ]; then
@@ -202,7 +206,7 @@ for bad in '42' '"a string"' 'true' '[1,2]' 'null'; do
              hand:false,turn:null,round:null,text:"an honest later message",
              created_at:"t",sent_ms:0}' > "$R/lane/a/000002.json"
   printf '2' > "$R/state/a.seq"
-  out=$(COUNCIL_ME=b bash "$CLI" recv --timeout 1 2>/dev/null)
+  out=$(COUNCIL_ME=b bash "$CLI" recv --timeout "$RECV_WAIT" 2>/dev/null)
   n=$(printf '%s' "$out" | grep -c . || true)
   if printf '%s' "$out" | grep -q "an honest later message" && [ "$n" = 1 ]; then
     echo "ok   a non-object document ($bad) cost only its own message"
@@ -239,7 +243,7 @@ jq -c -n '{id:"a-3",from:"a",lamport:3,deps:{},act:"msg",refs:[],to:["*"],
            created_at:"t",sent_ms:0}' > "$R/lane/a/000003.json"
 printf '3' > "$R/state/a.seq"
 err="$R/recv.err"
-out=$(COUNCIL_ME=b bash "$CLI" recv --timeout 1 2>"$err")
+out=$(COUNCIL_ME=b bash "$CLI" recv --timeout "$RECV_WAIT" 2>"$err")
 n=$(printf '%s' "$out" | grep -c . || true)
 if printf '%s' "$out" | grep -q "an honest earlier message" \
    && printf '%s' "$out" | grep -q "an honest later message" && [ "$n" = 2 ]; then

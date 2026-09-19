@@ -27,6 +27,15 @@ export LC_ALL=C
 SKILL="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"
 [ -f "$SKILL/lib/up.sh" ] || { echo "t16: cannot find up.sh under $SKILL" >&2; exit 1; }
 
+# The keeper period for every room this file builds. Production is five seconds and stays five
+# seconds; this file is not about the period — it is about WHICH EVENTS end a keeper (owner EOF,
+# a group signal, the directory going) — and at five seconds every one of those `wait_gone`s
+# spent most of its time waiting for the next poll rather than for the event. Nothing here has a
+# premise about how long a poll takes; the one case in the suite that does is t19 case G, and it
+# passes its own period at the call site rather than inheriting one. `${:-}` so an outer override
+# still wins, which is what makes an A/B measurement possible on one box.
+export COUNCIL_KEEPER_POLL_INTERVAL="${COUNCIL_KEEPER_POLL_INTERVAL:-0.05}"
+
 ROOT=$(mktemp -d) || exit 1
 KEEPERS=()   # every keeper we spawn, reaped in the trap: they detach and reparent, so nothing
 OWNERS=()    # else would. Owners block on `wait`, so a failed case could leave one running too.
@@ -165,7 +174,18 @@ canary_probe() { # <expose-wfd:1|0> <pidfile> -> prints eof|timeout|data
   local expose="$1" pidfile="$2" cr cw boot rc r d f
   d=$(mktemp -d); f="$d/.canary"; mkfifo "$f"
   exec {boot}<>"$f"; exec {cr}<"$f"; exec {cw}>"$f"; exec {boot}>&-; rm -f "$f"; rmdir "$d" 2>/dev/null
-  ct_launch() { sleep 30 & echo "$!" >> "$pidfile"; return 0; }   # faked daemonizing backend
+  # The faked daemonizing backend. Its stdio is detached and its OTHER inherited fds are not,
+  # which is the whole point: what this case asks is whether the daemon kept a copy of the canary
+  # WRITE END, and that is a `{cw}` fd, untouched by the three redirections below.
+  #
+  # WITHOUT `>/dev/null` THIS CASE COST SIXTY SECONDS AND MEASURED NOTHING WITH THEM. `canary_probe`
+  # is called inside `$( )`, and a command substitution does not return when its command does — it
+  # returns when the last writer to its pipe closes. The backgrounded `sleep` inherited that pipe,
+  # so each probe blocked for the sleep's full 30s AFTER the verdict had already been printed, and
+  # the two calls were 60 of this file's 63 seconds. Nothing was being established in that time:
+  # the `read -t 3` above had already answered. (Measured: 63s before, ~3s after, same verdicts.)
+  # t20 backgrounds its killer with the same three redirections, for the same reason.
+  ct_launch() { sleep 30 </dev/null >/dev/null 2>&1 & echo "$!" >> "$pidfile"; return 0; }
   if [ "$expose" = 1 ]; then _KEEPER_CANARY_WFD="$cw"; else unset _KEEPER_CANARY_WFD; fi
   _ct_launch_owned peerA /tmp /dev/null
   exec {cw}>&-                       # owner death: drop the only intended writer

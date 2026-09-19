@@ -250,7 +250,11 @@ gh() { printf 'OPEN\n'; return 0; }
 export -f git tmux gh
 run_report() {  # <stall-secs> [extra args...]; prints the whole report
   local ss="$1"; shift
-  SHIPYARD_STALL_SECS="$ss" SHIPYARD_BACKEND=tmux SHIPYARD_SESSION=t13ex \
+  # SHIPYARD_MOTION_INTERVAL: the report waits three seconds between its two captures, PER SLOT,
+  # and this runs three slots per call. The wait decides nothing here — the faked `capture-pane`
+  # above returns a fixed string, so both captures are the same bytes at any interval, and no
+  # check in this file reads the ▶️/⏸ column. Production's default is untouched (#203).
+  SHIPYARD_MOTION_INTERVAL="${SHIPYARD_MOTION_INTERVAL:-0.01}" SHIPYARD_STALL_SECS="$ss" SHIPYARD_BACKEND=tmux SHIPYARD_SESSION=t13ex \
     bash "$REPORT" "$@" 41 42 43 2>/dev/null
 }
 

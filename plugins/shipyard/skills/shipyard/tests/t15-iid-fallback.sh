@@ -32,8 +32,10 @@
 #
 # The rig is t13-wait.sh's: exported shell functions shadow `git`, `tmux` and `gh`, which works
 # where a fake binary on PATH does not because shipyard-lib.sh prepends the system PATH over
-# anything a test puts in front. Cost: the report sleeps 3s per slot for its motion diff, so one
-# five-slot run is ~15s — which is why this suite is in `make test`, not the per-commit gate.
+# anything a test puts in front. Cost: the report sleeps once per slot for its motion diff, which
+# in production is three seconds and made this six-slot run eighteen of its nineteen measured
+# seconds. The run below sets SHIPYARD_MOTION_INTERVAL (#203) and says there why that changes no
+# answer here. The suite is still in `make test` rather than the per-commit gate.
 #
 # WHAT A GREEN RUN DOES NOT PROVE, stated so it is not read as more than it is. The `gh` fake
 # honours `--jq` by piping its canned JSON through real jq, so the filter in shipyard-report.sh is
@@ -157,7 +159,11 @@ gh() {
 export -f git tmux gh
 
 printf '%s\n' "$(date +%s)" >"$FAKE_GIT/ship-escalations/report-tick"
-out=$(SHIPYARD_STALL_SECS=100000 SHIPYARD_BACKEND=tmux SHIPYARD_SESSION=t15ex \
+# SHIPYARD_MOTION_INTERVAL: six slots, and the report waits between two captures for each one —
+# eighteen seconds of a nineteen-second file. The faked `capture-pane` above returns a fixed
+# string, so both captures are identical at any interval and nothing below reads the ▶️/⏸
+# column; production's three-second default is untouched (#203).
+out=$(SHIPYARD_MOTION_INTERVAL="${SHIPYARD_MOTION_INTERVAL:-0.01}" SHIPYARD_STALL_SECS=100000 SHIPYARD_BACKEND=tmux SHIPYARD_SESSION=t15ex \
         bash "$REPORT" 51 52 53 54 55 56 2>/dev/null)
 
 # 1 — the whole point: a child that wrote nothing still gets its PR number.

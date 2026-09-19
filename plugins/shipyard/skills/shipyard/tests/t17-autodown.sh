@@ -366,7 +366,14 @@ b_tick() { # [<VAR=value> ...] -- <slot> ...
   # (run-all.sh, the Makefile and CI all reach a modern bash through PATH), which is exactly why
   # it is spelled out here. `slots` gets the same treatment: it is non-empty at every call site
   # today, so it is latent rather than broken, and the two should not differ.
-  env SHIPYARD_STALL_SECS=100000 SHIPYARD_BACKEND=tmux SHIPYARD_SESSION=t17b ${envs[@]+"${envs[@]}"} \
+  # SHIPYARD_MOTION_INTERVAL: the report's two captures are three seconds apart in production,
+  # and this file ticks it 46 times — 118 of the suite's ~825 seconds, all of it waiting. The
+  # wait measures nothing HERE because the backend is faked: `capture-pane` cats $B_SCREEN, which
+  # only this test writes and only BETWEEN ticks, so the two captures are of the same bytes
+  # whatever the interval is. Shrinking it therefore changes no answer, which is what makes it
+  # safe; the production default is untouched in shipyard-report.sh. It goes before ${envs}, not
+  # after, so a case that wants its own value still overrides it.
+  env SHIPYARD_MOTION_INTERVAL="${SHIPYARD_MOTION_INTERVAL:-0.01}" SHIPYARD_STALL_SECS=100000 SHIPYARD_BACKEND=tmux SHIPYARD_SESSION=t17b ${envs[@]+"${envs[@]}"} \
     bash "$FARM/shipyard-report.sh" ${slots[@]+"${slots[@]}"} 2>/dev/null
 }
 
@@ -460,7 +467,7 @@ b_slot 68 868 ready-to-merge
 printf '1 ship-68\n' >"$B_WINS"; printf 'ship-68\n' >"$B_ENUM"
 printf '868\tMERGED\n' >"$B_STATES"
 printf '%s\n' "$(date +%s)" >"$B_GIT/ship-escalations/report-tick"
-b9err=$( env SHIPYARD_STALL_SECS=100000 SHIPYARD_BACKEND=tmux SHIPYARD_SESSION=t17b \
+b9err=$( env SHIPYARD_MOTION_INTERVAL="${SHIPYARD_MOTION_INTERVAL:-0.01}" SHIPYARD_STALL_SECS=100000 SHIPYARD_BACKEND=tmux SHIPYARD_SESSION=t17b \
            SHIPYARD_AUTODOWN_TICKS=1 bash "$FARM/shipyard-report.sh" 68 2>&1 >/dev/null )
 ok "B9: a threshold of 1 is refused, loudly"         1 "$(printf '%s' "$b9err" | grep -c 'single forge read')"
 ok "B9: ...and one tick still tears nothing down"    0 "$(grep -c . "$DOWN_CALLS")"

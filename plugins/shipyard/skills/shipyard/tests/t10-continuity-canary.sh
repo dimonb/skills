@@ -159,8 +159,21 @@ canary_probe() { # <close-wfd:1|0> <pidfile> -> eof|timeout|data
   local close="$1" pidfile="$2" cr cw boot rc r d f
   d=$(mktemp -d); f="$d/.canary"; mkfifo "$f"
   exec {boot}<>"$f"; exec {cr}<"$f"; exec {cw}>"$f"; exec {boot}>&-; rm -f "$f"; rmdir "$d" 2>/dev/null
-  if [ "$close" = 1 ]; then ( exec {cw}>&-; sleep 30 & echo "$!" >> "$pidfile" )   # child WITHOUT the write end
-  else                      ( sleep 30 & echo "$!" >> "$pidfile" ); fi             # child WITH the write end (bug)
+  # The faked launched child. Its STDIO is detached and its other inherited fds are not, which is
+  # the whole question this case asks: whether it kept a copy of the canary WRITE end, a `{cw}` fd
+  # that none of the three redirections below touches. The `close=1` branch drops that fd first;
+  # the control deliberately does not.
+  #
+  # WITHOUT `</dev/null >/dev/null 2>&1` THIS CASE COST SIXTY SECONDS AND MEASURED NOTHING WITH
+  # THEM. `canary_probe` is called inside `$( )`, and a command substitution returns when the last
+  # writer to its pipe closes, not when its command exits. The backgrounded `sleep` inherited that
+  # pipe, so each probe blocked for the sleep's full 30s AFTER the verdict had already been
+  # printed — the `read -t 3` above had answered seconds earlier — and the two calls were 60 of
+  # this file's 63 seconds, making it the whole suite's critical path. (Measured: 63s before, ~3s
+  # after, same two verdicts. t16 case D in the council suite is the identical shape and the
+  # identical fix; #109 carries the general form.)
+  if [ "$close" = 1 ]; then ( exec {cw}>&-; sleep 30 </dev/null >/dev/null 2>&1 & echo "$!" >> "$pidfile" )   # child WITHOUT the write end
+  else                      ( sleep 30 </dev/null >/dev/null 2>&1 & echo "$!" >> "$pidfile" ); fi             # child WITH the write end (bug)
   exec {cw}>&-                       # owner death: drop the only intended writer
   if read -t 3 -u "$cr" _ 2>/dev/null; then r=data; else rc=$?; if [ "$rc" -le 128 ]; then r=eof; else r=timeout; fi; fi
   exec {cr}<&-

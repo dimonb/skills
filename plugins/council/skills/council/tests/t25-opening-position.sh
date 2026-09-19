@@ -184,9 +184,21 @@ echo "--- the round deadline starts at the first position, not the first message
 # round-0 accessor selected on the field alone, a non-position was the anchor -- in the observed
 # room, the `--help`. A stray message minutes before anybody actually spoke therefore backdated
 # the deadline, and the round could close on a quorum the moment the first real position landed.
-R4="$COUNCIL_TEST_ROOT/t25d"; newroom "$R4" 1000 2 a b c
-old=$(( $(now_ms) - 10000 ))
-raw_round0 a 1 5 msg "$old" "--help, ten seconds before anybody spoke"
+#
+# THE TWO NUMBERS ARE A MARGIN, AND THE MARGIN USED TO BE ONE SECOND. What has to hold is that
+# the stale message is older than the deadline (so a run that anchors on it closes the round, and
+# this case kills that mutant) while the real positions are younger (so a correct run leaves it
+# open). The gap between them is all the wall clock this case may spend on its own three CLI
+# calls, and at `1000` against a message `10000` ms old that was one second — comfortable on an
+# idle box and not comfortable at all once the suite's files run concurrently, where three
+# `bash council.sh` invocations and their jq children take longer than that and the round closes
+# legitimately, on the deadline, reporting a defect that is not there. Measured: red under a
+# parallel run, green on the same tree run alone. Ten minutes against one is the same assertion
+# with six hundred times the headroom, and it weakens nothing — the mutant is caught by the
+# ORDERING of the two, never by how close they are.
+R4="$COUNCIL_TEST_ROOT/t25d"; newroom "$R4" 60000 2 a b c
+old=$(( $(now_ms) - 600000 ))
+raw_round0 a 1 5 msg "$old" "--help, ten minutes before anybody spoke"
 COUNCIL_ME=b bash "$CLI" send --act propose "position b" >/dev/null
 COUNCIL_ME=c bash "$CLI" send --act propose "position c" >/dev/null
 [ "$(barrier b)" = open ] && ok "a stale non-position does not backdate the deadline" \
@@ -194,6 +206,11 @@ COUNCIL_ME=c bash "$CLI" send --act propose "position c" >/dev/null
 
 # THE CONTROL: the same stale message as a POSITION must close the round, or the fixture's clock
 # never reaches the deadline and the assertion above is vacuous.
+#
+# ITS NUMBERS STAY TIGHT ON PURPOSE, and are not an oversight left behind by the widening above.
+# This one asserts the round IS closed, so wall clock spent by the test only pushes it further
+# past the deadline: load can make this case pass more easily, never fail. The case above is the
+# one that needed headroom, because there load pushes it the wrong way.
 R5="$COUNCIL_TEST_ROOT/t25e"; newroom "$R5" 1000 2 a b c
 old=$(( $(now_ms) - 10000 ))
 raw_round0 a 1 5 propose "$old" "a real position, ten seconds ago"
