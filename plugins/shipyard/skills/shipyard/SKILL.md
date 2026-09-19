@@ -157,11 +157,12 @@ behaviour, not an accident; what was wrong was a heading promising a monitor. `S
 removes the teardown.
 
 It does NOT make a run inert, and the first draft of this very paragraph claimed it did. With the
-teardown off the report still writes its four mailbox bookkeeping files — including **truncating**
-`report-merged`, which resets the consecutive-merged counts of every slot the run did not name —
-repaints each child's sidebar glyph, and closes pending notices through its escalation tail. Run
-it ad hoc beside a live monitor and you delay that monitor's teardowns by a tick and consume any
-notice raised since its last one.
+teardown off the report still writes its mailbox bookkeeping files — including **truncating**
+`report-merged`, which with the teardown OFF resets *every* slot's consecutive-merged count, and
+with it on resets the counts of the slots that run did not visit — repaints each child's sidebar
+glyph, closes pending notices through its escalation tail, and re-arms the Codex parent continuity
+watcher. Run it ad hoc beside a live monitor and you delay that monitor's teardowns by a tick and
+consume any notice raised since its last one.
 
 ## Step 1. Launch (with dedup)
 
@@ -362,10 +363,14 @@ escalation has not moved for 30 minutes (`SHIPYARD_STALL_SECS` to tune). Treat t
 an alarm, not as a status line — and work the order it prints, which is Step 5's: git,
 then a nudge, then compaction.
 
-**Four blocks bypass `--only-changed`**, for the same reason: `🛑 STALLED`, `🛑 NO SIGNAL`, and —
-added with the automatic teardown — `✋ HELD` and `✋ AWAITING REMOVAL`. The last two report a
-destructive act being attempted and declined on every tick, and an action only you can take, so
-they repeat for as long as the condition lasts rather than being news once. That repetition is a
+**Some blocks bypass `--only-changed` entirely** rather than riding the per-slot signature:
+`🛑 STALLED`, `🛑 NO SIGNAL`, and — added with the automatic teardown — `🧹 TORN DOWN`,
+`✋ HELD` and `✋ AWAITING REMOVAL`. `🧹 TORN DOWN` reports an act already taken, and a signature
+is the wrong thing to gate that on because the signature file lives in the mailbox children write
+into. The other two report a destructive act being attempted and declined on every tick, and an
+action only you can take, so they repeat for as long as the condition lasts rather than being news
+once. Those are the blocks checked against the bypass condition in `shipyard-report.sh`; nothing
+keeps this list and that condition in step, so read the condition if it matters. That repetition is a
 deliberate trade and a contested one: #182 is open against exactly it (a verbatim block that
 repeats trains the operator to skim it), so if that lands these should move to whatever
 de-duplication it introduces.

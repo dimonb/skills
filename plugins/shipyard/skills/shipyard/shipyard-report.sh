@@ -58,8 +58,8 @@
 #    undeliverable. See the block where SHIPYARD_AUTODOWN is read for every lock and why
 #    `closed` is not a trigger. It is the one thing here that REMOVES A SLOT rather than
 #    observing it; the script's other side effects are its own mailbox bookkeeping
-#    (report-sig / -stall / -tick / -merged), the agterm sidebar glyphs it repaints, and the
-#    pending notices its escalation tail closes. What it removed, refused or held each get their
+#    (report-sig / -stall / -tick / -merged), the agterm sidebar glyphs it repaints, the pending
+#    notices its escalation tail closes, and the Codex parent continuity watcher it re-arms. What it removed, refused or held each get their
 #    own block, and all three bypass --only-changed;
 #  * a motionless slot is asked WHY before the stall clock is consulted (shipyard_wait_state in
 #    shipyard-lib.sh). A child that CANNOT move (a stated capacity wait) and one nobody ASKED to
@@ -218,6 +218,7 @@ SIGFILE=""
 STALLFILE=""
 TICKFILE=""
 MERGEDFILE=""
+MAILBOX_DIR="(mailbox unresolved)"   # named once in the HELD block; the records are basenames
 STALL_SECS="${SHIPYARD_STALL_SECS:-1800}"   # 30 min of no movement, idle, nothing asked of you
 # ENSURE, not just resolve: if the directory is missing the stall table cannot be
 # written, `since` resets to now on every run, and the watchdog silently never
@@ -225,6 +226,7 @@ STALL_SECS="${SHIPYARD_STALL_SECS:-1800}"   # 30 min of no movement, idle, nothi
 if mb=$(shipyard_mailbox_ensure 2>/dev/null); then
   SIGFILE="$mb/report-sig"; STALLFILE="$mb/report-stall"; TICKFILE="$mb/report-tick"
   MERGEDFILE="$mb/report-merged"
+  MAILBOX_DIR="$mb"
 fi
 
 # --- a merged slot tears itself down (#181) -------------------------------------------------
@@ -326,8 +328,8 @@ autodown_consider() {
   # path and resolve the VICTIM slot's real worktree. Measured on tmux, which accepts `ship-7/`
   # as a window name and lists it verbatim: slot `7/` was not held, and the teardown it would
   # have run targets slot `7`. Refusing here keeps the AUTOMATIC path away from a name it cannot
-  # reason about; validating slot names at the boundary would fix the manual path too, and is
-  # filed rather than done here (that is a change to a function with other callers).
+  # reason about. Validating slot names at the boundary would fix the manual path too — that is
+  # #198, and it belongs there because it changes a function with other callers.
   case "$slot" in *"/"*) return 1 ;; esac
   # Lock 2 first, because it is a file read and lock 1's value costs a forge call on the
   # no-terminal path. Both are already in hand for a live slot, so the order costs nothing
@@ -414,9 +416,10 @@ autodown_consider() {
   # the only thing outstanding, which is exactly what the block tells the operator.
   if [ "${pending:-0}" != 0 ]; then
     # Both counts, so the block can tell the operator which case they are in: `$pending` is the
-    # fail-closed one and `$shown` is what the escalation block below will actually display. They
-    # agree for a readable record and differ for an unreadable one, and only the second case
-    # warrants the explanation about the esc column.
+    # fail-closed one and `$shown` is what the escalation block below will actually display. The
+    # two ask different questions — any record not provably closed, versus a readable escalation
+    # KIND whose status is `pending` — so they diverge for an unreadable record and would diverge
+    # for an off-allow-list kind too, if anything wrote one under this stem today.
     REAP_HELD+=("$slot|$pending|$(slot_pending "$slot")")
     return 1
   fi
@@ -689,18 +692,31 @@ slot_pending() {
 # paths are read in a render block, and a function that returns both through one string would be
 # parsed by both callers. It re-walks the glob, which costs one extra pass over a handful of
 # files and only for a slot that is actually held.
+# BOTH VALUES IT PRINTS ARE WRITTEN BY THE CHILD, and this block is operator-facing text, so
+# neither goes out raw. A filename may contain any byte but `/` and NUL, and `.status` is a JSON
+# string, so both can carry newlines and control bytes. Measured before this was added: a crafted
+# filename injected a whole forged `### 🧹 TORN DOWN` line while the header still said the slot
+# was HELD, and a raw `ESC[2J ESC[H` plus CR erased the real block and the table above it. The
+# review that found it also rendered a forged `AWAITING REMOVAL` whose "exact command" carried
+# `--force` — which `shipyard-down.sh` accepts in any argv position and which overrides every
+# gate. That is child-written evidence deciding whether the operator sees a signal, i.e. the rule
+# this whole change is built on, in the function added to satisfy it.
+#
+# `%q` rather than a `tr` filter: it is bash 3.2 built-in, it renders a newline or ESC as
+# `$'\n'` / `$'\033'` on ONE line, and what it prints stays paste-able. The basename is used
+# because the directory is constant and is printed once in the block's own sentence.
 slot_unsettled_files() {
   local slot="$1" mb f st
   mb=$(shipyard_mailbox 2>/dev/null) || return 0
   [ -d "$mb" ] || return 0
-  { [ -r "$mb" ] && [ -x "$mb" ]; } || { printf '%s (unreadable mailbox directory)\n' "$mb"; return 0; }
+  { [ -r "$mb" ] && [ -x "$mb" ]; } || { printf '%q (unreadable mailbox directory)\n' "$mb"; return 0; }
   shopt -s nullglob
   for f in "$mb/$slot-"*.json; do
     st=$(jq -r '.status // "pending"' "$f" 2>/dev/null) || st=""
     case "$st" in
       done|answered) ;;
-      '')            printf '%s (unreadable — cannot be answered)\n' "$f" ;;
-      *)             printf '%s (%s)\n' "$f" "$st" ;;
+      '')            printf '%q (unreadable — cannot be answered)\n' "${f##*/}" ;;
+      *)             printf '%q (%q)\n' "${f##*/}" "$st" ;;
     esac
   done
 }
@@ -721,10 +737,14 @@ slot_unsettled() {
   # THE ONE THAT ACTUALLY FIRES, and the one this function shipped without. A directory that
   # exists but cannot be read passes `-d`, and bash's glob over it then yields NO MATCHES
   # SILENTLY — nullglob removes the word and the count stays 0 while a pending record sits
-  # inside, still readable by path. Measured at modes 111 and 000 under bash 5 and /bin/bash 3.2:
-  # both returned 0 with a `status: pending` record present. `shipyard_mailbox_ensure` still
-  # succeeds and `report-merged` still works (traversal needs only +x), so nothing else refuses
-  # either, and the slot is torn down with its question open.
+  # inside, still reachable by name. The count reads 0 at modes 000, 111 and 311 (measured under
+  # bash 5 and /bin/bash 3.2), but only ONE of those actually ends in a teardown, and the
+  # difference is worth stating because the other two look like evidence and are not: at 000 the
+  # counter file cannot be read and at 111 it cannot be written, so in both the consecutive count
+  # never reaches its threshold and something other than this guard stops the removal. The
+  # exhibiting mode is 311 — writable and traversable, not listable — where `report-merged` keeps
+  # working by name and the slot really is torn down with its question open. t17's B18 uses 311
+  # for exactly that reason.
   { [ -r "$mb" ] && [ -x "$mb" ]; } || { printf 1; return; }
   shopt -s nullglob
   for f in "$mb/$slot-"*.json; do
@@ -785,6 +805,7 @@ declare -a ROWS
 declare -a SIG
 inflight=0
 total_pend=0
+total_unsettled=0   # the wider count the teardown hold uses; see the terminal test
 GONE=""      # slots this tick rendered `⛔ no terminal`; consulted by the tail's re-ask
 
 # ONCE, HERE, IN THIS SHELL — never from inside the loop below. The per-slot ctx call is
@@ -812,6 +833,7 @@ for slot in "${SLOTS[@]}"; do
   unsettled=$(slot_unsettled "$slot")
   esc="—"; [ "$pend" != 0 ] && esc="⚠️ $pend"
   total_pend=$((total_pend+pend))
+  total_unsettled=$((total_unsettled+unsettled))
 
   if [ -z "$addr" ]; then
     # A slot with no terminal but a worktree still on disk is the shape that ACCUMULATES: it
@@ -1064,17 +1086,26 @@ fi
 [ -n "$TICKFILE" ] && printf '%s\n' "$RUN_EPOCH" >"$TICKFILE" 2>/dev/null
 
 TERMINAL=0
-# `$total_pend` AND the held count, because the two answer the same question from different
-# sources and the teardown now uses the wider one. `total_pend` comes from `slot_pending`, which
+# `$total_pend` AND `$total_unsettled`, because the two answer the same question from different
+# sources and the teardown uses the wider one. `total_pend` comes from `slot_pending`, which
 # cannot see a record it fails to parse; a slot held by exactly such a record would otherwise let
 # the run declare the fleet drained WHILE holding it — measured: the tick printed "nothing in
 # flight (all merged/closed) — monitor stopped" directly above a HELD block promising a next tick
 # that would never come, and exited 0. A parseable pending question kept the loop alive on the
 # same fixture, so the two counts disagreed precisely where it mattered.
 #
+# IT IS `$total_unsettled` AND NOT `${#REAP_HELD[@]}`, and that correction is the whole of this
+# paragraph's second life. The first version tested the HELD array, which is only populated once
+# `autodown_consider` has passed the consecutive-tick gate and lock 3 — so on the FIRST merged
+# tick, and whenever `$AUTODOWN` is 0, the array is empty and the run stopped anyway. Measured: a
+# gone slot with an unreadable record printed `monitor stopped` on tick 1 with no HELD block at
+# all, which was worse than before the hold existed. `$total_unsettled` is summed for every slot
+# in the loop above, before any of those gates, so it holds on tick 1 and with the teardown
+# disabled.
+#
 # This can keep a monitor running indefinitely over an unclearable hold, which is why it is not
 # the whole fix: the HELD block names the records holding the slot so the operator can clear one.
-[ "$inflight" -eq 0 ] && [ "$total_pend" -eq 0 ] && [ "${#REAP_HELD[@]}" -eq 0 ] && TERMINAL=1
+[ "$inflight" -eq 0 ] && [ "$total_pend" -eq 0 ] && [ "$total_unsettled" -eq 0 ] && TERMINAL=1
 
 # The SECOND exit, and it needs the same corroboration for the same reason. Named slots do not
 # reach the discovery branch above, so `shipyard-report.sh --only-changed 22 61` against a backend
@@ -1297,7 +1328,7 @@ fi
     echo "### ✋ HELD — finished and merged, but somebody is owed an answer"
     for x in "${REAP_HELD[@]}"; do
       sl=${x%%|*}; rest=${x#*|}; n=${rest%%|*}; shown=${rest#*|}
-      echo "- \`$sl\` — merged, finished and otherwise ready; its teardown is HELD by $n unsettled mailbox record(s)."
+      echo "- \`$sl\` — merged, finished and otherwise ready; its teardown is HELD by $n unsettled record(s) in $MAILBOX_DIR:"
       # NAME THE FILES. Without this the block's only remedy was "answer it", which is false for
       # exactly the records the hold was widened to catch: `shipyard-escalations.sh` skips a
       # record whose kind it cannot parse, so for an unparseable one the escalation block below
@@ -1313,9 +1344,9 @@ fi
       else
         # The counts differ, so at least one record is unreadable. Say that, rather than the
         # blanket sentence an earlier version printed even when the two agreed.
-        echo "  $shown of those are readable escalations; the rest this report could not parse."
-        echo "  An unreadable record does NOT appear in the escalation block below and cannot be"
-        echo "  answered — look at the file named above and remove or repair it (#197)."
+        echo "  $shown of those are readable escalations; the rest are not."
+        echo "  A record this report cannot parse does NOT appear in the escalation block below"
+        echo "  and cannot be answered — look at the file named above and repair or remove it (#197)."
       fi
       echo "  Nothing was removed. Tearing it down by hand first destroys the session that asked, and"
       echo "  the reply then reports success to a child that is no longer there."
