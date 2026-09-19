@@ -1,5 +1,61 @@
 # STATE — session memory
 
+## ⏸ PAUSED (2026-09-14, by the owner) — three changes in flight, nothing lost
+
+Verified rather than assumed: all three worktrees **clean**, all three branches **pushed and level
+with origin**, no line of work living only on disk. Terminals and worktrees deliberately **left
+standing** — teardown's only legitimate triggers are a merge or a close.
+
+| slot | branch | head | PR | stage | the next action it would have taken |
+|---|---|---|---|---|---|
+| `ship-48` | `fix/council-decide-tears-down-room` | `71d58b6` | **#183** | impl-review | verify by RUNNING that the record and both stderr lines are fully written before the deciding seat's own terminal goes |
+| `ship-181` | `feat/shipyard-merged-slot-teardown` | see PR | **#185** | impl-review | round 3, scoped to round 2's fix diff, then hand over at ready-to-merge |
+| `ship-21` | `feat/council-monitor-protocol` | `2d41161` | **#184** | impl-review | finish the round |
+
+To resume: re-arm the two monitors (`shipyard-report.sh --only-changed 48 181 21` with
+`SHIPYARD_CTX_WINDOW=1000000`, and `shipyard-escalations.sh --new`) and nudge each slot. The
+concurrency cap was raised to 3 for the third launch (`SHIPYARD_MAX_SLOTS=3`); it is **not**
+persisted, so a fresh launch is capped at 2 again.
+
+### What the three are, and why they exist
+
+The owner's decision: **finished work cleans up after itself.** A decided room and a merged slot
+are both finished work kept alive by the operator's memory.
+
+* **#48 / PR #183 — council.** `decide` signals the room's **keeper** rather than writing a second
+  teardown path. Two calls confirmed as faithful-rather-than-literal readings: teardown fires only
+  on a *decided* close (an unresolved room is the one a human most wants to walk into, and it has
+  just been escalated as needs-human), and it happens **after** the close announcement, with the
+  keeper's asynchronous poll widening that gap rather than narrowing it.
+* **#181 — shipyard.** Settled by a council room (`debate-4`) rather than by me: **option B**, and
+  the argument overturned my own framing. B is not "two issues in one change" — the #139(1) fix is
+  one existing tested call inserted before the worktree removal. The rejected alternative built the
+  same corroboration a *second* time on a path the manual one lacks. And the room found what
+  neither I nor the slot had: **`merged` is not `child done`** — a child that lands one PR and keeps
+  working outlives its own merge by design, so the "cheap" terminal-only option kills a live child
+  and does it again after every relaunch.
+* **#21 / PR #184 — council's monitor protocol.** Filed because *I* am the measurement: four rooms,
+  four hand-rolled monitor loops, each with its own blind spots, and the one that mattered let a
+  live seat sit at a prompt because the loop printed only on verdict changes.
+
+### Shipped today, before the pause
+
+`council` reached usable and was **released as 0.4.0** (shipyard 0.5.1), and then three defects
+were found **by running it** that no amount of reading had surfaced: the opening barrier counting
+any message as a position (#177), a closed room still accepting messages (#176), and probe rooms
+leaking into the live supervision mailbox (#178). The barrier fix cost three rounds and a
+disclosure regression **of my own design** — I told the slot to narrow one shared accessor, and that
+accessor also fed the mid-round disclosure gate, whose safe direction is the opposite one.
+
+### Open and unfixed, recorded so it is not rediscovered
+
+* **#172** — a dead agent in a live terminal reads as an idle child, and the stall remedy gets typed
+  into a shell. Measured three times in one day.
+* **#182** — the stall alarm repeats verbatim, which trains the operator to skim it. Measured on
+  this supervisor: four identical firings answered with "still progressing" before acting.
+* **#149** — seventh test-number collision this week; the next free number is computed from a `main`
+  that contains neither branch, so resolving one collision creates the next.
+
 ## ✅ COUNCIL IS USABLE (2026-09-13) — the finish line is met
 
 The same test the fleet got, applied to the skill that had been validated by nothing. All five

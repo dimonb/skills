@@ -22,10 +22,25 @@ check:
 	@bash shared/knobs/tests/run-all.sh
 
 # Every suite's fast subset — the five `make check` runs, plus shipyard and council (without
-# council's slow `--full` load and latency runs). Run by hand to verify a change for real
-# (~2-3 min), like `make check-test`. This is where a shipyard or council suite RUNTIME error
-# surfaces — `make check` does not run those two (only their registration and invocation are gated
-# at commit time; every other suite runs there in full).
+# council's slow `--full` load and latency runs). Run by hand to verify a change for real, like
+# `make check-test`. This is where a shipyard or council suite RUNTIME error surfaces — `make
+# check` does not run those two (only their registration and invocation are gated at commit time;
+# every other suite runs there in full).
+#
+# MEASURED at 12-13 min wall on an otherwise idle machine, at ~28% CPU — two readings on the same
+# box, 13:26 and then 12:18 with SIX MORE checks, so run-to-run variance is larger than what a
+# handful of cases adds. Take the range as the figure; it is dominated by
+# deliberate SLEEPING (the report's 3s motion diff per live slot, the confirmation polls, the
+# canary waits), not by work, so it scales with the number of fixture SLOTS rather than with the
+# number of cases or with the box. The figure said "~2-3 min" for a long time and went stale
+# silently, which is the failure AGENTS.md warns about: re-measure this line when you add or grow
+# a suite, and do not adjust it by arithmetic. CI runs the same target, so a change that lengthens
+# it lengthens every PR.
+#
+# This figure has now gone stale twice inside one change: it read ~2-3 min while a suite was
+# added, was re-measured at 11:58, and that reading was itself taken before the same suite grew
+# again. If you are adding or growing a test, this line is part of your change. AGENTS.md points
+# here rather than carrying its own number, so this is the place to update.
 test:
 	@bash shared/driver/tests/run-all.sh
 	@bash shared/flow/tests/run-all.sh

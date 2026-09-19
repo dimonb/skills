@@ -82,6 +82,175 @@ _room_dirs_sane() { # <room>
   return 0
 }
 
+# --- teardown-on-close ----------------------------------------------------------
+# One name for the file that asks the room's keeper to close the participant terminals and exit.
+# Everything that reads, writes, clears or NAMES it goes through here — the writer below, the
+# keeper's loop, `relaunch`'s cancel, and `v_decide`'s message when it has to tell an operator
+# which path could not be written. Deliberately not a count: the first version of this comment
+# said "three places", `v_decide` then became a fourth by spelling the path out as a literal, and
+# a number that has to be maintained is the thing that stops agreeing with the tree.
+_keeper_teardown_file() { printf '%s/state/teardown' "$1"; }
+
+# Ask the room's keeper to reap. This is the whole of `decide`'s teardown (#48), and it is a
+# REQUEST rather than the act: the seat that closes a room is `--me`-gated to a participant, so
+# it is asking for its own terminal to be closed, and a reap written inline would race the
+# process that began it. The keeper already runs in its own process group, already holds the
+# roster it was forked with, and already knows how to close every terminal and exit — that is
+# what `up --hold` uses when its owner dies. So this signals that machinery instead of adding a
+# second teardown path. The cost is latency: the keeper polls, so the terminals go within one
+# poll (five seconds) rather than at once. That is the right side to err on — the close
+# announcement rings every seat first, and a reap that waits a moment lets it land.
+#
+# THE KEEPER IS CHECKED BEFORE THE MARKER IS WRITTEN, and the order is deliberate in both
+# directions. A room with no live keeper has nothing that will ever take the marker, so writing
+# one would leave `decide` reporting a teardown that cannot happen — and would leave a trap for
+# whichever keeper starts next. Returning 1 here lets the caller say what is true and name `down`.
+# The reverse window (a keeper that dies in the instant after the check) leaves a marker nothing
+# takes; `relaunch` clears it, because that is the one verb that puts a room back into use.
+#
+# THE CALLER IS ASKING FOR ITS OWN TERMINAL, so its remaining output races this request — and what
+# makes that safe is NOT the poll interval. The interval bounds only WHEN the reap happens, not
+# that it happens after `decide` has finished writing. What bounds it is the asymmetry of the two
+# paths once the marker exists: `decide` has two write syscalls left (the record path on stdout,
+# one line on stderr), while the keeper must run `[ -f ]`, an external `rm`, `ct_kill`, the
+# `$(ct_name …)` subshell and finally the backend's own command — three process spawns at least
+# before any signal reaches a pane. Measured, because an asymmetry argued and not counted is how a
+# margin turns out to be the wrong sign: 5 end-to-end closes (reap 3.2-3.5 s behind), 25 at a
+# random phase, and 15 sweeping fork+4.90 s .. fork+5.10 s to land the marker right on a check —
+# there the reap still trailed by 13-240 ms, and in none of the 45 did it win. The floor is a
+# LOWER bound on the real margin, since those runs faked `ct_kill` as a `printf`: a live agterm or
+# tmux reap is slower than that, never faster. Keep the two writes cheap, and if this ever grows a
+# third thing to say, say it before asking rather than after.
+# THE TWO WAYS THIS FAILS ARE DIFFERENT FACTS AND GET DIFFERENT STATUSES. One `return 1` for
+# both let `decide` report "this room has no live keeper" over a room whose keeper was alive and
+# answering `kill -0` — measured on four separate triggers (an unwritable `state/`, the marker
+# path being a directory, the marker file mode 0444, and `state/` being a symlink). The symlink
+# run is the one to remember: `_room_dirs_sane` prints its own true sentence and the false one
+# lands directly underneath it, two contradicting lines on one stderr. A verb that reports a
+# cause it did not establish is the exact defect exit 5 was added to prevent, one level down.
+# WHAT DECIDES WHETHER THE OPERATOR IS TOLD, asked per output as AGENTS.md's rule on untrusted
+# evidence requires. `decide`'s exit 5 and its "terminals could NOT be closed" sentence are an
+# operator-facing signal, and their APPEARANCE is gated on `state/keeper.pid` and on `state/`
+# being writable — both of them room state a participant can write, and the room is not a trust
+# boundary. So the honest answer is that this achieves NEITHER prevention NOR self-revelation.
+# Routes that bypass it — the ones found so far, and an earlier version of this comment presented
+# its list as complete, which is how the symlink one below survived a round:
+#
+#   * `state/keeper.pid` naming a live process that is not this room's keeper. `kill -0` cannot
+#     tell them apart, so this returns 0, a marker is written that nothing will ever take, and
+#     `decide` reports the seats are going. Reachable WITHOUT a hostile seat: `down` leaves the
+#     pid file behind and the OS recycles pids (#30).
+#   * the marker removed between this write and the keeper's next poll — up to five seconds, and
+#     `relaunch` does exactly that legitimately.
+#   * the keeper killed after the marker is written.
+#   * (CLOSED, and listed because the list must not look shorter than the history) the marker path
+#     planted as a symlink to /dev/null, which made a bare `>` succeed while the keeper's `[ -f ]`
+#     stayed false for ever; and then, in the fix for THAT, a plain directory or a symlink to one,
+#     which `mv` moves the temp inside of at rc 0. The write now renames and then asks the
+#     reader's own `[ -f ]`.
+#
+# NOTHING GUARANTEES THIS LIST IS COMPLETE, and nothing can: every route above was found by
+# review rather than by the author, two of them in the fix for the one before, and the gate sees
+# none of it. Read it as the routes known so far, never as the set.
+#
+# None of the open ones is prevented here and nothing detects them. What is NOT lost is the evidence
+# underneath: the seats are still there and (on the first route) the marker stays on disk. What is
+# missing is a verb that reports it — `rooms` does not probe the backend, which is #190. Until it
+# does (#194 tracks this), this signal is trustworthy only about the room's own bookkeeping, not about whether a
+# terminal actually closed, and the sentence it prints is worded for that: it says the keeper HAS
+# BEEN ASKED, not that the seats are gone.
+_keeper_teardown() { # <room> -> 0 asked, 1 no live keeper to ask, 2 the request could not be written
+  local room="$1" pid f
+  # Liveness first: with no keeper nothing will ever reap, whatever the directory looks like.
+  pid=$(_keeper_pid "$room/state/keeper.pid") || return 1
+  kill -0 "$pid" 2>/dev/null || return 1
+  _room_dirs_sane "$room" || return 2
+  f=$(_keeper_teardown_file "$room") || return 2
+  # WRITE A TEMP AND RENAME IT IN, never `>` onto the name — the same remedy `_write_launcher`
+  # uses a few hundred lines below, for the same reason and against the same actor. `>` FOLLOWS a
+  # symlink: point `state/teardown` at `/dev/null` and the write succeeds, so this returns 0 and
+  # `decide` reports the seats are going, while the keeper's `[ -f "$tdn" ]` is false for ever and
+  # nothing ever reaps. Measured. `mv -f` replaces a symlink to a NON-DIRECTORY at the destination
+  # instead of following it — the qualifier matters and cost a round: a symlink to a directory,
+  # like a plain directory, is moved INTO rather than replaced, which is what the shape check
+  # above is for.
+  #
+  # The destination shapes actually tried, on this platform, before and after: absent, a plain
+  # directory, a symlink to a directory, a symlink to /dev/null, a symlink to a regular file, and
+  # a mode-0444 regular file. That is the scope checked — NOT a proof that the set is closed.
+  # Nothing guards it: the gate cannot see any of this, and the first version of this write
+  # shipped with a list of three routes that read as complete until review found a fourth.
+  #
+  # Presence IS the whole signal, and the rename is atomic, so there is no half-written state a
+  # reader could misread. The word in the file is for whoever finds it by hand.
+  #
+  # `2>/dev/null` BEFORE the redirection, not after, and that ordering is the whole of it.
+  # Redirections are applied left to right, so a trailing suppressor is installed AFTER the
+  # failing `open()` and bash writes its own diagnostic to the still-original fd 2. Measured on
+  # this platform rather than reasoned: `printf x > "$F" 2>/dev/null` leaks `Permission denied`,
+  # `printf x 2>/dev/null > "$F"` does not. The trailing form is an idiom this tree carries in
+  # roughly twenty places; the ones looked at here (shared/driver, shared/flow, shipyard's
+  # report and continuity writers) print nothing that a contradicting sentence sits under, so
+  # they were left alone — the rest were not audited. What made this one site worth fixing is
+  # that it put a raw `up.sh: line NN:` directly above a message that disagreed with it.
+  #
+  # Because the diagnostic is now suppressed, the caller's exit-5 message NAMES THE PATH itself
+  # rather than pointing at an error above it. The two go together: an earlier revision did both
+  # — suppressed the error and then told the operator to read it.
+  local tmp="$room/state/.teardown.$$"
+  printf 'teardown\n' 2>/dev/null > "$tmp" || return 2
+  # REFUSE A DIRECTORY AT THE DESTINATION, and refuse ONLY that. `mv file dir` does not replace a
+  # directory, it moves the file INSIDE it and returns 0 doing so — so `mkdir state/teardown`, or
+  # a link to any directory, makes the rename "succeed" while `[ -f ]` stays false for ever: the
+  # teardown silently never happens and the close reports success. Measured. The bare `>` this
+  # replaced returned 2 on that shape, so leaving this out would not merely keep a hole open, it
+  # would REMOVE an operator signal that existed before.
+  #
+  # Narrow on purpose. The first version of this guard refused every non-regular destination, and
+  # that traded one denial for another: a link to `/dev/null` is not a regular file, so it was
+  # refused — where the rename on its own had DEFEATED that plant by replacing the link. `[ -d ]`
+  # follows symlinks, so this catches a directory and a link to one, and leaves every other shape
+  # to the rename, which handles them. Checked here: absent, plain directory, link to a directory,
+  # link to /dev/null, link to a regular file, mode-0444 regular file.
+  if [ -d "$f" ]; then rm -f "$tmp" 2>/dev/null; return 2; fi
+  mv -f "$tmp" "$f" 2>/dev/null || { rm -f "$tmp" 2>/dev/null; return 2; }
+  # CONFIRM WITH THE READER'S OWN PREDICATE. The test above races: a peer can `mkdir` between it
+  # and the rename, and there is no atomic rename-only-onto-a-non-directory. Asking `[ -f ]` — the
+  # exact question `_keeper_loop` will ask — stops this function claiming a success the reader's
+  # own predicate would not support. On that path the temp has been moved inside the planted
+  # directory, so clean it up there as well as at its own name.
+  #
+  # IT DOES NOT COVER THE CONVERSE, and an earlier version of this comment claimed it did ("what
+  # makes writer and reader unable to disagree, whatever shape arrives in between" — false, and it
+  # survived its author and a review round). `_keeper_loop`'s FIRST act on the marker is to `rm`
+  # it, so the keeper is the one actor certain to be racing this path, in the other direction: a
+  # poll landing between the rename and this check consumes the marker and reaps, and this then
+  # returns 2 over a teardown that happened. Measured at a ~2.4 ms window against a 5 s poll, so
+  # of the order of one close in two thousand. Known, unfixed, and tracked as #196 — the direction
+  # is a false alarm rather than a silent non-teardown, which is why it did not hold up the change
+  # that introduced it.
+  #
+  # THESE TWO ARE REDUNDANT FOR EVERY SHAPE A TEST CAN BUILD, and that is measured rather than
+  # assumed: deleting either one on its own leaves t26 fully green, because each catches the
+  # planted directory by itself. Only this one also covers the race, and the race cannot be
+  # provoked without instrumenting the code, so nothing pins it — do not read the suite staying
+  # green after deleting a line here as evidence the line is dead.
+  [ -f "$f" ] || { rm -f "$f/${tmp##*/}" "$tmp" 2>/dev/null; return 2; }
+  return 0
+}
+
+# The reap itself, shared by the keeper's two reaping triggers so neither can drift from the
+# other. ct_kill resolves terminal names and the container from $ROOM, and a keeper forked
+# before council_up assigned it would not inherit the value — so set it from the room we were
+# handed. Failures are swallowed on purpose: a peer whose terminal is already gone is the
+# ordinary case on both backends, and a room built without terminals at all (the test harness
+# does exactly that) has no ct_* in scope, which must not stop the keeper exiting.
+_keeper_reap() { # <room> <peer>...
+  local room="$1" p; shift
+  ROOM="$room"
+  for p in "$@"; do ct_kill "$p" 2>/dev/null || true; done
+}
+
 # --- create ---------------------------------------------------------------------
 # A private fifo for the owner canary (see _keeper_ensure). mktemp -u then mkfifo, in the room's
 # own state dir rather than a shared tmp, so it inherits the room's directory and never collides
@@ -98,14 +267,26 @@ _canary_fifo() { # <room> -> a freshly created fifo path on stdout, or rc 1
   printf '%s' "$f"
 }
 
-# The keeper's body. It exits on ANY of three triggers — but only the first two end the LIVE room
-# (its terminals and itself, never the durable record); on the third the room carries on without
+# The keeper's body. It exits on ANY of four triggers — but only the first three end the LIVE room
+# (its terminals and itself, never the durable record); on the last the room carries on without
 # this keeper, under the one that superseded it:
-#   * the room directory going away: an explicit `down`/`council_down`, exactly as before. In that
-#     path `council_down` has already closed the terminals, so the keeper only has to exit.
+#   * the room directory going away — a deletion by hand, or `down --purge`. This is the BACKSTOP
+#     rather than the usual cause, and the distinction has now been got wrong twice in this
+#     comment. Whenever the pid file names a process, BOTH forms of `down` SIGTERM the keeper
+#     before the purge branch — the kill is gated on `_keeper_pid` resolving, so a missing or
+#     malformed pid file sends nothing at all — and a signal ends it in ~11 ms measured while
+#     this poll can take up to five seconds, so on `--purge` the signal gets there first and the
+#     loop never sees the removal. A plain `down` does not remove the directory at all: it prints
+#     "room kept". So this trigger is what catches a room that went away without anyone signalling
+#     the keeper. This list is the ways the LOOP returns; a signal is outside it entirely.
 #   * (a `--hold` room only) its OWNER dying, seen as EOF on the canary read end. Here nothing
 #     else closes the terminals — an owner that was Ctrl-C'd, crashed or was OOM/SIGKILLed never
 #     reached `council_down` — so the keeper REAPS every participant terminal itself, then exits.
+#   * the teardown marker appearing: a `decide` that closed the room with a decision has asked for
+#     the seats to go (#48, _keeper_teardown above). Same reap as the canary trigger, through the
+#     same _keeper_reap, because it is the same act asked for by a different party. It applies in
+#     a detached room as much as in a `--hold` one — the marker is checked on every pass, before
+#     the canary read, so both kinds of room notice it within one poll.
 #   * the pid file naming ANOTHER keeper: the room was rebuilt at this same path and the rebuild's
 #     own keeper has claimed it. This one steps down — and REAPS NOTHING, see below.
 #
@@ -142,11 +323,34 @@ _canary_fifo() { # <room> -> a freshly created fifo path on stdout, or rc 1
 # The check goes at the TOP of the loop body, before the canary read, and not at the bottom: both
 # `continue`s below jump straight back to the `while` test, so a check placed after them would
 # never run at all in a `--hold` room — exactly the rooms whose owner is holding a terminal open.
+#
+# THE TEARDOWN CHECK SITS BETWEEN THE TWO, and both neighbours decide its placement. It goes
+# AFTER the step-down check for the same reason the canary's second check exists: a keeper that
+# has been superseded must reap nothing, and a marker left by the room this path once served
+# would otherwise close the terminals of the room that replaced it. It goes BEFORE the canary
+# read because that read blocks for up to five seconds, and a detached room has no canary at all
+# — putting it after would make a detached room wait on `sleep 5`, and would make a `--hold` room
+# NEVER NOTICE A TEARDOWN AT ALL. Not "late", and not "only on owner death": both `continue`s
+# above jump straight back to the `while` test, and the EOF branch reaps and returns, so a check
+# placed below that block is unreachable in a held room for the room's whole life — `decide`
+# reports the seats are going, exits 0, and nothing ever happens. That was measured by mutation,
+# through the shipped `up --hold` + `decide` path; t26 case H exists to keep it measured.
+#
+# It CONSUMES the marker before reaping, so the instruction is one-shot. A marker left in place
+# would be taken again by whatever keeper the room is given next — `relaunch` forks one — and a
+# seat put back up would then be killed within five seconds of starting, which reads as the
+# relaunch having silently failed.
 _keeper_loop() { # <room> <pid-file> <canary-read-fd-or-empty> <peer>...
   local room="$1" keep="$2" cfd="$3"; shift 3
-  local rc p named
+  local rc named tdn
+  tdn=$(_keeper_teardown_file "$room")
   while [ -d "$room" ]; do
     if named=$(_keeper_pid "$keep") && [ "$named" != "$BASHPID" ]; then return 0; fi
+    if [ -f "$tdn" ]; then
+      rm -f "$tdn"
+      _keeper_reap "$room" "$@"
+      return 0
+    fi
     if [ -n "$cfd" ]; then
       read -t 5 -u "$cfd" _ 2>/dev/null; rc=$?
       [ "$rc" -eq 0 ] && continue
@@ -158,10 +362,7 @@ _keeper_loop() { # <room> <pid-file> <canary-read-fd-or-empty> <peer>...
       # room that superseded it, which is the one outcome the step-down exists to avoid. Cheap, and
       # it changes nothing for a room nobody superseded: the file names us, so the reap proceeds.
       if named=$(_keeper_pid "$keep") && [ "$named" != "$BASHPID" ]; then return 0; fi
-      # ct_kill resolves terminal names and the container from $ROOM, and a keeper forked before
-      # council_up assigned it would not inherit the value — set it from the room we were handed.
-      ROOM="$room"
-      for p in "$@"; do ct_kill "$p" 2>/dev/null || true; done
+      _keeper_reap "$room" "$@"
       return 0
     fi
     sleep 5
@@ -481,9 +682,18 @@ council_up() {
   # child that would inherit the write end and keep the room alive past this shell's death — the
   # exact trap that a `while sleep` loop falls into. When this shell dies for ANY reason (Ctrl-C,
   # a closed pane, a crash, SIGKILL) the write end closes, the keeper hits EOF and reaps every
-  # terminal; if `wait` ever returns on its own it is because the keeper already exited (an
-  # explicit `down` removed the room), so there is nothing left to hold. Without --hold the
-  # function simply returns here and the detached keeper outlives the caller, as it always has.
+  # terminal; if `wait` ever returns on its own it is because the keeper already exited, and there
+  # is then nothing left to hold. That is the general statement and it is the safe one to keep —
+  # `_keeper_loop`'s header enumerates the four ways a keeper exits, and SKILL.md's "Room
+  # lifetime" section carries the operator-facing copy of the same list; keep the two in step.
+  #
+  # Since #48 the commonest of those is worth naming here, because it is the one an operator will
+  # meet and misread: a close recorded `decided` asks the keeper to reap, so it reaps, exits, and
+  # this `wait` returns. ON THAT PATH THE ROOM, THE RECORD AND THE TRANSCRIPT ALL SURVIVE —
+  # measured, on a real held room — so a returning hold shell does not mean the room was removed,
+  # and nothing has been lost. (Nor does a plain `down`, which keeps the room too; only
+  # `down --purge` deletes anything.) Without --hold the function simply returns here and the
+  # detached keeper outlives the caller, as it always has.
   if [ "$hold" = 1 ]; then
     printf '\n[hold] this shell owns the room; its death (Ctrl-C, closed pane, crash, kill) tears it down.\n'
     printf '       run without --hold for a room that outlives this shell (bounded by its directory).\n'
@@ -988,6 +1198,25 @@ council_relaunch() {
     esac
   fi
 
+  # CANCEL A PENDING TEARDOWN FIRST. Putting a seat back up is an operator saying this room is in
+  # use again, so it outranks a close that asked for the seats to go (#48) — and it has to, or the
+  # seat launched below is killed within one keeper poll of starting.
+  #
+  # WHAT THIS COVERS is any request no keeper has TAKEN yet: the keeper that died before its next
+  # pass (whose marker the keeper `_keeper_ensure` is about to fork would otherwise pick up), and
+  # the live keeper still inside its five-second poll window. Both were measured; an earlier
+  # version of this comment claimed only the first, and the guard is unconditional precisely
+  # because it is not trying to tell them apart.
+  #
+  # WHAT IT CANNOT COVER is a reap already IN FLIGHT. The keeper consumes the marker before it
+  # starts closing, so once that has happened there is nothing left to clear and no observable
+  # here saying a reap is running — `kill -0` reports a reaping keeper as alive, which is what
+  # makes `_keeper_ensure` below return early and leave the room without one. The window is the
+  # length of one reap, measured at 84-383 ms for three seats on a live tmux backend. Do not
+  # "fix" that by narrowing this `rm -f` to a dead-keeper condition: the live-keeper case above
+  # is real and losing it costs a relaunched seat. Tracked separately; closing it needs an
+  # observable for an in-flight reap, not a tighter test here.
+  rm -f "$(_keeper_teardown_file "$ROOM")"
   # A seat can be relaunched after `down`, which killed the keeper along with the terminals.
   # Without it every bell rung at this participant is lost while the room looks healthy.
   _keeper_ensure "$ROOM" "${roster[@]}"

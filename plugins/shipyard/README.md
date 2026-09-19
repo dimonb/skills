@@ -147,7 +147,7 @@ message dies with the context that held it.
 | `shipyard-continuity.sh` | automatic capacity retry and paused-goal continuity for a Codex parent in agterm |
 | `shipyard-launch.sh` | start a child: slot, protocol, launcher, container |
 | `shipyard-admission.sh` | the pre-launch admission gate: concurrency cap + macOS memory-pressure |
-| `shipyard-report.sh` | the status table, stall watchdog, sidebar glyphs |
+| `shipyard-report.sh` | the status table, stall watchdog, sidebar glyphs, and the teardown of a finished slot |
 | `shipyard-ctx.sh` | the ctx column: reads a child's transcript, infers its window, bands it |
 | `tests/run-all.sh` | the shipyard script suite — runs under `make test`; its registration is gated by `make check` |
 | `shipyard-escalations.sh` | the escalation view (`--new` for a fast monitor) |
@@ -197,7 +197,7 @@ Environment knobs: `SHIPYARD_AGENT`, `SHIPYARD_BACKEND`, `SHIPYARD_WORKSPACE`, `
 `SHIPYARD_ENV_PASS`, `SHIPYARD_ENV_SCRUB`, `SHIPYARD_SLOT`, `SHIPYARD_FORCE`, `SHIPYARD_DRY`,
 `SHIPYARD_MAX_SLOTS`, `SHIPYARD_MEM_MIN_FREE_PCT`, `SHIPYARD_STALL_SECS`, `SHIPYARD_CTX_WINDOW`,
 `SHIPYARD_TELL_MAXLINE`, `SHIPYARD_TELL_CONFIRM_SECS`, `SHIPYARD_TELL_CONFIRM_INTERVAL`,
-`SHIPYARD_ASK_TIMEOUT`, `SHIPYARD_DOWN_FETCH`.
+`SHIPYARD_ASK_TIMEOUT`, `SHIPYARD_DOWN_FETCH`, `SHIPYARD_AUTODOWN`, `SHIPYARD_AUTODOWN_TICKS`.
 
 `SHIPYARD_MAX_SLOTS` (default `2`) and `SHIPYARD_MEM_MIN_FREE_PCT` (default `10`) are the two
 admission-gate knobs — the concurrency cap and the macOS free-memory floor a launch must clear.
@@ -206,6 +206,18 @@ See **A launch this machine cannot take** above.
 `SHIPYARD_DOWN_FETCH` (default `1`) allows the teardown gate one `git fetch` of the base branch
 per invocation, so a slot torn down seconds after its merge is not refused over a
 remote-tracking ref this clone has simply not seen yet. Set it to `0` to keep teardown offline.
+
+`SHIPYARD_AUTODOWN` (default `1`) lets the monitor finish a slot off for you: once its PR/MR has
+read `merged` on `SHIPYARD_AUTODOWN_TICKS` consecutive ticks (default and minimum `2`), ship's own
+stage is terminal, nobody is at the terminal and no escalation is open, the report calls
+`shipyard-down.sh` — unchanged, with no flags and never `--force` — which closes the terminal and
+removes the worktree. **The branch is never touched**, so the work is recoverable from it either
+way. Anything the gate declines is named in its own block with the exact command; a slot held by an
+open question gets its own block naming the records that hold it. Set it to `0` to keep teardown entirely manual; that also makes a
+no-argument `/shipyard` run non-destructive — though not inert: the report still writes its
+mailbox bookkeeping (truncating the consecutive-merged counts — with the teardown off, all of
+them), repaints sidebar glyphs, closes pending notices, and re-arms the Codex parent continuity
+watcher.
 
 `SHIPYARD_CTX_WINDOW` pins the context window, in tokens as a plain integer, that the `ctx`
 percentage is measured against. Without it the window is inferred from the largest total the

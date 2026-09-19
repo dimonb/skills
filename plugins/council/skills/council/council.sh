@@ -91,7 +91,13 @@ council.sh <verb> [options]
     transcript                     the transcript, for a human
 
   Closing the room
-    decide  [--force]              write the ADR on the board and close the room
+    decide  [--force]              write the ADR on the board and close the room; a close
+                                   recorded DECIDED then closes its own participant terminals
+                                   (the record, transcript and lanes stay), and one recorded
+                                   UNRESOLVED leaves them up. exit 5 = record written and the
+                                   room told, terminals not closed. --force only lifts the
+                                   not-ripe refusal: on a room that has converged it still
+                                   records decided and still closes the terminals.
     say     <peer> "<text>"        speak to a participant out of band, in its terminal
 
   Common options: --room <name> --me <peer>
@@ -209,7 +215,15 @@ case "$VERB" in
   # Sources term.sh itself, on demand, inside _room_terminals — the same deferral `status` uses,
   # so a room with no container pin never resolves a terminal backend to be told it has none.
   terminals) . "$SKILL/lib/verbs.sh"; v_terminals ;;
-  decide) need_me; . "$SKILL/lib/verbs.sh"; . "$SKILL/lib/policy.sh"; v_decide "$@" ;;
+  # `decide` closes a room that decided, and a decided room closes its own terminals (#183). It
+  # does not do the reaping — the seat running this is `--me`-gated to a participant, so it would
+  # be closing its own terminal — it asks the room's KEEPER, which already runs in its own process
+  # group and already does exactly this when a `--hold` room's owner dies. That machinery lives in
+  # lib/up.sh, hence the source here. lib/term.sh is NOT sourced, for the same reason `status`
+  # does not source it: the keeper does the reaping, so resolving a terminal backend in this
+  # process would buy nothing and every close would pay for it.
+  decide) need_me; . "$SKILL/lib/verbs.sh"; . "$SKILL/lib/policy.sh"; . "$SKILL/lib/up.sh"
+          v_decide "$@" ;;
   say)    . "$SKILL/lib/up.sh"; council_say "$@" ;;
   relaunch) . "$SKILL/lib/up.sh"; council_relaunch "$@" ;;
   down)   . "$SKILL/lib/up.sh"; council_down "$@" ;;
