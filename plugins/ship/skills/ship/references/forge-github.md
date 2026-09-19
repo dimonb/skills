@@ -65,8 +65,22 @@ unset GITHUB_TOKEN; export REPO=<owner>/<repo>
 # detail
 gh issue view N --repo "$REPO" --json number,state,assignees,title,url
 
-# duplicates, before creating one
-gh issue list --repo "$REPO" --search "<keywords>"
+# ENUMERATE the open issues — the duplicate and class check of core §5.11 rung 2, and the
+# near-duplicate check of §7.A. Raise --limit past the open count and confirm you got them
+# all: the default is 30, and a silently truncated list is the search this replaces.
+gh issue list --repo "$REPO" --state open --limit 1000 \
+  --json number,title,labels \
+  --jq '.[] | "\(.number)\t\([.labels[].name] | join(","))\t\(.title)"'
+
+# a keyword search is a SUPPLEMENT to that enumeration, never the check — it matches words,
+# so a near-duplicate phrased differently does not come back
+gh issue list --repo "$REPO" --state open --search "<keywords>"
+
+# read a candidate in full before commenting a scenario onto it
+gh issue view N --repo "$REPO" --json number,title,body,labels
+
+# rung 2 — add the scenario to an issue that is already open (body via file)
+gh issue comment N --repo "$REPO" --body-file "$BODY"
 
 # labels — read before inventing one
 gh label list --repo "$REPO" --limit 200
