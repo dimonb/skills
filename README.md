@@ -181,8 +181,8 @@ the same skills is verified, and the symlink is additive.
 ## Working on this repo
 
 ```bash
-make check        # the gate — static checks plus the four fast suites; green before every commit
-make test         # all six suites' fast subsets; run by hand
+make check        # the gate — static checks plus every fast suite; green before every commit
+make test         # every suite's fast subset; run by hand
 make check-test   # proves each of the gate's assertions actually fails when violated
 ```
 
@@ -203,7 +203,7 @@ file carries non-Latin script (untracked ones too, like the leak scan); that no 
 names the shared temp parent — a grep
 for the shape a test copied from an older checkout carries, not a proof about where its rooms
 are built; and that no test suite can silently stop running, which takes three assertions rather
-than one. `check.sh` names the six gated suites once, in `$GATED_SUITES`; check 10 walks that list
+than one. `check.sh` names the gated suites once, in `$GATED_SUITES`; check 10 walks that list
 and requires every test on disk to appear in the list its `run-all.sh` actually walks, so a test
 cannot land and then stop running; and check 12 asserts the two converse directions against the
 runners it finds on disk — that each is named by a `Makefile` recipe, so a whole suite cannot run
@@ -212,9 +212,9 @@ never registration-checked. The declaration is hand-maintained on purpose: deriv
 a suite deleted or renamed wholesale simply leaves the list, silently. All three classes are
 history, not theory — `shared/policy/tests` was missing from the list and from both targets from
 the day it landed, so it ran in no automated invocation at all while looking entirely healthy.
-Beyond those static checks, `make check` also runs the fast driver, flow, adapter and policy
-suites, so a regression in any of the four reds a commit; the slower shipyard and council suites
-run under `make test`, and `make check` gates only their registration, invocation and declaration
+Beyond those static checks, `make check` also runs every fast, pure suite — the Makefile's
+`check` recipe is the list — so a regression in any of them reds a commit; the slower shipyard and
+council suites run under `make test`, and `make check` gates only their registration, invocation and declaration
 (above). CI (`.github/workflows/ci.yml`) then runs all three —
 `make check`, `make check-test` and `make test` — on every push to `main` and every pull request,
 so those suites' runtime errors surface in CI; locally, where `make check` stays fast, they still

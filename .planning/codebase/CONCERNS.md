@@ -51,9 +51,9 @@ runner was invoked per phase. That framing left a loophole — "or state the man
 SUMMARY" — and `shared/policy/tests` took it and ran in no automated invocation at all from the
 day it landed.
 
-Now: `scripts/check.sh` names the six gated suites once in `$GATED_SUITES`; check 10 gates each
+Now: `scripts/check.sh` names the gated suites once in `$GATED_SUITES`; check 10 gates each
 suite's test registration, and check 12 gates that every runner on disk is named by a `Makefile`
-recipe AND appears in `$GATED_SUITES`. `make check` runs the four fast suites, `make test` adds
-shipyard and council. Adding a suite requires both edits and the gate reds until both are done, so
+recipe AND appears in `$GATED_SUITES`. `make check` runs every fast suite — the Makefile's `check` recipe is
+the list — and `make test` adds shipyard and council. Adding a suite requires both edits and the gate reds until both are done, so
 "green tests" no longer depends on anyone remembering. The two skill suites are still `make test`
 only — deliberately, on runtime — but their invocation is now gated rather than conventional.
