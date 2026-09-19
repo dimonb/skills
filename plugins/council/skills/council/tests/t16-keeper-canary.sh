@@ -244,5 +244,19 @@ echo "── case F: no owner-liveness path reads \$PPID (acceptance) ──"
 # zero is $PPID in the CODE — reading a reparented process's parent tells you nothing on macOS.
 ok "up.sh code (comments stripped) reads no PPID" 0 "$(sed 's/#.*//' "$SKILL/lib/up.sh" | grep -c 'PPID')"
 
+# ---------------------------------------------------------------------------------------------
+echo "── case G: the PRODUCTION default is still five seconds (acceptance) ──"
+# #203 made the keeper period a knob so THIS FILE could stop paying it, and the one way that goes
+# wrong is somebody making a test fast by moving the default instead of the test. Asserted here
+# rather than trusted, and asserted in the file that benefits: nothing else covers it — the knob
+# READER has its own suite (shared/knobs), which tests `knob_interval` and not what a caller
+# passes it.
+#
+# A source-text assertion, and the limit is worth stating: it pins the literal in the call, so it
+# catches `5` becoming `0.05` and would NOT catch `_keeper_ensure` ceasing to consult the knob at
+# all. Case F above is the same idiom with the same limit.
+ok "the keeper poll still defaults to 5s in production" 1 \
+   "$(grep -Fc 'knob_interval "${COUNCIL_KEEPER_POLL_INTERVAL:-}" 5' "$SKILL/lib/up.sh")"
+
 printf '\n'
 if [ "$FAILURES" -eq 0 ]; then echo "t16 PASS ($CHECKS checks)"; else echo "t16 FAIL ($FAILURES/$CHECKS)"; exit 1; fi

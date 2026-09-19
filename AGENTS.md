@@ -283,6 +283,34 @@ than creating one. Either way:
    the two disagree or if either disagrees with `plugins/` on disk.
 5. `make check`.
 
+## A knob that makes a test fast can change what the test measures
+
+Both suites now shrink production intervals through knobs so a faked backend does not pay a wait it
+has no use for. That is the right shape, and it has one failure mode which is not "the default got
+changed" — the gate asserts each default now — but the **value chosen for the tests**:
+
+> **A per-process interval is not a per-process cost.** Pick the smallest value that works on one
+> test and you have picked it for however many processes the suite runs at once, each paying
+> whatever its loop body costs per iteration.
+
+Measured, in the change that introduced the knobs. The council keeper's loop body forks TWICE per
+iteration — a command substitution and a `sleep` — and a parallel run of that suite has about
+**38 keepers alive at once**, counted with `ps` during one. At the issue's suggested "hundredths of
+a second" that is roughly **1500 polling forks a second** against 15 at the production period. The
+keepers saturated the run queue of the box they were being timed on, and the visible symptom was
+not slowness: it was canary-reap cases failing because a keeper could not be scheduled to notice
+its own owner's death inside a **sixty-second** ceiling. A/B on one box, parallel suite: 2 of 2
+runs red at 0.05, 2 of 2 green at the production 5. Shipped at a tenth of production rather than a
+twentieth — nine tenths of the win at a tenth of the churn.
+
+So when you add or shrink a timing knob for the tests' benefit: **multiply by the concurrency and
+by the loop body's cost before choosing**, and check `ps` during a full parallel run rather than
+one file's stopwatch. And be slow to read a test that fails after such a change as a test that was
+always fragile — some of them are, and some of them are reacting to load the change itself created.
+Telling those apart needs the A/B, not an argument.
+
+The gate cannot see any of this.
+
 ## How to verify a change for real
 
 ```bash

@@ -158,6 +158,25 @@ ok "[0] still falls back"                   yes "$(has "$out" 'not a usable posi
 out=$(run_tell SHIPYARD_TELL_CONFIRM_SECS=1 SHIPYARD_TELL_CONFIRM_INTERVAL=0.05)
 ok "a small positive interval is kept"      no  "$(has "$out" 'not a usable positive number')"
 
+# --- the PRODUCTION defaults, asserted rather than trusted ---------------------------------------
+# #203 turned three production constants into knobs so the SUITES could stop paying them, and the
+# one way that goes wrong is somebody making a test fast by moving the default instead of the test.
+# Nothing asserted the defaults until this block: the knob readers have their own suite
+# (shared/knobs), and it tests `knob_interval`, not what any caller passes it.
+#
+# A source-text assertion, not a behavioural one, and the limit is worth stating: it pins the
+# literal in the call, so it catches the edit that changes `3` to `0.01` and would NOT catch a
+# caller that stopped consulting the knob at all. The neighbouring `grep -Fc` checks in t13 and
+# t11 are the same idiom with the same limit.
+#
+# These two are shipyard's; council's keeper default is asserted in its own suite
+# (t16-keeper-canary), beside the cases that benefit from the knob, for the same reason.
+printf '\n── the production defaults ──\n'
+ok "the motion diff still defaults to 3s in production" 1 \
+   "$(grep -Fc 'knob_interval "${SHIPYARD_MOTION_INTERVAL:-}" 3' "$SKILL_DIR/shipyard-report.sh")"
+ok "the settle delay still defaults to 1s in production" 1 \
+   "$(grep -Fc 'knob_interval "${SHIPYARD_TELL_SETTLE_DELAY:-}" 1' "$SKILL_DIR/shipyard-tell.sh")"
+
 printf '\n'
 if [ "$FAILURES" -eq 0 ]; then
   printf 't16-tell-knobs: %d checks, all passed\n' "$CHECKS"
