@@ -593,6 +593,13 @@ open question that nobody can answer.
 Do not answer a `decision` on the user's behalf. Relay it, get the call, pass it back
 verbatim — that is the whole reason it was escalated instead of decided in the child.
 
+Issue bookkeeping is not a `question`. Which issue a change anchors to, whether something
+found on the way is filed, commented on an existing issue or skipped, and whether an issue
+the pipeline filed stays open are ship's own decisions wherever the repo's skill defines
+them; the protocol tells the child to take the skill's default and report it in a `notice`.
+A child that raises one anyway has left its skill — answer with "decide it yourself by the
+skill's rule and report the decision", not with the decision.
+
 ## Step 4. Speak first — `shipyard-tell.sh`
 
 The mailbox is a **child-initiated** channel: the child creates a record and polls it, you

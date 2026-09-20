@@ -131,8 +131,8 @@ fi
 
 # --- first prompt --------------------------------------------------------------
 # `/ship` takes all three shapes itself: a number, a `#N`/`pr N` marker, and a
-# free-text description ("Create a new Issue (asks to confirm), then propose + spec
-# PR"). So there is exactly one entry point and no handover.
+# free-text description (find or create the issue, then propose + spec PR). So there
+# is exactly one entry point and no handover.
 if [ "$NUMERIC" = 1 ]; then
   PROMPT="$SHIP_REF $TARGET"
 else
@@ -209,6 +209,13 @@ PROTO="$MB/protocol-$SLOT.md"
   echo "* Ambiguous, conflicting or missing requirements and acceptance criteria — including"
   echo "  the shape of the change itself when you were started from a free-text idea and"
   echo "  \`$SHIP_REF\` needs the scope pinned down before it can write a spec."
+  echo
+  echo "  Issue bookkeeping is NOT that. Which issue a change anchors to, whether something"
+  echo "  found on the way is filed, commented on an existing issue, or skipped, and whether"
+  echo "  an issue the pipeline filed stays open are \`$SHIP_REF\`'s own decisions wherever the"
+  echo "  repo's skill defines them: take the default it gives, report the"
+  echo "  decision with its basis in a notice, and never raise it as a question — a wrong"
+  echo "  anchor costs one comment, a question costs the run."
   echo "* Anything risky or irreversible: prod, data migrations, secrets/access, rewriting"
   echo "  or deleting someone else's work, force-push, CI/CD changes."
   echo "* Any blocker you cannot clear yourself (auth, permissions, a red pipeline you"
