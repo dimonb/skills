@@ -345,4 +345,5 @@ fi
 
 echo "started $AGENT ship in $(shipyard_where "$SLOT") (worktree .claude/worktrees/$NAME) - $PROMPT"
 echo "env: $ENVSUM"
+echo "effort: $(shipyard_child_effort 2>/dev/null)"
 echo "SLOT:$SLOT"

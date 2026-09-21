@@ -133,6 +133,11 @@ started from inside an agterm session captures those and hands them to every pro
 ever spawns, so a child's status hook would report against whichever session happened to
 start tmux.
 
+**Child reasoning effort.** A Claude child runs at `--effort max` unless `SHIPYARD_EFFORT` names
+another level (`low`, `medium`, `high`, `xhigh`, `max`), read at launch and printed on the launch
+line. Lower it for mechanical work — a comment pay-down or a rename touches hundreds of steps, and
+each one pays for maximum thinking. An unusable value falls back to `max` and says so on stderr.
+
 ## A slot
 
 A **slot** is the key of a terminal + worktree. For an existing MR/PR/issue it is the
