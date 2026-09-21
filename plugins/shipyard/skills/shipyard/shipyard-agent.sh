@@ -124,6 +124,20 @@ shipyard_agent_env_scrub_default() {
 # `full` approval, not `sandboxed`: a shipyard child `-C`s into its own worktree and drives a
 # whole change end to end unattended. council takes `sandboxed` for the opposite reason. The two
 # values are the one thing this unification must not flatten, so both are asserted in the suites.
+# The child's reasoning effort: `max` unless SHIPYARD_EFFORT names another. A mechanical change
+# does not need max, and pays for it on every step. An unusable value falls back, loudly.
+shipyard_child_effort() {
+  case "${SHIPYARD_EFFORT:-}" in
+    low|medium|high|xhigh|max) printf '%s' "$SHIPYARD_EFFORT" ;;
+    '') printf 'max' ;;
+    *)
+      printf 'shipyard: SHIPYARD_EFFORT=%s is not low|medium|high|xhigh|max; using max\n' \
+        "$SHIPYARD_EFFORT" >&2
+      printf 'max'
+      ;;
+  esac
+}
+
 shipyard_agent_exec() {
   local agent="$1" name="$2" worktree="$3" proto="$4" prompt="$5" mode
   shipyard_agent_admits "$agent" || return 1
@@ -139,7 +153,7 @@ shipyard_agent_exec() {
     case "$mode" in
       # The protocol travels as a system prompt where the CLI has one; where it does not, the
       # path has to be named in the bootstrap sentence instead, which is shipyard's wording.
-      system-prompt) ADP_PROTOCOL="$proto"; ADP_NAME="$name"; ADP_EFFORT=max ;;
+      system-prompt) ADP_PROTOCOL="$proto"; ADP_NAME="$name"; ADP_EFFORT=$(shipyard_child_effort) ;;
       reference)
         ADP_CWD="$worktree"
         ADP_PROMPT="Read and follow the supervisor protocol at $proto. Then invoke $prompt and stay inside that workflow until its stopping condition."

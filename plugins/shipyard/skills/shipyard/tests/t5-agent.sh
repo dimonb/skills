@@ -50,6 +50,17 @@ case "$claude_cmd" in
   *) printf 'not ok - Claude launcher (%s)\n' "$claude_cmd"; failures=$((failures+1)) ;;
 esac
 
+effort_of() { # <cmd> — the value after --effort, or nothing
+  sed -n "s/.*--effort '\{0,1\}\([a-z]*\)'\{0,1\}.*/\1/p" <<<"$1" | head -1
+}
+check max "$(effort_of "$claude_cmd")" "Claude child effort defaults to max"
+check medium "$(effort_of "$(SHIPYARD_EFFORT=medium shipyard_agent_exec claude ship-42 "$TMP/work tree" "$TMP/protocol file" '/ship #42')")" \
+  "SHIPYARD_EFFORT sets the Claude child effort"
+check max "$(effort_of "$(SHIPYARD_EFFORT=turbo shipyard_agent_exec claude ship-42 "$TMP/work tree" "$TMP/protocol file" '/ship #42' 2>/dev/null)")" \
+  "an unusable SHIPYARD_EFFORT falls back to max"
+check 1 "$(SHIPYARD_EFFORT=turbo shipyard_child_effort 2>&1 >/dev/null | grep -c 'not low|medium')" \
+  "the fallback says why"
+
 shipyard_agent_prepare_worktree codex "$TMP/repo" "$TMP/worktree" || failures=$((failures+1))
 if [ -f "$TMP/worktree/.git" ] || [ -d "$TMP/worktree/.git" ]; then worktree_exists=true; else worktree_exists=false; fi
 check true "$worktree_exists" "Codex worktree is created"
