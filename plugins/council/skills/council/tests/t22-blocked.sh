@@ -148,7 +148,7 @@ ok "...labelled a quote, not a verdict"      1 "$(printf '%s' "$out" | grep -c '
 # rate_limited banner" — the same output asserting and denying the same fact, on the one path the
 # feature exists for, with the suite green because it only ever asserted each sentence separately.
 ok "...without denying its own annotation"   0 \
-   "$(printf '%s' "$out" | grep -c 'Nothing this check recognises')"
+   "$(printf '%s' "$out" | grep -c 'Nothing on this seat.s pane explains it')"
 # The annotation travels with the notice, so the person woken at 3am gets the same evidence as the
 # person reading the console.
 body=$(cat "$(ls "$POLICY_MAILBOX_DIR"/council-t22a-*.json | head -1)")
@@ -208,7 +208,7 @@ ok "...and says a prompt is answered in place" 1 "$(printf '%s' "$out" | grep -c
 ok "...and scopes relaunch to a dead seat"   1 "$(printf '%s' "$out" | grep -c 'only for a seat that is genuinely dead')"
 # It claims only what it checked. The commonest wedge puts the reason on the terminal in plain
 # words this code cannot read, so "nothing on its terminal says why" would be false.
-ok "...claiming only what it checked"        1 "$(printf '%s' "$out" | grep -c 'Nothing this check recognises')"
+ok "...claiming only what it checked"        1 "$(printf '%s' "$out" | grep -c 'Nothing on this seat.s pane explains it')"
 
 # --- 5. the push: a stall reaches the shared mailbox, once ---------------------------------
 ok "a stall pushes a notice"                 1 "$(notices t22g)"
@@ -456,15 +456,15 @@ out=$(COUNCIL_ROOM="$R16" COUNCIL_WAIT_SCREEN_FILE="$RUNNING" bash "$CLI" status
 ok "an unanchored kind earns no long turn"   0 "$(printf '%s' "$out" | grep -c '⏳ LONG TURN')"
 ok "...and stalls as it always did"          1 "$(printf '%s' "$out" | grep -c '🛑 STALL')"
 
-# 10g. THE ALARM MUST NOT DENY ITS OWN READ. "Nothing this check recognises explains it" is owed to
+# 10g. THE ALARM MUST NOT DENY ITS OWN READ. "Nothing on this seat's pane explains it" is owed to
 #      the `🛑 STALL` arm; printed under a `⏳ LONG TURN` line it denies, in the next sentence, the
 #      very read that chose the line. That defect has already happened once here, when the banner
 #      was the only recogniser; this is the same arm reached by a second door.
 out=$(COUNCIL_ROOM="$R12" COUNCIL_WAIT_SCREEN_FILE="$QUIET" bash "$CLI" status 2>&1)
-ok "an unexplained stall still says so"      1 "$(printf '%s' "$out" | grep -c 'Nothing this check recognises')"
+ok "an unexplained stall still says so"      1 "$(printf '%s' "$out" | grep -c 'Nothing on this seat.s pane explains it')"
 age_room_to "$R12" 1000
 out=$(COUNCIL_ROOM="$R12" COUNCIL_WAIT_SCREEN_FILE="$RUNNING" bash "$CLI" status 2>&1)
-ok "a long turn does not deny its own read"  0 "$(printf '%s' "$out" | grep -c 'Nothing this check recognises')"
+ok "a long turn does not deny its own read"  0 "$(printf '%s' "$out" | grep -c 'Nothing on this seat.s pane explains it')"
 # ...AND DOES NOT CONTRADICT ITSELF EITHER, which the assertion above cannot see: it greps one
 # string, and the fourth version of this arm appended a DIFFERENT sentence — "it does not soften
 # this alarm because 1000s is past the 5400s backstop" — on the ordinary calm path, asserting the
@@ -480,11 +480,11 @@ ok "...and claims no backstop it has not reached" 0 "$(printf '%s' "$out" | grep
 age_room_to "$R12" 6000
 out=$(COUNCIL_ROOM="$R12" COUNCIL_WAIT_SCREEN_FILE="$RUNNING" bash "$CLI" status 2>&1)
 ok "past the backstop it is a stall"         1 "$(printf '%s' "$out" | grep -c '🛑 STALL')"
-ok "...and does not deny the read it took"   0 "$(printf '%s' "$out" | grep -c 'Nothing this check recognises')"
+ok "...and does not deny the read it took"   0 "$(printf '%s' "$out" | grep -c 'Nothing on this seat.s pane explains it')"
 ok "...it reports the read and the override" 1 "$(printf '%s' "$out" | grep -c 'past the 5400s backstop')"
 ok "...still labelled a quote, not a verdict" 1 "$(printf '%s' "$out" | grep -c 'not a verdict')"
 out=$(COUNCIL_ROOM="$R12B" COUNCIL_WAIT_SCREEN_FILE="$RUNNING" bash "$CLI" status 2>&1)
-ok "a closed room does not deny it either"   0 "$(printf '%s' "$out" | grep -c 'Nothing this check recognises')"
+ok "a closed room does not deny it either"   0 "$(printf '%s' "$out" | grep -c 'Nothing on this seat.s pane explains it')"
 ok "...and names the closure as the override" 1 "$(printf '%s' "$out" | grep -c 'because the room is CLOSED')"
 
 # 10h. THE KNOB, AND WHAT ITS FALLBACK ACTUALLY BUYS — stated as measured, because the first

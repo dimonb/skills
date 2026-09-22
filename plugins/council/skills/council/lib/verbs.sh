@@ -1413,7 +1413,17 @@ v_status() {
           alarms="$alarms ⏳ its client still reads as mid-turn — a quote from a pane the seat writes, not a verdict. It does not soften this alarm because ${held}s is past the ${hard}s backstop, where no pane can pick the tier."
         fi
       else
-        alarms="$alarms Nothing this check recognises explains it; the shapes recognised today are an announced capacity wait and a client that says it is mid-turn."
+        # NO LIST HERE, AND THAT IS THE FIX RATHER THAN THE WORDING. This sentence has been wrong
+        # four ways in three review rounds, and the first of them was the list itself: it said
+        # "only an announced capacity wait is recognised today", which the commit that added a
+        # second recogniser made false. A sentence that enumerates what the check can see has to
+        # be found and edited by every change that teaches it to see something else, and this
+        # repo's rule for that shape is to remove the enumerable thing rather than correct the
+        # instance. So it reports the OUTCOME for this seat and lists nothing; what the check can
+        # recognise is documented once, in SKILL.md's tier table, where a reader goes looking for
+        # it. The guard above is what keeps this true, and it is structural: every recognised
+        # shape has its own arm, and this is the else.
+        alarms="$alarms Nothing on this seat's pane explains it."
       fi
     fi
     # OUTSIDE the wording branches, deliberately. All of them are the same event — the floor has
