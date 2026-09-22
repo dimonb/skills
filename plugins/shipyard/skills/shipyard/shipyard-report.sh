@@ -466,7 +466,8 @@ STALLED=()
 STALL_ROWS=()
 WAITING=()    # motionless for a stated, self-healing reason — nothing to do
 ATTENTION=()  # motionless for a known reason that needs a person, but never compaction
-UNSCALED=()   # slots whose ctx figure has no window the report can defend scaling it by
+UNSCALED=()   # "<slot>|<display>" — a ctx figure with no window to assert it against; the
+              # display distinguishes the two causes, which take different remedies (Step 5)
 
 # --- the supervision gap ---------------------------------------------------------------
 # THE STALL CLOCK ONLY MEASURES WHAT THIS SCRIPT WATCHED. `since` is carried across runs in
@@ -980,7 +981,12 @@ for slot in "${SLOTS[@]}"; do
   case "$band" in
     warn)    ctx="⚠️ $ctx" ;;
     crit)    ctx="🛑 $ctx" ;;
-    unknown) ctx="❓ $ctx"; UNSCALED+=("$slot") ;;
+    # The DISPLAY is carried alongside the slot, not just the slot: the block below tells the two
+    # `?` causes apart by whether ctx_probe printed a `<=` bound or a bare count, because their
+    # remedies differ. A parallel associative array would be the obvious way and is bash 4+; this
+    # file is sourced into a bash-3.2 floor, so it uses the same `|`-joined entry shape ATTENTION
+    # does. Captured before the glyph is prefixed, so the test is over ctx_probe's own output.
+    unknown) UNSCALED+=("$slot|$ctx"); ctx="❓ $ctx" ;;
   esac
 
   # --- WHY is it not moving? asked BEFORE the clock is consulted ---------------
@@ -1300,18 +1306,37 @@ fi
   fi
   # An unscalable ctx figure is NOT a healthy one, and the band alone is easy to miss in a wide
   # table — so it gets its own line. It means the report is holding a token count and no window it
-  # can defend scaling the count by, which is the one state where it can neither reassure nor
-  # alarm honestly. The causes are ctx_probe's business, not this block's: what the operator does
-  # about them is the same act, so the text states the missing thing and the remedy rather than
-  # sorting the slots into kinds it would then have to keep in step with ctx_probe.
+  # can defend ASSERTING it against.
+  #
+  # THE TWO CAUSES TAKE DIFFERENT ACTS, so this block says which is which rather than printing
+  # both remedies at every slot. An earlier draft did print both, on the stated grounds that the
+  # operator's act was the same — it is not, and the half that does not apply is actively harmful:
+  # for a figure whose window is merely unsettled, the size is already listed, so adding another
+  # cannot clear it, and an extra entry BELOW the current smallest moves the boundary the guard
+  # measures against. The row already distinguishes them (ctx_probe prints a bare count for one
+  # and a `<=` bound for the other), so this block reads the same distinction off the display
+  # rather than keeping a second copy of the rule.
   if [ "${#UNSCALED[@]}" -gt 0 ]; then
     echo
-    echo "### ❓ ctx UNSCALED — a token count with no window to measure it against"
-    for sl in "${UNSCALED[@]}"; do
-      echo "- \`$sl\` — the token count is shown without a percentage because none can be computed."
-      echo "  Do NOT read the missing glyph as healthy: this child may be at its ceiling or nowhere near it."
-      echo "  Fix it by naming the window — \`SHIPYARD_CTX_WINDOW=<tokens>\` — or add the size to CTX_WINDOWS"
-      echo "  in shipyard-ctx.sh if a new model has shipped."
+    echo "### ❓ ctx UNSCALED — a token count with no window to assert it against"
+    echo "Do NOT read a missing percentage as healthy: these children may be at their ceiling or nowhere near it."
+    for x in "${UNSCALED[@]}"; do
+      sl=${x%%|*}; disp=${x#*|}
+      case "$disp" in
+      '<='*)
+        echo "- \`$sl\` — the figure is an UPPER BOUND, not a measurement: the window is not pinned"
+        echo "  down yet, so the child is at most that fraction and possibly far less. Name the window"
+        echo "  — \`SHIPYARD_CTX_WINDOW=<tokens>\` — to turn it into a real band. Adding a CTX_WINDOWS"
+        echo "  entry will NOT clear this one; the size is already listed."
+        echo "  A bound that never resolves as the count climbs is itself the answer: that child's"
+        echo "  window IS the smallest size this report knows, and only the override will say so."
+        ;;
+      *)
+        echo "- \`$sl\` — the count exceeds every window this report knows of, so no percentage exists"
+        echo "  to print. Add the size to CTX_WINDOWS in shipyard-ctx.sh if a new model has shipped,"
+        echo "  or name it with \`SHIPYARD_CTX_WINDOW=<tokens>\`."
+        ;;
+      esac
     done
   fi
   # What this tick TORE DOWN, and what it refused to. A destructive act the operator did not

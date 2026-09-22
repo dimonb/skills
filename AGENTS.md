@@ -195,6 +195,28 @@ When no anchorable shape exists, the honest answer is to drop the arm. An exempt
 evidence is worth less than not having it, and a classifier that is right about two states beats
 one that guesses at five.
 
+## Your own configuration hides the path everybody else runs
+
+A supervisor's instrument has a default path and an override. The moment you set the override in
+your own fleet — because you know your setup and the exact reading is nicer — **the default path
+stops being exercised by the only person maintaining it.** It is then live code for every user and
+dead code for its author, which is the worst of both: it ships, it is reasoned about, and it is
+never once observed.
+
+Measured here. The `ctx` column infers a child's context window, and this repo's planning record
+carries "monitors carry `SHIPYARD_CTX_WINDOW=1000000`" as a standing rule. A change to that
+inference was written, self-reviewed and escalated by a session that had set that same override in
+both of its own monitors an hour earlier. The change removed the ceiling alarm outright for the
+default deployment — every fleet that has *not* set the override — and nobody felt it, because
+nobody involved was running that path. Five independent review axes found it; the author's own
+verification, run on the author's own configuration, had come back clean.
+
+So: **when you change a thing that has an override, unset the override and read the result.** And
+when you write the advice "just set X" into the docs, notice that you have described the reason the
+code under X will rot. The gate cannot see any of this, and neither can a test suite that inherits
+your environment — which is why this repo's ctx suite unsets `SHIPYARD_CTX_WINDOW` in its helpers
+and why that line is load-bearing rather than tidiness.
+
 ## Untrusted evidence may annotate an operator-facing signal, never suppress one
 
 Both skills let an operator's alarm, glyph, exit code or push be shaped by state that an agent

@@ -28,9 +28,31 @@ ok "peak just under the smallest size"    "yes" "$(unproven 199999)"
 ok "peak exactly on the smallest size"    "yes" "$(unproven 200000)"
 ok "peak one over -> the next size is a deduction" "no" "$(unproven 200001)"
 ok "peak well over"                       "no"  "$(unproven 461514)"
-# Past the whole list ctx_window returns the last entry, so nothing listed is being passed over.
-# ctx_probe's >100% branch speaks for that reading instead; this one must stay out of its way.
+# Past the whole list the peak is well clear of the smallest size, so the window is settled as
+# far as this predicate is concerned. ctx_probe's >100% branch speaks for that reading instead;
+# this one must stay out of its way.
 ok "peak past the whole list"             "no"  "$(unproven 1000001)"
+
+# --- THE BOUNDARY IS THE SMALLEST LISTED SIZE, NOT THE LAST ENTRY ---------------------------
+# The first draft asked "is ctx_window's answer not the last entry?". On a two-entry list that is
+# the same predicate; on a longer one it is not, and the difference blinds the fleet — only the
+# topmost class could ever be proven, so APPENDING a size unproved every child below the new top.
+# Measured on that draft: with 2000000 appended, a real `90% · 900k` crit became a bare `?`. The
+# report's own block prints "add the size to CTX_WINDOWS" as a remedy, so the instrument would
+# have been instructing the edit that blinded it. The trigger was a source edit, so no shipped
+# list was ever affected — the shape was the defect, and this is what pins the fix.
+_saved_windows=("${CTX_WINDOWS[@]}")
+CTX_WINDOWS=(200000 1000000 2000000)
+ok "a third entry leaves the middle class proven"  "no"  "$(unproven 900000)"
+ok "...and the class above it"                     "no"  "$(unproven 1500000)"
+ok "...while the smallest size still bounds"       "yes" "$(unproven 162000)"
+# The length guard: with one entry there is no second candidate, so nothing is ever unproven.
+# Without it every reading below the sole window would be, and the column would withhold wholesale.
+CTX_WINDOWS=(200000)
+ok "a single-entry list is never unproven"         "no"  "$(unproven 5000)"
+ok "...at any peak"                                "no"  "$(unproven 199999)"
+CTX_WINDOWS=("${_saved_windows[@]}")
+ok "the list was restored for what follows" "200000 1000000" "${CTX_WINDOWS[*]}"
 
 # A STATED window is never a guess — the operator said what it is, and nothing here re-opens it.
 ok "override, peak below the whole list"  "no"  "$(SHIPYARD_CTX_WINDOW=1000000 unproven 5000)"

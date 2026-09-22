@@ -228,12 +228,17 @@ them), repaints sidebar glyphs, closes pending notices, and re-arms the Codex pa
 watcher.
 
 `SHIPYARD_CTX_WINDOW` pins the context window, in tokens as a plain integer, that the `ctx`
-percentage is measured against. Without it, a Codex child's window is read from its own rollout,
-while a Claude child's is inferred from the largest total its transcript has ever carried — a
-request that carried N tokens cannot have run on a window smaller than N. The override beats
-either in both directions. Where that inference has not yet ruled anything out and the reading
-would otherwise raise a glyph, the column shows `❓` and the raw token count rather than a
-percentage it cannot defend; setting this variable replaces it with a real band.
+percentage is measured against. Without it, a Codex child's window is read from its own rollout
+when one resolves, and otherwise — as for every Claude child — it is inferred from the largest
+total the transcript has ever carried, since a request that carried N tokens cannot have run on a
+window smaller than N. The override beats all of that, in both directions.
+
+**Pin it for a Claude fleet.** Nothing names the model when a child is launched, so where the
+inference has not yet ruled anything out and the reading would otherwise raise a glyph, the column
+shows an upper bound (`❓ <=92% · 185k`) rather than a percentage it cannot defend. For a child
+whose window *is* the smallest size the report knows, that is its permanent reading above the warn
+threshold — a peak cannot exceed the window that carried it, so the ambiguity never resolves on
+its own. Setting this variable replaces the bound with an exact band, for good.
 
 `SHIPYARD_EFFORT` (unset by default) is an operator's explicit `--effort` level for a Claude
 child. Unset, the child is launched with no such flag: how hard to think and how deep to review

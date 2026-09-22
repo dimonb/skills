@@ -34,14 +34,17 @@
 # that expansion is not padding, and the count is not the contract. Do not add a property that
 # has no defect behind it: a suite longer than the code it guards stops being run.
 #
-# WHAT IS NOT COVERED, so that a green run is never read as more than it is — `ctx_transcript` has
-# no test at all. Specifically unguarded: the project-directory slug, the newest-by-mtime choice,
-# the exclusion of subagent transcripts, and the CLAUDE_CONFIG_DIR/CLAUDE_HOME resolution. t3
-# reaches `ctx_probe`'s transcript branch by REPLACING that lookup with a fixture path, so what it
-# proves is the logic downstream of it — which of `cur`/`peak` feeds the window question, the case
-# ctx_window_unproven made load-bearing — and nothing about how the file is found. The continuity suite uses recorded screen shapes and a
-# fake terminal CLI; it does not exercise a real control socket or prove a future Codex build
-# renders the same markers. Mutate any uncovered path and this suite still passes.
+# WHAT IS NOT COVERED, so that a green run is never read as more than it is: on the CLAUDE side,
+# `ctx_claude_transcript` has no test — the project-directory slug, the newest-by-mtime choice,
+# the exclusion of subagent transcripts and the CLAUDE_CONFIG_DIR/CLAUDE_HOME resolution are all
+# unguarded. t3 reaches `ctx_probe`'s transcript branch by REPLACING that lookup with a fixture
+# path, so what it proves is the logic downstream of it — which of `cur`/`peak` feeds the window
+# assignment — and nothing about how the file is found. The CODEX lookup is different: t6 drives
+# `ctx_codex_transcript` against a real fixture tree, so that half IS covered, while the codex
+# arm's FALL-THROUGH (no rollout, or a rollout with no token_count event, which lands a codex
+# child on the claude inference) is covered by nothing. The continuity suite uses recorded screen
+# shapes and a fake terminal CLI; it does not exercise a real control socket or prove a future
+# Codex build renders the same markers. Mutate any uncovered path and this suite still passes.
 set -uo pipefail
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
