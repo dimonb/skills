@@ -465,6 +465,20 @@ ok "an unexplained stall still says so"      1 "$(printf '%s' "$out" | grep -c '
 age_room_to "$R12" 1000
 out=$(COUNCIL_ROOM="$R12" COUNCIL_WAIT_SCREEN_FILE="$RUNNING" bash "$CLI" status 2>&1)
 ok "a long turn does not deny its own read"  0 "$(printf '%s' "$out" | grep -c 'Nothing this check recognises')"
+# THE THIRD DOOR. The denial must follow the READ, never the TIER — the two part company in
+# exactly the states where the tier is overridden, and conditioning on the tier put this sentence
+# back on the path where a healthy turn crosses the backstop. There the operator was told the room
+# had stopped AND that nothing explained it, while the screen said `running`. Both override states
+# are pinned, because they are separate overrides and a fix for one is not a fix for the other.
+age_room_to "$R12" 6000
+out=$(COUNCIL_ROOM="$R12" COUNCIL_WAIT_SCREEN_FILE="$RUNNING" bash "$CLI" status 2>&1)
+ok "past the backstop it is a stall"         1 "$(printf '%s' "$out" | grep -c '🛑 STALL')"
+ok "...and does not deny the read it took"   0 "$(printf '%s' "$out" | grep -c 'Nothing this check recognises')"
+ok "...it reports the read and the override" 1 "$(printf '%s' "$out" | grep -c 'past the 5400s backstop')"
+ok "...still labelled a quote, not a verdict" 1 "$(printf '%s' "$out" | grep -c 'not a verdict')"
+out=$(COUNCIL_ROOM="$R12B" COUNCIL_WAIT_SCREEN_FILE="$RUNNING" bash "$CLI" status 2>&1)
+ok "a closed room does not deny it either"   0 "$(printf '%s' "$out" | grep -c 'Nothing this check recognises')"
+ok "...and names the closure as the override" 1 "$(printf '%s' "$out" | grep -c 'because the room is CLOSED')"
 
 # 10h. THE KNOB, AND WHAT ITS FALLBACK ACTUALLY BUYS — stated as measured, because the first
 #      version of this comment claimed the opposite and was believed through a commit. The call

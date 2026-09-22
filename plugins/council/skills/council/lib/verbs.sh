@@ -1098,7 +1098,7 @@ v_status() {
   local j verd g t floor held conf room_age alarms="" phase wait_ev="" wait_note="" rec=""
   local only_changed=0 alarms_only=0 term_live="" term_total="" term_rc term_out="" live_note=""
   local out="" round_line="" openct sig sigfile TAB term_line="" quiet_line=""
-  local hard fscreen="" tier=stall
+  local hard fscreen="" tier=stall mid=0
   TAB=$(printf '\t')
   while [ $# -gt 0 ]; do
     case "$1" in
@@ -1335,7 +1335,17 @@ v_status() {
       # says `🛑` any more. #188's care note (b) names this, and the regression was live for one
       # review round — reachable only BELOW the backstop, which is why case 6, aged to 7200s,
       # stayed green through it. `$rec` is the status captured once at the top of this verb.
-      if [ -z "$rec" ] && [ "$held" -le "$hard" ] && _floor_mid_turn "$fscreen"; then tier=longturn; else tier=stall; fi
+      #
+      # THE READ IS TAKEN ONCE, INTO `$mid`, AND THE TIER IS A SEPARATE QUESTION FROM IT. Folding
+      # the read into the tier chain as a conjunct looked tidier and was wrong: the chain
+      # short-circuits, so in the two states that override the tier — past the backstop, and on a
+      # closed room — `_floor_mid_turn` was never called, `$tier` was the only record of what the
+      # pane said, and every later arm that asked about the READ got the answer to a different
+      # question. That is how the denial below came to contradict a screen that plainly said
+      # `running`. Keep the two apart: `$mid` is what the client claims, `$tier` is what this
+      # alarm does about it, and the second may override the first without erasing it.
+      mid=0; _floor_mid_turn "$fscreen" && mid=1
+      if [ -z "$rec" ] && [ "$held" -le "$hard" ] && [ "$mid" = 1 ]; then tier=longturn; else tier=stall; fi
       if [ "$tier" = longturn ]; then
         # THE CALM LINE MAY NOT CARRY THE LOUD GLYPH, even to name what it will become. A
         # supervisor's fast loop greps this channel, and `🛑` inside this sentence would match a
@@ -1367,13 +1377,28 @@ v_status() {
       if [ -n "$wait_ev" ]; then
         wait_note="⏳ its pane carries a live ${wait_ev%%	*} banner: $(policy_park_advice) If that banner is current the seat resumes by itself, so check the terminal before relaunching — this is a quote from a pane, not a verdict. Evidence: ${wait_ev#*	}"
         alarms="$alarms $wait_note"
-      # THE DENIAL IS OWED TO THE `🛑 STALL` ARM ONLY, and this guard is that same conditional-
-      # recognition rule extended to a second recognised shape. "Nothing this check recognises
-      # explains it" printed under a `⏳ LONG TURN` line would deny, in the next sentence, the very
-      # read that chose the line — which is exactly the defect the paragraph above records, arriving
-      # a second time by a different door because a new recogniser was added and this arm's
-      # condition still named only the first one.
-      elif [ "$tier" != longturn ]; then
+      # THE DENIAL IS OWED TO A FAILED READ, NOT TO A LOUD TIER — and getting that wrong is now the
+      # THIRD time this one sentence has denied something the same check had just established. It
+      # was unconditional once, and said "nothing recognised" in the same breath as a capacity
+      # banner. It was then conditioned on `$tier`, which is not the read: past the backstop and on
+      # a closed room the tier is `stall` however plainly the client says it is working, so the
+      # denial returned on exactly the path where a healthy long turn crosses 5400s — an operator
+      # told "the room has stopped; go and look at it" AND that nothing explains it, while the one
+      # fact that would stop them running `relaunch` on a working seat sat on the screen, read and
+      # discarded. No adversary needed; the file's own measurements say a real turn reaches that
+      # threshold.
+      #
+      # So it branches on `$mid`. And when the read SUCCEEDED but the tier overrode it, the alarm
+      # says so and names which override — that is the annotate-never-suppress rule working in the
+      # direction it is usually not tested in: the evidence cannot make the alarm quieter here, and
+      # it must still not be thrown away.
+      elif [ "$mid" = 1 ]; then
+        if [ -n "$rec" ]; then
+          alarms="$alarms ⏳ its client still reads as mid-turn — a quote from a pane the seat writes, not a verdict. It does not soften this alarm because the room is CLOSED, where the stall line always fires."
+        else
+          alarms="$alarms ⏳ its client still reads as mid-turn — a quote from a pane the seat writes, not a verdict. It does not soften this alarm because ${held}s is past the ${hard}s backstop, where no pane can pick the tier."
+        fi
+      else
         alarms="$alarms Nothing this check recognises explains it; the shapes recognised today are an announced capacity wait and a client that says it is mid-turn."
       fi
     fi
