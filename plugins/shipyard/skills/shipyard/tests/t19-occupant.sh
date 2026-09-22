@@ -102,7 +102,10 @@ run_report() { # [args...] -> the report
     bash "$REPORT" "$@" 41 42 43 44 45 46 2>/dev/null
 }
 row() { printf '%s\n' "$1" | grep "^| $2 " | cut -d'|' -f5 | sed 's/^ *//; s/ *$//'; }
-block() { printf '%s\n' "$1" | sed -n "/^### $2/,/^###/p" | grep -o '^- `[0-9]*`' | tr -d '`- ' | tr '\n' ' ' | sed 's/ $//'; }
+# The hyphen goes LAST in tr's set: `'`- '` is a range to GNU tr (backtick to space, reversed —
+# an error) and a literal list to BSD tr, so the old spelling passed on macOS and emptied every
+# block on Linux CI.
+block() { printf '%s\n' "$1" | sed -n "/^### $2/,/^###/p" | grep -o '^- `[0-9]*`' | tr -d '` -' | tr '\n' ' ' | sed 's/ $//'; }
 backdate_stall() { # <seconds>
   local f="$MB/report-stall"
   [ -f "$f" ] || { echo "  FAIL backdate_stall: no stall table yet — the fixture asserts nothing"; FAILURES=$((FAILURES + 1)); return 1; }
