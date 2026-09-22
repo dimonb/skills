@@ -832,6 +832,13 @@ none** — so this stays silent until something actually needs you. Ten minutes 
 seat sitting on a permission prompt; a minute is not. It keeps no state between ticks, so unlike
 the loop above there is nothing here that could go stale and swallow a standing alarm.
 
+**One line here does not need you**, and it is on this channel deliberately rather than by
+oversight: `⏳ LONG TURN` reports a floor held past the stall threshold by a seat whose own client
+says it is still working. It cannot be moved off the alarms line without letting a seat's pane
+decide whether a supervisor hears anything at all — the whole argument is [below](#the-mid-turn-tier-and-why-it-reclassifies-rather-than-gates). Read the glyph, not the
+presence of a line: `🛑` is the one that wants a person, and a fast loop that greps for it will not
+match the calm tier.
+
 **It takes the same `&& break` as loop 1, and for a sharper reason than tidiness.** `status`'s
 exit code is the same in this mode, so the loop ends itself when the room closes — and a loop
 without that clause never ends: a finished room's floor keeps ageing, so it stays past the stall
@@ -874,7 +881,7 @@ on the first throws away the argument that seat was holding.
 |---|---|---|
 | the seat's terminal is **gone** | **partly — evidence, not proof** | the backend is asked which sessions exist, and an absence is reported only when it answered and no pin says these seats were launched on a different backend. Neither check establishes *which* container was enumerated, and the pin (`<room>/state/container-<backend>`) is a file inside the room — so a participant can point the read at an empty container and make a live seat look gone |
 | the seat's terminal is **up** | **partly — same read, same limit** | a session named `council-<room>-<peer>` is listed. Anything that can reach the backend can create that name, so this is a reason not to reach for `relaunch` first, not proof of identity |
-| a terminal that is up is **at a prompt** rather than working | **no** | no committed pane capture separates a prompt from a think. `adp_turn_state` (shared adapters, used by `say`) reads running/idle/queued, but `idle` cannot tell a permission prompt from a finished turn, so it would not answer this either |
+| a terminal that is up is **at a prompt** rather than working | **no — and the read it has runs the other way** | `adp_turn_state` (shared adapters) reads running/queued/idle off the pane, and `status` uses it for the `⏳ LONG TURN` tier below: a client that says it is *working* is quoted as such. The converse is not available — `idle` cannot tell a permission prompt from a finished turn, and no committed capture separates them — so the absence of that quote is not a claim that a seat is wedged |
 | a terminal that is up is in an announced **capacity wait** | **partly** | `status` quotes a `rate_limited`-style banner where the client's chrome makes it forgery-proof — two of the three agent kinds have a committed pane capture, the third gets no annotation at all |
 
 So the alarm says what a live seat and a dead seat **look like** (*"a session named … is listed,
@@ -896,12 +903,16 @@ A seat the room never gave a terminal — the one a human took with `--me` — i
 that rather than as a dead seat, because `relaunch` refuses it and the room is simply waiting on
 a person.
 
-**One alarm and one annotation — and the difference is not a matter of degree.**
+**What a held floor produces, tier by tier.** Read the table as *which line, on which channel,
+with which push* — not as a count. The rows below differ in kind, not in degree: one of them never
+leaves the block, one of them asks for nothing, and one of them is the signal the whole monitor
+protocol rests on.
 
-| line | default | where it goes | pushes? |
+| line | threshold | where it goes | pushes? |
 |---|---|---|---|
 | `quiet: …` | `COUNCIL_STALL_WARN_SECS`, 300s | the **block only** — never the alarms line, never `--alarms-only`. Entering or leaving the quiet state breaks `--only-changed`'s silence **once**; holding it does not | no |
-| `🛑 STALL` | `COUNCIL_STALL_SECS`, 900s | the alarms line: both loops, and it bypasses every filter | yes, one `notice` to the mailbox |
+| `⏳ LONG TURN` | `COUNCIL_STALL_SECS`, 900s, **and** the seat's own client reads as mid-turn | the alarms line: both loops, and it bypasses every filter, exactly as the row below does | yes, one `notice`, keyed `[longturn:<peer>:<turns>]` |
+| `🛑 STALL` | `COUNCIL_STALL_SECS`, 900s, otherwise — and `COUNCIL_STALL_HARD_SECS`, 5400s, **whatever the pane says** | the alarms line: both loops, and it bypasses every filter | yes, one `notice`, keyed `[stall:<peer>:<turns>]` |
 
 The early line exists because the wedges that actually cost rooms were **323s and 344s**, well
 under the 900s threshold, so nothing fired for either. It was first written as an alarm, and that
@@ -918,17 +929,47 @@ instrument, not a mistuned one**, and the honest form of the early signal is a l
 that a supervisor reads when the block is printing anyway. At that point a low threshold costs
 nothing, which is why 300s stays — as an annotation threshold, not an alarm threshold.
 
-What *would* separate them is turn state: the failure this was asked for was a seat that **ended
-its turn** at a prompt, i.e. idle rather than running, and `adp_turn_state` in the shared adapters
-already reads that. Wiring it in is a change of its own and is filed rather than half-made here.
+#### The mid-turn tier, and why it reclassifies rather than gates
 
-The `🛑 STALL` alarm keeps the mailbox push to itself, for a mechanical reason as well as a
-judgement one: `_stall_escalate` de-duplicates on `[stall:<peer>:<turns>]`, so a push from an
-earlier tier would consume the key the real alarm needs and silence it. Both lines are skipped
+The same measurement indicted the **900s** tier too: each of those four healthy turns raised
+`🛑 STALL` and pushed a notice about a seat that was working. What separates a think from a wedge
+is **turn state** — the failure this was asked for was a seat that **ended its turn** at a prompt,
+i.e. *idle* rather than *running* — and `adp_turn_state` in the shared adapters reads exactly that
+from the seat's pane.
+
+**It may not GATE the alarm, and the direction of the forgery is why.** The pane's content is the
+seat's own to write and the pane's selection follows a pin inside the room, so a gate would let a
+seat silence the supervisor's alarm *about itself* by printing its client's turn marker. The rule
+— *untrusted evidence may annotate an operator-facing signal, never suppress one* — applies per
+**output**, so gating only the push is the same defect through the same door. What ships instead:
+
+* past 900s with the client reading as mid-turn, the line is **`⏳ LONG TURN`** — same channel,
+  same filter bypass, its own notice. The evidence changes the *wording*, not whether a supervisor
+  is told;
+* past **`COUNCIL_STALL_HARD_SECS`** the pane is not consulted at all and the line is `🛑 STALL`.
+  So a seat that forges the marker buys a calmer sentence and a **bounded delay**, never silence.
+
+**5400s is a measurement, not a preference.** The four healthy turns above top out at **5040s**, so
+the backstop sits just above every healthy turn anyone has timed here. Re-measure it rather than
+tuning it. Its limit, plainly: a slower model or a longer agenda can produce a healthy turn past
+5400s, and when one does the backstop fires on it — the goalpost is bounded, not removed, which is
+the point of a backstop. `COUNCIL_STALL_HARD_SECS` is there for an operator who has measured their
+own rooms.
+
+**The two tiers carry different de-duplication keys**, and that is load-bearing rather than tidy:
+`_stall_escalate` de-duplicates on `[<tier>:<peer>:<turns>]`, so a shared key would let the calm
+notice consume the one the backstop needs and buy exactly the silence the backstop exists to
+prevent. For the same reason the 300s line pushes nothing at all. All three lines are skipped
 during an open barrier round, where a long-held floor is normal; the quiet line is also skipped on
 a closed room, and on a closed room the `STALL` alarm still fires (a closure is two files a
 participant can forge, so withholding it would buy that silence) but makes no claim about any
 seat's terminal.
+
+**What the mid-turn read still cannot tell you** is the row the table above already marks *no*:
+`idle` does not separate a permission prompt from a finished turn, so `⏳ LONG TURN`'s absence is
+not a claim that a seat is wedged, only that its client is not saying it is working. Catching the
+323s/344s wedges early needs a tier that reads turn state *below* the stall threshold, which is a
+change of its own.
 
 ### Reading the block
 
@@ -985,8 +1026,14 @@ looked at this room. **It still does not make the room self-reporting** — some
 of this section are for. Arm them; the push is what covers the supervisor who is not watching
 *this* room's console.
 
+**So does a `⏳ LONG TURN`**, under its own key, and for the reason the tier exists: the push is
+the same event's second operator-facing output, so withholding it for the calm tier would be the
+suppression the tier was built to avoid. The two notices read differently — one says go and look,
+the other says there is nothing to do yet and names the second at which a stall is raised anyway —
+so a mailbox a supervisor skims still separates them at a glance.
+
 The push is de-duplicated within one room — the room matched on the mailbox entry's own `slot`
-field, and within that, on the floor holder and the turn count — so polling does not accrue
+field, and within that, on the tier, the floor holder and the turn count — so polling does not accrue
 duplicates while a room that moves and stalls again notifies afresh. **It de-duplicates against the
 mailbox itself, not against a latch file**, and that is the interesting part: nothing confines a
 participant, so a latch anywhere is a file the seat the notice is about could pre-write, and

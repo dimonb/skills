@@ -242,9 +242,14 @@ ok "past COUNCIL_STALL_SECS it is 🛑"    1 "$(printf '%s' "$a" | grep -c '🛑
 a=$(COUNCIL_STALL_WARN_SECS=100000 bash "$CLI" status 2>/dev/null)
 ok "COUNCIL_STALL_WARN_SECS raises it"   0 "$(printf '%s' "$a" | grep -c '^quiet:')"
 
-# The quiet tier must not push, and this is mechanical rather than a matter of taste:
-# _stall_escalate de-duplicates on `[stall:<peer>:<turns>]`, so a push from the early tier would
-# consume the key the real STALL needs and silence the alarm it exists to warn about.
+# The quiet tier must not push. The reason USED to be mechanical — one de-duplication key for
+# every tier, so a push from here would consume the key the real STALL needs and silence the alarm
+# it exists to warn about. That argument no longer holds on its own: since #188 the key carries the
+# tier (`[<tier>:<peer>:<turns>]`), precisely so a calm notice cannot eat a loud one. What keeps
+# this tier push-free now is what it is: a line on the BLOCK rather than an alarm, at a threshold
+# (300s) chosen to cost nothing because it never leaves the console. Pushing from here would put a
+# notice in the mailbox for every seat that thinks for five minutes, which is the noise #188 was
+# filed about, one tier lower.
 rm -f "$POLICY_MAILBOX_DIR"/council-t27q-*.json 2>/dev/null
 bash "$CLI" status >/dev/null 2>&1
 n=$(ls "$POLICY_MAILBOX_DIR"/council-t27q-*.json 2>/dev/null | wc -l | tr -d ' ')
