@@ -61,7 +61,7 @@ FLAGS
   merge | no-merge   Override the repo's merge policy for this run. `merge` IS the user's
                      go-ahead — pass it only when the user said so in this invocation.
   no-create          Never create an issue; abort if none is found.
-  effort <level>     Review depth: low|medium|high|xhigh|max|auto (default: auto — ship
+  effort <level>     Review depth: low|medium|high|auto (default: auto — ship
                      picks the level from the shape of the change, §2.9, and says why).
   max-rounds <n>     Fix rounds per review stage before escalating (default: 3).
   soft-bounds        On hitting max_iterations/deadline, nudge once and keep going
@@ -281,7 +281,7 @@ is a judgement about the change, not a fact read off the repo.
 |---|---|
 | docs, config, a rename, a mechanical edit, or one small file | `low` or `medium` |
 | an ordinary bug fix or feature in code | `high` |
-| cross-cutting; security-sensitive (auth, secrets, network exposure, permissions, CI/CD, dependencies); concurrency; a data migration; anything hard to reverse | `max` |
+| cross-cutting; security-sensitive (auth, secrets, network exposure, permissions, CI/CD, dependencies); concurrency; a data migration; anything hard to reverse | `high` |
 
 When two rows fit, the higher wins. Record the level in `flags.effort` and the reason, one line, in
 `flags.effort_rationale` — the file §2.8 just wrote — and state both in the first report this run
@@ -530,7 +530,7 @@ productive question to ask any spec.
 **Sizing.** A spec is prose about a design, so substance never removes one of these four — each
 can find a defect in any proposal — and only effort decides how many agents carry them: at `low`
 and `medium`, two — `spec-completeness` with `spec-scope-fit`, and `spec-architecture` with
-`spec-security` — each carrying both charters verbatim; at `high` and above, four. Record the
+`spec-security` — each carrying both charters verbatim; at `high`, four. Record the
 sizing as §5.3's *Sizing the battery* says, with `skipped` empty.
 
 **End every charter — spec and implementation alike — with the anti-noise clause:** *return
@@ -542,10 +542,31 @@ what the round budget is paying for.
 ### 5.3 Implementation-stage battery (up to 5 axes, parallel)
 
 Context every axis gets: the diff against the base branch, the spec artifacts if any, the
-PR/MR title and description, the effort level, and the findings already confirmed in earlier
-rounds so it does not re-report them. The five below are the whole battery, not the battery
-every change gets: *Sizing the battery*, at the end of this section, picks which of them run
-and as how many agents.
+PR/MR title and description, the effort level, the findings already confirmed in earlier
+rounds so it does not re-report them, and **the head's verification run** — see the rule
+immediately below.
+
+The five below are the whole battery, not the battery every change gets:
+*Sizing the battery*, at the end of this section, picks which of them run and as how many
+agents.
+
+**Verification runs ONCE per head, and no axis runs it.** ship runs the discovered check commands
+(§2.4) on the head under review before the battery starts, and hands every charter that run's
+command, exit status and output. An axis does **not** run the check command, a test suite, a
+suite's runner, or a mutation harness. It judges the evidence it was given, and reports what is
+unmeasured as unmeasured rather than measuring it itself; an axis that believes a specific check
+is missing reports that as a finding, and a check that must actually run to settle a blocker is
+run by ship, once, between rounds.
+
+This is not a tidiness rule, and the reason is a measurement rather than an estimate. A battery is
+N agents, a fleet is M changes, and a per-axis instruction to verify costs N×M runs of the same
+command: seven axes each told to run the check command plus a suite's whole runner plus five
+mutation harnesses, on two slots at once, took one machine to a load average of **294**. At that
+point tests begin failing because a process cannot be scheduled rather than because the code is
+wrong — so the duplicate runs do not merely waste tokens and wall-clock, they **corrupt the
+evidence they were meant to produce**, and a round then spends itself chasing reds that the
+reviewing caused. The same multiplication applies to any per-agent cost: size it
+against the concurrency it will actually run at, never against one agent in isolation.
 
 | Axis | Charter |
 |---|---|
@@ -553,7 +574,7 @@ and as how many agents.
 | `impl-security` | **Attempts `/security-review` inside itself and reports whether it actually ran** (see below), then covers the surface regardless: authorization on every new route and query, tenant/owner scoping, secrets in code, config, CI or logs, injection (SQL, command, template, prompt), SSRF and caller-supplied URLs, unsafe deserialization, new dependencies, data exposed to a client that should not see it. For an infrastructure diff also network exposure, policy gaps, role scope, and secret delivery. Plus the three shapes below, which have each shipped for real. |
 | `impl-spec-conformance` | Code against the spec artifacts, **both directions**: every requirement satisfied by the code; no shipped behaviour no requirement describes; no unchecked task whose work is genuinely absent. In a no-spec repo this axis becomes *code against the issue*: does the change do what was asked, no more and no less? |
 | `impl-conventions` | The repo's own conventions as discovered in §2.7 — style, structure, localization parity, formatting of user-facing text, dead or debug code, stray markers, commented-out blocks, and **no AI/assistant attribution anywhere in the diff**. |
-| `impl-gates-coverage` | What actually runs in CI versus what changed — is any part of this change unverified by construction? Does every component with a test entry point appear in the pipeline that should run it? Does the change need manual or browser verification? Are the discovered check commands sufficient evidence for *this* diff, and did they actually run green on *this* head? |
+| `impl-gates-coverage` | What actually runs in CI versus what changed — is any part of this change unverified by construction? Does every component with a test entry point appear in the pipeline that should run it? Does the change need manual or browser verification? Are the discovered check commands sufficient evidence for *this* diff? The head's own run is supplied as context above — judge what it proves and name what it leaves unmeasured; do not re-run it, and do not run a suite or a mutation harness of your own. |
 
 Three defects that have actually reached a default branch, and are therefore named in the
 `impl-security` charter explicitly rather than left to the reviewer's imagination:
@@ -595,7 +616,7 @@ rule:
    config*, *a dependency bump*, *a data model* — and run every axis that can find a real defect
    in that kind of change. Every other axis is **skipped, with the reason recorded**. A line count
    is never the reason to run an axis the substance does not call for, and neither is the effort
-   level — with the one exception rule 2 names, `impl-security` at `high` and above; neither is
+   level — with the one exception rule 2 names, `impl-security` at `high`; neither is
    ever the reason to skip an axis the substance does call for.
 
    | The diff is… | Runs | Skipped |
@@ -615,16 +636,16 @@ rule:
 2. **Effort decides how much the axes that run get.** Two rules that never yield to it:
    `impl-correctness` and `impl-spec-conformance` always happen where the diff has any code in it
    (at `low` they may be ONE agent with a merged charter), and `impl-security` runs at any effort
-   when the diff touches a security surface and always at `high` and above — below `high`, with
+   when the diff touches a security surface and always at `high` — below `high`, with
    no such surface, it is skipped with the reason recorded. The `/code-review` engine inside
-   `impl-correctness` runs at `high` and above; `/security-review` is part of `impl-security`'s
+   `impl-correctness` runs at `high`; `/security-review` is part of `impl-security`'s
    charter and is attempted whenever that axis runs, at any effort.
 
 3. **Size decides whether the axes that run share an agent.** For a small diff — on the order of
    150 changed lines and five files or fewer — at `low` or `medium`, `impl-conventions` and
    `impl-gates-coverage` fold into the correctness charter instead of getting agents of their own
    (into the conformance charter where substance skipped correctness, as on a prose-only diff);
-   at `high` and above, or for a larger diff, they are separate agents. **A folded axis still
+   at `high`, or for a larger diff, they are separate agents. **A folded axis still
    ran** — its charter went in verbatim, its findings carry its own axis name, and it is listed in
    `axes`, never in `skipped`. Folding is a size-and-effort call and skipping is a substance call,
    and they are recorded apart because they are different claims about what was reviewed.
@@ -633,10 +654,9 @@ rule:
 |---|---|---|
 | `low` | 1–2 | correctness and conformance merged; conventions and gates folded in; no `/code-review` |
 | `medium` | 2–3 | correctness and conformance apart; security only on a surface; no `/code-review` |
-| `high` | 4–5 | every admitted axis its own agent; security always; `/code-review` runs |
-| `xhigh` / `max` | the full 5 | every admitted axis its own agent, nothing folded, both engines |
+| `high` | 4–5 | every admitted axis its own agent; security always; both engines run |
 
-Substance narrows first and these apply to what is left: a docs-only diff at `max` is still two
+Substance narrows first and these apply to what is left: a docs-only diff at `high` is still two
 axes, and a CI change at `low` still gets its security agent.
 
 **Scoped rounds inherit the sizing** (§5.7): a round after the first re-opens only the axes whose
