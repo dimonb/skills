@@ -1,0 +1,4 @@
+probe-shell	0 zsh
+probe-sleep	0 sleep
+probe-dead	1 sh
+probe-wrapper	0 bash

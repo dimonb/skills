@@ -1,0 +1,37 @@
+{
+  "ok": true,
+  "result": {
+    "tree": {
+      "workspaces": [
+        {
+          "name": "proj",
+          "sessions": [
+            {
+              "id": "agent-live",
+              "foreground": [
+                "claude"
+              ],
+              "name": "agent-live"
+            },
+            {
+              "id": "probe-exited",
+              "name": "probe-exited"
+            },
+            {
+              "id": "probe-shell",
+              "name": "probe-shell"
+            },
+            {
+              "id": "probe-sleep",
+              "foreground": [
+                "sleep",
+                "600"
+              ],
+              "name": "probe-sleep"
+            }
+          ]
+        }
+      ]
+    }
+  }
+}
