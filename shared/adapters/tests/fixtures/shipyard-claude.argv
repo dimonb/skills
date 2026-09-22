@@ -8,12 +8,6 @@ claude
 ship-42
 <<END>>
 <<ARG>>
---effort
-<<END>>
-<<ARG>>
-max
-<<END>>
-<<ARG>>
 -n
 <<END>>
 <<ARG>>
