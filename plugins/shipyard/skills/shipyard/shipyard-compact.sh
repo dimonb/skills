@@ -132,9 +132,11 @@ fi
 # That is exactly the state a compaction is supposed to end, so surfacing it beats reporting
 # success. tell.sh prints what to look at.
 #
-# THAT INHERITANCE GIVES 6 AND 7 TWO SOURCES EACH, and for 7 the two need opposite responses: from
-# the pre-check it means nothing happened, from here it means the compaction SUCCEEDED and only the
-# resume did not resolve — leaving the idle child this script exists to prevent. The caller tells
+# THAT INHERITANCE GIVES SOME CODES TWO SOURCES — 7 and 8 among them, since both have a pre-check
+# above — and for 7 the two need opposite responses: from the pre-check it means nothing happened,
+# from here it means the compaction SUCCEEDED and only the resume did not resolve — leaving the idle
+# child this script exists to prevent. An 8 from here means the agent was gone by the time the
+# resume was sent, after Escape and `/compact` had been; the remedy is the same recovery. The caller tells
 # them apart by whether `compacting ship-<slot>…` was printed; SKILL.md's Step 5 spells it out.
 # (No list of which codes are free: an enumeration in a comment is a latent defect, and this one
 # was already stale.)

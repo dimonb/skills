@@ -342,7 +342,10 @@ drv_signal() {
 #   * `none` for a live agent is possible for an instant: between the pane's shell starting and
 #     its `exec` of the agent, and on tmux for an agent a wrapper script runs WITHOUT exec (the
 #     shell is then the process-group leader tmux names). Both launchers that use this driver exec
-#     the agent; a caller that alarms on `none` should still require it on more than one read.
+#     the agent — though on tmux the launcher itself is started through tmux's `default-shell -c`,
+#     so that shell must hand off to it too (measured for zsh only). Measured for a real launcher
+#     with a zsh login profile, the pre-exec `none` lasts under 0.3s on both backends; a caller
+#     that alarms on `none` should still require it on more than one read, spaced wider than that.
 drv_occupant() {
   local name="$1" tree v t out dead cmd
   case "$(drv_backend)" in

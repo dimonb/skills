@@ -158,8 +158,10 @@ EOF
 )"
 
 # --------------------------------------------- 5. the wiring is load-bearing
+# The whole assignment, not just the call: a slot with no agent in its terminal is asked the same
+# question on another line (#172), so the call alone is no longer unique to this site.
 ok "report.sh asks why before the clock" 1 \
-   "$(grep -Fc 'shipyard_wait_state "$b" "$phase" "$stage"' "$REPORT")"
+   "$(grep -Fc 'wait_line=$(shipyard_wait_state "$b" "$phase" "$stage" 2>/dev/null) || wait_line=""' "$REPORT")"
 ok "...only of a motionless child with nothing pending" 1 \
    "$(grep -Fc 'if [ "$run" = "⏸ idle/wait" ] && [ "$pend" = 0 ]; then' "$REPORT")"
 ok "an answered slot never reaches STALLED" 1 \

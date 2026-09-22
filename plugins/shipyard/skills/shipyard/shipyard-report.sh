@@ -1053,6 +1053,16 @@ for slot in "${SLOTS[@]}"; do
   # Cleared every iteration, not just assigned: these are plain shell variables in one long loop,
   # so a value left over from the previous slot would otherwise decide this one's row.
   wait_kind=""; wait_class=""; wait_label=""; wait_action=""; wait_line=""
+  # A FINISHED slot is finished whether or not its agent is still in the terminal. An agent that
+  # exits after the hand-off (an operator's `/exit`, a crash) leaves its pane up until the merge, and
+  # telling the operator to "recover" a concluded change is false. So a slot with no agent is asked
+  # the same question as an idle one, and `finished` alone — no other class: a capacity banner left
+  # on a dead agent's screen is not a wait anybody will resume from — hands it back to the idle path
+  # below, where it gets `✅ finished` and the graph's `completed` glyph exactly as before.
+  if [ "$noagent" = 1 ] \
+     && [ "$(shipyard_wait_state "$b" "$phase" "$stage" 2>/dev/null | cut -f2)" = finished ]; then
+    noagent=0; run="⏸ idle/wait"
+  fi
   # `$pend = 0` for the same reason the stall condition below carries it: a slot with an open
   # escalation is already accounted for by the esc column and the escalation block, and it is
   # asking for something. Without this guard such a slot could be printed under "a stated,

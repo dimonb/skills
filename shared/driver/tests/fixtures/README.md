@@ -46,3 +46,13 @@ server (`tmux -L <name>`, killed afterwards), tmux 3.7b, read four seconds after
 | `probe-wrapper` | `bash -c 'sleep 600; true'` | a live process run by a wrapper WITHOUT `exec`: tmux names the wrapper shell, which is the false `none` `drv_occupant` documents |
 
 Unreduced: each line is the window name, a tab, and tmux's output verbatim.
+
+## The pre-exec window (measured, not a fixture)
+
+`drv_occupant`'s comment says the launch-time `none` lasts under 0.3s. That figure came from
+polling a real launch every 0.1s, shaped like shipyard's: a `#!/bin/zsh -l` launcher ending in
+`exec sleep 600`, started on agterm as `zsh -lc 'exec <launcher>'` with `--wait`, and on a private
+tmux server (`default-shell` zsh) as a one-argument window command. agterm: the field was omitted
+for one poll (~0.03s), then held the launcher's `zsh -l` argv until ~0.64s, then the exec'd
+process. tmux: `0 zsh` for two polls, then `0 sleep`. One machine, one zsh login profile — a
+slower profile widens the window, which is why callers take two reads.

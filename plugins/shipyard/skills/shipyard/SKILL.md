@@ -430,14 +430,23 @@ classifies, the report asks the backend which process owns each pane (`drv_occup
 
 It gets its own `💀 NO AGENT` block, is exempt from the stall clock, and bypasses `--only-changed`
 while it holds; `shipyard-tell.sh` and `shipyard-compact.sh` refuse such a slot with exit 8,
-typing nothing. The reading is one-sided, and each side is wrong in a known way:
+typing nothing. One exception: a slot that is **finished** (`✅ finished` above) stays finished
+when its agent has exited — there is nothing to recover, so it keeps its row and its `completed`
+glyph. The reading is one-sided, and each side is wrong in a known way:
 
 * **No verdict claims nothing.** A backend that does not answer, or an agterm build that does not
   report the field, leaves the slot exactly where it was before this check existed — row, stall
   clock and all.
 * **`none` can be briefly wrong** for a launch caught between its shell and its `exec`, which is
-  why it takes both reads; and on tmux for an agent a wrapper runs *without* `exec`, which
-  shipyard's own launcher never does.
+  why it takes both reads, `SHIPYARD_MOTION_INTERVAL` (3s) apart. Measured for a real launcher
+  with a zsh login profile: under 0.3s of `none` on agterm and on tmux, then the launcher's own
+  shell (agterm reads that as `agent`) or the agent. A login profile slow enough to span both reads
+  would still read `none` twice; an exit 8 within seconds of a launch is worth one re-run before
+  recovering anything.
+* **On tmux, `none` is wrong for an agent run without `exec`.** tmux names the process-group
+  leader, so a wrapper shell that stays in front of the agent reads as a shell. shipyard's launcher
+  `exec`s the agent, but tmux starts it through its `default-shell -c`, so this also assumes that
+  shell hands off to a single command — measured for zsh, not for others.
 * **`agent` is no proof of life.** An agent that dies leaving another non-shell process in the
   foreground — something it `exec`ed, a hung command — reads `agent` for as long as that process
   lives. A child can therefore keep this block off by construction; what still catches that case
@@ -1092,8 +1101,10 @@ Exit 6 comes from the RESUME, not the compaction: every arm `exec`s `shipyard-te
 may be sitting unsent — **do not re-compact**, which would discard the context the first
 compaction just rebuilt. Work the nudge's own output instead (Step 5, 2b).
 
-Exit 8 means the terminal is up but no agent is in it (the report's `💀 no agent`), and nothing
-was sent — not even the Escape. There is no session to compact; recover the child (Step 5).
+Exit 8 means the terminal is up but no agent is in it (the report's `💀 no agent`). Printed
+**before** `compacting ship-<slot>…`, nothing was sent — not even the Escape. Printed **after** it,
+the compaction was typed and the agent was gone by the time the `exec`'d resume looked. Either
+way there is no session to resume; recover the child (Step 5).
 
 Exit 5 means the child was still mid-turn when the wait ran out: `shipyard-compact.sh` will NOT
 drive a terminal during a turn, because the Escape it sends to clear the input box is
