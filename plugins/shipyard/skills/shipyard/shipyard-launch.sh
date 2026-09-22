@@ -300,7 +300,7 @@ LAUNCHER="$MB/launch-$SLOT.sh"
 chmod +x "$LAUNCHER"
 
 ENVSUM=$(shipyard_env_summary "$AGENT")
-EFFORTSUM=$(shipyard_child_effort_summary)
+EFFORTSUM=$(shipyard_child_effort_summary "$AGENT")
 
 if [ "${SHIPYARD_DRY:-}" = 1 ]; then
   echo "dry-run: agent $AGENT, backend $BACKEND, $KIND $CONTAINER, terminal $NAME (worktree .claude/worktrees/$NAME)"

@@ -145,14 +145,21 @@ shipyard_child_effort() {
 }
 
 # What the launch line prints and launch-<slot>.json records about it: the level and that the
-# operator set it, or that no flag was passed and the choice is ship's. The stderr note for an
-# unusable value is emitted where the launcher is rendered (shipyard_agent_exec), so it is
-# silenced here rather than printed twice.
-shipyard_child_effort_summary() {
-  local level
+# operator set it, or that no flag was passed and the choice is ship's. It branches on the same
+# adp_protocol_mode answer shipyard_agent_exec branches on, so it claims `<level> (SHIPYARD_EFFORT)`
+# only for a kind whose arm actually carries the flag: a codex child gets no --effort from
+# shipyard, and with the override set the line says so rather than recording a level the child was
+# never given. The stderr note for an unusable value is emitted where the launcher is rendered
+# (shipyard_agent_exec), so it is silenced here rather than printed twice.
+shipyard_child_effort_summary() { # <agent>
+  local agent="${1:-}" level
   level=$(shipyard_child_effort 2>/dev/null)
-  if [ -n "$level" ]; then printf '%s (SHIPYARD_EFFORT)' "$level"
-  else printf 'runtime default (ship decides)'; fi
+  if [ -z "$level" ]; then printf 'runtime default (ship decides)'; return 0; fi
+  case "$(adp_protocol_mode "$agent" 2>/dev/null)" in
+    system-prompt) printf '%s (SHIPYARD_EFFORT)' "$level" ;;
+    *) printf 'runtime default (ship decides; SHIPYARD_EFFORT=%s is not passed to a %s child)' \
+         "$level" "$agent" ;;
+  esac
 }
 
 shipyard_agent_exec() {

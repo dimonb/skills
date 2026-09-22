@@ -61,16 +61,25 @@ has_effort() { case "$1" in *--effort*) printf 'yes' ;; *) printf 'no' ;; esac; 
 check no "$(has_effort "$claude_cmd")" "a default launch passes no --effort: the level is ship's to choose"
 check low "$(effort_of "$(SHIPYARD_EFFORT=low shipyard_agent_exec claude ship-42 "$TMP/work tree" "$TMP/protocol file" '/ship #42')")" \
   "SHIPYARD_EFFORT is the operator's explicit override"
-check no "$(has_effort "$(SHIPYARD_EFFORT=turbo shipyard_agent_exec claude ship-42 "$TMP/work tree" "$TMP/protocol file" '/ship #42' 2>/dev/null)")" \
-  "an unusable SHIPYARD_EFFORT passes no flag rather than a level shipyard picked"
+# Byte for byte against the default render, not `has_effort`: an empty render would read as
+# "no flag" too, and this case discards the render's stderr, so nothing else would catch it.
+check "$claude_cmd" "$(SHIPYARD_EFFORT=turbo shipyard_agent_exec claude ship-42 "$TMP/work tree" "$TMP/protocol file" '/ship #42' 2>/dev/null)" \
+  "an unusable SHIPYARD_EFFORT renders the default launcher: no flag, not a level shipyard picked"
 check 1 "$(SHIPYARD_EFFORT=turbo shipyard_child_effort 2>&1 >/dev/null | grep -c 'not low|medium')" \
   "and says why on stderr"
-check 'runtime default (ship decides)' "$(shipyard_child_effort_summary)" \
+check 'runtime default (ship decides)' "$(shipyard_child_effort_summary claude)" \
   "the launch line says the choice is ship's when nothing was set"
-check 'low (SHIPYARD_EFFORT)' "$(SHIPYARD_EFFORT=low shipyard_child_effort_summary)" \
+check 'low (SHIPYARD_EFFORT)' "$(SHIPYARD_EFFORT=low shipyard_child_effort_summary claude)" \
   "the launch line names the override and where it came from"
-check 'runtime default (ship decides)' "$(SHIPYARD_EFFORT=turbo shipyard_child_effort_summary 2>/dev/null)" \
+check 'runtime default (ship decides)' "$(SHIPYARD_EFFORT=turbo shipyard_child_effort_summary claude 2>/dev/null)" \
   "an unusable override reads as no choice on the launch line"
+# A codex child takes no --effort from shipyard, so the override changes nothing in its launcher
+# and the record must not claim a level the child was never given.
+check "$codex_cmd" "$(SHIPYARD_EFFORT=low shipyard_agent_exec codex ship-42 "$TMP/work tree" "$TMP/protocol file" '$ship #42')" \
+  "SHIPYARD_EFFORT leaves a codex launcher unchanged"
+check 'runtime default (ship decides; SHIPYARD_EFFORT=low is not passed to a codex child)' \
+  "$(SHIPYARD_EFFORT=low shipyard_child_effort_summary codex)" \
+  "the launch line says the override is not passed to a codex child"
 
 shipyard_agent_prepare_worktree codex "$TMP/repo" "$TMP/worktree" || failures=$((failures+1))
 if [ -f "$TMP/worktree/.git" ] || [ -d "$TMP/worktree/.git" ]; then worktree_exists=true; else worktree_exists=false; fi

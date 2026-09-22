@@ -121,6 +121,12 @@ case "$bare" in *-w\ *|*--remote-control*) ok "no ADP_NAME -> no session flags" 
                 *)                         ok "no ADP_NAME -> no session flags" yes yes ;; esac
 case "$bare" in *--effort*) ok "no ADP_EFFORT -> no --effort" yes "no: [$bare]" ;;
                 *)          ok "no ADP_EFFORT -> no --effort" yes yes ;; esac
+# The positive case is pinned here because the shipyard-claude golden was the only place this
+# make-check-gated suite saw `--effort <level>` rendered, and that golden lost the flag when
+# shipyard stopped choosing the level. Without this, dropping the printf in the claude arm would
+# leave make check green, and only t5 — which make check skips — would notice.
+eff=$( ADP_PROMPT=goal ADP_EFFORT=low; adp_cmd claude | head -1 )
+ok "ADP_EFFORT -> --effort, quoted" "exec claude --effort 'low' --permission-mode auto \\" "$eff"
 case "$bare" in *--append-system-prompt*) ok "no ADP_PROTOCOL -> no system prompt" yes "no: [$bare]" ;;
                 *)                        ok "no ADP_PROTOCOL -> no system prompt" yes yes ;; esac
 nocwd=$( ADP_PROMPT=goal; adp_cmd codex )

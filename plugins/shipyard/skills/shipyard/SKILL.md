@@ -146,8 +146,11 @@ maximum on every step.
 nothing more. It is read at launch, printed on the launch line as `effort: <level>
 (SHIPYARD_EFFORT)` — `effort: runtime default (ship decides)` when it is unset — and recorded in
 `<mailbox>/launch-<slot>.json`. An unusable value is not corrected to a level shipyard picked: it
-means no flag, and says so on stderr. Ship flags you type (`effort <level>` among them) go through
-verbatim because they are your words, not shipyard's.
+means no flag, and says so on stderr. A Codex child gets no `--effort` from shipyard at all, so
+with the override set the line reads `effort: runtime default (ship decides;
+SHIPYARD_EFFORT=<level> is not passed to a codex child)` rather than recording a level the child
+was never given. Ship flags you type (`effort <level>` among them) go through verbatim because
+they are your words, not shipyard's.
 
 ## A slot
 
