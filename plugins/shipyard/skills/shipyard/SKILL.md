@@ -386,6 +386,17 @@ escalation has not moved for 30 minutes (`SHIPYARD_STALL_SECS` to tune). Treat t
 an alarm, not as a status line — and work the order it prints, which is Step 5's: git,
 then a nudge, then compaction.
 
+**A stall is printed in full once, then as its delta.** The same stall — one unbroken motionless
+run — fires on every tick, but only its **first** firing prints the full remedy. Later firings
+print one line leading with what changed: `STILL motionless, now N min`, how long ago it was
+first raised, and whether anything was sent since — `nudged at HH:MM UTC (<delivery>)`, read from
+the directive records `shipyard-tell.sh` writes, or `nothing sent to it yet`. On the **third**
+firing with nothing sent, the slot moves under its own heading, `🛑 STALL UNANSWERED`, and the
+full remedy is printed once more; after that it stays one line there. The alarm never goes
+quieter and never stops bypassing `--only-changed` — it gets *shorter* and, unanswered, *louder*.
+A `--submit-only` tell records no directive, so it does not count as something sent. Both counts
+are fixed on purpose rather than tunable; the report's source says why.
+
 **Some blocks bypass `--only-changed` entirely** rather than riding the per-slot signature:
 `🛑 STALLED`, `💀 NO AGENT`, `🛑 NO SIGNAL`, and — added with the automatic teardown — `🧹 TORN DOWN`,
 `✋ HELD` and `✋ AWAITING REMOVAL`. `🧹 TORN DOWN` reports an act already taken, and a signature

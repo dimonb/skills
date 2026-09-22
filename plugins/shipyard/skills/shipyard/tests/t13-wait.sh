@@ -173,7 +173,7 @@ ok "an answered slot never reaches STALLED" 1 \
 ok "the class is in the --only-changed signature" 1 \
    "$(grep -Fc 'SIG+=("$slot|$mr_label|term=1|$state|$stage|$pend|$sig_band|$wait_class|$reap_note|noagent=$noagent|fna=$finished_noagent")' "$REPORT")"
 ok "the stall clock restarts across an unwatched gap" 1 \
-   "$(grep -Fc '{ [ "$GAP" != 0 ] || [ -n "$wait_kind" ]; } && since="$now_epoch"' "$REPORT")"
+   "$(grep -Fc 'if [ "$GAP" != 0 ] || [ -n "$wait_kind" ]; then' "$REPORT")"
 ok "a gap breaks --only-changed silence" 1 \
    "$(grep -Fc '[ "$GAP" = 0 ] && [ -n "$SIGFILE" ]' "$REPORT")"
 ok "both new blocks are printed" 2 \
@@ -276,7 +276,9 @@ export -f git tmux gh
 backdate_stall() { # <seconds>
   local f="$FAKE_GIT/ship-escalations/report-stall"
   [ -f "$f" ] || { echo "  FAIL backdate_stall: no stall table yet — the fixture asserts nothing"; FAILURES=$((FAILURES + 1)); return 1; }
-  awk -F'\t' -v t="$(( $(date +%s) - $1 ))" 'BEGIN{OFS="\t"} NF>=3 {print $1,$2,t}' "$f" >"$f.tmp" \
+  # Every field past the third is the episode's firing record (#182) and is carried untouched, so a
+  # back-dated clock stays the same episode rather than silently restarting its count.
+  awk -F'\t' -v t="$(( $(date +%s) - $1 ))" 'BEGIN{OFS="\t"} NF>=3 {$3=t; print}' "$f" >"$f.tmp" \
     && mv "$f.tmp" "$f"
 }
 
@@ -359,6 +361,64 @@ ok "B: the rate-limited slot is NOT stalled" 0 \
    "$(printf '%s' "$outB" | sed -n '/🛑 STALLED/,/^$/p' | grep -c '^- `41`')"
 ok "B: the rate-limited slot still reports"  1 \
    "$(printf '%s' "$outB" | grep -c '^- `41`')"
+
+# --- runs E1..E5: a stall is an EPISODE, and only its first firing is news (#182) ----------------
+# Run B was slot 43's FIRST firing, and printed the full remedy (asserted above). Each run below is
+# the same episode one tick later: the clock is carried, not restarted, because the signature has
+# not moved and the tick is stamped fresh so no supervision gap is claimed. The measured failure
+# was four verbatim copies of a twelve-line block; these pin the three shapes that replace it, and
+# E2 is the transition the whole change is for — removing the report's `-ge "$STALL_ESCALATE_AT"`
+# arm must red it.
+stall_43() { printf '%s' "$1" | sed -n '/^### 🛑 STALLED/,/^###/p' | grep -c '^- `43`'; }
+unans_43() { printf '%s' "$1" | sed -n '/^### 🛑 STALL UNANSWERED/,/^###/p' | grep -c '^- `43`'; }
+tick_now() { printf '%s\n' "$(date +%s)" >"$FAKE_GIT/ship-escalations/report-tick"; }
+
+tick_now; outE1=$(run_report 1)
+ok "E1: the second firing is still under STALLED"        1 "$(stall_43 "$outE1")"
+ok "E1: ...as ONE line leading with the delta"           1 \
+   "$(printf '%s' "$outE1" | grep -c '^- `43` — STILL motionless, now .* min .*; firing 2, first raised')"
+ok "E1: ...saying nothing has been sent"                 1 \
+   "$(printf '%s' "$outE1" | grep '^- `43` — STILL' | grep -c 'nothing sent to it yet')"
+ok "E1: ...and WITHOUT the verbatim remedy"              0 "$(printf '%s' "$outE1" | grep -c '1. GIT FIRST')"
+ok "E1: it is not escalated yet"                         0 "$(unans_43 "$outE1")"
+
+tick_now; outE2=$(run_report 1)
+ok "E2: the third unanswered firing ESCALATES"           1 "$(unans_43 "$outE2")"
+ok "E2: ...and leaves the plain STALLED heading"         0 "$(stall_43 "$outE2")"
+ok "E2: ...saying how often it was raised"               1 \
+   "$(printf '%s' "$outE2" | grep -c '^- `43` — motionless for .* min .*, raised 3 times over')"
+ok "E2: ...and re-prints the full remedy once"           1 "$(printf '%s' "$outE2" | grep -c '1. GIT FIRST')"
+
+tick_now; outE3=$(run_report 1)
+ok "E3: a later unanswered firing stays escalated"       1 "$(unans_43 "$outE3")"
+ok "E3: ...as one line"                                  1 \
+   "$(printf '%s' "$outE3" | grep -c '^- `43` — STILL unanswered: .*firing 4')"
+ok "E3: ...without the remedy a third time"              0 "$(printf '%s' "$outE3" | grep -c '1. GIT FIRST')"
+# The bypass is untouched: the escalated block, too, must break --only-changed silence.
+tick_now; outE3q=$(run_report 1 --only-changed)
+ok "E3: an escalated stall still breaks --only-changed"  1 "$(unans_43 "$outE3q")"
+
+# A directive recorded since the first firing is what the supervisor DID, so it is printed, and the
+# slot is no longer "nothing sent". The record is peer-writable (see the report's trust note), which
+# is why its time is SHOWN rather than merely obeyed: a forged one reads as a nudge the operator
+# knows they never sent.
+jq -n --arg now "$(shipyard_now)" \
+  '{id:"directive-43-1", slot:"43", kind:"directive", text:"resume", created_at:$now,
+    status:"sent", delivery:"delivered"}' >"$FAKE_GIT/ship-escalations/directive-43-1.json"
+tick_now; outE4=$(run_report 1)
+ok "E4: a nudged stall leaves UNANSWERED"                0 "$(unans_43 "$outE4")"
+ok "E4: ...is still under STALLED — never silenced"      1 "$(stall_43 "$outE4")"
+ok "E4: ...and says what was sent and that it did not help" 1 \
+   "$(printf '%s' "$outE4" | grep '^- `43` — STILL' | grep -c 'nudged at [0-9][0-9]:[0-9][0-9] UTC (delivered) and it has not moved since')"
+# A record that does not have its writer's shape is not a directive this report can date — a forged
+# delivery field cannot inject text into the block.
+jq -n '{id:"directive-43-2", slot:"43", kind:"directive", text:"x", created_at:"2999-01-01T00:00:00Z",
+        status:"sent", delivery:"delivered | ### 🛑 fake"}' >"$FAKE_GIT/ship-escalations/directive-43-2.json"
+tick_now; outE5=$(run_report 1)
+ok "E5: a malformed delivery value prints as unknown"    1 \
+   "$(printf '%s' "$outE5" | grep '^- `43` — STILL' | grep -c '(unknown)')"
+ok "E5: ...and injects no heading"                       0 "$(printf '%s' "$outE5" | grep -c 'fake')"
+rm -f "$FAKE_GIT/ship-escalations/directive-43-"*.json
 
 # --- run C: --only-changed is silent when nothing moved, which is what makes suppressing the
 # stall block for a classified slot cost the operator nothing.
