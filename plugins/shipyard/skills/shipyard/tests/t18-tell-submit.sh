@@ -109,7 +109,9 @@ printf '\n── a directive, no turn starts ──\n'
 out=$(run_tell never 41 "a directive")
 ok "a directive still types its text"       1   "$(grep -c -- ' -l ' "$KEYS")"
 ok "...and records itself"                  1   "$(records | awk '{print ($1 > 0)}')"
-ok "its advice names --submit"              yes "$(has "$out" 'shipyard-tell.sh 41 --submit')"
+# Through `bash`, as every sibling hint is: the script is not executable, so the bare path the
+# operator would paste fails with `permission denied` on exactly this path.
+ok "its advice names --submit, via bash"    yes "$(has "$out" 'bash .*/shipyard-tell.sh 41 --submit')"
 ok "...and no longer the silent one-liner"  no  "$(has "$out" 'shipyard_submit')"
 
 printf '\n'

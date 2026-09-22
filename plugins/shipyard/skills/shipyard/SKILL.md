@@ -711,8 +711,10 @@ guess from this list:
   **healthy** child, and the commonest of the three;
 * a turn began and ended between two samples, or the screen could not be read at all.
 
-**Look before re-sending** — a second send types another copy onto the first; the warning prints
-the peek command and the command that submits what is already there:
+**Look before re-sending** — a second send types another copy onto the first. The bias is
+deliberate: re-sending on a false `unconfirmed` is cheap and visible, believing a false
+`delivered` is neither. The warning prints the peek command and the command that submits what is
+already there:
 
 ```bash
 bash <SKILL>/shipyard-tell.sh <slot> --submit
@@ -722,9 +724,7 @@ It types nothing and records nothing: it presses Return on the box as it stands 
 same turn-state reading, so it answers with the same three verdicts and exit codes as the table
 above. Use it rather than calling `shipyard_submit` from a sourced lib: that call prints nothing
 either way, so it cannot tell *slot not resolved* from *Return sent and not taken* from *it
-worked*. The bias is deliberate:
-re-sending on a false `unconfirmed` is cheap and visible, believing a false `delivered` is
-neither. `SHIPYARD_TELL_CONFIRM_SECS` and `SHIPYARD_TELL_CONFIRM_INTERVAL` set the window and the
+worked*. `SHIPYARD_TELL_CONFIRM_SECS` and `SHIPYARD_TELL_CONFIRM_INTERVAL` set the window and the
 sampling rate; both are validated, and the defaults live in `shipyard-tell.sh` rather than being
 restated here.
 

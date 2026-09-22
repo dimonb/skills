@@ -250,7 +250,7 @@ case "$DELIVERY" in
                  echo "         a second send types another copy onto the first:" >&2
                  echo "           $(shipyard_peek_hint "$SLOT")" >&2
                  echo "         if your directive is in the box, submit what is already there:" >&2
-                 echo "           $DIR/shipyard-tell.sh $SLOT --submit" >&2
+                 echo "           bash $DIR/shipyard-tell.sh $SLOT --submit" >&2
                fi
                echo "         This is NOT proof it went nowhere — see adp_delivery_verdict in" >&2
                echo "         shared/adapters for what the verdict does and does not rule out." >&2 ;;
@@ -261,6 +261,6 @@ case "$DELIVERY" in
                echo "       the shared turn-state module may be missing — reinstall the plugin." >&2
                exit 1 ;;
 esac
-[ -n "$SRC" ] && echo "(in reply to $SRC — that record is not polled by the child, hence this channel)"
+[ -n "$SRC" ] && [ -z "$SUBMIT_ONLY" ] && echo "(in reply to $SRC — that record is not polled by the child, hence this channel)"
 [ "$DELIVERY" = unconfirmed ] && exit 6
 exit 0
