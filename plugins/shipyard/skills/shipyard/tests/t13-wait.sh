@@ -164,8 +164,12 @@ ok "...only of a motionless child with nothing pending" 1 \
    "$(grep -Fc 'if [ "$run" = "⏸ idle/wait" ] && [ "$pend" = 0 ]; then' "$REPORT")"
 ok "an answered slot never reaches STALLED" 1 \
    "$(grep -Fc 'if [ -n "$wait_kind" ]; then' "$REPORT")"
+# Pins the whole field list by exact text, not just the wait class — so a field added, removed or
+# RENAMED reds here. That brittleness is the point and should not be traded for a field count: the
+# band field became `$sig_band` (the band, plus the bound's own band where the band is `unknown`)
+# and this assertion is what caught it. A count would not have.
 ok "the class is in the --only-changed signature" 1 \
-   "$(grep -Fc 'SIG+=("$slot|$mr_label|term=1|$state|$stage|$pend|$band|$wait_class|$reap_note")' "$REPORT")"
+   "$(grep -Fc 'SIG+=("$slot|$mr_label|term=1|$state|$stage|$pend|$sig_band|$wait_class|$reap_note")' "$REPORT")"
 ok "the stall clock restarts across an unwatched gap" 1 \
    "$(grep -Fc '{ [ "$GAP" != 0 ] || [ -n "$wait_kind" ]; } && since="$now_epoch"' "$REPORT")"
 ok "a gap breaks --only-changed silence" 1 \
@@ -240,7 +244,12 @@ tmux() {
       case "$*" in
         *t13ex:1*) printf 'ran the check suite\n⚠ Usage limit reached · continuing automatically at 2am\n' ;;
         *t13ex:2*) printf '⏺ Blockers posted on the PR. Holding for a human.\n' ;;
-        *)         printf '⏺ spec review round 2, awaiting the verifier\n' ;;
+        # Slot 43's pane carries a token total when T13_CTX_TOKENS is set, which is how section 8
+        # drives the ctx column through the real ctx_probe: no transcript resolves under $FAKE_ROOT,
+        # so the pane fall-through runs and the figure becomes a real reading.
+        *)         printf '⏺ spec review round 2, awaiting the verifier\n'
+                   [ -n "${T13_CTX_TOKENS:-}" ] && printf '%s tokens\n' "$T13_CTX_TOKENS"
+                   : ;;
       esac
       return 0 ;;
   esac
@@ -366,6 +375,65 @@ ok "C: the report stamped its own tick" yes \
    "$([ -n "$tick_after" ] && [ "$tick_after" != "$tick_sentinel" ] && echo yes || echo no)"
 ok "C: ...with a current epoch, not a stale one" yes \
    "$([ -n "$tick_after" ] && [ "$tick_after" -gt "$tick_sentinel" ] 2>/dev/null && echo yes || echo no)"
+
+# --- run D: the ctx column's UNSCALED block and the signature's bound band -----------------------
+#
+# WHY THIS IS HERE AND NOT IN THE ctx SUITE. t1-t4 test shipyard-ctx.sh's pure functions, which is
+# most of the ctx column — but two things live in report.sh and cannot be sourced (it runs
+# `shipyard_backend_check || exit 1` at top level), so until now they were guarded by nothing:
+# the ❓ block's per-cause dispatch, and `sig_band`. This file already has the rig — a faked backend
+# whose capture-pane returns per-slot text — so driving them costs a fixture line, not machinery.
+# An earlier draft of this change deferred exactly this on the stated grounds that it "needs t17's
+# rig", which was wrong about the solution space and is recorded in that commit.
+#
+# THE OVERRIDE IS UNSET FOR THIS SECTION. Every reading below depends on the window being INFERRED;
+# an operator who has exported SHIPYARD_CTX_WINDOW — which SKILL.md and the README both now tell a
+# claude fleet to do — would otherwise turn the whole section red on a correctly configured machine.
+# The ctx suite's helpers unset it for the same reason.
+unset SHIPYARD_CTX_WINDOW
+
+# 162000 against an inferred 200000 is 81%: above the crit threshold, and the peak has not settled
+# the window, so the column must withhold the glyph and print a bound instead.
+export T13_CTX_TOKENS=162000
+outD=$(run_report 100000)
+ok "D: an unsettled reading prints a bound, not a percentage" 1 \
+   "$(printf '%s' "$outD" | grep -c '^| 43 .*❓ <=81% · 162k')"
+ok "D: ...and never a bare crit glyph for it"                 0 \
+   "$(printf '%s' "$outD" | grep -c '^| 43 .*🛑')"
+ok "D: the UNSCALED block names it under Bounded"             1 \
+   "$(printf '%s' "$outD" | grep -c '^\*\*Bounded —.*`43`')"
+ok "D: ...and tells it to name the window"                    1 \
+   "$(printf '%s' "$outD" | grep -c 'Adding a CTX_WINDOWS entry will NOT clear these')"
+ok "D: ...and does NOT offer it the past-the-list remedy"     0 \
+   "$(printf '%s' "$outD" | grep -c '^\*\*Past every known window')"
+
+# A figure past every listed window takes the other arm, and the two must not be confusable: this
+# is the dispatch that decides which remedy an operator is given, and the wrong half is the one the
+# block itself calls harmful.
+export T13_CTX_TOKENS=1400000
+outD2=$(run_report 100000)
+ok "D: a past-the-list reading takes the other arm" 1 \
+   "$(printf '%s' "$outD2" | grep -c '^\*\*Past every known window —.*`43`')"
+ok "D: ...and is not called a bound"                0 \
+   "$(printf '%s' "$outD2" | grep -c '^\*\*Bounded —')"
+
+# THE SIGNATURE. `band` is `unknown` for both readings below, so with only the band in the
+# signature the second tick is byte-identical and --only-changed prints NOTHING — which is the
+# ceiling crossing going silent for an un-pinned fleet, the regression `sig_band` exists to close.
+# Three runs: establish, confirm silence when nothing moved, then cross 65% -> 80% and require a
+# tick. The middle run is what stops the third from passing for the wrong reason.
+export T13_CTX_TOKENS=130000          # 65% of the inferred window -> unknown-warn
+outD3=$(run_report 100000 --only-changed)
+ok "D: the first bounded reading breaks silence" yes \
+   "$([ -n "$outD3" ] && echo yes || echo no)"
+outD4=$(run_report 100000 --only-changed)
+ok "D: an unchanged bound stays silent"          0 "$(printf '%s' "$outD4" | grep -c .)"
+export T13_CTX_TOKENS=162000          # 81% -> unknown-crit, same band, different bound band
+outD5=$(run_report 100000 --only-changed)
+ok "D: crossing the crit threshold inside \`unknown\` still breaks silence" yes \
+   "$([ -n "$outD5" ] && echo yes || echo no)"
+unset T13_CTX_TOKENS
+
 unset -f git tmux gh
 fi
 

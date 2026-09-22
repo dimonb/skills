@@ -19,7 +19,7 @@
 # news as well.
 # Deliberately NOT meaningful: the timestamp, the
 # `last line` column (elapsed time / token counts change every tick), the raw ctx
-# figure — only its band — and ▶️/⏸, which flips
+# figure and a bound's percentage — only their bands — and ▶️/⏸, which flips
 # constantly while ship works and re-waits. A terminal report (nothing in flight) is
 # always printed, so the end of the run is never swallowed — and so is a tick that could
 # NOT TELL whether anything is in flight (the 🛑 NO SIGNAL block below), and a tick whose
@@ -1378,10 +1378,13 @@ fi
     if [ -n "$bounded" ]; then
       echo
       echo "**Bounded —$bounded**"
-      echo "The figure is an UPPER BOUND against the smallest window this report still considers"
-      echo "possible, not a measurement: the child is at most that fraction of THAT window, and less"
-      echo "on any larger one. Name the window — \`SHIPYARD_CTX_WINDOW=<tokens>\` — to turn it into a"
-      echo "real band. Adding a CTX_WINDOWS entry will NOT clear these; the size is already listed."
+      echo "The figure is a BOUND, not a measurement: it is that fraction of the smallest window this"
+      echo "report still considers possible, and less on any larger one it knows. It is NOT a"
+      echo "guarantee the child is below it — a real window smaller than any size this report lists"
+      echo "under-warns here, so a 150k child carrying 140k prints \`<=70%\` and is at 93%."
+      echo "Name the window — \`SHIPYARD_CTX_WINDOW=<tokens>\` — to turn it into a real band, which"
+      echo "also closes that gap. Adding a CTX_WINDOWS entry will NOT clear these; the size is"
+      echo "already listed."
       echo "A bound that never resolves as the count climbs is itself the answer: that child's window"
       echo "IS the smallest size this report knows, and only the override will say so."
     fi

@@ -52,7 +52,7 @@ a slot behaves identically on either; when neither is available the skill refuse
 
 **A monitor that stays quiet until something happens.** The status table reports running
 versus idle from a snapshot diff rather than spinner glyphs, and `--only-changed` keeps it
-silent until a state, stage, escalation count, ctx band, terminal presence or the reason a
+silent until a state, stage, escalation count, ctx band (including the bound's own band while the window is unpinned), terminal presence or the reason a
 slot is motionless actually moves.
 
 **...and that never mistakes silence for completion.** Exiting 0 is how the report tells the

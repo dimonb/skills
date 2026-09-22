@@ -42,7 +42,13 @@
 # assignment — and nothing about how the file is found. The CODEX lookup is different: t6 drives
 # `ctx_codex_transcript` against a real fixture tree, so that half IS covered, while the codex
 # arm's FALL-THROUGH (no rollout, or a rollout with no token_count event, which lands a codex
-# child on the claude inference) is covered by nothing. The continuity suite uses recorded screen
+# child on the claude inference) is covered by nothing.
+#
+# The two halves of the ctx column that live in shipyard-report.sh — the `❓` block's per-cause
+# dispatch and `sig_band`, neither of which can be unit-tested because that file cannot be sourced
+# — are driven by t13's section D through its faked backend, and both were mutation-checked when
+# they landed. What t1-t4 pin is shipyard-ctx.sh's pure functions; do not read a green ctx suite as
+# covering the report's rendering of them. The continuity suite uses recorded screen
 # shapes and a fake terminal CLI; it does not exercise a real control socket or prove a future
 # Codex build renders the same markers. Mutate any uncovered path and this suite still passes.
 set -uo pipefail

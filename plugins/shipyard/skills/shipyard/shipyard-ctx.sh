@@ -73,8 +73,9 @@
 #   * `message.model` in the transcript OMITS the `[1m]` marker even for sessions that really are
 #     1M: it reads the same either way. Re-checked for #228 on a live 1M child's own transcript —
 #     every assistant record read `claude-opus-5`, and no field anywhere in the file named a
-#     window. This is the fact that makes a per-kind default impossible, and it is not deducible
-#     from the code, so it is written down rather than left to be re-derived;
+#     window. This is the fact that makes a per-kind default impossible FOR CLAUDE — the leg that
+#     actually carries the rejection above; for codex it is near-dead rather than impossible — and
+#     it is not deducible from the code, so it is written down rather than left to be re-derived;
 #   * the `cost-state` record DOES carry the marker, but it is written once at session EXIT —
 #     absent from every live child, which is the only kind this reads;
 #   * a subagent's `.meta.json` carries an aliased model id, but that is what the SUBAGENT was
@@ -304,7 +305,8 @@ ctx_window() {
 # fixed here: a child whose real window IS the smallest listed size can never prove it, because a
 # single request's usage sum cannot exceed the window it ran on (the bound stated at ctx_window).
 # So its peak never passes CTX_WINDOWS[0] and this returns true for the child's whole life. That is
-# why ctx_probe prints a CONSERVATIVE BOUND rather than nothing: a permanent `?` carrying no figure
+# why ctx_probe prints a BOUND OVER THE LISTED CANDIDATES rather than nothing: a permanent `?`
+# carrying no figure
 # would leave that child's operator with no reading at all, and it is the commonest deployment.
 ctx_window_unproven() {
   local peak="$1"
@@ -405,12 +407,12 @@ ctx_probe() {
   # is what closes the gap for anyone whose size is not on the list.
   #
   # WHY A BOUND RATHER THAN NOTHING. A bare `?` is right for a figure past every listed window —
-  # there no candidate fits, so no bound exists — but wrong here, where a perfectly good upper
-  # bound does exist. It matters most for the population that never leaves this branch: a child
-  # whose window IS the smallest listed size (ctx_window_unproven's closing note). Under a bare
-  # `?` that operator gets an unscaled number for the child's whole life and must go and configure
-  # something; under the bound they get `<= 92% · 185k`, which is true, needs no configuration
-  # act, and is actionable on sight. The two `?` causes therefore RENDER DIFFERENTLY, and that is
+  # there no candidate fits, so no bound over the list exists at all — but wrong here, where one
+  # does. It matters most for the population that never leaves this branch: a child whose window
+  # IS the smallest listed size (ctx_window_unproven's closing note). Under a bare `?` that
+  # operator gets an unscaled number for the child's whole life and must go and configure
+  # something; under the bound they get `<=92% · 185k`, which is the tightest reading the listed
+  # candidates allow, needs no configuration act, and is actionable on sight. The two `?` causes therefore RENDER DIFFERENTLY, and that is
   # deliberate — a bare count means "past every listed window, add the size", a bounded one means
   # "the window is not pinned down, name it" — so the operator can tell from the row which remedy
   # is theirs.

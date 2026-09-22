@@ -85,14 +85,16 @@ ok "...and it bands unknown, never ok"      "unknown"        "$(band_of '162000 
 # whose real window IS the smallest listed size can never settle it (its peak cannot exceed its
 # own window), so it never leaves this branch — and it is the DEFAULT deployment, since nothing
 # pins a model at launch. A bare `?` would leave that operator with an unscaled number for the
-# child's whole life; the bound is true, needs no configuration act, and is actionable on sight.
-ok "the bound is exact at the boundary"  "? <=100% · 200k" "$(probe '200000 tokens')"
+# child's whole life; the bound is the tightest reading the LISTED candidates allow, needs no
+# configuration act, and is actionable on sight. It bounds nothing below that list — a real window
+# smaller than the smallest listed size under-warns here as everywhere else in this column.
+ok "the bound reaches 100% exactly at the smallest listed size" "? <=100% · 200k" "$(probe '200000 tokens')"
 ok "...and one token under"              "? <=99% · 199k"  "$(probe '199999 tokens')"
 ok "a mid-range unproven reading is bounded" "? <=92% · 185k" "$(probe '185000 tokens')"
 
-# It is an UPPER bound, so it must be taken against the SMALLEST still-consistent window — the
-# largest percentage any listed candidate could produce. Taken against any other it would either
-# understate (and reassure about a child at its ceiling) or exceed what the evidence supports.
+# It is a bound over the LISTED candidates, so it must be taken against the smallest listed size
+# still consistent with the peak — the largest percentage any listed candidate could produce.
+# Taken against a larger one it would understate and reassure about a child at its ceiling.
 # 162000 is 81% of 200000 and 16% of 1000000; the bound is the 81.
 ok "the bound uses the smallest consistent window" "81" \
    "$(read -r _ b <<<"$(probe '162000 tokens')"; printf '%s' "${b#<=}" | sed 's/%.*//')"

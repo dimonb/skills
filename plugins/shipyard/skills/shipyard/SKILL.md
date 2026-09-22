@@ -370,8 +370,11 @@ printed. Drop the flag only when you want a heartbeat for its own sake.
 The ctx band belongs in that list now in a way it did not before. It has always been in the
 signature, but while the column was scraping the pane it read `—` on current builds and so was
 permanently `ok` — a signal that could never fire. Reading it from the transcript makes a band
-crossing a real event, and it is the only part of the ctx column that breaks silence: the raw
-token figure ticks up constantly and is deliberately excluded.
+crossing a real event. What the signature carries is the band, **plus — where the band is
+`unknown` and the display is a `<=` bound — the bound's own band**, so a warn→crit crossing
+*inside* `unknown` still prints once; without that, an un-pinned child would go silent from the
+warn threshold to its ceiling. The raw token figure and the bound's percentage are both
+deliberately excluded: they tick up constantly.
 
 **`--only-changed` cannot hide a stall.** Silence and death have the same shape here: a
 child that hit its context ceiling, that was compacted and never told to resume, or that
@@ -524,7 +527,10 @@ in practice every table that arrives is worth reprinting. If you do get an uncha
 table anyway (heartbeat mode, a `⏸`/`▶️` flip, an escalation count settling back to 0),
 do not reprint it — a wall of identical tables buries the one line that matters. **A ctx band
 crossing is never such a table**: it is the whole reason that column exists, and a row whose
-only visible change is `⚠️`, `🛑` or `❓` appearing is exactly the one to surface. Say
+only visible change is `⚠️`, `🛑` or `❓` appearing is exactly the one to surface — **and so is a
+`❓` row whose bound has crossed into the warn or crit range** (`<=64%` → `<=81%`). That one wears
+the same glyph before and after, so it reads as an unchanged row and is not: on an un-pinned
+fleet it *is* the ceiling crossing, and it is the only form that crossing takes. Say
 nothing, or fold it into one short sentence when the user asks. `⏸ idle/wait` on `apply`
 or `archive` (work in progress, or CI still green-lighting the head) is a normal resting
 state of a healthy ship session, not news.
@@ -810,8 +816,9 @@ child that may genuinely be at its ceiling, while `❓ <=66% · 132k` is one who
 either settle the window or not. Resolve the instrument, not the child: name the window with
 `SHIPYARD_CTX_WINDOW`
 (the fix for a bound), or add the size to `CTX_WINDOWS` (the fix for a bare count past every
-listed window). That turns `❓` into a real band, and you act on that. The report prints the right
-one of those two beside each slot it flags.
+listed window). That turns `❓` into a real band, and you act on that. The report prints a block
+under the table that groups the flagged slots by cause and states each cause's remedy once,
+naming its slots inline.
 
 Two traps that each produced a wrong diagnosis, and neither is visible from the report:
 
@@ -864,7 +871,7 @@ established.** The inference proves upward and only upward: once a claude child'
 the smallest listed size, that size is ruled out and the next one up is a deduction. Until it
 has, nothing is ruled out — the same token count is a comfortable fraction of one listed window
 and an emergency against another — and a percentage would be a choice wearing the clothes of a
-measurement. So in that state the column prints **`❓` and an upper bound**: `❓ <=92% · 185k`.
+measurement. So in that state the column prints **`❓` and a bound**: `❓ <=92% · 185k`.
 
 The bound is the tightest reading the **listed** candidates allow. The window it scales against is
 the smallest listed size the peak fits, so the figure is the largest percentage any *listed*
@@ -943,13 +950,16 @@ different marks, because they are different facts and you act differently on the
   no glyph. Its band is `unknown`, which is neither ok nor crit, and **must not be read as
   healthy**. It comes in two forms, and they take **different remedies**, which is why the row
   shows you which is which:
-  * **`❓ <=92% · 185k`** — a bound. The window is not pinned down, so the child is at most that
-    fraction and possibly far less. Name it with `SHIPYARD_CTX_WINDOW=<tokens>`. Adding a
-    `CTX_WINDOWS` entry will *not* clear this one — the size is already listed.
+  * **`❓ <=92% · 185k`** — a bound over the sizes the report knows: the child is that fraction of
+    the **smallest listed** window, less on any larger listed one, and **more** if its real window
+    is smaller than anything listed. Name it with `SHIPYARD_CTX_WINDOW=<tokens>`, which also closes
+    that last gap. Adding a `CTX_WINDOWS` entry will *not* clear this one — the size is already
+    listed.
   * **`❓ 1240k`** — a bare count, past every window the report knows of, so no bound exists
     either. Add the size to `CTX_WINDOWS` in `shipyard-ctx.sh` if a new model has shipped.
 
-  The report prints a block under the table naming the right remedy per slot.
+  The report prints a block under the table grouping the flagged slots by cause, with each cause's
+  remedy stated once.
 
 There is a fourth form, rare and easy to mistake for a bug: **a bare percentage with no token
 count** (`⚠️ 68%`). That is a figure read straight from the client's own footer, on a build that
@@ -1167,7 +1177,7 @@ starts a fresh watcher for its own parent session.
 | session | ▶️ running / ⏸ idle-wait (snapshot diff) / ⛔ no terminal — or, when a motionless slot's reason is known, `⏳ rate-limited`, `⏳ overloaded`, `✅ finished` or `🙋 needs you` (Step 2). `🧹 torn down` means this tick removed the slot's worktree, and its terminal if one was still there (Step 6) — it is the report's own act, not something the child did to itself |
 | MR state / stage | forge state (opened/merged/closed) + ship's pipeline stage |
 | esc | open escalations for this slot |
-| ctx | child context usage as `<pct>% · <tokens>`, read from its transcript; `⚠️` ≥65%, `🛑` ≥80%. A bare `<pct>%` is the client's own footer figure, used when no transcript was found. Two non-readings, neither meaning healthy: `—` = nothing measurable yet; `❓` = no window this script can defend asserting the figure against, in two forms with different remedies — `❓ <=92% · 185k` is an upper bound, fixed by naming the window with `SHIPYARD_CTX_WINDOW`; `❓ 1240k` is past every window it knows, fixed by a new `CTX_WINDOWS` entry (Step 5) |
+| ctx | child context usage as `<pct>% · <tokens>`, read from its transcript; `⚠️` ≥65%, `🛑` ≥80%. A bare `<pct>%` is the client's own footer figure, used when no transcript was found. Two non-readings, neither meaning healthy: `—` = nothing measurable yet; `❓` = no window this script can defend asserting the figure against, in two forms with different remedies — `❓ <=92% · 185k` is a bound over the sizes it knows — not a ceiling on the truth — fixed by naming the window with `SHIPYARD_CTX_WINDOW`; `❓ 1240k` is past every window it knows, fixed by a new `CTX_WINDOWS` entry (Step 5) |
 | last line | last meaningful line of the screen |
 
 ⏸ idle-wait is **normal** for ship: it waits on CI or on a self-review round and re-wakes
