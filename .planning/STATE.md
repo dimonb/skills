@@ -1,5 +1,73 @@
 # STATE — session memory
 
+## ✅ SHIPPED overnight (2026-09-23) — the supervision quartet is closed
+
+Run unattended while the owner slept, one slot at a time, on the owner's instruction to choose the
+work and drive it. The fleet is empty, every worktree torn down through the content gate, one branch
+on origin, no open PR.
+
+| PR | what | release |
+|---|---|---|
+| **#234** | shipyard: submit the draft in the box through `tell`, with a verdict (#195) | shipyard 0.7.0 |
+| **#236** | shipyard: a terminal with no agent in it is not an idle child (#172) | " |
+| **#237** | shipyard: a stall prints in full once, then as its delta, and escalates unanswered (#182) | " |
+| **#241** | release: shipyard 0.7.0, council 0.6.1 | — |
+
+**#195 stays open on purpose.** A byte probe established that the backend delivers a real CR and the
+keystroke submits in five states; the two states the original report was in could not be built. So
+the change fixes what was MEASURED — the recovery was silent, and an operator could not tell "target
+not resolved" from "Return sent and ignored" from "it worked" — and went in as `Refs`, never `closes`.
+
+### #231 verified in practice, not by reading
+
+The first slot launched after it ran ONE suite invocation for its round (one process tree, one root,
+forking internally) instead of one per axis, and a later scoped round ran a single targeted test file.
+Peak footprint 33 bash / 9 sleep against 38 / 31 during the incident that produced the fix. Two
+machine-load spikes that night (143, 173) were traced to another project's test runner and macOS
+daemons, not to the fleet — checked rather than assumed, twice.
+
+Battery breadth across the three changes: **7 → 5 → 3 agents**, narrowed by SUBSTANCE each time, not by
+effort. All three ran at the new ceiling.
+
+### Four decisions taken without the owner, and the grounds
+
+Each was taken because the tree's own rules decided it, not because waiting was inconvenient; all
+four are reversible and none forecloses anything.
+
+* **#195** — build the verdict (the alternative shipped a defect that was measured, and the other was
+  a speculative retry that can double-submit).
+* **#172** — a new shared-driver primitive reading process state, because the shared-engine rule fixes
+  the placement once the other skill is checked and has the same gap, which it was and does.
+* **Two waivers of `max-rounds`**, both for bounded scoped rounds. The second one is the pattern worth
+  keeping: **both stops were caused by the change's own CLAIM rather than its behaviour** — once a
+  sentence wrong four ways, once a "self-revealing" promise the signature did not keep. Filed as a
+  second scenario on #206, with the honest note that the budget worked both times, since it is what
+  stopped them.
+
+### Two instrument lessons, both self-inflicted
+
+* **A stale stage entry silences the stall clock.** Slot 172 sat idle under a `needs-human` exemption
+  written before a waiver released it, so the row read "waiting for you" while nobody was asked
+  anything — the same family as the issue it was fixing, from the other side.
+* **A monitor that counts the wrong thing reads as "nothing is happening".** The supervisor's own load
+  line counted `run-all.sh` while the child had been told to run single test files, so it printed
+  `suites: 0` beside a live test. Fixed mid-run; the same defect class this repo files against its
+  children.
+
+### Filed overnight
+
+**#235** (council adoption of the occupant primitive), **#238** (council's stall line, carrying the
+DECIDED shape rather than the task), **#239** (the other repeating blocks), **#240** (a t7 CI flake),
+**#232** (the bash 3.2 floor asserted for none of the ctx source chain). Scenarios onto #206, #114,
+#187, #198.
+
+### Queue
+
+The operator-facing quartet is done. **#206** is the live thread — two scenarios and a measurement now
+sit on it, and #231 changed the battery underneath it, so it wants observation before more surgery.
+Next candidates are the council security trio (**#204**, **#179**, **#165**) and the test-reliability
+set (**#114**, **#109**, **#108**, **#149**).
+
 ## ✅ SHIPPED (2026-09-22) — two changes, two releases, and the battery's cost measured
 
 The fleet is empty, both worktrees torn down through the content gate, every branch gone. Released
