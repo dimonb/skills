@@ -52,7 +52,7 @@ a slot behaves identically on either; when neither is available the skill refuse
 
 **A monitor that stays quiet until something happens.** The status table reports running
 versus idle from a snapshot diff rather than spinner glyphs, and `--only-changed` keeps it
-silent until a state, stage, escalation count, ctx band, terminal presence or the reason a
+silent until a state, stage, escalation count, ctx band (including the bound's own band while the window is unpinned), terminal presence or the reason a
 slot is motionless actually moves.
 
 **...and that never mistakes silence for completion.** Exiting 0 is how the report tells the
@@ -228,9 +228,20 @@ them), repaints sidebar glyphs, closes pending notices, and re-arms the Codex pa
 watcher.
 
 `SHIPYARD_CTX_WINDOW` pins the context window, in tokens as a plain integer, that the `ctx`
-percentage is measured against. Without it the window is inferred from the largest total the
-child's transcript has ever carried — a request that carried N tokens cannot have run on a
-window smaller than N — and the override beats that inference in both directions.
+percentage is measured against. Without it, a Codex child's window is read from its own rollout
+when one resolves, and otherwise — as for every Claude child — it is inferred from the largest
+total the transcript has ever carried, since a request that carried N tokens cannot have run on a
+window smaller than N. The override beats all of that, in both directions.
+
+**Pin it for a Claude fleet.** Nothing names the model when a child is launched, so where the
+inference has not yet ruled anything out and the reading would otherwise raise a glyph, the column
+shows a bound (`❓ <=92% · 185k`) rather than a percentage it cannot defend. That bound is taken
+against the smallest size the report still considers possible, so it is the tightest reading its
+own list allows — it is **not** a guarantee the child is below it, since a window smaller than
+anything listed under-warns the same way an unpinned window always has. For a child whose window
+*is* the smallest size the report knows, the bound is its permanent reading above the warn
+threshold: a peak cannot exceed the window that carried it, so the ambiguity never resolves on its
+own. Setting this variable replaces the bound with an exact band, for good.
 
 `SHIPYARD_EFFORT` (unset by default) is an operator's explicit `--effort` level for a Claude
 child. Unset, the child is launched with no such flag: how hard to think and how deep to review

@@ -15,7 +15,7 @@ ok "100 is crit" "crit" "$(ctx_band 100)"
 # --- the two sentinels ----------------------------------------------------------------------
 ok "em-dash sentinel is ok"   "ok"      "$(ctx_band -)"
 ok "empty is ok"              "ok"      "$(ctx_band '')"
-ok "out-of-range is unknown"  "unknown" "$(ctx_band '?')"
+ok "the unscalable sentinel is unknown"  "unknown" "$(ctx_band '?')"
 
 # --- unknown is NOT ok. This is the whole point of it existing. -----------------------------
 ok "unknown is distinct from ok" "different" \
