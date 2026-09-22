@@ -1388,12 +1388,26 @@ v_status() {
       # discarded. No adversary needed; the file's own measurements say a real turn reaches that
       # threshold.
       #
-      # So it branches on `$mid`. And when the read SUCCEEDED but the tier overrode it, the alarm
-      # says so and names which override — that is the annotate-never-suppress rule working in the
-      # direction it is usually not tested in: the evidence cannot make the alarm quieter here, and
-      # it must still not be thrown away.
+      # Conditioning it on `$mid` alone was then wrong the OTHER way, and that is the fourth time:
+      # on the ordinary `⏳ LONG TURN` path `mid` is 1, so this arm appended a sentence asserting
+      # the alarm had NOT been softened one clause after softening it, and naming a backstop the
+      # held time had not reached — "1000s is past the 5400s backstop" — on the commonest healthy
+      # path this whole change exists to produce.
+      #
+      # SO IT IS GUARDED ON THE PAIR, because neither half determines the sentence by itself:
+      # `$mid` says whether there is a read to report, `$tier` says whether reporting it would
+      # repeat the line above. The three arms below are exhaustive and each states its own
+      # precondition rather than relying on the reader to carry one down from the last branch:
+      #   * mid=1, tier=longturn — the `⏳ LONG TURN` line already carries the read; say nothing;
+      #   * mid=1, tier=stall, room closed — the closure is the override;
+      #   * mid=1, tier=stall, room open — then `held > hard` is the only way the tier could have
+      #     been overridden, so the backstop is the override and the figures are real.
+      # The final `else` is `mid=0`, and it needs no tier guard: `tier=longturn` requires `mid=1`,
+      # so the denial cannot reach a softened line.
       elif [ "$mid" = 1 ]; then
-        if [ -n "$rec" ]; then
+        if [ "$tier" = longturn ]; then
+          : # the line above already says the client reads as mid-turn; repeating it here is noise
+        elif [ -n "$rec" ]; then
           alarms="$alarms ⏳ its client still reads as mid-turn — a quote from a pane the seat writes, not a verdict. It does not soften this alarm because the room is CLOSED, where the stall line always fires."
         else
           alarms="$alarms ⏳ its client still reads as mid-turn — a quote from a pane the seat writes, not a verdict. It does not soften this alarm because ${held}s is past the ${hard}s backstop, where no pane can pick the tier."

@@ -465,6 +465,13 @@ ok "an unexplained stall still says so"      1 "$(printf '%s' "$out" | grep -c '
 age_room_to "$R12" 1000
 out=$(COUNCIL_ROOM="$R12" COUNCIL_WAIT_SCREEN_FILE="$RUNNING" bash "$CLI" status 2>&1)
 ok "a long turn does not deny its own read"  0 "$(printf '%s' "$out" | grep -c 'Nothing this check recognises')"
+# ...AND DOES NOT CONTRADICT ITSELF EITHER, which the assertion above cannot see: it greps one
+# string, and the fourth version of this arm appended a DIFFERENT sentence — "it does not soften
+# this alarm because 1000s is past the 5400s backstop" — on the ordinary calm path, asserting the
+# opposite of the line it was appended to and naming a threshold the held time had not reached.
+# Grepping for the absence of one wrong sentence is not the same as asserting the line is right.
+ok "...and does not un-soften what it softened" 0 "$(printf '%s' "$out" | grep -c 'does not soften this alarm')"
+ok "...and claims no backstop it has not reached" 0 "$(printf '%s' "$out" | grep -c 'past the 5400s backstop')"
 # THE THIRD DOOR. The denial must follow the READ, never the TIER — the two part company in
 # exactly the states where the tier is overridden, and conditioning on the tier put this sentence
 # back on the path where a healthy turn crosses the backstop. There the operator was told the room
