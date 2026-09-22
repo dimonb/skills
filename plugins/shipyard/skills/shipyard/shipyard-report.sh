@@ -487,8 +487,10 @@ STALL_ROWS=()
 # instant as shipyard_now prints it, for comparing against directive records), `firings`, and
 # `last_fired` (the epoch of the latest firing). The record rides with the stall clock's `since`,
 # plus ONE exception, the carry in the slot loop, which exists because a nudge types into the very
-# screen whose hash is the signature: a change to the screen part alone, within one stall threshold
-# of the last firing, once a directive has been recorded since the episode's first firing. That is
+# screen whose hash is the signature: whenever `since` is not carried (the screen part of the
+# signature moved, or a stored `since` was refused) while the state, stage and escalation part did
+# not move, within one stall threshold of the last firing, and once a directive has been recorded
+# since the episode's first firing. That is
 # a condition on timing, not proof that the directive CAUSED the change — a child that moves by
 # itself inside that window after a nudge keeps its episode too, and its line still truthfully
 # names the nudge. The block takes one of three shapes per slot:
@@ -1268,8 +1270,8 @@ for slot in "${SLOTS[@]}"; do
       # the firing record rode with `since` alone, would end the episode it was sent about: the
       # child stays stuck, and half an hour later the operator is told of a brand-new stall with
       # "nothing sent to it", about a slot they nudged. So the record survives a signature change
-      # when all three hold: only the SCREEN part of the signature moved (state, stage and open
-      # escalations did not), a directive was recorded for this slot since the episode's first
+      # when all three hold: state, stage and open escalations did not move (only the SCREEN part
+      # did — or a stored `since` was refused, which reaches here the same way), a directive was recorded for this slot since the episode's first
       # firing, and the last firing was within one stall threshold — so a child that goes on to
       # work for longer than that sheds the record and its next stall is a new one. The clock
       # itself still restarts (`since` stays unset here): "motionless for N min" counts from the

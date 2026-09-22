@@ -467,14 +467,17 @@ tick_now; outE6=$(run_report 100)
 ok "E6: a leading-zero count does not drop the stall"    1 "$(stall_43 "$outE6")"
 ok "E6: ...it reads as a first firing"                   1 \
    "$(printf '%s' "$outE6" | grep -c '^- `43` — motionless for .* announcing no reason')"
-# The same guard on every other number in the row — `since` among them, the route the report's
-# trust note names as closed. Refused values restart the clock or the record rather than abort, so
-# the assertion is that the report got through 43 at all: its table row is printed.
+# The same guard on `since`, the route the report's trust note names as closed. A refused value
+# restarts the clock rather than abort, so the assertion is that the report got through 43 at all:
+# its table row is printed. Fields 4 and 7 are corrupted too, but this case does NOT pin their
+# guards: either one refused resets the whole firing record, which masks the other, and a refused
+# `since` keeps 43 from stalling, so neither field's arithmetic is reached here. Only `since` is
+# measured by this case.
 awk -F'\t' 'BEGIN{OFS="\t"} $1 == "43" {$3="08"; $4="09"; $7="08"} {print}' \
   "$FAKE_GIT/ship-escalations/report-stall" >"$FAKE_GIT/ship-escalations/report-stall.tmp" \
   && mv "$FAKE_GIT/ship-escalations/report-stall.tmp" "$FAKE_GIT/ship-escalations/report-stall"
 tick_now; outE6b=$(run_report 100)
-ok "E6: leading zeros in since, fired_epoch and last_fired do not abort the report" 1 \
+ok "E6: a leading-zero since does not abort the report" 1 \
    "$(printf '%s' "$outE6b" | grep -c '^| 43 ')"
 
 # E7 — the carry is bounded. With no directive on record, a screen change sheds the firing record:
