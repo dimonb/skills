@@ -387,7 +387,7 @@ an alarm, not as a status line — and work the order it prints, which is Step 5
 then a nudge, then compaction.
 
 **Some blocks bypass `--only-changed` entirely** rather than riding the per-slot signature:
-`🛑 STALLED`, `🛑 NO SIGNAL`, and — added with the automatic teardown — `🧹 TORN DOWN`,
+`🛑 STALLED`, `💀 NO AGENT`, `🛑 NO SIGNAL`, and — added with the automatic teardown — `🧹 TORN DOWN`,
 `✋ HELD` and `✋ AWAITING REMOVAL`. `🧹 TORN DOWN` reports an act already taken, and a signature
 is the wrong thing to gate that on because the signature file lives in the mailbox children write
 into. The other two report a destructive act being attempted and declined on every tick, and an
@@ -408,13 +408,64 @@ column and its own block, and is exempt from the stall clock:
 | `session` column | what it means | what to do |
 |---|---|---|
 | `⏳ rate-limited` / `⏳ overloaded` | the client announced a capacity wait, and has said nothing since | nothing — it resumes itself |
-| `✅ finished` | the slot graph says the change is concluded **and** ship's stage agrees | review and merge, or tell it what to change |
+| `✅ finished` | the slot graph says the change is concluded **and** ship's stage agrees | review and merge, or tell it what to change — unless the row adds `(no agent)`: then recover it before asking for changes (below) |
 | `🙋 needs you` | ship's stage is `needs-human`: it stopped on blockers it will not fix | read its record on the PR/MR and answer it |
 
 **None of those is ever a compaction trigger**, and each block says so. What is left — idle,
 nothing asked of it, announcing no reason, at no stage that waits by design — is genuinely
 STUCK, and that still raises the loud block that bypasses `--only-changed`. The point of the
 classification is to make that alarm **rarer and right**, never quieter.
+
+**A live terminal is not a live agent.** A terminal can outlive the agent launched into it and be
+left at a shell prompt or an exited pane — measured three times in one day — and from the screen that
+is a perfect `⏸ idle/wait`: no banner, a ctx figure that simply stops moving, no escalation. The
+stall block then prescribes a nudge, and the nudge is typed at a shell prompt. So before it
+classifies, the report asks the backend which process owns each pane (`drv_occupant` in
+`shared/driver`: agterm's per-session `foreground`, tmux's `pane_dead` and
+`pane_current_command`), once before each of its two captures:
+
+| `session` column | what it means | what to do |
+|---|---|---|
+| `💀 no agent` | on both reads, a shell prompt or a pane held open after its command exited, where the agent was launched | **not** a nudge and **not** compaction — git first, then recover it as a dead child is recovered (Step 5) |
+
+It gets its own `💀 NO AGENT` block, is exempt from the stall clock, and bypasses `--only-changed`
+while it holds; `shipyard-tell.sh` and `shipyard-compact.sh` refuse such a slot with exit 8,
+typing nothing. One exception in the report: a slot that is **finished** (`✅ finished` above)
+stays finished when its agent has exited, and keeps its `completed` glyph — merging it needs no
+agent. Its row reads `✅ finished (no agent)` and its action says so, because `tell` and `compact`
+have no such exception: they still refuse it with exit 8, so **changing** a finished change whose
+agent is gone means recovering it first (Step 5). What makes a slot finished is its own stage and
+PR number, which the child writes — so a child that is told to change something and dies before
+re-recording its stage also lands here. That is not prevented; it is made visible instead. The
+`(no agent)` on the row, carried in the `--only-changed` signature so the monitor prints the tick
+the agent dies once (not on every tick, as `💀` does), and the exit 8 the first `tell` gets. What
+it gives up is the `💀` block, its repetition and the `blocked` glyph. That one print rides the
+signature, so two routes still silence it, and neither is closed: a report over exactly the
+monitor's slot list, in the same order (with a one-slot monitor, that includes
+`shipyard-report.sh <that slot>`), run before the monitor's tick, with or without `--only-changed`
+— both rewrite the signature file, while a run over any other list writes a different signature
+and does not consume it — and anything that can write the
+mailbox, a child included, writing the predicted signature — the reason given above for keeping
+`🧹 TORN DOWN` off the signature. What survives both is the row on any printed table and the exit 8 on `tell` and
+`compact`. The reading is one-sided, and each side is wrong in a known way:
+
+* **No verdict claims nothing.** A backend that does not answer, or an agterm build that does not
+  report the field, leaves the slot exactly where it was before this check existed — row, stall
+  clock and all.
+* **`none` can be briefly wrong** for a launch caught between its shell and its `exec`, which is
+  why it takes both reads, `SHIPYARD_MOTION_INTERVAL` (3s) apart. Measured for a real launcher
+  with a zsh login profile: under 0.3s of `none` on agterm and on tmux, then the launcher's own
+  shell (agterm reads that as `agent`) or the agent. A login profile slow enough to span both reads
+  would still read `none` twice; an exit 8 within seconds of a launch is worth one re-run before
+  recovering anything.
+* **On tmux, `none` is wrong for an agent run without `exec`.** tmux names the process-group
+  leader, so a wrapper shell that stays in front of the agent reads as a shell. shipyard's launcher
+  `exec`s the agent, but tmux starts it through its `default-shell -c`, so this also assumes that
+  shell hands off to a single command — measured for zsh, not for others.
+* **`agent` is no proof of life.** An agent that dies leaving another non-shell process in the
+  foreground — something it `exec`ed, a hung command — reads `agent` for as long as that process
+  lives. A child can therefore keep this block off by construction; what still catches that case
+  is the stall clock, which it does not exempt.
 
 **The same question, one level up: an empty answer is not a finished fleet.** `exit 0` ends
 supervision for good, so it is the loudest thing this script says — and it used to be reachable
@@ -667,6 +718,11 @@ has to say which question was actually answered before it may be read as a death
 |---|---|---|
 | **3** | the backend **answered**, does **not** list that slot, and is the one this fleet was launched on — the child is gone | recover the way Step 5 says: a FRESH session on the SAME worktree plus a handoff file. Teardown only after the merge (Step 6) |
 | **7** | the slot could not be **resolved**, for one of three reasons the refusal names — the backend did not answer; it is not the one this fleet was launched on; or it **still lists the slot**, so the per-slot lookup is what failed | **nothing about the slot.** Clear the backend question, then re-ask |
+| **8** | the slot **resolved** and its terminal is **up**, but on two reads the backend reports a shell prompt or an exited pane where the agent was launched — nothing was typed or recorded | recover the child as for 3; unlike 3 the terminal is still there to look at. The report shows the same slot as `💀 no agent` — or, for a finished change, `✅ finished (no agent)` |
+
+Exit 8 is the one to tell apart from 3: **3 is "no terminal", 8 is "a terminal with nobody in
+it".** A backend that cannot say who owns the pane never produces 8 — the directive then goes out
+as it always did.
 
 Exit 7 is the same refusal as the report's `🛑 NO SIGNAL` block, one level down: that one
 declines to read an empty fleet as a drained one, this one declines to read an unresolvable
@@ -755,10 +811,11 @@ that way for **8.5 hours** overnight; the unsubmitted-line case turned up **thre
 one run**. So do not diagnose from the silhouette — work the order below.
 
 **First, check that the report has not already told you.** The cases it can name — a capacity
-wait, a dead turn, a concluded change, a `needs-human` stop — no longer reach the `🛑 STALLED`
-block at all; they get `⏳`/`⚠️`/`✅`/`🙋` in the `session` column and a block of their own (Step
-2). If the slot is in one of those, the answer is there and **none of them is a compaction
-case**. The order below is for what is left: idle, nothing asked of it, announcing no reason.
+wait, a dead turn, a concluded change, a `needs-human` stop, a terminal with no agent in it — no
+longer reach the `🛑 STALLED` block at all; they get `⏳`/`⚠️`/`✅`/`🙋`/`💀` in the `session` column
+and a block of their own (Step 2). If the slot is in one of those, the answer is there and **none
+of them is a compaction case** — and `💀` is not a nudge case either, since there is nobody to
+nudge. The order below is for what is left: idle, nothing asked of it, announcing no reason.
 Three measured false alarms are why the split exists — a rate-limited pair, a change parked at
 its hand-off with every review round clean, and a four-day operator pause that printed a
 5420-minute stall — and all three ended at a compaction step that would have discarded live
@@ -1058,6 +1115,11 @@ Exit 6 comes from the RESUME, not the compaction: every arm `exec`s `shipyard-te
 `unconfirmed` becomes this script's status. The compaction itself succeeded and the resume brief
 may be sitting unsent — **do not re-compact**, which would discard the context the first
 compaction just rebuilt. Work the nudge's own output instead (Step 5, 2b).
+
+Exit 8 means the terminal is up but no agent is in it (the report's `💀 no agent`). Printed
+**before** `compacting ship-<slot>…`, nothing was sent — not even the Escape. Printed **after** it,
+the compaction was typed and the agent was gone by the time the `exec`'d resume looked. Either
+way there is no session to resume; recover the child (Step 5).
 
 Exit 5 means the child was still mid-turn when the wait ran out: `shipyard-compact.sh` will NOT
 drive a terminal during a turn, because the Escape it sends to clear the input box is

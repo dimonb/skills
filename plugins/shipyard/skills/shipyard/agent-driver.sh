@@ -306,6 +306,83 @@ drv_signal() {
   return 0
 }
 
+# drv_occupant <session-name> — is anything but a shell running in that terminal? Echoes one word,
+# exit 0:
+#   agent  a non-shell process owns the pane
+#   none   the pane is at a shell prompt, or held open after its command exited — whatever was
+#          launched into it is gone, and anything typed there reaches a shell or nothing
+# Exit 1 and prints nothing when there is no verdict: no such session, the backend did not answer,
+# or it answered in a shape this does not know (an agterm build without the field). NO VERDICT IS
+# NEVER `none` — a caller that reads it that way turns every backend blip into a dead agent.
+#
+# WHY PROCESS STATE AND NOT THE SCREEN. The terminal is not the agent: `drv_target` answers for a
+# session whose agent exited long ago, and a dead agent renders no chrome to anchor on. The fact
+# asked for here is the backend's own — which process owns the terminal — so it cannot be forged
+# by anything an agent PRINTS. What it reads, per backend, captured rather than reasoned about
+# (shared/driver/tests/fixtures/ holds one real capture per backend, and its README says how each
+# was taken):
+#   agterm  the session's `foreground` field: the argv of the running command. At a login shell's
+#           prompt and in a `--wait` pane whose command has exited the field is OMITTED, not null
+#           — and an older build that never reports it omits it too. The two are told apart by
+#           the rest of the tree: an omitted field reads `none` only when some session in the same
+#           tree does carry one, which proves this build reports it. A tree where nothing does is
+#           no verdict. (A projection like `{name, foreground}` prints null for a missing key and
+#           hides exactly this; the first capture of this fixture made that mistake.) Only the two
+#           captured shapes give a verdict — an explicit null or an empty list, which no capture
+#           has shown, is no verdict rather than a guess;
+#   tmux    `#{pane_dead}` (1 for a pane kept after its command exited) and
+#           `#{pane_current_command}`, which names the shell when the pane is at a prompt.
+#
+# THE DIRECTION OF EACH ERROR, because neither is zero:
+#   * `agent` for a dead agent is POSSIBLE and nothing here can prevent it: an agent that dies
+#     leaving a non-shell process in the foreground — something it `exec`ed, a hung child — reads
+#     `agent` for as long as that process lives. A supervised agent can therefore keep this
+#     reading on `agent` by construction, and a caller must treat `agent` as "no evidence of
+#     death", never as proof of life.
+#   * `none` for a live agent is possible for an instant: between the pane's shell starting and
+#     its `exec` of the agent, and on tmux for an agent a wrapper script runs WITHOUT exec (the
+#     shell is then the process-group leader tmux names). Both launchers that use this driver exec
+#     the agent — though on tmux the launcher itself is started through tmux's `default-shell -c`,
+#     so that shell must hand off to it too (measured for zsh only). Measured for a real launcher
+#     with a zsh login profile, the pre-exec `none` lasts under 0.3s on both backends; a caller
+#     that alarms on `none` should still require it on more than one read, spaced wider than that.
+drv_occupant() {
+  local name="$1" tree v t out dead cmd
+  case "$(drv_backend)" in
+    agterm)
+      tree=$(agtermctl tree --json 2>/dev/null) || return 1
+      # `$reports` is the capability check: a build that does not report the field has not said the
+      # pane is empty, it has said nothing, so an omitted field there is `error` (no verdict) and
+      # never `none`. It is read off OTHER sessions, so its limit is stated rather than hidden: a
+      # tree in which nothing at all is running a command yields no verdict for every session —
+      # the safe direction, which leaves the caller where it was before this read existed.
+      v=$(printf '%s' "$tree" | jq -r --arg ws "$(drv_container)" --arg n "$name" '
+            ([.result.tree.workspaces[]?.sessions[]? | objects | select(has("foreground"))]
+              | length > 0) as $reports
+            | [.result.tree.workspaces[]? | select(.name == $ws) | .sessions[]? | select(.name == $n)]
+            | .[0]
+            | if type != "object" then error("no verdict")
+              elif has("foreground") | not then (if $reports then "none" else error("no verdict") end)
+              elif (.foreground | type) == "array" and (.foreground | length) > 0 then "agent"
+              else error("no verdict") end' 2>/dev/null) || return 1 ;;
+    tmux)
+      t=$(drv_target "$name") || return 1
+      out=$(tmux display-message -p -t "$t" '#{pane_dead} #{pane_current_command}' 2>/dev/null) || return 1
+      dead=${out%% *}; cmd=${out#* }; cmd=${cmd#-}
+      case "$dead" in
+        1) v=none ;;
+        0) case "$cmd" in
+             '') return 1 ;;
+             sh|bash|zsh|fish|dash|ksh|mksh|tcsh|csh) v=none ;;
+             *) v=agent ;;
+           esac ;;
+        *) return 1 ;;
+      esac ;;
+    *) _drv_no_backend; return 1 ;;
+  esac
+  case "$v" in agent|none) printf '%s' "$v" ;; *) return 1 ;; esac
+}
+
 # --- MAY AN ABSENCE BE BELIEVED? -----------------------------------------------
 # Every caller of `drv_target` eventually finds nothing, and the question it must answer next is
 # not "is this session there" but "did I actually get to ask". `DRV_BACKEND=auto` decides per

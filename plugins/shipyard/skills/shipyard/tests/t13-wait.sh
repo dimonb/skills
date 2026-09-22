@@ -158,8 +158,10 @@ EOF
 )"
 
 # --------------------------------------------- 5. the wiring is load-bearing
+# The whole assignment, not just the call: a slot with no agent in its terminal is asked the same
+# question on another line (#172), so the call alone is no longer unique to this site.
 ok "report.sh asks why before the clock" 1 \
-   "$(grep -Fc 'shipyard_wait_state "$b" "$phase" "$stage"' "$REPORT")"
+   "$(grep -Fc 'wait_line=$(shipyard_wait_state "$b" "$phase" "$stage" 2>/dev/null) || wait_line=""' "$REPORT")"
 ok "...only of a motionless child with nothing pending" 1 \
    "$(grep -Fc 'if [ "$run" = "⏸ idle/wait" ] && [ "$pend" = 0 ]; then' "$REPORT")"
 ok "an answered slot never reaches STALLED" 1 \
@@ -169,7 +171,7 @@ ok "an answered slot never reaches STALLED" 1 \
 # band field became `$sig_band` (the band, plus the bound's own band where the band is `unknown`)
 # and this assertion is what caught it. A count would not have.
 ok "the class is in the --only-changed signature" 1 \
-   "$(grep -Fc 'SIG+=("$slot|$mr_label|term=1|$state|$stage|$pend|$sig_band|$wait_class|$reap_note")' "$REPORT")"
+   "$(grep -Fc 'SIG+=("$slot|$mr_label|term=1|$state|$stage|$pend|$sig_band|$wait_class|$reap_note|noagent=$noagent|fna=$finished_noagent")' "$REPORT")"
 ok "the stall clock restarts across an unwatched gap" 1 \
    "$(grep -Fc '{ [ "$GAP" != 0 ] || [ -n "$wait_kind" ]; } && since="$now_epoch"' "$REPORT")"
 ok "a gap breaks --only-changed silence" 1 \

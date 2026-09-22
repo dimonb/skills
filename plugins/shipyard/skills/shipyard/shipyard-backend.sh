@@ -187,6 +187,12 @@ shipyard_container_kind() {
 # terminal. agterm: the session UUID. tmux: `<session>:<index>`.
 shipyard_target()  { drv_target "ship-$1"; }
 
+# shipyard_occupant <slot> — `agent` or `none` for a slot whose terminal is up: whether the agent
+# launched into it is still the process that owns it. Exit 1 = no verdict, which is NOT `none`.
+# Both answers are one-sided — `agent` is no proof of life, and `none` wants a second read before
+# anyone acts on it; `drv_occupant` in shared/driver says why each can be wrong.
+shipyard_occupant() { drv_occupant "ship-$1"; }
+
 # shipyard_capture <slot> — the child's visible screen as plain text.
 shipyard_capture() { drv_read "ship-$1"; }
 

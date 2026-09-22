@@ -38,6 +38,20 @@ shipyard_backend_check || exit 1
 # the first tells a supervisor its work died; see shipyard_absence_report in shipyard-backend.sh.
 T=$(shipyard_where "$SLOT") || { shipyard_absence_report "$SLOT" || exit 7; exit 3; }
 
+# Exit 8: the terminal is up but the agent launched into it is not (#172). Escape and `/compact`
+# would be typed at a shell prompt and the wait below would then time out into exit 4, which reads
+# as a slow compaction. The same two-read check as shipyard-tell.sh, which says why it takes two
+# and why no verdict is not `none`.
+if [ "$(shipyard_occupant "$SLOT" 2>/dev/null)" = none ]; then
+  sleep "$(knob_interval "${SHIPYARD_MOTION_INTERVAL:-}" 3)"
+  if [ "$(shipyard_occupant "$SLOT" 2>/dev/null)" = none ]; then
+    echo "error: $T is up, but the agent launched into it is not: the backend reports a shell prompt" >&2
+    echo "       or an exited pane there. Nothing was sent — there is no session to compact. Recover the" >&2
+    echo "       child (SKILL.md, Step 5)." >&2
+    exit 8
+  fi
+fi
+
 pane() { shipyard_capture "$SLOT"; }
 
 # Submit is not the same key on every client build, and a session AT its ceiling can
@@ -118,9 +132,12 @@ fi
 # That is exactly the state a compaction is supposed to end, so surfacing it beats reporting
 # success. tell.sh prints what to look at.
 #
-# THAT INHERITANCE GIVES 6 AND 7 TWO SOURCES EACH, and for 7 the two need opposite responses: from
-# the pre-check it means nothing happened, from here it means the compaction SUCCEEDED and only the
-# resume did not resolve — leaving the idle child this script exists to prevent. The caller tells
+# THAT INHERITANCE GIVES SOME CODES TWO SOURCES — 7 and 8 among them, since both have a pre-check
+# above — and for 7 the two need opposite responses: from the pre-check it means nothing happened,
+# from here it means the compaction SUCCEEDED and only the resume did not resolve — leaving the idle
+# child this script exists to prevent. An 8 from here means the agent was gone when the resume was
+# about to be sent: tell refused it, so nothing after `/compact` was typed. The remedy is the same
+# recovery. The caller tells
 # them apart by whether `compacting ship-<slot>…` was printed; SKILL.md's Step 5 spells it out.
 # (No list of which codes are free: an enumeration in a comment is a latent defect, and this one
 # was already stale.)

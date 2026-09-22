@@ -4,7 +4,8 @@
 # Everything here is a PURE read over environment variables and two faked CLIs (agtermctl, tmux)
 # placed on PATH — NO live terminal, no network, no real agterm/tmux. It covers the driver's
 # deterministic surface: backend selection, drv_shq quoting, container-name derivation for BOTH
-# caller variants, drv_target handle construction, drv_signal, and the COMMAND the write/interaction
+# caller variants, drv_target handle construction, drv_signal, drv_occupant (against the real
+# captures in fixtures/), and the COMMAND the write/interaction
 # dispatches construct — the fakes log their argv, so the command line is asserted without a live
 # terminal: drv_launch on BOTH backends (agterm's zsh -lc session; tmux new-session vs new-window
 # and the AGTERM_* scrub); drv_tell/submit/kill/focus on tmux (send-keys -l, Enter vs KPEnter,
@@ -82,6 +83,9 @@ case "$1" in
                 cat "${FAKE_TMUX_WINDOWS:-/dev/null}"; exit 0 ;;
   has-session)  exit "${FAKE_TMUX_HASSESSION_RC:-0}" ;;
   capture-pane) cat "${FAKE_TMUX_CAPTURE:-/dev/null}"; exit 0 ;;
+  # drv_occupant's read. FAKE_TMUX_PANE is tmux's output verbatim (a line of the captured fixture).
+  display-message) [ "${FAKE_TMUX_DISPLAY_RC:-0}" = 0 ] || exit "${FAKE_TMUX_DISPLAY_RC}"
+                   printf '%s\n' "${FAKE_TMUX_PANE:-}"; exit 0 ;;
   *) printf '%s\n' "$*" >>"${FAKE_TMUX_LOG:-/dev/null}"
      # When the server is (re)started, record any AGTERM_* variable that survived into this
      # process's environment, so the launch scrub can be asserted: a scrubbed var leaves no line.
@@ -300,6 +304,82 @@ ok "signal idle via the alternate prompt glyph" "live|idle" \
 : >"$TMP/screen-empty.txt"
 ok "signal for a live but blank screen" "live|unknown" \
   "$(PATH="$FAKEBIN:$PATH" FAKE_AT_TREE="$TMP/tree.json" FAKE_AT_TEXT="$TMP/screen-empty.txt" _DRV_BE=agterm DRV_CONTAINER_OVERRIDE=proj drv_signal s1)"
+
+# --- 7. drv_occupant: is anything but a shell in the terminal? --------------------------------
+# Fed the REAL captures in fixtures/ (their README says how each was taken), never a tree written to
+# agree with the expression under test. What each case pins is the verdict for a shape agterm or
+# tmux actually produced.
+printf '\n── drv_occupant ──\n'
+FIX="$DIR/fixtures"
+occ_of() { # <VAR=VAL>... <session> -> "<verdict>|<rc>"
+  local out rc=0 name="${!#}"
+  out=$( export PATH="$FAKEBIN:$PATH"
+         export "${@:1:$#-1}"
+         drv_occupant "$name" 2>/dev/null ) || rc=$?
+  printf '%s|%s' "$out" "$rc"
+}
+at_occ() { occ_of _DRV_BE=agterm DRV_CONTAINER_OVERRIDE=proj "FAKE_AT_TREE=$FIX/agterm-foreground.json" "$@"; }
+ok "agterm: a live agent (captured mid-tool-call) is agent" "agent|0" "$(at_occ agent-live)"
+ok "agterm: an exec'd live process is agent"               "agent|0" "$(at_occ probe-sleep)"
+ok "agterm: a login shell at its prompt is none"           "none|0"  "$(at_occ probe-shell)"
+ok "agterm: a --wait pane whose command exited is none"    "none|0"  "$(at_occ probe-exited)"
+# NO VERDICT IS NEVER `none`. Each of these is a question that was not answered, and reading any of
+# them as an empty pane would turn a backend blip into a dead agent.
+ok "agterm: an absent session has no verdict"              "|1"      "$(at_occ nope)"
+ok "agterm: a tree call that fails has no verdict"         "|1"      "$(at_occ FAKE_AT_TREE_RC=1 probe-shell)"
+# agterm OMITS the field for an empty pane — the capture holds no `null` — so an omitted field is
+# `none` only where the same tree proves the build reports it. Strip it from every session and
+# the tree is indistinguishable from an older build's: no verdict, for the dead pane AND the live one.
+jq 'del(.result.tree.workspaces[].sessions[].foreground)' "$FIX/agterm-foreground.json" >"$TMP/tree-nofg.json"
+ok "agterm: a build without the field has no verdict"      "|1" \
+   "$(occ_of _DRV_BE=agterm DRV_CONTAINER_OVERRIDE=proj "FAKE_AT_TREE=$TMP/tree-nofg.json" probe-shell)"
+ok "...not even for what was a live agent"                 "|1" \
+   "$(occ_of _DRV_BE=agterm DRV_CONTAINER_OVERRIDE=proj "FAKE_AT_TREE=$TMP/tree-nofg.json" agent-live)"
+# The capability is read from the WHOLE tree, not the caller's container: a supervisor's own session
+# elsewhere is evidence about the build as good as a sibling's.
+jq '.result.tree.workspaces[0].sessions |= map(del(.foreground))
+    | .result.tree.workspaces += [{"name":"elsewhere","sessions":[{"id":"x","name":"x","foreground":["claude"]}]}]' \
+   "$FIX/agterm-foreground.json" >"$TMP/tree-fg-elsewhere.json"
+ok "agterm: the field seen in another workspace proves the build" "none|0" \
+   "$(occ_of _DRV_BE=agterm DRV_CONTAINER_OVERRIDE=proj "FAKE_AT_TREE=$TMP/tree-fg-elsewhere.json" probe-shell)"
+# Only captured shapes give a verdict. Neither of these has been seen from agterm.
+jq '(.result.tree.workspaces[].sessions[] | select(.name == "probe-shell") | .foreground) = null' \
+   "$FIX/agterm-foreground.json" >"$TMP/tree-fgnull.json"
+ok "agterm: an explicit null has no verdict"               "|1" \
+   "$(occ_of _DRV_BE=agterm DRV_CONTAINER_OVERRIDE=proj "FAKE_AT_TREE=$TMP/tree-fgnull.json" probe-shell)"
+jq '(.result.tree.workspaces[].sessions[] | select(.name == "probe-shell") | .foreground) = []' \
+   "$FIX/agterm-foreground.json" >"$TMP/tree-fgempty.json"
+ok "agterm: an empty argv has no verdict"                  "|1" \
+   "$(occ_of _DRV_BE=agterm DRV_CONTAINER_OVERRIDE=proj "FAKE_AT_TREE=$TMP/tree-fgempty.json" probe-shell)"
+jq '.result.tree.workspaces[].sessions[].foreground = "zsh"' "$FIX/agterm-foreground.json" >"$TMP/tree-fgstr.json"
+ok "agterm: a field of an unknown type has no verdict"     "|1" \
+   "$(occ_of _DRV_BE=agterm DRV_CONTAINER_OVERRIDE=proj "FAKE_AT_TREE=$TMP/tree-fgstr.json" probe-shell)"
+# The session must be found in THIS caller's container: the same name elsewhere is not it.
+ok "agterm: a session in another container has no verdict" "|1" \
+   "$(occ_of _DRV_BE=agterm DRV_CONTAINER_OVERRIDE=other "FAKE_AT_TREE=$FIX/agterm-foreground.json" probe-shell)"
+
+# tmux: each captured line through the fake, in a container that lists the window.
+printf '%s\n' '0 probe' >"$TMP/win-occ.txt"
+tmux_occ() { # <fixture-window> [VAR=VAL...]
+  local w="$1" line; shift
+  line=$(awk -F'\t' -v w="$w" '$1 == w { print $2 }' "$FIX/tmux-occupant.tsv")
+  occ_of _DRV_BE=tmux DRV_CONTAINER_OVERRIDE=cont "FAKE_TMUX_WINDOWS=$TMP/win-occ.txt" "FAKE_TMUX_PANE=$line" "$@" probe
+}
+ok "tmux: an exec'd live process is agent"          "agent|0" "$(tmux_occ probe-sleep)"
+ok "tmux: a shell at its prompt is none"            "none|0"  "$(tmux_occ probe-shell)"
+ok "tmux: a pane kept after its command exited is none" "none|0" "$(tmux_occ probe-dead)"
+# The documented false `none`: a wrapper that runs its agent without exec is named by tmux as the
+# shell. Pinned so the day it changes is a deliberate one, and so the limit is visible here.
+ok "tmux: a non-exec wrapper reads none (documented limit)" "none|0" "$(tmux_occ probe-wrapper)"
+ok "tmux: a login shell's leading dash is ignored"  "none|0" \
+   "$(occ_of _DRV_BE=tmux DRV_CONTAINER_OVERRIDE=cont "FAKE_TMUX_WINDOWS=$TMP/win-occ.txt" "FAKE_TMUX_PANE=0 -zsh" probe)"
+ok "tmux: a failed read has no verdict"             "|1"      "$(tmux_occ probe-shell FAKE_TMUX_DISPLAY_RC=1)"
+ok "tmux: an empty answer has no verdict"           "|1" \
+   "$(occ_of _DRV_BE=tmux DRV_CONTAINER_OVERRIDE=cont "FAKE_TMUX_WINDOWS=$TMP/win-occ.txt" "FAKE_TMUX_PANE=" probe)"
+ok "tmux: an unknown pane_dead has no verdict"      "|1" \
+   "$(occ_of _DRV_BE=tmux DRV_CONTAINER_OVERRIDE=cont "FAKE_TMUX_WINDOWS=$TMP/win-occ.txt" "FAKE_TMUX_PANE=x zsh" probe)"
+ok "tmux: an absent window has no verdict"          "|1" \
+   "$(occ_of _DRV_BE=tmux DRV_CONTAINER_OVERRIDE=cont "FAKE_TMUX_WINDOWS=$TMP/win-occ.txt" "FAKE_TMUX_PANE=0 zsh" nope)"
 
 # --- 9. may an absence be believed? -----------------------------------------------------------
 # PROVENANCE. A supervisor that resolves a session name, finds nothing, and concludes the child
