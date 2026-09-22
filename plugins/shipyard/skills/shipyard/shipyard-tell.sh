@@ -36,7 +36,11 @@
 #       launched on (the child IS gone), 7 UNRESOLVED — the slot could not be resolved, because
 #       the backend did not answer, or is not the one this fleet was launched on, or still lists
 #       the slot (so the per-slot lookup is what failed), leaving whether the child is alive
-#       UNKNOWN, 2 usage error, 1 mailbox/backend failure — which is also where a dead agterm
+#       UNKNOWN, 8 NO AGENT — the slot resolved and its terminal is up, but on two reads the
+#       backend reports a shell prompt or an exited pane where the agent was launched, so nothing
+#       was typed or recorded (3 is "no terminal at all"; 8 is "a terminal, and nobody in it" —
+#       recover the child either way, and on 8 the terminal itself is still there to look at),
+#       2 usage error, 1 mailbox/backend failure — which is also where a dead agterm
 #       control socket lands, since the backend precheck refuses before any of this runs.
 #       6 rather than 0 on purpose: an `unconfirmed` that exits 0 is a note nobody has to
 #       notice, which is the same defect class as the false `delivered` it replaced. 7 rather
@@ -105,6 +109,24 @@ WHERE=$(shipyard_where "$SLOT") || {
   echo "       nothing to tell; if this was an answer, the record keeps it but no one will read it." >&2
   exit 3
 }
+
+# The terminal is there — is the AGENT? A terminal outlives the agent launched into it, and then a
+# directive is typed at a shell prompt: measured, `zsh: bad pattern: [supervisor`, recorded as sent
+# because a shell starts no turn to confirm or deny (#172). So ask the backend which process owns
+# the pane BEFORE typing, and refuse on `none` with nothing typed and nothing recorded. Two reads,
+# SHIPYARD_MOTION_INTERVAL apart exactly as in the report: one `none` can be a launch caught before
+# its `exec`, and the second read is paid only on the rare path where the first said `none`. No
+# verdict (exit 1) is not `none` and goes on exactly as before; neither does `agent` prove the child
+# alive (see drv_occupant in shared/driver for the one way it can be wrong).
+if [ "$(shipyard_occupant "$SLOT" 2>/dev/null)" = none ]; then
+  sleep "$(knob_interval "${SHIPYARD_MOTION_INTERVAL:-}" 3)"
+  if [ "$(shipyard_occupant "$SLOT" 2>/dev/null)" = none ]; then
+    echo "error: $WHERE is up, but the agent launched into it is not: the backend reports a shell prompt" >&2
+    echo "       or an exited pane there. Nothing was typed and nothing was recorded — a directive would" >&2
+    echo "       reach a shell. Recover the child (SKILL.md, Step 5); do not compact it." >&2
+    exit 8
+  fi
+fi
 
 if [ -n "$SUBMIT_ONLY" ]; then
   # Nothing to record and nothing to type; ID only names what was sent, in the lines below.

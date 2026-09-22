@@ -169,7 +169,7 @@ ok "an answered slot never reaches STALLED" 1 \
 # band field became `$sig_band` (the band, plus the bound's own band where the band is `unknown`)
 # and this assertion is what caught it. A count would not have.
 ok "the class is in the --only-changed signature" 1 \
-   "$(grep -Fc 'SIG+=("$slot|$mr_label|term=1|$state|$stage|$pend|$sig_band|$wait_class|$reap_note")' "$REPORT")"
+   "$(grep -Fc 'SIG+=("$slot|$mr_label|term=1|$state|$stage|$pend|$sig_band|$wait_class|$reap_note|noagent=$noagent")' "$REPORT")"
 ok "the stall clock restarts across an unwatched gap" 1 \
    "$(grep -Fc '{ [ "$GAP" != 0 ] || [ -n "$wait_kind" ]; } && since="$now_epoch"' "$REPORT")"
 ok "a gap breaks --only-changed silence" 1 \

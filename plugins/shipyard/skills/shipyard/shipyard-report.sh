@@ -473,6 +473,7 @@ STALLED=()
 STALL_ROWS=()
 WAITING=()    # motionless for a stated, self-healing reason — nothing to do
 ATTENTION=()  # motionless for a known reason that needs a person, but never compaction
+NOAGENT=()    # "<slot>|<ctx>" — a live terminal whose agent is gone (drv_occupant `none`, twice)
 UNSCALED=()   # "<slot>|<display>" — a ctx figure with no window to assert it against; the
               # display distinguishes the two causes, which take different remedies (Step 5)
 
@@ -896,10 +897,23 @@ for slot in "${SLOTS[@]}"; do
     continue
   fi
 
+  # IS THE AGENT STILL IN THE TERMINAL? A terminal outliving its agent reads, from the screen, as a
+  # healthy idle child — and every remedy the stall block prints is then typed into a shell (#172).
+  # This asks the backend which process owns the pane (shared/driver's `drv_occupant`), once before
+  # each capture, so the two reads are MOTION_INTERVAL apart and a launch caught between its shell
+  # and its `exec` does not read as a death. `none` on BOTH is the only thing acted on; no verdict
+  # (exit 1: the backend did not answer, or does not report the field) leaves the slot on today's
+  # path, claiming nothing. What this does NOT catch, and cannot: an agent that died leaving another
+  # non-shell process in the foreground reads `agent` for as long as that process lives — so a
+  # child can keep this signal off by construction, and the stall clock below is what still sees it.
+  occ_a=$(shipyard_occupant "$slot" 2>/dev/null) || occ_a=""
   a=$(shipyard_capture "$slot")
   sleep "$MOTION_INTERVAL"
+  occ_b=$(shipyard_occupant "$slot" 2>/dev/null) || occ_b=""
   b=$(shipyard_capture "$slot")
   [ "$a" = "$b" ] && run="⏸ idle/wait" || run="▶️ running"
+  noagent=0
+  if [ "$occ_a" = none ] && [ "$occ_b" = none ]; then noagent=1; run="💀 no agent"; fi
 
   line=$(printf '%s\n' "$b" | status_line)
   [ -z "$line" ] && line="—"
@@ -1079,7 +1093,11 @@ for slot in "${SLOTS[@]}"; do
   STALL_ROWS+=("$slot	$slot_sig	$since")
   motionless=$(( now_epoch - since ))
   stalled_now=0
-  if [ -n "$wait_kind" ]; then
+  if [ "$noagent" = 1 ]; then
+    # Not a stall and not a wait: there is no agent to stall or to wait. Its own block, whose
+    # remedy is recovery — never the stall block, whose nudge and compaction would go to a shell.
+    NOAGENT+=("$slot|$ctx")
+  elif [ -n "$wait_kind" ]; then
     # Motionless for a reason it told us. Not a stall, and never a compaction candidate.
     case "$wait_kind" in
       wait) WAITING+=("$slot|$wait_class|$ctx|$wait_action") ;;
@@ -1103,6 +1121,7 @@ for slot in "${SLOTS[@]}"; do
   if   [ "$pend" != 0 ];             then shipyard_note "$slot" blocked --blink
   elif [ "$wait_class" = needs_human ]; then shipyard_note "$slot" blocked
   elif [ "$stalled_now" = 1 ];        then shipyard_note "$slot" blocked
+  elif [ "$noagent" = 1 ];            then shipyard_note "$slot" blocked
   else                                    shipyard_note "$slot" "$verdict"
   fi
 
@@ -1110,8 +1129,9 @@ for slot in "${SLOTS[@]}"; do
   # No $run and no $line here on purpose — see the --only-changed note in the header. $wait_class
   # IS meaningful: entering or leaving a stated wait is exactly the tick worth breaking silence
   # for, and it is the news the first time it appears, which is why it is not left to the (now
-  # suppressed) stall block to announce.
-  SIG+=("$slot|$mr_label|term=1|$state|$stage|$pend|$sig_band|$wait_class|$reap_note")
+  # suppressed) stall block to announce. `noagent=` is there for the tick it CLEARS: the 💀 block
+  # bypasses the filter while it holds, so only the signature can make its ending news.
+  SIG+=("$slot|$mr_label|term=1|$state|$stage|$pend|$sig_band|$wait_class|$reap_note|noagent=$noagent")
   :
 done
 
@@ -1222,6 +1242,9 @@ fi
 # EVERY tick it holds, not once. Left to the signature it would be announced the first time and
 # then suppressed for as long as it lasted, which is the one tick shape the report is supposed to
 # be loudest about — the header line is the only trace the incident left behind.
+# A slot with NO AGENT in its terminal bypasses it too, for STALLED's reason: it is the same
+# silhouette — nothing moves and nothing is asked — except that nobody is left to move, so every
+# tick it lasts is a tick of lost work that only the operator can end.
 # A REAPED, HELD or REFUSED slot bypasses the silence outright, like STALLED above and for the
 # same reason: each is a state where a destructive act has just happened, or is being attempted
 # and declined every tick, and where the operator owes an action nobody else can take. Leaving
@@ -1245,6 +1268,7 @@ fi
 # monitor performs the teardown and consumes the only 🧹 block, leaving the monitor to show a
 # table the slot has merely vanished from. The same hazard is documented for $MERGEDFILE above.
 if [ "$ONLY_CHANGED" = 1 ] && [ "$TERMINAL" = 0 ] && [ "${#STALLED[@]}" -eq 0 ] \
+   && [ "${#NOAGENT[@]}" -eq 0 ] \
    && [ "${#REAP_HELD[@]}" -eq 0 ] && [ "${#REAP_REFUSED[@]}" -eq 0 ] \
    && [ "${#REAPED[@]}" -eq 0 ] \
    && [ "$NOSIG_RC" = 0 ] && [ -z "$PINNED_ELSEWHERE" ] && [ "$GAP" = 0 ] && [ -n "$SIGFILE" ]; then
@@ -1321,6 +1345,21 @@ fi
       echo "     every reading above the warn threshold stays a ❓ bound. There, a bound whose raw count is"
       echo "     approaching that smallest size is what stands in for the glyph; pin SHIPYARD_CTX_WINDOW so"
       echo "     this condition can fire properly."
+    done
+  fi
+  if [ "${#NOAGENT[@]}" -gt 0 ]; then
+    echo
+    echo "### 💀 NO AGENT — the terminal is up, the agent launched into it is not"
+    for x in "${NOAGENT[@]}"; do
+      sl=${x%%|*}; c=${x#*|}
+      echo "- \`$sl\` — on both reads of this tick the backend reports a shell prompt, or a pane held open"
+      echo "  after its command exited, where the agent was launched. ctx $c is its LAST figure: it will not move."
+      echo "  Do NOT nudge or compact it — anything typed there goes to a shell, not to an agent, which is"
+      echo "  why \`shipyard-tell.sh\` and \`shipyard-compact.sh\` refuse this slot with exit 8."
+      echo "  1. GIT FIRST: \`git -C $ROOT/.claude/worktrees/ship-$sl log --oneline -5\` and \`git status\` — what it"
+      echo "     produced before it went is usually more than its last notice said."
+      echo "  2. THEN RECOVER IT the way a dead child is recovered (SKILL.md, Step 5): a fresh session on the"
+      echo "     SAME worktree, with a written handoff. Do not tear the slot down — its work is not finished."
     done
   fi
   # The two blocks the STALLED one used to swallow. Each is a slot that is motionless for a reason
