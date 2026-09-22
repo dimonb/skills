@@ -61,7 +61,8 @@ FLAGS
   merge | no-merge   Override the repo's merge policy for this run. `merge` IS the user's
                      go-ahead — pass it only when the user said so in this invocation.
   no-create          Never create an issue; abort if none is found.
-  effort <level>     Review depth: low|medium|high|xhigh|max (default: max).
+  effort <level>     Review depth: low|medium|high|xhigh|max|auto (default: auto — ship
+                     picks the level from the shape of the change, §2.9, and says why).
   max-rounds <n>     Fix rounds per review stage before escalating (default: 3).
   soft-bounds        On hitting max_iterations/deadline, nudge once and keep going
                      instead of stopping. Default is a HARD stop.
@@ -76,8 +77,10 @@ PIPELINE (one branch + one PR/MR per change)
 
 BEHAVIOR
   - Reviews itself: a fresh-context battery reviews the spec before any code is written,
-    and correctness/security/conformance/conventions/gates axes review the branch diff
-    before hand-off. Every blocking finding faces a skeptic that tries to refute it.
+    and up to five axes (correctness, security, conformance, conventions, gates) review
+    the branch diff before hand-off — which of them from what the diff actually is, how
+    many agents from the effort level. Every blocking finding faces a skeptic that tries
+    to refute it.
   - A review stage whose blocking findings survive max-rounds STOPS the run, converts the
     PR/MR to draft, and reports. That budget is the only thing standing in for a human
     reviewer — honor it.
@@ -103,17 +106,19 @@ from a half-done PR/MR. Accepted inputs (resolved in §3):
 is ambiguous** — do not guess, ask which one is meant. (A caller that knows the answer
 should pass the marker; the launcher skill `shipyard` preserves it for exactly this reason.)
 
-Optional flags: `merge`, `no-merge`, `no-create`, `effort <level>`, `max-rounds <n>`,
-`soft-bounds`.
+Optional flags: `merge`, `no-merge`, `no-create`, `effort <level>|auto`, `max-rounds <n>`,
+`soft-bounds`. `effort` defaults to `auto`, which §2.9 resolves to a level before any review
+runs; an explicit level always wins over it.
 
 ---
 
 ## 2. Discovery — learn the repo before touching it
 
 Run this ONCE per run, before anything else. **§2.8 then writes every answer into the state
-file (§4), and that step is not optional.** It is the last act of discovery and the first
-thing a supervisor can see; a run that skips it is invisible from outside for its whole life
-(§2.8 says what that costs). **Shell environment does not persist between tool calls**, so
+file (§4), and that step is not optional.** It records the last fact discovery establishes and
+is the first thing a supervisor can see; a run that skips it is invisible from outside for its
+whole life (§2.8 says what that costs; §2.9, a judgement rather than a fact, follows it and
+writes into the same file). **Shell environment does not persist between tool calls**, so
 the forge env guard from the reference file must be re-applied in *every* block that calls
 the forge CLI.
 
@@ -228,7 +233,7 @@ commit granularity and message style, protected branches, assignment discipline,
 language, attribution rules, anything about labels. Where this skill and the repo's law
 disagree, **the repo's law wins** — say so and follow it.
 
-### 2.8 Write the state file — the last act of discovery, and a real step
+### 2.8 Write the state file — the last fact of discovery, and a real step
 
 Create `.pipeline-state/<KEY>.json` (§4) now, with what §2.1–§2.7 just answered. **A
 supervisor's status table is built from two fields of this file: the PR/MR number as
@@ -263,6 +268,27 @@ record as the change having become a person's move: it can conclude the change, 
 finished, and switch off the watchdog that would otherwise notice a wedged run. Stamping it on
 the way in advertises a run still working through the final checks and the §10 merge gate as
 done, which is worse than not recording at all.
+
+### 2.9 Effort — passed, or picked from the shape of the change
+
+`effort` is how deep the review battery goes (§5.3, *Sizing the battery*). An explicit level in
+this invocation always wins. With none passed — the default is `auto` — ship picks the level
+itself, here, from the shape of the change it is about to make: the idea text, the issue, or the
+PR/MR diff, whichever exists at this point. It follows §2.8 rather than preceding it because it
+is a judgement about the change, not a fact read off the repo.
+
+| The change is… | Level |
+|---|---|
+| docs, config, a rename, a mechanical edit, or one small file | `low` or `medium` |
+| an ordinary bug fix or feature in code | `high` |
+| cross-cutting; security-sensitive (auth, secrets, network exposure, permissions, CI/CD, dependencies); concurrency; a data migration; anything hard to reverse | `max` |
+
+When two rows fit, the higher wins. Record the level in `flags.effort` and the reason, one line, in
+`flags.effort_rationale` — the file §2.8 just wrote — and state both in the first report this run
+makes and in the PR/MR description, so a reader can dispute the judgement instead of discovering
+it. Pick it once. The one revision allowed is upward: a diff that, once it exists, fits a higher
+row than the idea did raises the level before round 1, with the rationale updated; a level is
+never lowered mid-run.
 
 ---
 
@@ -394,17 +420,24 @@ passes it — the absent file does not fail safe, it fails open.)
   "bound_nudge_sent": false,
   "monitor_task_id": "...",
   "next_wakeup_id": "ship-42-tick",
-  "flags": { "merge": false, "no_create": false, "effort": "max", "max_rounds": 3, "soft_bounds": false },
+  "flags": { "merge": false, "no_create": false, "effort": "high",
+             "effort_rationale": "auto: shell logic in a script the gate runs",
+             "max_rounds": 3, "soft_bounds": false },
 
   "reviews": {
     "spec": {
       "head": "819f7d74...", "rounds": 1, "clean": true, "mode": "delta",
       "axes": ["spec-completeness", "spec-architecture", "spec-security", "spec-scope-fit"],
+      "agents": 4, "axes_rationale": "effort high: an agent per axis", "skipped": [],
       "candidates": 7, "confirmed": 3, "fixed": 3, "optional": 4,
       "open": []
     },
     "impl": {
       "head": "a1b2c3d4...", "rounds": 2, "clean": false, "mode": "delta+sweep",
+      "axes": ["impl-correctness", "impl-security", "impl-spec-conformance", "impl-conventions"],
+      "agents": 4,
+      "axes_rationale": "shell logic, 120 lines in 3 files, at high: an agent per admitted axis; security at high regardless of surface",
+      "skipped": [ { "axis": "impl-gates-coverage", "reason": "no suite covers the touched script; the check command is its only gate and ran green on this head" } ],
       "security_engine": "ran|unavailable", "security_engine_reason": "…",
       "open": [
         { "id": "impl-2", "fp": "sha256(...)", "file": "lib/foo.ts", "line": 42,
@@ -446,7 +479,9 @@ pass on the archived head (§7.F).
 ### 5.1 Principles (honor verbatim)
 
 - **Subagents review; ship never reviews in its own context.** One independent agent per
-  axis. ship writes the charters, dedupes, verifies, fixes, and posts.
+  axis — or per merged charter, where §5.3's sizing folds axes into one agent; the
+  independence that matters is from ship's context. ship writes the charters, dedupes,
+  verifies, fixes, and posts.
 - **Review subagents are strictly READ-ONLY.** End every charter with: *do not edit files,
   do not run git write commands, do not touch the forge CLI, do not install anything, do not
   check out another ref — return findings only.* Parallel writers in one worktree corrupt
@@ -472,7 +507,7 @@ The bundled `/code-review` and `/security-review` skills are **analysis engines*
 `--comment` or `--fix`** — they post to the forge and append an attribution footer. If an
 engine result cites a URL from the wrong forge, rewrite it before it goes anywhere.
 
-### 5.2 Spec-stage battery (4 axes, parallel)
+### 5.2 Spec-stage battery (up to 4 axes, parallel)
 
 Only where a spec stage exists (§2.5). Context every axis gets: the change slug, the
 artifact paths, the branch diff against the base branch, the originating issue, and the
@@ -492,17 +527,25 @@ about a path that no longer exists rots silently); and **concurrency, ordering a
 partial-failure cases the proposal states no behaviour for** — historically the most
 productive question to ask any spec.
 
+**Sizing.** A spec is prose about a design, so substance never removes one of these four — each
+can find a defect in any proposal — and only effort decides how many agents carry them: at `low`
+and `medium`, two — `spec-completeness` with `spec-scope-fit`, and `spec-architecture` with
+`spec-security` — each carrying both charters verbatim; at `high` and above, four. Record the
+sizing as §5.3's *Sizing the battery* says, with `skipped` empty.
+
 **End every charter — spec and implementation alike — with the anti-noise clause:** *return
 an EMPTY array if the change is clean on your axis, and say so. Inventing a nitpick to look
 diligent is a failure, not thoroughness.* The §5.4 normalization rules stop an invented
 finding from *gating*, but not from being raised, verified and acted on, and that churn is
 what the round budget is paying for.
 
-### 5.3 Implementation-stage battery (5 axes, parallel)
+### 5.3 Implementation-stage battery (up to 5 axes, parallel)
 
 Context every axis gets: the diff against the base branch, the spec artifacts if any, the
 PR/MR title and description, the effort level, and the findings already confirmed in earlier
-rounds so it does not re-report them.
+rounds so it does not re-report them. The five below are the whole battery, not the battery
+every change gets: *Sizing the battery*, at the end of this section, picks which of them run
+and as how many agents.
 
 | Axis | Charter |
 |---|---|
@@ -540,6 +583,68 @@ rounds carried no security analysis at all, with nothing anywhere saying so.**
 engine can become available between rounds, or stop being — and a stale `unavailable` carried
 forward keeps a working engine switched off for the rest of the change, which is the same
 silence this clause exists to close.
+
+#### Sizing the battery — substance picks the axes, effort and size pick the agents
+
+**Size the battery before round 1 of each stage, and record the sizing** — `axes`, `agents`,
+`axes_rationale`, `skipped` (§4). Three inputs, in this order of authority, and the order is the
+rule:
+
+1. **The substance of the change decides WHICH axes run.** Classify the diff in a few words —
+   *prose in a skill file*, *shell script logic*, *test-only*, *an auth or permission path*, *CI
+   config*, *a dependency bump*, *a data model* — and run every axis that can find a real defect
+   in that kind of change. Every other axis is **skipped, with the reason recorded**. A line count
+   is never the reason to run an axis the substance does not call for, and neither is the effort
+   level — with the one exception rule 2 names, `impl-security` at `high` and above; neither is
+   ever the reason to skip an axis the substance does call for.
+
+   | The diff is… | Runs | Skipped |
+   |---|---|---|
+   | markdown or other prose only — a skill, a README, a design note | `impl-spec-conformance` (does it say what was asked, does it contradict the rest of the file, and could an agent follow it as written?) and `impl-conventions` | correctness — no logic to hunt in; security — no surface; gates — nothing executes it |
+   | a shell script or other code | `impl-correctness` and `impl-spec-conformance`; `impl-security` when it touches exec, paths, secrets or the network; `impl-gates-coverage` when the repo has a suite that could cover it | security when no such surface is touched (below `high` only — see 2); gates when the check command is the only thing that could run it |
+   | test-only | `impl-correctness` — does the test prove what it claims, which is where the vacuous-test shapes named in `impl-security`'s charter are hunted — `impl-gates-coverage` (is it registered, does it run), `impl-spec-conformance`, and `impl-conventions` (folded or separate per 3) | security when no such surface is touched (below `high` only — see 2) |
+   | CI, permissions, auth, secrets, a dependency, network exposure | **`impl-security`, always, at every effort**, plus whatever the rest of the diff calls for | nothing on the security axis |
+   | a data model, a migration, anything that redefines something global | the full five, and §5.8 trigger 1 is probably true | nothing |
+
+   A mixed diff runs the union. A skipped axis was **not run**: it is never recorded as clean,
+   nothing it would have looked for was looked for, and the stage record (§5.9) names it as
+   skipped so a reader knows what was not looked at. The one thing no skip removes is the
+   secret-in-diff clause (§5.4): it goes into every charter that runs, whatever the axis, so a
+   skipped security axis never skips it.
+
+2. **Effort decides how much the axes that run get.** Two rules that never yield to it:
+   `impl-correctness` and `impl-spec-conformance` always happen where the diff has any code in it
+   (at `low` they may be ONE agent with a merged charter), and `impl-security` runs at any effort
+   when the diff touches a security surface and always at `high` and above — below `high`, with
+   no such surface, it is skipped with the reason recorded. The `/code-review` engine inside
+   `impl-correctness` runs at `high` and above; `/security-review` is part of `impl-security`'s
+   charter and is attempted whenever that axis runs, at any effort.
+
+3. **Size decides whether the axes that run share an agent.** For a small diff — on the order of
+   150 changed lines and five files or fewer — at `low` or `medium`, `impl-conventions` and
+   `impl-gates-coverage` fold into the correctness charter instead of getting agents of their own
+   (into the conformance charter where substance skipped correctness, as on a prose-only diff);
+   at `high` and above, or for a larger diff, they are separate agents. **A folded axis still
+   ran** — its charter went in verbatim, its findings carry its own axis name, and it is listed in
+   `axes`, never in `skipped`. Folding is a size-and-effort call and skipping is a substance call,
+   and they are recorded apart because they are different claims about what was reviewed.
+
+| Effort | Agents per round, typically | What it buys |
+|---|---|---|
+| `low` | 1–2 | correctness and conformance merged; conventions and gates folded in; no `/code-review` |
+| `medium` | 2–3 | correctness and conformance apart; security only on a surface; no `/code-review` |
+| `high` | 4–5 | every admitted axis its own agent; security always; `/code-review` runs |
+| `xhigh` / `max` | the full 5 | every admitted axis its own agent, nothing folded, both engines |
+
+Substance narrows first and these apply to what is left: a docs-only diff at `max` is still two
+axes, and a CI change at `low` still gets its security agent.
+
+**Scoped rounds inherit the sizing** (§5.7): a round after the first re-opens only the axes whose
+files moved, from the set round 1 chose. One re-arm: a fix that newly touches a security surface
+re-arms `impl-security` for that round even where round 1 skipped it — a fix diff is a diff, and
+the substance rule reads it too. A re-arm moves the axis from `skipped` to `axes` and appends the
+round and its reason to `axes_rationale`, so the record reports the round it ran in and never
+lists one axis as both skipped and run.
 
 ### 5.4 Finding contract and normalization
 
@@ -630,12 +735,13 @@ Classify each finding **at the moment it is confirmed** — cheap now, unreconst
 ### 5.7 Rounds, convergence, and escalation
 
 ```
-round 1: full battery      -> dedupe -> verify -> fix -> check -> commit + push
+round 1: sized battery     -> dedupe -> verify -> fix -> check -> commit + push
 round 2: scoped battery     -> dedupe -> verify -> fix -> check -> commit + push
 round 3: …
 ```
 
-- **Round 1** runs the full battery for the stage.
+- **Round 1** runs the battery as §5.3 sized it for the stage — every axis the substance
+  admitted, at the agent count effort and size allow.
 - **Round N > 1 is scoped**: the fix diff since the last round — pass it to an engine as a
   commit range (`--range <last-round-sha>..HEAD`, undocumented but working; **the engine
   echoes the range back, so read the scope out of the result and confirm it took**). A range
@@ -654,8 +760,10 @@ round 3: …
   zero diff read. **Judge the body, not the duration** — a fast "no findings" over a
   one-commit range is a legitimate result.
 - **Axes clear individually, and a cleared axis stays cleared until its own files change.**
-  Head movement re-opens only the axes whose files it touched. Without this, every fix push
-  re-arms the whole battery and the stage cannot converge.
+  Head movement re-opens only the axes whose files it touched, from the set round 1 chose —
+  plus `impl-security` when a fix newly touches a security surface (§5.3, *Sizing the
+  battery*). Without this, every fix push re-arms the whole battery and the stage cannot
+  converge.
 - **The stage clears when a round returns zero confirmed blocking findings.** Record it
   against the head sha and move on. A clean round is a snapshot of that round, **not proof
   the diff is clean** — the same engine over the same bytes disagrees with itself at
@@ -764,14 +872,21 @@ and it is terse.
 pasted in, no AI self-attribution:
 
 ```
-Review (impl) — mode: delta — axes: correctness, security, spec-conformance, conventions, gates.
+Review (impl) — mode: delta — effort: high (auto: shell logic in a script the gate runs).
+Axes (4 agents): correctness, security, spec-conformance, conventions.
+Skipped: gates — no suite covers the touched script; the check command is its only gate.
 Round 1: 7 candidates -> 3 confirmed, fixed in 4f2a1c9. Round 2: clean.
 Security (engine): no issues found in this diff.
 Optional (non-blocking): 4 — listed below, no action required.
 Deferred: 2 — fixed here 1; scenario onto #123; new issues none.
 ```
 
-- Keep it to **four lines or so**: counts and the mode token, not finding contents.
+- Keep it to **seven lines or so**: counts, the mode token and the sizing, not finding contents.
+- The axes and skipped lines say what ran, as how many agents, and what was **skipped with its
+  reason**, from the ledger's `axes`, `agents` and `skipped` (§5.3, *Sizing the battery*). A
+  folded axis is listed as run. **A skipped axis is reported as not run, never as clean** — the
+  same claim the security line is held to below. A stage that skipped nothing says
+  `Skipped: none`, for the reason the `Deferred:` line gives.
 - The security line **names which lens produced the verdict**, from `security_engine`:
   - `ran` + nothing found → `Security (engine): no issues found in this diff.`
   - `unavailable` + nothing found → `Security (charter): no issues found in this diff — the
@@ -779,6 +894,9 @@ Deferred: 2 — fixed here 1; scenario onto #123; new issues none.
     **A pass that did not run is never reported as one that did** — this is the single claim
     the record may never make.
   - findings in either case → `Security (<engine|charter>): N finding(s), fixed in <sha>`.
+  - the axis skipped by sizing → `Security: not run — <the recorded reason>`, read from
+    `skipped` — a skipped axis never sets `security_engine`. Never `no issues found` for an
+    axis that did not look.
 - **Optional findings**: batch them ALL into ONE comment (`file:line` plus one line each),
   ending "No action required." Never one comment per nit.
 - **Deferred findings**: ONE line giving the disposition by rung (§5.11) — how many were fixed
@@ -807,7 +925,8 @@ record even when the stage was clean on the first round.
 
 A verdict is bound to a **head sha**.
 
-- After each stage clears, record `{stage, head, rounds, mode, axes, counts, clean:true}`.
+- After each stage clears, record `{stage, head, rounds, mode, axes, agents, skipped, counts,
+  clean:true}`.
 - The merge gate (§10) requires a clean entry with nothing unreviewed landed after it.
 - **Fix-only head advance**: a push carrying only this stage's own review fixes needs its own
   clean entry for the new sha — but that entry is **earned by a scoped round, not a fresh
@@ -1084,7 +1203,8 @@ checklist after a merge. Neither is automated; skipping it makes the board drift
 Skipped entirely in a no-spec repo.
 
 1. Ensure the worktree is at the head; fetch the base branch.
-2. Dispatch the spec battery (§5.2) in one message → barrier → dedupe → verify (§5.5).
+2. Size the spec battery (§5.2: two agents at `low` and `medium`, four above), record the
+   sizing, and dispatch it in one message → barrier → dedupe → verify (§5.5).
 3. Fix confirmed blockers **in the artifacts, through the spec tool's skills** where one
    exists, not by hand-editing. Re-validate, commit, push.
 4. Scoped rounds (§5.7) until a round returns no confirmed blocker, or escalate at
@@ -1118,10 +1238,12 @@ mis-read the state.
 
 1. Ensure the worktree is at the head; fetch the base branch — **a stale base produces
    phantom findings.**
-2. Evaluate the §5.8 triggers **before dispatching** (trigger 1 can be true on this very
-   first pass) and consult `swept` so a latched trigger does not re-fire.
-3. Dispatch the impl battery plus any sweep axes in one message → barrier → dedupe → verify →
-   classify origin (§5.6).
+2. Size the battery from the substance of the diff (§5.3, *Sizing the battery*) and record
+   `axes`, `agents`, `axes_rationale` and `skipped` before anything is dispatched. Then evaluate
+   the §5.8 triggers (trigger 1 can be true on this very first pass) and consult `swept` so a
+   latched trigger does not re-fire.
+3. Dispatch the sized impl battery plus any sweep axes in one message → barrier → dedupe →
+   verify → classify origin (§5.6).
 4. Fix every confirmed blocker sequentially in ship's own context. Re-run the check commands
    and the touched components' tests; commit; push.
 5. Scoped rounds (§5.7) until clean, or escalate at `max-rounds` → `needs-human`.
@@ -1285,6 +1407,10 @@ change whose run was still in progress. Poll until nothing is pending or running
   over an empty selection.
 - **Review only in subagents** (§5.1), strictly read-only, dispatched concurrently, with a
   barrier before ship edits anything.
+- **Size the battery from the substance of the diff before round 1** (§5.3): run the axes that
+  can find a defect in that kind of change, skip the rest with a recorded reason, and let effort
+  and size decide only how many agents carry what runs. A skipped axis is reported as not run,
+  never as clean, and skipping `impl-security` never skips the secret-in-diff clause.
 - **Verify before fixing** (§5.5). Refuted means dropped — never "fix it anyway to be safe".
 - **A finding that leaves the change works the ladder** (§5.11): fix it here if it passes the
   four-question test, else a scenario on an issue that is already open, else a new issue — and

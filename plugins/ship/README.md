@@ -13,17 +13,19 @@ session, unattended. On GitHub or GitLab.
 /ship --help                      the full synopsis
 ```
 
-Flags: `merge` / `no-merge`, `no-create`, `effort <level>`, `max-rounds <n>`, `soft-bounds`.
+Flags: `merge` / `no-merge`, `no-create`, `effort <level>|auto`, `max-rounds <n>`, `soft-bounds`.
 
 ## What makes it different from "please open a PR"
 
 **It reviews its own work, and the review is real.** Every review pass runs as *read-only
 subagents* — never in the session's own context, because a reviewer that shares the author's
-context inherits the author's blind spots. Several axes run in parallel (correctness,
+context inherits the author's blind spots. Up to five axes run in parallel (correctness,
 security, conformance to what was asked, the repo's conventions, and whether CI actually
-covers what changed), then **every blocking finding faces a skeptic whose job is to refute
-it**. Only what survives gets fixed. Refuted findings are dropped rather than "fixed anyway
-to be safe", which is how a clean diff acquires unexplained code.
+covers what changed) — which of them, from what the diff actually is, and as how many
+agents, from an effort level ship picks itself when none is given — then **every blocking
+finding faces a skeptic whose job is to refute it**. Only what survives gets fixed. Refuted
+findings are dropped rather than "fixed anyway to be safe", which is how a clean diff
+acquires unexplained code.
 
 **Nothing waits on an actor nobody starts.** There is no reviewer skill, no approval gate,
 and no stage that parks until someone shows up. That is deliberate: on a forge where the
