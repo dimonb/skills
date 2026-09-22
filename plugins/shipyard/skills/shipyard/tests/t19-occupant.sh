@@ -43,11 +43,12 @@ FAKE_ROOT="$TMP/repo"; FAKE_GIT="$TMP/gitdir"; MB="$FAKE_GIT/ship-escalations"
 KEYS="$TMP/keys"; C44="$TMP/c44"
 mkdir -p "$FAKE_ROOT" "$MB"
 : > "$MB/container-tmux"        # pinned where we resolve, so no `elsewhere` refusal
-for s in 41 42 43 44 45; do
+for s in 41 42 43 44 45 46; do
   mkdir -p "$FAKE_ROOT/.claude/worktrees/ship-$s/.pipeline-state"
   printf '{"pr_number":9%s,"state":"impl-review"}\n' "$s" >"$FAKE_ROOT/.claude/worktrees/ship-$s/.pipeline-state/PR-9$s.json"
 done
 printf '{"pr_number":945,"state":"ready-to-merge"}\n' >"$FAKE_ROOT/.claude/worktrees/ship-45/.pipeline-state/PR-945.json"
+printf '{"pr_number":946,"state":"needs-human"}\n'    >"$FAKE_ROOT/.claude/worktrees/ship-46/.pipeline-state/PR-946.json"
 export FAKE_ROOT FAKE_GIT KEYS C44
 
 # The slots, one per case:
@@ -56,7 +57,9 @@ export FAKE_ROOT FAKE_GIT KEYS C44
 #   43  no verdict: display-message fails — the backend could not say
 #   44  `none` once, then `agent`        — a launch caught between its shell and its exec
 #   45  `none` on every read, at ready-to-merge with its PR open — a FINISHED change whose agent
-#       exited after the hand-off: still finished, nothing to recover
+#       exited after the hand-off: still finished (merging needs no agent), with the exit annotated
+#   46  `none` like 41 (FAKE_OCC too), at needs-human — a class that is NOT `finished`: its dead
+#       agent must still read 💀, which is what pins "finished alone" in the exemption
 git() {
   case "${1:-} ${2:-}" in
     "rev-parse --show-toplevel")  printf '%s\n' "$FAKE_ROOT"; return 0 ;;
@@ -68,14 +71,14 @@ git() {
 tmux() {
   case "${1:-}" in
     list-windows) case "$*" in
-                    *window_index*) printf '1 ship-41\n2 ship-42\n3 ship-43\n4 ship-44\n5 ship-45\n' ;;
-                    *)              printf 'ship-41\nship-42\nship-43\nship-44\nship-45\n' ;;
+                    *window_index*) printf '1 ship-41\n2 ship-42\n3 ship-43\n4 ship-44\n5 ship-45\n6 ship-46\n' ;;
+                    *)              printf 'ship-41\nship-42\nship-43\nship-44\nship-45\nship-46\n' ;;
                   esac; return 0 ;;
     has-session)  return 0 ;;
     send-keys)    shift; printf '%s\n' "$*" >> "$KEYS"; return 0 ;;
     display-message)
       case "$*" in
-        *t19ex:1*) if [ "${FAKE_OCC:-dead}" = alive ]; then printf '0 claude\n'; else printf '0 zsh\n'; fi ;;
+        *t19ex:1*|*t19ex:6*) if [ "${FAKE_OCC:-dead}" = alive ]; then printf '0 claude\n'; else printf '0 zsh\n'; fi ;;
         *t19ex:2*) printf '0 claude\n' ;;
         *t19ex:3*) return 1 ;;
         *t19ex:5*) printf '0 zsh\n' ;;
@@ -96,7 +99,7 @@ export -f git tmux gh
 run_report() { # [args...] -> the report
   : > "$C44"
   SHIPYARD_MOTION_INTERVAL=0.01 SHIPYARD_STALL_SECS=1800 SHIPYARD_BACKEND=tmux SHIPYARD_SESSION=t19ex \
-    bash "$REPORT" "$@" 41 42 43 44 45 2>/dev/null
+    bash "$REPORT" "$@" 41 42 43 44 45 46 2>/dev/null
 }
 row() { printf '%s\n' "$1" | grep "^| $2 " | cut -d'|' -f5 | sed 's/^ *//; s/ *$//'; }
 block() { printf '%s\n' "$1" | sed -n "/^### $2/,/^###/p" | grep -o '^- `[0-9]*`' | tr -d '`- ' | tr '\n' ' ' | sed 's/ $//'; }
@@ -112,9 +115,12 @@ ok "41 (none, none) reads no agent"            "💀 no agent"  "$(row "$out" 41
 ok "42 (agent) is the ordinary idle row"       "⏸ idle/wait"  "$(row "$out" 42)"
 ok "43 (no verdict) is the ordinary idle row"  "⏸ idle/wait"  "$(row "$out" 43)"
 ok "44 (none, then agent) is not a death"      "⏸ idle/wait"  "$(row "$out" 44)"
-ok "45 (finished, no agent) stays finished"    "✅ finished"  "$(row "$out" 45)"
-ok "the NO AGENT block names 41 and only 41"   "41"           "$(block "$out" '💀 NO AGENT')"
+ok "45 (finished, no agent) stays finished"    "✅ finished (no agent)"  "$(row "$out" 45)"
+ok "the NO AGENT block names 41 and 46 only"    "41 46"          "$(block "$out" '💀 NO AGENT')"
 ok "45 is under WAITING FOR YOU as before"     "45"           "$(block "$out" '🙋 WAITING FOR YOU')"
+ok "...whose action says tell will refuse it"  yes \
+   "$(printf '%s\n' "$out" | sed -n '/^### 🙋 WAITING FOR YOU/,/^###/p' | grep '^- `45`' | grep -q 'refuse it with exit 8' && echo yes || echo no)"
+ok "46 (needs-human, no agent) is still no agent" "💀 no agent" "$(row "$out" 46)"
 ok "...and prescribes no nudge or compaction"  no \
    "$(printf '%s\n' "$out" | sed -n '/^### 💀 NO AGENT/,/^###/p' | grep -q 'bash .*shipyard-\(tell\|compact\)\.sh ' && echo yes || echo no)"
 
@@ -122,7 +128,7 @@ printf '\n── past the stall threshold: no verdict keeps today'"'"'s path ─
 backdate_stall 7200
 out=$(run_report)
 ok "STALLED names every live-or-unknown idle slot, never 41" "42 43 44" "$(block "$out" '🛑 STALLED')"
-ok "41 is still under NO AGENT"                              "41"       "$(block "$out" '💀 NO AGENT')"
+ok "41 and 46 are still under NO AGENT"                      "41 46"     "$(block "$out" '💀 NO AGENT')"
 
 printf '\n── --only-changed ──\n'
 rm -f "$MB/report-sig" "$MB/report-stall"

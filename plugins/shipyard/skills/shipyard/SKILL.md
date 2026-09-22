@@ -408,7 +408,7 @@ column and its own block, and is exempt from the stall clock:
 | `session` column | what it means | what to do |
 |---|---|---|
 | `⏳ rate-limited` / `⏳ overloaded` | the client announced a capacity wait, and has said nothing since | nothing — it resumes itself |
-| `✅ finished` | the slot graph says the change is concluded **and** ship's stage agrees | review and merge, or tell it what to change |
+| `✅ finished` | the slot graph says the change is concluded **and** ship's stage agrees | review and merge, or tell it what to change — unless the row adds `(no agent)`: then recover it before asking for changes (below) |
 | `🙋 needs you` | ship's stage is `needs-human`: it stopped on blockers it will not fix | read its record on the PR/MR and answer it |
 
 **None of those is ever a compaction trigger**, and each block says so. What is left — idle,
@@ -430,9 +430,15 @@ classifies, the report asks the backend which process owns each pane (`drv_occup
 
 It gets its own `💀 NO AGENT` block, is exempt from the stall clock, and bypasses `--only-changed`
 while it holds; `shipyard-tell.sh` and `shipyard-compact.sh` refuse such a slot with exit 8,
-typing nothing. One exception: a slot that is **finished** (`✅ finished` above) stays finished
-when its agent has exited — there is nothing to recover, so it keeps its row and its `completed`
-glyph. The reading is one-sided, and each side is wrong in a known way:
+typing nothing. One exception in the report: a slot that is **finished** (`✅ finished` above)
+stays finished when its agent has exited, and keeps its `completed` glyph — merging it needs no
+agent. Its row reads `✅ finished (no agent)` and its action says so, because `tell` and `compact`
+have no such exception: they still refuse it with exit 8, so **changing** a finished change whose
+agent is gone means recovering it first (Step 5). What makes a slot finished is its own stage and
+PR number, which the child writes — so a child that is told to change something and dies before
+re-recording its stage also lands here. That is not prevented; it is visible, in the `(no agent)`
+on the row and in the exit 8 the first `tell` gets. The reading is one-sided, and each side is
+wrong in a known way:
 
 * **No verdict claims nothing.** A backend that does not answer, or an agterm build that does not
   report the field, leaves the slot exactly where it was before this check existed — row, stall
@@ -703,7 +709,7 @@ has to say which question was actually answered before it may be read as a death
 |---|---|---|
 | **3** | the backend **answered**, does **not** list that slot, and is the one this fleet was launched on — the child is gone | recover the way Step 5 says: a FRESH session on the SAME worktree plus a handoff file. Teardown only after the merge (Step 6) |
 | **7** | the slot could not be **resolved**, for one of three reasons the refusal names — the backend did not answer; it is not the one this fleet was launched on; or it **still lists the slot**, so the per-slot lookup is what failed | **nothing about the slot.** Clear the backend question, then re-ask |
-| **8** | the slot **resolved** and its terminal is **up**, but on two reads the backend reports a shell prompt or an exited pane where the agent was launched — nothing was typed or recorded | recover the child as for 3; unlike 3 the terminal is still there to look at. The report shows the same slot as `💀 no agent` |
+| **8** | the slot **resolved** and its terminal is **up**, but on two reads the backend reports a shell prompt or an exited pane where the agent was launched — nothing was typed or recorded | recover the child as for 3; unlike 3 the terminal is still there to look at. The report shows the same slot as `💀 no agent` — or, for a finished change, `✅ finished (no agent)` |
 
 Exit 8 is the one to tell apart from 3: **3 is "no terminal", 8 is "a terminal with nobody in
 it".** A backend that cannot say who owns the pane never produces 8 — the directive then goes out

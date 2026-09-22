@@ -1059,9 +1059,20 @@ for slot in "${SLOTS[@]}"; do
   # the same question as an idle one, and `finished` alone — no other class: a capacity banner left
   # on a dead agent's screen is not a wait anybody will resume from — hands it back to the idle path
   # below, where it gets `✅ finished` and the graph's `completed` glyph exactly as before.
+  #
+  # WHAT DECIDES THIS, AND WHO CAN WRITE IT. `finished` is the child's own stage and PR number
+  # (its .pipeline-state) plus the slot graph's phase, which accepts that stage without the forge —
+  # so a child can reach this exemption from state it writes, and the likeliest way is innocent: a
+  # finished child told to change something, dying mid-rework before it re-records its stage. This
+  # does not PREVENT that; it is made SELF-REVEALING instead. The dead-agent fact is not dropped but
+  # annotated onto the row and the action (below), and shipyard-tell.sh and shipyard-compact.sh
+  # carry no such exemption, so acting on the slot still refuses with exit 8. What this suppresses
+  # is only the 💀 block and its recovery prescription — the same state already exempted this slot
+  # from 🛑 STALLED before #172.
+  finished_noagent=0
   if [ "$noagent" = 1 ] \
      && [ "$(shipyard_wait_state "$b" "$phase" "$stage" 2>/dev/null | cut -f2)" = finished ]; then
-    noagent=0; run="⏸ idle/wait"
+    noagent=0; finished_noagent=1; run="⏸ idle/wait"
   fi
   # `$pend = 0` for the same reason the stall condition below carries it: a slot with an open
   # escalation is already accounted for by the esc column and the escalation block, and it is
@@ -1076,6 +1087,10 @@ for slot in "${SLOTS[@]}"; do
       wait_action=$(printf '%s' "$wait_line" | cut -f4)
       run="$wait_label"
     fi
+  fi
+  if [ "$finished_noagent" = 1 ]; then
+    run="$run (no agent)"
+    [ -n "$wait_action" ] && wait_action="$wait_action Its agent has EXITED: merging needs nothing, but tell and compact refuse it with exit 8 — to change it, recover it first (SKILL.md, Step 5)."
   fi
 
   # --- stall detection -------------------------------------------------------
