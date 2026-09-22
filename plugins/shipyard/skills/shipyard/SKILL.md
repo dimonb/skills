@@ -25,7 +25,8 @@ Skill arguments (use `$shipyard` in Codex and `/shipyard` in Claude):
 * `shipyard 108 104` - continue existing MRs/PRs by number;
 * `shipyard "#42"` - start from an existing issue;
 * `shipyard "add X to Y"` - a brand-new change from a free-text idea, handed to ship as-is;
-* `shipyard 108 no-merge` - extra ship flags (`no-merge`, `merge`, `effort <level>`) go through verbatim;
+* `shipyard 108 no-merge` - extra ship flags (`no-merge`, `merge`, `effort <level>`) go through verbatim:
+  they are your words to ship, and shipyard adds none of its own;
 * `shipyard` - no arguments: monitor-only over the ship terminals that already exist (Step 0).
 
 Run it from the **main worktree** of a git repo.
@@ -133,10 +134,20 @@ started from inside an agterm session captures those and hands them to every pro
 ever spawns, so a child's status hook would report against whichever session happened to
 start tmux.
 
-**Child reasoning effort.** A Claude child runs at `--effort max` unless `SHIPYARD_EFFORT` names
-another level (`low`, `medium`, `high`, `xhigh`, `max`), read at launch and printed on the launch
-line. Lower it for mechanical work — a comment pay-down or a rename touches hundreds of steps, and
-each one pays for maximum thinking. An unusable value falls back to `max` and says so on stderr.
+**Review depth, battery size and reasoning effort are ship's decisions, not shipyard's.** The
+launcher does not know what a change is; ship does, once its discovery step has run, and it sizes
+its own effort and its own review battery from the substance of the diff. So a Claude child is
+launched with **no `--effort` flag** — the runtime's default applies and ship chooses for itself —
+and nothing in this skill sets, defaults or recommends a level. It used to be `--effort max` for
+every child, which was the launcher deciding, for every change, that the child should think at
+maximum on every step.
+
+`SHIPYARD_EFFORT` (`low`, `medium`, `high`, `xhigh`, `max`) is an operator's explicit override and
+nothing more. It is read at launch, printed on the launch line as `effort: <level>
+(SHIPYARD_EFFORT)` — `effort: runtime default (ship decides)` when it is unset — and recorded in
+`<mailbox>/launch-<slot>.json`. An unusable value is not corrected to a level shipyard picked: it
+means no flag, and says so on stderr. Ship flags you type (`effort <level>` among them) go through
+verbatim because they are your words, not shipyard's.
 
 ## A slot
 
@@ -212,8 +223,9 @@ What it launches:
 codex --approve-for-me -C .claude/worktrees/ship-<slot> \
   'Read <protocol>; then invoke $ship <target> [flags]'
 
-# From a Claude parent:
-claude -w ship-<slot> --effort max -n ship-<slot> --permission-mode auto \
+# From a Claude parent (no --effort: that is ship's to choose; `--effort <level>` appears
+# only when SHIPYARD_EFFORT names one):
+claude -w ship-<slot> -n ship-<slot> --permission-mode auto \
   --remote-control ship-<slot> --append-system-prompt "$(cat <mailbox>/protocol-<slot>.md)" \
   '/ship <target> [flags]'
 ```

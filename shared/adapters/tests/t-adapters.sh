@@ -158,7 +158,7 @@ render() { # <pair> — the exact knobs the named caller sets for that kind
     council-agy)     ( ADP_APPROVAL=sandboxed ADP_DIRS=$DIRS ADP_PROTOCOL=$PROTO \
                        ADP_PROMPT="Follow this protocol literally. Begin."
                        adp_cmd agy ) ;;
-    shipyard-claude) ( ADP_APPROVAL=full ADP_NAME=ship-42 ADP_EFFORT=max ADP_PROTOCOL=$PROTO \
+    shipyard-claude) ( ADP_APPROVAL=full ADP_NAME=ship-42 ADP_PROTOCOL=$PROTO \
                        ADP_PROMPT='/ship #42'
                        adp_cmd claude ) ;;
     shipyard-codex)  ( ADP_APPROVAL=full ADP_CWD="$FX/work tree" \

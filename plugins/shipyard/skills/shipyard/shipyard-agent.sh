@@ -124,18 +124,35 @@ shipyard_agent_env_scrub_default() {
 # `full` approval, not `sandboxed`: a shipyard child `-C`s into its own worktree and drives a
 # whole change end to end unattended. council takes `sandboxed` for the opposite reason. The two
 # values are the one thing this unification must not flatten, so both are asserted in the suites.
-# The child's reasoning effort: `max` unless SHIPYARD_EFFORT names another. A mechanical change
-# does not need max, and pays for it on every step. An unusable value falls back, loudly.
+#
+# The child's reasoning effort is NOT shipyard's to choose. The launcher does not know what the
+# change is; ship does, after its discovery step, and it sizes its own effort and its own review
+# battery from that. So a child is launched with NO --effort flag — the runtime's default applies
+# and ship decides for itself — unless SHIPYARD_EFFORT names a level, which is an operator's
+# explicit override and nothing more. It used to default to `max`, which was this launcher
+# deciding, for every change, that the child should think at maximum on every step. An unusable
+# value is not corrected to a level shipyard picked: it means no flag, and says so on stderr.
+# Prints the level, or nothing.
 shipyard_child_effort() {
   case "${SHIPYARD_EFFORT:-}" in
     low|medium|high|xhigh|max) printf '%s' "$SHIPYARD_EFFORT" ;;
-    '') printf 'max' ;;
+    '') ;;
     *)
-      printf 'shipyard: SHIPYARD_EFFORT=%s is not low|medium|high|xhigh|max; using max\n' \
+      printf 'shipyard: SHIPYARD_EFFORT=%s is not low|medium|high|xhigh|max; passing no --effort\n' \
         "$SHIPYARD_EFFORT" >&2
-      printf 'max'
       ;;
   esac
+}
+
+# What the launch line prints and launch-<slot>.json records about it: the level and that the
+# operator set it, or that no flag was passed and the choice is ship's. The stderr note for an
+# unusable value is emitted where the launcher is rendered (shipyard_agent_exec), so it is
+# silenced here rather than printed twice.
+shipyard_child_effort_summary() {
+  local level
+  level=$(shipyard_child_effort 2>/dev/null)
+  if [ -n "$level" ]; then printf '%s (SHIPYARD_EFFORT)' "$level"
+  else printf 'runtime default (ship decides)'; fi
 }
 
 shipyard_agent_exec() {

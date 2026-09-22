@@ -32,6 +32,8 @@
 #   SHIPYARD_SESSION    tmux session name    (default: <repo>)
 #   SHIPYARD_ENV_PASS   env vars copied from THIS session into the child (default:
 #                 CODEX_HOME for Codex; CLAUDE_HOME CLAUDE_CONFIG_DIR for Claude)
+#   SHIPYARD_EFFORT     low|medium|high|xhigh|max: an explicit --effort for a Claude child
+#                 (default: none — no flag is passed, and ship chooses its own effort)
 #   SHIPYARD_FORCE=1    allow a second terminal for the same numeric slot
 #   SHIPYARD_DRY=1      print the slot, protocol path and command; start nothing
 set -o pipefail
@@ -298,12 +300,14 @@ LAUNCHER="$MB/launch-$SLOT.sh"
 chmod +x "$LAUNCHER"
 
 ENVSUM=$(shipyard_env_summary "$AGENT")
+EFFORTSUM=$(shipyard_child_effort_summary)
 
 if [ "${SHIPYARD_DRY:-}" = 1 ]; then
   echo "dry-run: agent $AGENT, backend $BACKEND, $KIND $CONTAINER, terminal $NAME (worktree .claude/worktrees/$NAME)"
   echo "dry-run: protocol $PROTO"
   echo "dry-run: launcher $LAUNCHER"
   echo "dry-run: env      $ENVSUM"
+  echo "dry-run: effort   $EFFORTSUM"
   printf '%s\n' "$ADMISSION" | sed 's/^/dry-run: /'
   sed -n '3,$p' "$LAUNCHER" | sed 's/^/dry-run| /'
   echo "SLOT:$SLOT"
@@ -328,10 +332,10 @@ shipyard_launch "$SLOT" "$CWD" "$LAUNCHER" || {
 # question — a fake escalation that never resolves and keeps the monitor alive.
 jq -n --arg slot "$SLOT" --arg agent "$AGENT" --arg backend "$BACKEND" --arg container "$CONTAINER" \
       --arg prompt "$PROMPT" --arg proto "$PROTO" --arg launcher "$LAUNCHER" \
-      --arg env "$ENVSUM" --arg cwd "$CWD" --arg now "$(shipyard_now)" \
+      --arg env "$ENVSUM" --arg effort "$EFFORTSUM" --arg cwd "$CWD" --arg now "$(shipyard_now)" \
   '{id:("launch-"+$slot), slot:$slot, kind:"launch", status:"info",
     agent:$agent, backend:$backend, container:$container, prompt:$prompt,
-    protocol:$proto, launcher:$launcher, env:$env, cwd:$cwd, started_at:$now}' \
+    protocol:$proto, launcher:$launcher, env:$env, effort:$effort, cwd:$cwd, started_at:$now}' \
   >"$MB/launch-$SLOT.json" 2>/dev/null
 
 shipyard_note "$SLOT" active
@@ -345,5 +349,5 @@ fi
 
 echo "started $AGENT ship in $(shipyard_where "$SLOT") (worktree .claude/worktrees/$NAME) - $PROMPT"
 echo "env: $ENVSUM"
-echo "effort: $(shipyard_child_effort 2>/dev/null)"
+echo "effort: $EFFORTSUM"
 echo "SLOT:$SLOT"

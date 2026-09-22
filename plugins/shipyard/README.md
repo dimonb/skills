@@ -195,10 +195,10 @@ starts nothing.
 
 Environment knobs: `SHIPYARD_AGENT`, `SHIPYARD_BACKEND`, `SHIPYARD_WORKSPACE`, `SHIPYARD_SESSION`,
 `SHIPYARD_ENV_PASS`, `SHIPYARD_ENV_SCRUB`, `SHIPYARD_SLOT`, `SHIPYARD_FORCE`, `SHIPYARD_DRY`,
-`SHIPYARD_MAX_SLOTS`, `SHIPYARD_MEM_MIN_FREE_PCT`, `SHIPYARD_STALL_SECS`, `SHIPYARD_CTX_WINDOW`,
-`SHIPYARD_TELL_MAXLINE`, `SHIPYARD_TELL_CONFIRM_SECS`, `SHIPYARD_TELL_CONFIRM_INTERVAL`,
-`SHIPYARD_TELL_SETTLE_DELAY`, `SHIPYARD_MOTION_INTERVAL`, `SHIPYARD_ASK_TIMEOUT`,
-`SHIPYARD_DOWN_FETCH`, `SHIPYARD_AUTODOWN`, `SHIPYARD_AUTODOWN_TICKS`.
+`SHIPYARD_EFFORT`, `SHIPYARD_MAX_SLOTS`, `SHIPYARD_MEM_MIN_FREE_PCT`, `SHIPYARD_STALL_SECS`,
+`SHIPYARD_CTX_WINDOW`, `SHIPYARD_TELL_MAXLINE`, `SHIPYARD_TELL_CONFIRM_SECS`,
+`SHIPYARD_TELL_CONFIRM_INTERVAL`, `SHIPYARD_TELL_SETTLE_DELAY`, `SHIPYARD_MOTION_INTERVAL`,
+`SHIPYARD_ASK_TIMEOUT`, `SHIPYARD_DOWN_FETCH`, `SHIPYARD_AUTODOWN`, `SHIPYARD_AUTODOWN_TICKS`.
 
 The last two of the `TELL`/`MOTION` group are timing: `SHIPYARD_MOTION_INTERVAL` (default 3) is
 how long the report waits between the two captures of its motion diff, paid once per live slot
@@ -231,6 +231,10 @@ watcher.
 percentage is measured against. Without it the window is inferred from the largest total the
 child's transcript has ever carried — a request that carried N tokens cannot have run on a
 window smaller than N — and the override beats that inference in both directions.
+
+`SHIPYARD_EFFORT` (unset by default) is an operator's explicit `--effort` level for a Claude
+child. Unset, the child is launched with no such flag: how hard to think and how deep to review
+are `ship`'s decisions, made after its discovery step, and `shipyard` does not pre-empt them.
 
 Three more are worth knowing about. `SHIPYARD_AGENT=auto|codex|claude` defaults to matching the
 parent runtime; set it explicitly only when invoking the scripts from a shell with no parent
