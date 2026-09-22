@@ -81,7 +81,7 @@ tmux() {
         *t19ex:1*|*t19ex:6*) if [ "${FAKE_OCC:-dead}" = alive ]; then printf '0 claude\n'; else printf '0 zsh\n'; fi ;;
         *t19ex:2*) printf '0 claude\n' ;;
         *t19ex:3*) return 1 ;;
-        *t19ex:5*) printf '0 zsh\n' ;;
+        *t19ex:5*) if [ "${FAKE_OCC45:-dead}" = alive ]; then printf '0 claude\n'; else printf '0 zsh\n'; fi ;;
         # An EMPTY counter file is the first read — the runners truncate it — so default the empty
         # read too, not just a missing file. Without that the first read was `agent` and the case
         # proved nothing: the one-read-is-enough mutation survived it, which is how this was found.
@@ -140,6 +140,19 @@ ok "the tick it clears is news too"                   yes "$(has "$out" '^| 41 '
 ok "...with no block left"                            no  "$(has "$out" '### 💀 NO AGENT')"
 out=$(FAKE_OCC=alive run_report --only-changed)
 ok "and then the filter is silent again"              ""  "$out"
+
+# A FINISHED slot's agent dying gets no 💀 block and so no bypass — only the signature can make it
+# news. Without `fna=` in it the death changed nothing the filter sees and the monitor printed
+# nothing at all, while the comment and SKILL.md called the state visible.
+rm -f "$MB/report-sig" "$MB/report-stall"
+FAKE_OCC=alive FAKE_OCC45=alive run_report --only-changed >/dev/null
+out=$(FAKE_OCC=alive FAKE_OCC45=alive run_report --only-changed)
+ok "all alive: the filter is silent"                          ""  "$out"
+out=$(FAKE_OCC=alive FAKE_OCC45=dead run_report --only-changed)
+ok "a finished slot's agent dying breaks the silence"         yes "$(has "$out" '^| 45 .*✅ finished (no agent)')"
+ok "...as a finished row, with no 💀 block"                   no  "$(has "$out" '### 💀 NO AGENT')"
+out=$(FAKE_OCC=alive FAKE_OCC45=dead run_report --only-changed)
+ok "...and once: the next tick is silent again"               ""  "$out"
 
 run_tell() { # <args...> -> output, then "rc=<n>"
   local out rc=0

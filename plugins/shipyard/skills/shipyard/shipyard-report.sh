@@ -9,7 +9,8 @@
 # --only-changed prints NOTHING while the meaningful state is the same as the last
 # printed report, so a child parked in idle-wait for hours stops generating identical
 # tables. Meaningful = slot, MR iid, terminal present, MR state, pipeline stage, open
-# escalation count, the ctx BAND, the WAIT CLASS, and the REAP class (see the stall section
+# escalation count, the ctx BAND, the WAIT CLASS, the REAP class, and whether the agent is still
+# in its terminal (`noagent=`, and `fna=` for a finished slot — see drv_occupant) (see the stall section
 # below — entering or leaving a stated wait is news, and it is news exactly once, which is what
 # makes suppressing the stall block for it cost the operator nothing).
 # THE REAP CLASSES DO NOT RIDE THE SIGNATURE. A torn-down, held or refused slot bypasses this
@@ -1065,10 +1066,14 @@ for slot in "${SLOTS[@]}"; do
   # so a child can reach this exemption from state it writes, and the likeliest way is innocent: a
   # finished child told to change something, dying mid-rework before it re-records its stage. This
   # does not PREVENT that; it is made SELF-REVEALING instead. The dead-agent fact is not dropped but
-  # annotated onto the row and the action (below), and shipyard-tell.sh and shipyard-compact.sh
-  # carry no such exemption, so acting on the slot still refuses with exit 8. What this suppresses
-  # is only the 💀 block and its recovery prescription — the same state already exempted this slot
-  # from 🛑 STALLED before #172.
+  # annotated onto the row and the action (below), carried in the signature as `fna=` so the tick the
+  # agent dies breaks --only-changed silence once, and shipyard-tell.sh and shipyard-compact.sh carry
+  # no such exemption, so acting on the slot still refuses with exit 8. What this suppresses is the
+  # 💀 block, its recovery prescription and its every-tick repetition, and the `blocked` glyph (the
+  # graph's `completed` stays) — the same state already exempted this slot from 🛑 STALLED before
+  # #172. The route that still bypasses it: an ad-hoc report run beside the monitor that consumes
+  # the one silence-breaking tick, leaving the monitor a table where only the row says `(no agent)`
+  # — the same hazard the header documents for a teardown.
   finished_noagent=0
   if [ "$noagent" = 1 ] \
      && [ "$(shipyard_wait_state "$b" "$phase" "$stage" 2>/dev/null | cut -f2)" = finished ]; then
@@ -1155,8 +1160,10 @@ for slot in "${SLOTS[@]}"; do
   # IS meaningful: entering or leaving a stated wait is exactly the tick worth breaking silence
   # for, and it is the news the first time it appears, which is why it is not left to the (now
   # suppressed) stall block to announce. `noagent=` is there for the tick it CLEARS: the 💀 block
-  # bypasses the filter while it holds, so only the signature can make its ending news.
-  SIG+=("$slot|$mr_label|term=1|$state|$stage|$pend|$sig_band|$wait_class|$reap_note|noagent=$noagent")
+  # bypasses the filter while it holds, so only the signature can make its ending news. `fna=` is
+  # there for a FINISHED slot whose agent exited: it gets no 💀 block and no bypass, so without it
+  # that death would change nothing the filter sees and the monitor would never print it.
+  SIG+=("$slot|$mr_label|term=1|$state|$stage|$pend|$sig_band|$wait_class|$reap_note|noagent=$noagent|fna=$finished_noagent")
   :
 done
 

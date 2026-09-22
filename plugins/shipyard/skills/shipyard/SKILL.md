@@ -436,9 +436,12 @@ agent. Its row reads `✅ finished (no agent)` and its action says so, because `
 have no such exception: they still refuse it with exit 8, so **changing** a finished change whose
 agent is gone means recovering it first (Step 5). What makes a slot finished is its own stage and
 PR number, which the child writes — so a child that is told to change something and dies before
-re-recording its stage also lands here. That is not prevented; it is visible, in the `(no agent)`
-on the row and in the exit 8 the first `tell` gets. The reading is one-sided, and each side is
-wrong in a known way:
+re-recording its stage also lands here. That is not prevented; it is made visible instead. The
+`(no agent)` on the row, carried in the `--only-changed` signature so the monitor prints the tick
+the agent dies once (not on every tick, as `💀` does), and the exit 8 the first `tell` gets. What
+it gives up is the `💀` block, its repetition and the `blocked` glyph. One route still bypasses it:
+an ad-hoc report run beside the monitor can consume that one tick. The reading is one-sided, and
+each side is wrong in a known way:
 
 * **No verdict claims nothing.** A backend that does not answer, or an agterm build that does not
   report the field, leaves the slot exactly where it was before this check existed — row, stall
