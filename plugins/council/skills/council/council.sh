@@ -202,15 +202,20 @@ case "$VERB" in
   claims) . "$SKILL/lib/verbs.sh"; v_claims "$@" ;;
   verdict) . "$SKILL/lib/verbs.sh"; v_verdict "$@" ;;
   # `status` is a reading verb that also WRITES on one path: a floor held past the stall threshold
-  # pushes a de-duplicated notice into the shared escalation mailbox (see _stall_escalate). It asks
-  # such a seat's terminal why it is not moving, through the two shared modules that already answer
-  # that for shipyard — lib/policy.sh for the disposition, the operator sentence and the mailbox,
-  # lib/agent-adapters.sh for what a client renders and which kinds that read is evidenced for.
+  # pushes a de-duplicated notice into the shared escalation mailbox, under the key of whichever
+  # tier it reached (see _stall_escalate). It asks such a seat's terminal what it is doing, through
+  # the two shared modules that already answer that for shipyard — lib/policy.sh for the
+  # disposition, the operator sentence and the mailbox, lib/agent-adapters.sh for what a client
+  # renders, which kinds that read is evidenced for, and whether a turn is in flight.
   # lib/term.sh, the capture itself, is NOT sourced here: _floor_screen sources it on demand, after
   # the guard that skips rooms with no terminals, because sourcing it resolves a terminal backend
   # and every `status` would otherwise pay for that. The helpers test `command -v` for each, so a
   # caller that sources only verbs.sh degrades to the plain stall alarm instead of erroring.
+  # lib/knobs.sh joins them for `_stall_hard_secs`, which reads the backstop threshold: validating
+  # an operator-set whole number is the shared engine's job (shared/knobs), not a fourth hand-rolled
+  # digit test. It is pure and forkless, so it costs this verb nothing.
   status) . "$SKILL/lib/verbs.sh"; . "$SKILL/lib/policy.sh"; . "$SKILL/lib/agent-adapters.sh"
+          . "$SKILL/lib/knobs.sh"
           v_status "$@" ;;
   # Sources term.sh itself, on demand, inside _room_terminals — the same deferral `status` uses,
   # so a room with no container pin never resolves a terminal backend to be told it has none.

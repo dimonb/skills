@@ -82,6 +82,51 @@ printf '%s\n' \
 QUIET="$COUNCIL_TEST_ROOT/screen-quiet"
 printf '%s\n' 'Waiting.' > "$QUIET"
 
+# The turn-state screens (#188). What these pin is the WIRING — that a client's own mid-turn
+# marker reclassifies the alarm's tier and can never remove either of its outputs. The ANCHOR is
+# somebody else's to pin, and is: shared/adapters/tests/t-turn.sh drives the real read against
+# verbatim captures of both clients, with their provenance in fixtures/panes.notes. These are
+# minimal screens carrying the marker where that capture records it — the footer for the first
+# kind, a column-one service line for the second — in the same spirit as the banner screens above.
+#
+# THEY ARE WRITTEN OUT, NOT BUILT FROM THE MODULE'S CONSTANTS, and that is not laziness avoided by
+# accident: a fixture composed from the same expression it guards passes whatever that expression
+# becomes, so it asserts nothing. One such fixture shipped in this tree and was caught by its own
+# author. If a client's marker changes, this file should go red and be re-derived from a capture.
+RUNNING="$COUNCIL_TEST_ROOT/screen-running"
+printf '%s\n' \
+  '⏺ Weighing the third option' \
+  '  ⏵⏵ esc to interrupt' > "$RUNNING"
+
+QUEUED="$COUNCIL_TEST_ROOT/screen-queued"
+printf '%s\n' \
+  '⏺ Still on the second option' \
+  '• Messages to be submitted (1)' > "$QUEUED"
+
+# ADVERSARIAL: a seat that simply SAYS the words. The footer anchor is positional, so prose that
+# lands on the last non-empty line reads as mid-turn — a council seat arguing about this very
+# feature is exactly the agent that produces it. The pair of cases below is the honest statement
+# of what that buys and what it does not.
+FORGED="$COUNCIL_TEST_ROOT/screen-forged"
+printf '%s\n' \
+  '⏺ The line the monitor reads is this one: esc to interrupt' > "$FORGED"
+
+# An unreadable pane. `unknown` is what a FAILED capture returns as well as a blank screen, so it
+# is an absence of evidence and must never buy the calmer wording.
+EMPTY="$COUNCIL_TEST_ROOT/screen-empty"
+: > "$EMPTY"
+
+# Re-age a room built by `stalled_room`, whose floor otherwise reads as held for 7200s — past the
+# 5400s backstop, where the pane can no longer pick the tier. Every case that exercises the turn-state
+# tier needs a room UNDER that backstop, and hard-coding one age into the helper is what would make
+# these cases pass for the wrong reason.
+age_room_to() { # <dir> <seconds-held>
+  local room="$1" secs="$2"
+  jq --argjson cms "$(( 10#${EPOCHREALTIME/./} / 1000 - secs * 1000 ))" \
+     '.created_ms = $cms' "$room/roster.json" > "$room/roster.tmp" \
+    && mv "$room/roster.tmp" "$room/roster.json"
+}
+
 # --- 1. THE INVARIANT: a recognised banner annotates the alarm and does not remove it -------
 # If this pair ever goes green the other way round, the feature has become a way for a seat to
 # report itself healthy. The notice count is half the assertion: the push is the channel that
@@ -103,7 +148,7 @@ ok "...labelled a quote, not a verdict"      1 "$(printf '%s' "$out" | grep -c '
 # rate_limited banner" — the same output asserting and denying the same fact, on the one path the
 # feature exists for, with the suite green because it only ever asserted each sentence separately.
 ok "...without denying its own annotation"   0 \
-   "$(printf '%s' "$out" | grep -c 'Nothing this check recognises')"
+   "$(printf '%s' "$out" | grep -c 'Nothing on this seat.s pane explains it')"
 # The annotation travels with the notice, so the person woken at 3am gets the same evidence as the
 # person reading the console.
 body=$(cat "$(ls "$POLICY_MAILBOX_DIR"/council-t22a-*.json | head -1)")
@@ -163,7 +208,7 @@ ok "...and says a prompt is answered in place" 1 "$(printf '%s' "$out" | grep -c
 ok "...and scopes relaunch to a dead seat"   1 "$(printf '%s' "$out" | grep -c 'only for a seat that is genuinely dead')"
 # It claims only what it checked. The commonest wedge puts the reason on the terminal in plain
 # words this code cannot read, so "nothing on its terminal says why" would be false.
-ok "...claiming only what it checked"        1 "$(printf '%s' "$out" | grep -c 'Nothing this check recognises')"
+ok "...claiming only what it checked"        1 "$(printf '%s' "$out" | grep -c 'Nothing on this seat.s pane explains it')"
 
 # --- 5. the push: a stall reaches the shared mailbox, once ---------------------------------
 ok "a stall pushes a notice"                 1 "$(notices t22g)"
@@ -269,13 +314,198 @@ ok "an unnamed floor degrades to the room"   0 \
 # Every case above replaces the capture. This one does not: a pinned container makes _floor_screen
 # take its production path, sourcing term.sh and calling ct_capture for real. Whatever the backend
 # answers — and on a machine with none it answers nothing — the alarm and the push must both still
-# happen, because the read can only ever annotate.
+# happen. Not because the read "only annotates" (since #188 it also picks the tier) but because
+# every answer it can give is at least as loud as no answer at all: an unreadable pane declines
+# the calm tier and lands on `🛑 STALL`, which is what this asserts.
 R11="$COUNCIL_TEST_ROOT/t22m"; stalled_room "$R11" claude alpha beta
 printf 'no-such-container\n' > "$R11/state/container-tmux"
 printf 'no-such-container\n' > "$R11/state/container-agterm"
 out=$(COUNCIL_ROOM="$R11" bash "$CLI" status 2>&1)
 ok "the real capture path still alarms"      1 "$(printf '%s' "$out" | grep -c '🛑 STALL')"
 ok "...and still pushes"                     1 "$(notices t22m)"
+
+# --- 10. the turn-state tier: a working seat is named as one, and is still reported ---------
+# #188: at 900s this alarm fired on every healthy long turn — single turns on real rooms measured
+# at 24, 51, 55 and 84 minutes — so `🛑 STALL` and a pushed notice both landed on seats that were
+# thinking. The issue proposed GATING the alarm on turn state. That is the forbidden shape, and
+# every case here exists to keep it forbidden: the pane is the seat's own to write, so a gate would
+# let a seat silence the supervisor's alarm about itself. What ships instead is a reclassification
+# plus a backstop that reads no pane at all.
+#
+# THE PAIR THAT MATTERS is 10a with 10b. Separately each is satisfiable by a broken design — 10a
+# alone passes if the alarm was simply deleted, 10b alone passes if the tier was never built. Only
+# together do they say: the line changed, and nothing went quiet.
+
+# 10a. Below the backstop, a client that says it is mid-turn changes the GLYPH and the SENTENCE.
+R12="$COUNCIL_TEST_ROOT/t22p"; stalled_room "$R12" claude alpha beta; age_room_to "$R12" 1000
+out=$(COUNCIL_ROOM="$R12" COUNCIL_WAIT_SCREEN_FILE="$RUNNING" bash "$CLI" status 2>&1)
+ok "a mid-turn seat is named a long turn"    1 "$(printf '%s' "$out" | grep -c '⏳ LONG TURN')"
+ok "...and is not called a stopped room"     0 "$(printf '%s' "$out" | grep -c '🛑 STALL')"
+# EVIDENCE, NOT A VERDICT — the same labelling the banner annotation is held to, because it is the
+# same untrusted pane.
+ok "...labelled a quote, not a verdict"      1 "$(printf '%s' "$out" | grep -c 'not a verdict')"
+# And it says when the alarm comes anyway, so a reader knows this is a delay and not a dismissal.
+ok "...naming the backstop it will hit"      1 "$(printf '%s' "$out" | grep -c 'it is raised as a stall whatever the pane says')"
+# AND NAMING IT WITHOUT CARRYING THE LOUD GLYPH. A supervisor's fast loop greps this channel, so a
+# `🛑` inside the calm sentence matches a healthy turn and reinstates the noise #188 is about —
+# through the wording of its own fix. The assertion above already went red for exactly that.
+# 10b. ...AND NOTHING WENT QUIET. The push is the same event's other output, and #188's own care
+#      note names the trap: an earlier or more frequent push can consume the key a later one needs.
+ok "...and the push still happens"           1 "$(notices t22p)"
+ok "...under the long-turn key"              1 \
+   "$(grep -lF '[longturn:alpha:0]' "$POLICY_MAILBOX_DIR"/council-t22p-1.json 2>/dev/null | wc -l | tr -d ' ')"
+ok "...and NOT under the stall key"          0 \
+   "$(grep -lF '[stall:alpha:0]' "$POLICY_MAILBOX_DIR"/council-t22p-1.json 2>/dev/null | wc -l | tr -d ' ')"
+# The notice must not send a supervisor to look at a seat that is working — that is the noise the
+# issue was filed about — while still carrying the bound.
+body=$(cat "$POLICY_MAILBOX_DIR/council-t22p-1.json" 2>/dev/null)
+ok "...the notice says there is nothing to do yet" 1 "$(printf '%s' "$body" | grep -c 'nothing to do yet')"
+ok "...and quotes the backstop"                    1 "$(printf '%s' "$body" | grep -c 'at 5400s')"
+# THE CHANNEL IS THE POINT, AND NOTHING PINNED IT UNTIL NOW. `⏳ LONG TURN` is on the alarms line
+# deliberately: moved to the block, it would be a line the pane can keep from a supervisor
+# entirely, which is the suppression this whole tier is built to avoid. Both sibling tiers are
+# pinned this way (`t27-monitor.sh` for `🛑 STALL`, and the `quiet:` line for the block), so this
+# one was the odd one out — verified by hand during review, asserted by nothing, which is the gap
+# that lets a refactor move it off the fast channel and stay green.
+ao=$(COUNCIL_ROOM="$R12" COUNCIL_WAIT_SCREEN_FILE="$RUNNING" bash "$CLI" status --alarms-only 2>&1)
+ok "...and it reaches --alarms-only"               1 "$(printf '%s' "$ao" | grep -c '⏳ LONG TURN')"
+ok "...on the alarms line, not the block"          1 "$(printf '%s' "$ao" | grep -c 'alarms:.*⏳ LONG TURN')"
+# ...and it keeps breaking `--only-changed`'s silence while it HOLDS, not once when it arrives. A
+# room whose seat is thinking moves none of the signature's terms by definition, so a filter that
+# suppressed a standing alarm would go quiet exactly while the tier is true. Asserted on two
+# consecutive ticks, because a single tick passes under both designs and pins neither.
+oc1=$(COUNCIL_ROOM="$R12" COUNCIL_WAIT_SCREEN_FILE="$RUNNING" bash "$CLI" status --only-changed 2>&1)
+oc2=$(COUNCIL_ROOM="$R12" COUNCIL_WAIT_SCREEN_FILE="$RUNNING" bash "$CLI" status --only-changed 2>&1)
+ok "...and survives --only-changed on tick N"      1 "$(printf '%s' "$oc1" | grep -c '⏳ LONG TURN')"
+ok "...and on tick N+1, unchanged"                 1 "$(printf '%s' "$oc2" | grep -c '⏳ LONG TURN')"
+
+# 10c. THE BACKSTOP, on the very same room and the very same screen. This is what makes the
+#      reclassification an annotation rather than a suppression: past it the read is not consulted,
+#      so no arrangement of a seat's own pane keeps `🛑 STALL` away for ever.
+age_room_to "$R12" 7200
+out=$(COUNCIL_ROOM="$R12" COUNCIL_WAIT_SCREEN_FILE="$RUNNING" bash "$CLI" status 2>&1)
+ok "past the backstop it is a stall again"   1 "$(printf '%s' "$out" | grep -c '🛑 STALL')"
+ok "...and no longer a long turn"            0 "$(printf '%s' "$out" | grep -c '⏳ LONG TURN')"
+# THE ASSERTION THIS WHOLE SECTION IS FOR. A shared de-duplication key would have let 10a's notice
+# consume 10c's, so the backstop would print on a console nobody is reading and push nothing —
+# silence bought by the calmer tier, which is exactly the trap #188's care note names.
+ok "...and the backstop pushes its own notice" 2 "$(notices t22p)"
+ok "...under the stall key"                    1 \
+   "$(grep -lF '[stall:alpha:0]' "$POLICY_MAILBOX_DIR"/council-t22p-2.json 2>/dev/null | wc -l | tr -d ' ')"
+
+# 10d. A FORGED marker buys the calmer line, and that is stated rather than hidden. The footer
+#      anchor is positional, so a seat whose last line of prose carries the words reads as
+#      mid-turn — and a seat arguing about this feature writes exactly that line. What it cannot
+#      buy is silence: the push still happens, and the backstop still arrives.
+R13="$COUNCIL_TEST_ROOT/t22q"; stalled_room "$R13" claude alpha beta; age_room_to "$R13" 1000
+out=$(COUNCIL_ROOM="$R13" COUNCIL_WAIT_SCREEN_FILE="$FORGED" bash "$CLI" status 2>&1)
+ok "a seat can talk its way into the calmer tier" 1 "$(printf '%s' "$out" | grep -c '⏳ LONG TURN')"
+ok "...but not out of the push"                   1 "$(notices t22q)"
+age_room_to "$R13" 7200
+out=$(COUNCIL_ROOM="$R13" COUNCIL_WAIT_SCREEN_FILE="$FORGED" bash "$CLI" status 2>&1)
+ok "...and not past the backstop"                 1 "$(printf '%s' "$out" | grep -c '🛑 STALL')"
+
+# 10d-bis. A CLOSED ROOM IS NEVER RECLASSIFIED, and this is #188's care note (b) — the one the
+#     rest of this file already pins at 7200s in case 6. A closure is `board/status` plus
+#     `board/decision.md`, two files a participant writes in its own room, and a closed room
+#     ALREADY pushes nothing (`_stall_escalate` returns on `c_recorded_status`). So if the calm
+#     tier were reachable there, a seat could forge a closure, print its client's marker, and
+#     leave the console line — its last remaining loud output — reading `⏳ LONG TURN`.
+#
+#     IT MUST BE PINNED AT AN AGE UNDER THE BACKSTOP, which is exactly what case 6 cannot do:
+#     `stalled_room` ages to 7200s, past 5400, where the pane is not consulted for the tier at
+#     all — so case 6 stayed green through this regression and would have kept doing so. A test
+#     that only exercises the path on the far side of a new threshold is not a test of the near
+#     side. Both ages are asserted here for that reason.
+R12B="$COUNCIL_TEST_ROOT/t22pb"; stalled_room "$R12B" claude alpha beta; age_room_to "$R12B" 1000
+mkdir -p "$R12B/board"; printf 'decided' > "$R12B/board/status"
+printf '# decision\n\nstatus: **decided**\n' > "$R12B/board/decision.md"
+out=$(COUNCIL_ROOM="$R12B" COUNCIL_WAIT_SCREEN_FILE="$RUNNING" bash "$CLI" status 2>&1)
+ok "a closed room under the backstop still stalls" 1 "$(printf '%s' "$out" | grep -c '🛑 STALL')"
+ok "...and is never called a long turn"            0 "$(printf '%s' "$out" | grep -c '⏳ LONG TURN')"
+ok "...and still pushes nothing"                   0 "$(notices t22pb)"
+age_room_to "$R12B" 7200
+out=$(COUNCIL_ROOM="$R12B" COUNCIL_WAIT_SCREEN_FILE="$RUNNING" bash "$CLI" status 2>&1)
+ok "...and the same holds past the backstop"       1 "$(printf '%s' "$out" | grep -c '🛑 STALL')"
+
+# 10e. `queued` counts as mid-turn, and on the second kind it is a column-one service line rather
+#      than a footer — a different place, which is why the adapter has two arms and why reasoning
+#      from one kind to the other is not allowed here either.
+R14="$COUNCIL_TEST_ROOT/t22r"; stalled_room "$R14" codex alpha beta; age_room_to "$R14" 1000
+out=$(COUNCIL_ROOM="$R14" COUNCIL_WAIT_SCREEN_FILE="$QUEUED" bash "$CLI" status 2>&1)
+ok "a queued client counts as mid-turn"      1 "$(printf '%s' "$out" | grep -c '⏳ LONG TURN')"
+
+# 10f. THE THREE WAYS THE READ DECLINES, all below the backstop so the threshold cannot be what
+#      produces the answer. Each must land on `🛑 STALL`, which is today's behaviour exactly.
+#      `idle` is the wedge this tier exists to keep visible; `unknown` is an absence of evidence;
+#      an unanchored kind is a client whose chrome nobody has captured.
+R15="$COUNCIL_TEST_ROOT/t22s"; stalled_room "$R15" claude alpha beta; age_room_to "$R15" 1000
+out=$(COUNCIL_ROOM="$R15" COUNCIL_WAIT_SCREEN_FILE="$QUIET" bash "$CLI" status 2>&1)
+ok "an idle seat under the backstop stalls"  1 "$(printf '%s' "$out" | grep -c '🛑 STALL')"
+ok "...and is not called a long turn"        0 "$(printf '%s' "$out" | grep -c '⏳ LONG TURN')"
+# WHAT THIS PAIR ACTUALLY PINS, stated because the obvious reading is wrong and mutation proved
+# it: an empty capture is stopped by `_floor_mid_turn`'s emptiness guard, NOT by `unknown` being
+# absent from its list of mid-turn states. `adp_turn_state` returns `unknown` for an empty screen
+# and for nothing else, so that list entry is unreachable and adding it back changes nothing any
+# test can see. These two assertions guard the guard; the list is guarded by the `idle` pair above.
+out=$(COUNCIL_ROOM="$R15" COUNCIL_WAIT_SCREEN_FILE="$EMPTY" bash "$CLI" status 2>&1)
+ok "an unreadable pane buys nothing"         1 "$(printf '%s' "$out" | grep -c '🛑 STALL')"
+ok "...and is not called a long turn"        0 "$(printf '%s' "$out" | grep -c '⏳ LONG TURN')"
+R16="$COUNCIL_TEST_ROOT/t22t"; stalled_room "$R16" antigravity alpha beta; age_room_to "$R16" 1000
+out=$(COUNCIL_ROOM="$R16" COUNCIL_WAIT_SCREEN_FILE="$RUNNING" bash "$CLI" status 2>&1)
+ok "an unanchored kind earns no long turn"   0 "$(printf '%s' "$out" | grep -c '⏳ LONG TURN')"
+ok "...and stalls as it always did"          1 "$(printf '%s' "$out" | grep -c '🛑 STALL')"
+
+# 10g. THE ALARM MUST NOT DENY ITS OWN READ. "Nothing on this seat's pane explains it" is owed to
+#      the `🛑 STALL` arm; printed under a `⏳ LONG TURN` line it denies, in the next sentence, the
+#      very read that chose the line. That defect has already happened once here, when the banner
+#      was the only recogniser; this is the same arm reached by a second door.
+out=$(COUNCIL_ROOM="$R12" COUNCIL_WAIT_SCREEN_FILE="$QUIET" bash "$CLI" status 2>&1)
+ok "an unexplained stall still says so"      1 "$(printf '%s' "$out" | grep -c 'Nothing on this seat.s pane explains it')"
+age_room_to "$R12" 1000
+out=$(COUNCIL_ROOM="$R12" COUNCIL_WAIT_SCREEN_FILE="$RUNNING" bash "$CLI" status 2>&1)
+ok "a long turn does not deny its own read"  0 "$(printf '%s' "$out" | grep -c 'Nothing on this seat.s pane explains it')"
+# ...AND DOES NOT CONTRADICT ITSELF EITHER, which the assertion above cannot see: it greps one
+# string, and the fourth version of this arm appended a DIFFERENT sentence — "it does not soften
+# this alarm because 1000s is past the 5400s backstop" — on the ordinary calm path, asserting the
+# opposite of the line it was appended to and naming a threshold the held time had not reached.
+# Grepping for the absence of one wrong sentence is not the same as asserting the line is right.
+ok "...and does not un-soften what it softened" 0 "$(printf '%s' "$out" | grep -c 'does not soften this alarm')"
+ok "...and claims no backstop it has not reached" 0 "$(printf '%s' "$out" | grep -c 'past the 5400s backstop')"
+# THE THIRD DOOR. The denial must follow the READ, never the TIER — the two part company in
+# exactly the states where the tier is overridden, and conditioning on the tier put this sentence
+# back on the path where a healthy turn crosses the backstop. There the operator was told the room
+# had stopped AND that nothing explained it, while the screen said `running`. Both override states
+# are pinned, because they are separate overrides and a fix for one is not a fix for the other.
+age_room_to "$R12" 6000
+out=$(COUNCIL_ROOM="$R12" COUNCIL_WAIT_SCREEN_FILE="$RUNNING" bash "$CLI" status 2>&1)
+ok "past the backstop it is a stall"         1 "$(printf '%s' "$out" | grep -c '🛑 STALL')"
+ok "...and does not deny the read it took"   0 "$(printf '%s' "$out" | grep -c 'Nothing on this seat.s pane explains it')"
+ok "...it reports the read and the override" 1 "$(printf '%s' "$out" | grep -c 'past the 5400s backstop')"
+ok "...still labelled a quote, not a verdict" 1 "$(printf '%s' "$out" | grep -c 'not a verdict')"
+out=$(COUNCIL_ROOM="$R12B" COUNCIL_WAIT_SCREEN_FILE="$RUNNING" bash "$CLI" status 2>&1)
+ok "a closed room does not deny it either"   0 "$(printf '%s' "$out" | grep -c 'Nothing on this seat.s pane explains it')"
+ok "...and names the closure as the override" 1 "$(printf '%s' "$out" | grep -c 'because the room is CLOSED')"
+
+# 10h. THE KNOB, AND WHAT ITS FALLBACK ACTUALLY BUYS — stated as measured, because the first
+#      version of this comment claimed the opposite and was believed through a commit. The call
+#      site compares with `-le`; `[ … -le … ]` on a non-number errors and tests FALSE, which
+#      selects `tier=stall`. So an unusable setting fails LOUD, and the fallback is NOT what keeps
+#      the backstop armed — nothing can disarm it by this route. What the fallback buys is a
+#      printable figure in the operator's line and in the notice (`at 5400s`, never `at abcs`),
+#      and, through `knob_uint`'s nine-digit cap, no `[: integer expression expected` on stderr
+#      once a minute while a seat thinks. Both are observable below: the effective figure is
+#      quoted, and lowering or raising it changes the tier.
+R17="$COUNCIL_TEST_ROOT/t22u"; stalled_room "$R17" claude alpha beta; age_room_to "$R17" 1000
+out=$(COUNCIL_ROOM="$R17" COUNCIL_STALL_HARD_SECS=abc COUNCIL_WAIT_SCREEN_FILE="$RUNNING" \
+      bash "$CLI" status 2>&1)
+ok "an unusable backstop falls back"         1 "$(printf '%s' "$out" | grep -c 'at 5400s it is raised as a stall')"
+out=$(COUNCIL_ROOM="$R17" COUNCIL_STALL_HARD_SECS=100 COUNCIL_WAIT_SCREEN_FILE="$RUNNING" \
+      bash "$CLI" status 2>&1)
+ok "...and an operator can lower it"         1 "$(printf '%s' "$out" | grep -c '🛑 STALL')"
+out=$(COUNCIL_ROOM="$R17" COUNCIL_STALL_HARD_SECS=100000 COUNCIL_WAIT_SCREEN_FILE="$RUNNING" \
+      bash "$CLI" status 2>&1)
+ok "...and raise it"                         1 "$(printf '%s' "$out" | grep -c '⏳ LONG TURN')"
 
 printf '\n'
 if [ "$FAILURES" -eq 0 ]; then echo "t22 PASS ($CHECKS checks)"; else echo "t22 FAIL ($FAILURES/$CHECKS)"; exit 1; fi

@@ -509,7 +509,13 @@ done
 ```
 
 `--new` prints only escalations not shown yet (and marks them), so this monitor stays
-silent until something actually needs you. Description: "ship escalations (fast)".
+silent while the mailbox is not growing. Description: "ship escalations (fast)".
+
+**Not everything it prints needs you**, and that is worth knowing before you wire an alert to it:
+the mailbox is shared, and council writes into it too. A council room whose seat has been
+thinking past its stall threshold pushes a `LONG TURN` notice whose own text says there is nothing
+to do yet — it exists so that the room's real `STALL` notice stays meaningful, rather than firing
+on every healthy long turn. Read what a notice says rather than treating arrival as the signal.
 
 * Both scripts are separate files, so edits land on the next iteration — unlike an
   inline `while` body, which bash caches (editing a running monitor does nothing;

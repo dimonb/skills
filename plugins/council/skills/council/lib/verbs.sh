@@ -420,6 +420,21 @@ v_verdict() {
 # What this change CAN keep true is narrower and worth having: the TERMINAL READ — the one input
 # here that is not room state — is annotation-only, so it adds no new way to go dark.
 #
+# THE TERMINAL READ NOW PICKS A TIER AS WELL AS A SENTENCE (#188), and the list above is why that
+# is still annotation. Past `COUNCIL_STALL_SECS` a seat whose client reads as mid-turn gets
+# `⏳ LONG TURN` where it used to get `🛑 STALL` — on the same alarms line, with its own push under
+# its own de-duplication key. What the read cannot do is remove either output, and past
+# `_stall_hard_secs` it cannot pick the TIER, so the loudest form of the signal arrives on a
+# schedule no pane can move. Softening a line is the same class of act as rewording one; deciding
+# whether a supervisor is told is not, and that boundary is where this stays.
+#
+# SAID PRECISELY, BECAUSE THE LOOSE VERSION WAS WRONG IN FOUR PLACES AT ONCE: past the backstop the
+# pane is still CAPTURED and still read for the capacity-banner annotation — only the tier
+# short-circuits. The draft of this change wrote "not consulted at all" here and in three other
+# spots, which is the kind of absolute a later reader repairs by moving the capture inside the
+# backstop branch, silently dropping the banner annotation from every stall over 5400s. What is
+# true is narrower: the tier ignores the pane there, the annotation does not.
+#
 # WHY IT HAD TO BE THIS WAY ROUND, stated as what was actually checked rather than as a claim about
 # every possible design. An earlier draft let a recognised capacity banner REPLACE the alarm. Every
 # fact that draft keyed on turns out to sit inside the room directory, which is the participant's
@@ -458,8 +473,11 @@ _floor_screen() {
   # test still exercises the real anchor and the real policy table. It is read from the environment
   # of whichever process runs `status` — usually the supervisor's, but `status` takes no `need_me`
   # and participants are told they may read the room with it, so a seat running `status` controls
-  # this for ITS OWN invocation. That buys nothing worth having: the result can only ANNOTATE an
-  # alarm, and a seat can already put whatever it likes on its own pane.
+  # this for ITS OWN invocation. That still buys nothing worth having, though the reason is no
+  # longer that the result only annotates — since #188 it also picks the tier. It is that every
+  # outcome the read can reach is at least as loud as declining it: the alarm and its push happen
+  # either way, the backstop ignores the read entirely, and a seat can already put whatever it
+  # likes on its own pane, so the file adds no reach it did not have.
   if [ -n "${COUNCIL_WAIT_SCREEN_FILE:-}" ] && [ -f "$COUNCIL_WAIT_SCREEN_FILE" ]; then
     cat "$COUNCIL_WAIT_SCREEN_FILE"; return 0
   fi
@@ -471,13 +489,15 @@ _floor_screen() {
   for f in "$ROOM"/state/container-*; do [ -f "$f" ] && pinned=1; done
   [ "$pinned" = 1 ] || return 1
   # Sourced on demand, PER INVOCATION — not once, whatever the `command -v` looks like it buys.
-  # This function's only call site is `screen=$(_floor_screen "$peer")`, i.e. a command
-  # substitution, so everything it defines dies with that subshell and the next call re-sources.
-  # That is fine while there is one call per `status`, and it is the reason this guard cannot be
-  # read as a cache: a future caller that loops the read would pay the backend resolution every
-  # time, and should hoist the source into v_status, outside the substitution, where the guard
-  # would actually bite. A caller with no $SKILL, or a term.sh that will not load, gets no capture
-  # rather than an error — the same way v_decide treats policy.sh.
+  # It is reached through `_floor_anchored_screen`, whose own call site in v_status is a command
+  # substitution (`fscreen=$(_floor_anchored_screen "$floor")`), so everything this defines dies
+  # with that subshell and the next call re-sources. That is fine while `status` captures once per
+  # tick — which is what `_floor_anchored_screen` exists to keep true, now that two readers want
+  # the same pane — and it is the reason this guard cannot be read as a cache: a future caller
+  # that loops the read would pay the backend resolution every time, and should hoist the source
+  # into v_status, outside the substitution, where the guard would actually bite. A caller with no
+  # $SKILL, or a term.sh that will not load, gets no capture rather than an error — the same way
+  # v_decide treats policy.sh.
   if ! command -v ct_capture >/dev/null 2>&1; then
     [ -n "${SKILL:-}" ] && [ -f "$SKILL/lib/term.sh" ] || return 1
     . "$SKILL/lib/term.sh" || return 1
@@ -486,23 +506,75 @@ _floor_screen() {
   ct_capture "$peer" 2>/dev/null
 }
 
-# _floor_wait_state <peer> — "<class><TAB><the line that said so>" and rc 0 when this seat's own
-# client announces a wait that heals itself; nothing and rc 1 for every other answer, including
-# every answer we are not entitled to give.
+# _stall_hard_secs — the backstop threshold, in seconds: the age past which the floor raises
+# `🛑 STALL` whatever the seat's pane says.
 #
-# ITS RESULT IS EVIDENCE, NOT A VERDICT. Every input it reads is peer-writable (the header above
-# enumerates them), so the caller may quote it and must not act on it: it adds a sentence to the
-# STALL alarm and decides nothing about whether that alarm, or its push, happens. Keep it that way
-# round — the moment a caller branches the alarm on this, a seat can silence the supervisor's alarm
-# about itself, which is worse than the blindness this whole block exists to fix.
-_floor_wait_state() {
-  local peer="${1:-}" kind screen ev cls
+# THE DEFAULT IS 5400 BECAUSE OF A MEASUREMENT, AND THE MEASUREMENT BELONGS BESIDE IT. Single
+# healthy turns on real rooms were timed at 24, 51, 55 and 84 minutes — the longest being 5040s —
+# so 5400 sits just above every healthy turn anyone has actually observed here and below anything
+# a person would call a wait. A bare constant gets tuned by the next reader; a constant with its
+# evidence next to it gets RE-MEASURED instead, which is the only way this number can be moved
+# honestly. If you move it, put the new measurement here.
+#
+# ITS LIMIT, PLAINLY: this is a bound on a distribution nobody sampled twice. A slower model, a
+# longer agenda or a bigger context can produce a healthy turn past 5400s, and when one does the
+# backstop fires on it — a false `🛑 STALL`, of exactly the kind #188 was filed about. The
+# goalpost is bounded, not removed, and it is bounded deliberately: a backstop that could be
+# argued upward by the thing it watches would not be a backstop. `COUNCIL_STALL_HARD_SECS` is
+# there for an operator who has measured their own rooms.
+#
+# ONE PLACE, because the number is read by the alarm arm and quoted by the notice, and a default
+# spelled at each reader is the shape that goes out of step (#151).
+#
+# THE VALIDATION IS `knob_uint`'s, NOT ITS OWN, and the first draft got both halves of that wrong.
+# It hand-rolled an all-digits test that `shared/knobs` already owns — the duplication the shared
+# engine exists to remove — and it justified that test with a fail-direction that is simply not
+# what the code does. Stated correctly, because the wrong version was written down confidently and
+# survived into a commit: the comparison at the call site is `-le`, and `[ … -le … ]` on a
+# non-number errors and tests FALSE, which selects `tier=stall`. Every unusable value therefore
+# fails LOUD — the backstop effectively always on — not quiet. Measured across `abc`, empty, `08`,
+# `0` and a twenty-digit value.
+#
+# So the fallback is not what keeps the backstop armed; nothing can disarm it by this route. What
+# it buys is narrower and still worth having: a printable figure in the operator-facing line and
+# in the notice (`at 5400s …`, never `at abcs …`), and no `[: integer expression expected` on
+# stderr once a minute for as long as a seat thinks. `knob_uint`'s nine-digit cap is what closes
+# that last one — a twenty-digit run of digits passes an all-digits test and then errors in `[`,
+# which is exactly the stderr-per-tick this had before.
+#
+# A caller that has not sourced `lib/knobs.sh` keeps the bare default rather than erroring, the
+# same degradation every other optional module in this verb gets.
+_stall_hard_secs() {
+  # The default is spelled ONCE even inside this function: writing it in both the degraded arm and
+  # the knob_uint call would reinstate #151's shape three lines apart, which is where it is least
+  # likely to be noticed and exactly how the other pairs in this tree drifted.
+  local d=5400
+  command -v knob_uint >/dev/null 2>&1 || { printf '%s' "$d"; return 0; }
+  knob_uint "${COUNCIL_STALL_HARD_SECS:-}" "$d"
+}
+
+# _floor_anchored_screen <peer> — the seat's visible screen, and rc 0, only when this seat's KIND
+# has a committed pane capture behind it. Nothing and rc 1 for every other answer.
+#
+# WHY THE GATE IS HERE AND NOT IN EACH READER. Two readers now ask about the same pane in the same
+# tick — the capacity-banner annotation and the turn-state classification — and both are entitled
+# to it on exactly the same terms: `adp_wait_anchored` answers whether anyone has captured a pane
+# of this client, which is a property of the KIND and not of the question being asked of it. Split
+# across the two readers, the gate would be two roster reads (two `jq` forks) and, worse, two
+# CAPTURES — and on agterm a capture is a control-socket probe, paid once a minute for as long as a
+# seat is thinking by the fast alarm loop this skill tells a supervisor to arm.
+#
+# It does NOT make the screen trustworthy, and nothing downstream may read it that way. An anchored
+# kind means the client's column-one chrome has been captured, so a reader can tell the CLIENT's
+# own marks from the AGENT's words. It says nothing about whether the words are true: the pane's
+# content is the seat's to author and the pane's SELECTION follows a pin inside the room. See the
+# block header above for the full enumeration.
+_floor_anchored_screen() {
+  local peer="${1:-}" kind
   [ -n "$peer" ] || return 1
-  # Both shared modules are sourced by council.sh for this verb. Absent either, give up quietly:
-  # the STALL alarm is unchanged by that, and a supervisor is never told a pass ran that did not.
-  command -v adp_wait_class >/dev/null 2>&1 || return 1
+  # Sourced by council.sh for this verb. Absent it, give up quietly: the STALL alarm is unchanged
+  # by that, and a supervisor is never told a pass ran that did not.
   command -v adp_wait_anchored >/dev/null 2>&1 || return 1
-  command -v policy_dispose >/dev/null 2>&1 || return 1
   # The kind comes from the roster, which is where `relaunch` already reads it. `.peers` is absent
   # in a room built without it (the test helper's rooms, and any room made before `up` wrote the
   # field), and an unknown kind is unanchored by definition — both end the read here.
@@ -510,8 +582,58 @@ _floor_wait_state() {
            "$ROOM/roster.json" 2>/dev/null | head -1)
   [ -n "$kind" ] || return 1
   adp_wait_anchored "$kind" || return 1
-  screen=$(_floor_screen "$peer") || return 1
+  _floor_screen "$peer"
+}
+
+# _floor_mid_turn <screen> — rc 0 when this seat's own client says a turn is in flight.
+#
+# `running` is the plain case. `queued` counts too and that is not a widening: the client renders
+# that hint to say it has TAKEN a message for the turn AFTER this one, which it can only be doing
+# while the current one is still going. Everything else answers no, and it does so by being absent
+# from the list rather than by being named in one — a whitelist, so a state added to the adapter
+# later arrives on the loud side by default.
+#
+# THE TWO NOES ARE REACHED BY DIFFERENT LINES, and a reader who assumes otherwise will test the
+# wrong one. `idle` — the wedge this distinction exists to keep visible — reaches the case and
+# falls through it. `unknown` never reaches the case at all: `adp_turn_state` returns it for an
+# EMPTY screen and for nothing else, and the emptiness guard above has already returned by then.
+# That was measured by mutation: adding `unknown` to the list changes no behaviour and no test can
+# catch it, because nothing can produce the input. The guard is the real defence for an unreadable
+# pane and the list is the real defence for a readable one; keep both, and do not read a surviving
+# mutant here as a missing assertion.
+#
+# ITS RESULT IS EVIDENCE, NOT A VERDICT, exactly as `_floor_wait_state`'s is, and the caller is
+# held to the same rule: it may change how the alarm READS and may not decide whether the alarm or
+# its push HAPPENS. The forgery runs in the quieting direction — a seat that wants a calmer line
+# prints the turn marker — which is why the caller pairs this with a backstop tier that reads no
+# pane at all. See the alarm arm in v_status.
+_floor_mid_turn() {
+  local screen="${1:-}"
   [ -n "$screen" ] || return 1
+  command -v adp_turn_state >/dev/null 2>&1 || return 1
+  case "$(adp_turn_state "$screen")" in running|queued) return 0 ;; esac
+  return 1
+}
+
+# _floor_wait_state <screen> — "<class><TAB><the line that said so>" and rc 0 when this seat's own
+# client announces a wait that heals itself; nothing and rc 1 for every other answer, including
+# every answer we are not entitled to give.
+#
+# IT TAKES THE SCREEN AND NO LONGER CAPTURES ONE. The capture and its per-kind gate moved up to
+# `_floor_anchored_screen` when a second reader of the same pane arrived; that header says why.
+#
+# ITS RESULT IS EVIDENCE, NOT A VERDICT. Every input it reads is peer-writable (the header above
+# enumerates them), so the caller may quote it and must not act on it: it adds a sentence to the
+# STALL alarm and decides nothing about whether that alarm, or its push, happens. Keep it that way
+# round — the moment a caller branches the alarm on this, a seat can silence the supervisor's alarm
+# about itself, which is worse than the blindness this whole block exists to fix.
+_floor_wait_state() {
+  local screen="${1:-}" ev cls
+  [ -n "$screen" ] || return 1
+  # Both shared modules are sourced by council.sh for this verb. Absent either, give up quietly:
+  # the STALL alarm is unchanged by that, and a supervisor is never told a pass ran that did not.
+  command -v adp_wait_class >/dev/null 2>&1 || return 1
+  command -v policy_dispose >/dev/null 2>&1 || return 1
   ev=$(adp_wait_class "$screen" 2>/dev/null)   # "<class><TAB><the line that said so>", or empty
   cls=${ev%%	*}
   ev=${ev#*	}
@@ -528,8 +650,14 @@ _floor_wait_state() {
   return 1
 }
 
-# _stall_escalate <peer> <turns> <held-seconds> [annotation] — push one notice into the shared
-# mailbox for a stalled room. Best-effort: it can never fail the status block that called it.
+# _stall_escalate <peer> <turns> <held-seconds> <tier> [annotation] — push one notice into the
+# shared mailbox for a room whose floor has been held past a tier. Best-effort: it can never fail
+# the status block that called it.
+#
+# `<tier>` is `stall` or `longturn`, and it is the SAME event's classification the printed alarm
+# used — never a second decision taken here. It chooses this notice's wording and its
+# de-duplication key, and it chooses nothing else; whichever tier the caller reached, a notice is
+# pushed. See the alarm arm in v_status for which evidence picks which.
 #
 # WHAT IT ADDS THAT THE PRINTED ALARM CANNOT. `status` writes to a console someone has to be
 # reading. This is the same fire-and-forget channel `decide` already uses for a room that closed
@@ -541,20 +669,34 @@ _floor_wait_state() {
 # loops, a self-terminating status loop and a fast `--alarms-only` one, which is what #21 asked for.
 # This push is what covers the supervisor who is watching neither.
 #
-# IT FIRES WHENEVER THE ALARM DOES, in either of its wordings and explained or not. Two earlier
-# drafts got this wrong in the same way and it is the mistake worth naming: the first pushed only
-# for an UNEXPLAINED stall, so the screen read decided whether a person was woken; the second still
-# skipped the clock-wrong arm, so a peer writing `created_ms` did. Both times the alarm had been
-# fixed and the push — the same event's second operator-facing output — had not, because the alarm
-# was the one being looked at. What the classification changes is this notice's WORDING, never its
-# existence.
+# IT FIRES WHENEVER THE ALARM DOES, in every one of its wordings and explained or not. Three
+# earlier drafts got this wrong in the same way and it is the mistake worth naming: the first
+# pushed only for an UNEXPLAINED stall, so the screen read decided whether a person was woken; the
+# second still skipped the clock-wrong arm, so a peer writing `created_ms` did; the third gave the
+# turn-state tier no notice at all, so a pane reading `running` decided it. Each time the alarm had
+# been fixed and the push — the same event's second operator-facing output — had not, because the
+# alarm was the one being looked at. What the classification changes is this notice's WORDING,
+# never its existence.
 #
 # DE-DUPLICATED AGAINST THE MAILBOX ITSELF, within ONE room, so polling `status` does not accrue N
 # notices for one stall while a room that moves and stalls again notifies afresh. Two halves, and
 # an agent relocating this scan needs both: the ROOM is matched on the entry's `.slot` field with
-# `==`, and within that, the key `[stall:<peer>:<turns>]` carried in the notice's `.text` separates
-# one stall from the next. Dropping the first half reinstates a collision between sibling rooms
+# `==`, and within that, the key `[<tier>:<peer>:<turns>]` carried in the notice's `.text` separates
+# one report from the next. Dropping the first half reinstates a collision between sibling rooms
 # that the body below records in full.
+#
+# THE TIER IS IN THE KEY, AND THAT IS THE WHOLE REASON THE BACKSTOP CAN FIRE. The two tiers report
+# the same (peer, turn) pair, so a single shared key would mean the first notice consumed it and
+# the second — the `🛑 STALL` the backstop exists to raise once a long turn has run past every
+# healthy turn ever measured — would be de-duplicated into silence. That is the trap #188 named:
+# an earlier or more frequent push silences a later one. Separate keys make the two independent:
+# `longturn` never consumes what `stall` needs, so a seat whose pane reads mid-turn buys a calmer
+# line and a bounded delay, never the absence of a stall notice.
+#
+# The cost is that one (peer, turn) can produce BOTH notices — a long turn that then crosses the
+# backstop, or a seat whose pane changes classification mid-turn. That is two entries at most per
+# tier per turn, and both are true statements about different thresholds; collapsing them is what
+# would cost the backstop.
 #
 # THAT IS THE POINT OF IT, and it is why there is no latch file. Nothing confines a participant —
 # SKILL.md's "The room is not a trust boundary" records all three kinds writing outside the repo
@@ -600,7 +742,8 @@ _is_seat() { # <name>
 }
 
 _stall_escalate() {
-  local peer="${1:-}" turns="${2:-}" held="${3:-}" note="${4:-}" key room who where mb
+  local peer="${1:-}" turns="${2:-}" held="${3:-}" tier="${4:-stall}" note="${5:-}" \
+        key room who where mb text
   command -v policy_escalate >/dev/null 2>&1 || return 0
   command -v policy_mailbox_dir >/dev/null 2>&1 || return 0
   # A closed room's floor is nobody's problem, and `decide` has already escalated the one closure
@@ -641,7 +784,17 @@ _stall_escalate() {
   # own pane and lands in `.context`, so a seat that appends a key-shaped string to its banner would
   # otherwise suppress the NEXT stall's notice. Keying on `.text`, which this code composes, leaves
   # that route closed.
-  key="[stall:$peer:$turns]"
+  # The tier is part of the key, not a second scan: see the header for why the two must never
+  # share one. An unrecognised tier degrades to `stall`, which is the loud answer — a wording bug
+  # in a caller must not be able to route a notice onto a key the backstop is not watching.
+  #
+  # THAT ARM IS UNREACHABLE TODAY and is kept as a fail-loud default, not as a live guard: the one
+  # call site (`v_status`) passes `stall` or `longturn` and nothing else, so no test can exercise
+  # it and none pretends to. Said plainly because this diff labels its OTHER unreachable branch
+  # (`_floor_mid_turn`'s `unknown`) as unreachable, and leaving this one reading like a working
+  # check would be the same claim told two ways in one file.
+  case "$tier" in longturn) : ;; *) tier=stall ;; esac
+  key="[$tier:$peer:$turns]"
   # Fails OPEN by construction, which is the right way round for a de-duplication check: an empty
   # glob, an unreadable mailbox, a malformed entry or a missing jq all make this print nothing, and
   # a check that cannot read its own history must repeat a notice rather than skip one.
@@ -678,14 +831,28 @@ _stall_escalate() {
   # Built OUTSIDE the argument, not with a `${note:+…}` inside it: an apostrophe in the alternate
   # text ends the surrounding double-quoted word as far as bash's parser is concerned, and the
   # whole file then fails to parse. It cost a round here; the plain `if` cannot do that.
-  local ctx="turn $turns; go and look at $where. A permission or first-launch trust prompt is answered IN PLACE; council.sh relaunch is only for a seat that is genuinely dead, and it discards everything that seat has read."
+  #
+  # THE TWO TIERS SAY DIFFERENT THINGS AND MUST NOT BE COLLAPSED INTO ONE SENTENCE WITH A NOUN
+  # SWAPPED. A `stall` notice is a call to go and look; a `longturn` notice is a call to do
+  # nothing yet, and telling a supervisor to go and look at a seat that is working is the noise
+  # #188 was filed about. What the second one owes instead is the bound: it says when the alarm
+  # will come anyway if the evidence it rests on is wrong, so a reader knows this is a delay and
+  # not a dismissal.
+  local ctx
+  if [ "$tier" = longturn ]; then
+    text="council room '$room': $who has held the floor for ${held}s and its own client still reads as mid-turn $key"
+    # No `🛑` here either, for the console's reason and one of its own: the mailbox is read by
+    # grep as often as by eye, and a notice that carries the stop glyph is a notice that sorts
+    # with the ones a person must act on.
+    ctx="turn $turns; nothing to do yet. The mid-turn read is a quote from a pane the seat itself writes, not a verdict, so it cannot stop a stall being reported: at $(_stall_hard_secs)s this room raises a stall alarm whatever the pane says. Look at $where now only if you have another reason to."
+  else
+    text="council room '$room': $who has been held for ${held}s — the room has stopped $key"
+    ctx="turn $turns; go and look at $where. A permission or first-launch trust prompt is answered IN PLACE; council.sh relaunch is only for a seat that is genuinely dead, and it discards everything that seat has read."
+  fi
   if [ -n "$note" ]; then
     ctx="$ctx Quoted from the pane, not a verdict: <<$note>>"
   fi
-  policy_escalate notice "council-$room" \
-    "council room '$room': $who has been held for ${held}s — the room has stopped $key" \
-    "$ctx" \
-    >/dev/null 2>&1 || return 0
+  policy_escalate notice "council-$room" "$text" "$ctx" >/dev/null 2>&1 || return 0
 }
 
 # _room_terminals — how many of this room's seats still hold a terminal.
@@ -835,13 +1002,19 @@ v_terminals() {
 # on a permission prompt destroys the argument that seat was holding. What a backend
 # enumeration settles is presence: whether a terminal WITH THAT NAME exists. What it cannot
 # settle is what a present terminal is DOING, so an alive seat is never told "it is at a prompt".
-# An announced capacity wait is the only in-pane shape THIS ALARM reads (`_floor_wait_state`),
-# and it is a park, not a prompt. council does read the pane elsewhere — `say` classifies turn
-# state through `adp_turn_state` (`lib/up.sh`), which is vendored here as `lib/agent-adapters.sh`
-# — but `running`/`idle` cannot separate "at a permission prompt" from "finished and waiting",
-# so it would not answer this question either. Named rather than omitted: the sentence that used
-# to stand here said this was the only in-pane read in the skill, which was false and hid a
-# shared-engine reader from the next person to ask.
+# THIS ALARM READS TWO IN-PANE SHAPES, and neither answers "at a prompt": an announced capacity
+# wait (`_floor_wait_state`), which is a park rather than a prompt, and whether the client says a
+# turn is in flight (`_floor_mid_turn`, #188), which picks the tier. `running`/`idle` cannot
+# separate "at a permission prompt" from "finished and waiting", so the second one no more settles
+# this row than the first does. council reads the pane elsewhere too — `say` classifies turn state
+# through the same `adp_turn_state` (`lib/up.sh`, vendored here as `lib/agent-adapters.sh`).
+#
+# THE COUNT IN THIS PARAGRAPH HAS NOW BEEN WRONG TWICE, in the same direction both times, and the
+# second time was the commit that ADDED the second reader while leaving the sentence saying there
+# was one. The first version claimed a sole in-pane read in the skill and hid `say` from the next
+# reader; its replacement claimed a sole read for THIS ALARM and hid `_floor_mid_turn`. So do not
+# repair the number again — if you add a third reader, say which reader answers which question and
+# leave the counting out, because that is the shape that keeps going stale here.
 #
 # EVIDENCE, NOT A VERDICT — and unlike the first draft, THE STRINGS NOW SAY SO. `_floor_wait_state`
 # prints "this is a quote from a pane, not a verdict" and this printed an unhedged verdict that
@@ -925,6 +1098,7 @@ v_status() {
   local j verd g t floor held conf room_age alarms="" phase wait_ev="" wait_note="" rec=""
   local only_changed=0 alarms_only=0 term_live="" term_total="" term_rc term_out="" live_note=""
   local out="" round_line="" openct sig sigfile TAB term_line="" quiet_line=""
+  local hard fscreen="" tier=stall mid=0
   TAB=$(printf '\t')
   while [ $# -gt 0 ]; do
     case "$1" in
@@ -1063,6 +1237,41 @@ v_status() {
   # Nothing that fired before became suppressible; this one arrives that way, which is still
   # better than the silence it replaced but is not what the paragraphs above promise. Closing it
   # means a never-moved-room alarm that does not read the floor's age at all; that is filed.
+  #
+  # THE THRESHOLD IS NOT THE INSTRUMENT, AND THAT IS WHAT THE SECOND TIER BELOW IS FOR (#188).
+  # At 900s this alarm fired on every healthy long turn: single turns on real rooms have been
+  # measured at 24, 51, 55 and 84 minutes — 1440 to 5040 seconds — and each of them raised
+  # `🛑 STALL` and pushed a notice about a seat that was working. An alarm that fires on the
+  # commonest healthy path is one an operator learns to skim, which is the failure this repo has
+  # recorded three times; and a mailbox full of notices about seats that were thinking is how a
+  # real one gets missed.
+  #
+  # WHAT THE FIX IS NOT. #188 proposed gating the alarm on turn state. That is forbidden here and
+  # the direction of the forgery is why: turn state is read off the pane, the pane's content is the
+  # seat's own to write and the pane's SELECTION follows a pin inside the room, so a gate would let
+  # a seat silence the supervisor's alarm ABOUT ITSELF by printing its client's turn marker. The
+  # block header above states the rule, `_floor_mid_turn` restates it, and AGENTS.md carries the
+  # measured incidents. Gating only the PUSH is the same defect through the same door — and it is
+  # specifically the one an earlier round here already shipped, by fixing the alarm and leaving the
+  # push.
+  #
+  # WHAT IT IS. The evidence changes the WORDING, and a second threshold that reads no pane at all
+  # keeps the alarm unsuppressible:
+  #
+  #   * past `COUNCIL_STALL_SECS` with the seat's own client reading as mid-turn — `⏳ LONG TURN`,
+  #     on the alarms line, pushing its own notice under its own key. It is not a smaller signal on
+  #     a smaller channel; it is the same event, honestly named;
+  #   * past `COUNCIL_STALL_SECS` otherwise — `🛑 STALL`, exactly as before. `idle` is the wedge
+  #     this separates out, and `unknown` (an unreadable screen) is an absence of evidence and lands
+  #     here too;
+  #   * past `COUNCIL_STALL_HARD_SECS` — `🛑 STALL` whatever the pane says. The pane is still
+  #     captured and still read for the banner annotation there; what it cannot do past this point
+  #     is pick the tier.
+  #
+  # So a seat that forges `running` buys a calmer sentence and a delay bounded by the backstop,
+  # never silence. That bound is what makes the annotation-not-suppression rule survive contact
+  # with a threshold at all, and it is the part to keep if this block is ever rewritten.
+  hard=$(_stall_hard_secs)
   room_age=$(c_room_age_s) || room_age=""
   if [ "$held" -gt "${COUNCIL_STALL_SECS:-900}" ]; then
     if [ -n "$room_age" ] && [ "$held" -gt "$room_age" ]; then
@@ -1070,6 +1279,13 @@ v_status() {
       # No terminal read on this arm: `held` is not a trustworthy number here, so nothing about a
       # seat should be concluded from it, and the threshold-first ordering the paragraph above
       # insists on stays exactly as it was. The PUSH still happens — see below.
+      #
+      # AND NO RECLASSIFICATION EITHER, which is the same reasoning one step further. The tier
+      # below softens a line on the strength of a held time that says "this seat has been working
+      # for N seconds"; here that N is known to be impossible, so there is nothing to soften and a
+      # `⏳ LONG TURN` would be a calmer word placed on the arm that already says the figure cannot
+      # be believed. `$tier` is `stall` by declaration and this arm leaves it alone deliberately —
+      # if you ever move the assignment, this branch is the one that must not get it.
     else
       # ONE alarm, on exactly the condition it always fired on, and then — where the seat's own
       # client announced something this check recognises — one more sentence QUOTING that. The
@@ -1089,8 +1305,56 @@ v_status() {
       # path the feature exists for. It is worded this way rather than "nothing on its terminal"
       # because the only shape recognised is an announced capacity wait, so on the commonest wedge
       # the terminal says exactly why and this code cannot read it.
-      wait_ev=$(_floor_wait_state "$floor") || wait_ev=""
-      alarms="$alarms 🛑 STALL: $floor has held the floor for ${held}s — the room has stopped; go and look at it. A seat sitting on a permission or first-launch trust prompt needs that prompt ANSWERED IN PLACE; council.sh relaunch is only for a seat that is genuinely dead, and it discards everything that seat has read."
+      #
+      # ONE CAPTURE, TWO READINGS. Both readers want this seat's pane in this tick, and both are
+      # entitled to it on the same per-kind terms, so the capture and its gate happen once here.
+      # The gate answering no (an unanchored kind, no roster kind, no pin, an unreadable pane)
+      # leaves `$fscreen` empty, and every read below then declines — which is today's behaviour
+      # exactly: the plain `🛑 STALL`, with no sentence about a client nobody has captured.
+      fscreen=$(_floor_anchored_screen "$floor") || fscreen=""
+      wait_ev=$(_floor_wait_state "$fscreen") || wait_ev=""
+      # THE RECLASSIFICATION, AND THE TWO CONDITIONS THAT OUTRANK IT. Past the backstop the pane
+      # cannot pick the tier — `$held -le $hard` is tested before `_floor_mid_turn` and
+      # short-circuits it — so there is no arrangement of a seat's own screen that keeps
+      # `🛑 STALL` away for ever. (The pane is still captured and read for the banner annotation
+      # above; only the tier short-circuits. The looser "not consulted at all" was written here in
+      # a draft and is the sort of absolute a later reader acts on by moving the capture.)
+      # Below the backstop, a client that says it is mid-turn changes the glyph and the
+      # sentence and nothing else: the line still goes into `$alarms`, on the same channel, past
+      # the same filters, and the push below still fires. That is the annotate-never-suppress rule
+      # applied per OUTPUT rather than per alarm, which is the form of it this repo had to learn
+      # twice.
+      #
+      # A CLOSED ROOM IS NEVER RECLASSIFIED, and it is the first test rather than an afterthought.
+      # `🛑 STALL` fires on a closed room on purpose — t22 case 6 pins it, because a closure is
+      # `board/status` plus `board/decision.md`, two files a participant writes in its own room,
+      # and withholding the alarm would buy exactly that forgery. A closed room also already
+      # pushes nothing (`_stall_escalate` returns on `c_recorded_status`), so the console line is
+      # the LAST loud output there is about it. Letting the pane soften that line would hand a
+      # seat the whole set: forge the closure, print the client's marker, and nothing anywhere
+      # says `🛑` any more. #188's care note (b) names this, and the regression was live for one
+      # review round — reachable only BELOW the backstop, which is why case 6, aged to 7200s,
+      # stayed green through it. `$rec` is the status captured once at the top of this verb.
+      #
+      # THE READ IS TAKEN ONCE, INTO `$mid`, AND THE TIER IS A SEPARATE QUESTION FROM IT. Folding
+      # the read into the tier chain as a conjunct looked tidier and was wrong: the chain
+      # short-circuits, so in the two states that override the tier — past the backstop, and on a
+      # closed room — `_floor_mid_turn` was never called, `$tier` was the only record of what the
+      # pane said, and every later arm that asked about the READ got the answer to a different
+      # question. That is how the denial below came to contradict a screen that plainly said
+      # `running`. Keep the two apart: `$mid` is what the client claims, `$tier` is what this
+      # alarm does about it, and the second may override the first without erasing it.
+      mid=0; _floor_mid_turn "$fscreen" && mid=1
+      if [ -z "$rec" ] && [ "$held" -le "$hard" ] && [ "$mid" = 1 ]; then tier=longturn; else tier=stall; fi
+      if [ "$tier" = longturn ]; then
+        # THE CALM LINE MAY NOT CARRY THE LOUD GLYPH, even to name what it will become. A
+        # supervisor's fast loop greps this channel, and `🛑` inside this sentence would match a
+        # healthy turn — which is the noise #188 is about, reinstated by the wording of its own
+        # fix. Caught by the test that asserts the glyph is absent; keep both.
+        alarms="$alarms ⏳ LONG TURN: $floor has held the floor for ${held}s and its own client still reads as mid-turn, so this looks like a seat thinking rather than a room that has stopped — that is a quote from a pane the seat writes, not a verdict. Nothing to do yet; at ${hard}s it is raised as a stall whatever the pane says."
+      else
+        alarms="$alarms 🛑 STALL: $floor has held the floor for ${held}s — the room has stopped; go and look at it. A seat sitting on a permission or first-launch trust prompt needs that prompt ANSWERED IN PLACE; council.sh relaunch is only for a seat that is genuinely dead, and it discards everything that seat has read."
+      fi
       # WHAT the seat looks like, where the backend can be asked. It narrows the two remedies
       # above whenever presence is corroborated, and says nothing rather than guessing when it is
       # not.
@@ -1113,15 +1377,62 @@ v_status() {
       if [ -n "$wait_ev" ]; then
         wait_note="⏳ its pane carries a live ${wait_ev%%	*} banner: $(policy_park_advice) If that banner is current the seat resumes by itself, so check the terminal before relaunching — this is a quote from a pane, not a verdict. Evidence: ${wait_ev#*	}"
         alarms="$alarms $wait_note"
+      # THE DENIAL IS OWED TO A FAILED READ, NOT TO A LOUD TIER — and getting that wrong is now the
+      # THIRD time this one sentence has denied something the same check had just established. It
+      # was unconditional once, and said "nothing recognised" in the same breath as a capacity
+      # banner. It was then conditioned on `$tier`, which is not the read: past the backstop and on
+      # a closed room the tier is `stall` however plainly the client says it is working, so the
+      # denial returned on exactly the path where a healthy long turn crosses 5400s — an operator
+      # told "the room has stopped; go and look at it" AND that nothing explains it, while the one
+      # fact that would stop them running `relaunch` on a working seat sat on the screen, read and
+      # discarded. No adversary needed; the file's own measurements say a real turn reaches that
+      # threshold.
+      #
+      # Conditioning it on `$mid` alone was then wrong the OTHER way, and that is the fourth time:
+      # on the ordinary `⏳ LONG TURN` path `mid` is 1, so this arm appended a sentence asserting
+      # the alarm had NOT been softened one clause after softening it, and naming a backstop the
+      # held time had not reached — "1000s is past the 5400s backstop" — on the commonest healthy
+      # path this whole change exists to produce.
+      #
+      # SO IT IS GUARDED ON THE PAIR, because neither half determines the sentence by itself:
+      # `$mid` says whether there is a read to report, `$tier` says whether reporting it would
+      # repeat the line above. The three arms below are exhaustive and each states its own
+      # precondition rather than relying on the reader to carry one down from the last branch:
+      #   * mid=1, tier=longturn — the `⏳ LONG TURN` line already carries the read; say nothing;
+      #   * mid=1, tier=stall, room closed — the closure is the override;
+      #   * mid=1, tier=stall, room open — then `held > hard` is the only way the tier could have
+      #     been overridden, so the backstop is the override and the figures are real.
+      # The final `else` is `mid=0`, and it needs no tier guard: `tier=longturn` requires `mid=1`,
+      # so the denial cannot reach a softened line.
+      elif [ "$mid" = 1 ]; then
+        if [ "$tier" = longturn ]; then
+          : # the line above already says the client reads as mid-turn; repeating it here is noise
+        elif [ -n "$rec" ]; then
+          alarms="$alarms ⏳ its client still reads as mid-turn — a quote from a pane the seat writes, not a verdict. It does not soften this alarm because the room is CLOSED, where the stall line always fires."
+        else
+          alarms="$alarms ⏳ its client still reads as mid-turn — a quote from a pane the seat writes, not a verdict. It does not soften this alarm because ${held}s is past the ${hard}s backstop, where no pane can pick the tier."
+        fi
       else
-        alarms="$alarms Nothing this check recognises explains it; only an announced capacity wait is recognised today."
+        # NO LIST HERE, AND THAT IS THE FIX RATHER THAN THE WORDING. This sentence has been wrong
+        # four ways in three review rounds, and the first of them was the list itself: it said
+        # "only an announced capacity wait is recognised today", which the commit that added a
+        # second recogniser made false. A sentence that enumerates what the check can see has to
+        # be found and edited by every change that teaches it to see something else, and this
+        # repo's rule for that shape is to remove the enumerable thing rather than correct the
+        # instance. So it reports the OUTCOME for this seat and lists nothing; what the check can
+        # recognise is documented once, in SKILL.md's tier table, where a reader goes looking for
+        # it. The guard above is what keeps this true, and it is structural: every recognised
+        # shape has its own arm, and this is the else.
+        alarms="$alarms Nothing on this seat's pane explains it."
       fi
     fi
-    # OUTSIDE the wording branches, deliberately. Both of them are the same alarm — this room has
-    # stopped — and the push is that alarm's second operator-facing output, for the supervisor who
-    # is not at the console. Nesting it under one wording is how a peer-written `created_ms`, which
-    # only chooses between the two, came to decide whether anyone was woken.
-    _stall_escalate "$floor" "$t" "$held" "$wait_note"
+    # OUTSIDE the wording branches, deliberately. All of them are the same event — the floor has
+    # been held past a tier — and the push is that event's second operator-facing output, for the
+    # supervisor who is not at the console. Nesting it under one wording is how a peer-written
+    # `created_ms`, which only chooses between two of them, came to decide whether anyone was woken;
+    # `$tier` is passed IN rather than recomputed here for the same reason, so the console and the
+    # mailbox can never disagree about which tier this was.
+    _stall_escalate "$floor" "$t" "$held" "$tier" "$wait_note"
   elif [ "$held" -gt "${COUNCIL_STALL_WARN_SECS:-300}" ] && [ -z "$(c_recorded_status)" ] \
        && ! c_round_open && _is_seat "$floor"; then
     # THE EARLY TIER IS AN ANNOTATION, NOT AN ALARM, and the measurement is what decides that.
@@ -1134,14 +1445,23 @@ v_status() {
     # words: an alarm that fires on the commonest healthy path is one an operator learns to skim.
     #
     # RAISING THE NUMBER CANNOT FIX IT, which is the part worth keeping. Past the measurement
-    # this threshold would sit above 5040s — i.e. above the 900s hard tier it exists to sit below.
+    # this threshold would sit above 5040s — i.e. above the 900s stall tier it exists to sit below.
+    # ("Hard tier" is what this used to call 900s; since #188 that name belongs to
+    # `COUNCIL_STALL_HARD_SECS`' 5400s backstop, so it is spelled out here rather than reused.)
     # A quiet tier above the stall tier is not a tier, it is dead code. The two states simply are
     # not separable by held time: a 323-second prompt wedge and a 5040-second think are the same
     # number to this clock, so no threshold can tell them apart and the instrument is wrong, not
     # its tuning. What could tell them apart is TURN STATE — the supervisor's own failure was a
     # seat that ENDED ITS TURN at a prompt, i.e. idle rather than running — and `adp_turn_state`
-    # in the shared adapters already reads queued/running/idle. That is a real change to make, and
-    # it is filed rather than half-made here.
+    # in the shared adapters already reads queued/running/idle.
+    #
+    # THAT READ IS NOW WIRED, but ABOVE this tier, not at it (#188): the stall arm uses it to tell
+    # a working seat from a stopped room. It is not used here, and this tier is unchanged, because
+    # the two need opposite things from it — the stall arm acts on `running`, which a client
+    # asserts, while catching a 323s wedge needs `idle` to MEAN "wedged", and it does not: `idle`
+    # cannot separate a permission prompt from a finished turn. So the sub-threshold wedge tier is
+    # still unbuilt and still filed; what changed is that the reader it needs is no longer
+    # unreferenced, so do not read this paragraph as saying turn state is wired nowhere.
     #
     # So this goes on the BLOCK, never into `$alarms`: it does not bypass the filter the way an
     # alarm does, and it never wakes the 60-second alarm loop. It is NOT invisible to

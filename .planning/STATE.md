@@ -12,15 +12,23 @@ below is worked in order rather than partitioned into lanes.
 
 | order | issue | what it is |
 |---|---|---|
-| 1 | **#188** | the 900s STALL alarm fires on healthy long turns (measured 24-84 min) and pushes a notice for each |
+| ~~1~~ | ~~**#188**~~ | the 900s STALL alarm fires on healthy long turns — **PR #229, in review** |
 | 2 | **#195** | the documented stall recovery ("submit the draft already in the box") does not submit |
 | 3 | **#172** | a dead agent in a live terminal is indistinguishable from an idle child |
 | 4 | **#182** | a stall alarm that repeats verbatim trains the operator to skim it |
 
 All four are the supervisor's own instruments, which is why they go first: every later change is
 driven through them, so a false alarm or a silent failure here is paid again on every run after.
-They were named as the ones an operator meets in normal use when they were filed on 2026-09-19,
-and nothing has been done about them since.
+They were named as the ones an operator meets in normal use when they were filed on 2026-09-19.
+
+**#188 did not build what it proposed**, and the next item should know why: the issue preferred
+gating the stall alarm on turn state, which is suppression by evidence the supervised seat writes.
+PR #229 reclassifies instead — `⏳ LONG TURN` at 900s when the client reads as mid-turn, with a
+5400s backstop that reads no pane — so the alarm stays unsuppressible. **#187 (detect a
+prompt-wedged seat by turn state) stays open**: nothing there adds a tier below the stall
+threshold, and `idle` still cannot separate a prompt from a finished turn. #182's "repeats
+verbatim" is untouched and is now the more visible of the two, since a long turn produces one
+notice per tier per turn rather than one.
 
 ### Shipped since the 2026-09-19 entry below
 

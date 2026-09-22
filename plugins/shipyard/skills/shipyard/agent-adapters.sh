@@ -666,12 +666,16 @@ adp_wait_class() {
 # a call whose answer is always 0, is the plumbing this repo's law tells you not to buy. The day
 # either admission set widens, the gate is already here and that caller passes the kind it knows.
 #
-# WHAT ANSWERING 1 COSTS DEPENDS ON WHAT THE CALLER DOES WITH A 0, and the two live callers differ
-# — so this is stated as the two cases rather than as one rule. shipyard's read grants an exemption
-# from its stall clock, and there a 1 simply withholds it: the child falls through to the stall
-# path, i.e. to today's behaviour. council's read only ever ANNOTATES an alarm that fires either
-# way, so there a 1 withholds a sentence and nothing else. Neither direction can silence a caller's
-# alarm on a 1, which is the property to preserve. Widen it by CAPTURING a pane of that kind, committing
+# WHAT ANSWERING 1 COSTS DEPENDS ON WHAT THE CALLER DOES WITH A 0, and the live callers differ —
+# so this is stated case by case rather than as one rule. shipyard's read grants an exemption from
+# its stall clock, and there a 1 simply withholds it: the child falls through to the stall path,
+# i.e. to today's behaviour. council gates TWO readers of the same pane behind this, and they cost
+# different things: the capacity-banner annotation loses a sentence, while the turn-state read
+# loses the `LONG TURN` tier, so a 1 there also means a louder glyph, a different operator sentence
+# and a different mailbox de-duplication key. Neither direction can silence a caller's alarm on a
+# 1 — every one of those outcomes is at least as loud as the 0 case — and THAT is the property to
+# preserve, not the narrower "a 1 withholds a sentence" this used to say before council grew its
+# second reader. Widen it by CAPTURING a pane of that kind, committing
 # it beside the others, and adding the label below — never by reasoning that a client nobody
 # captured probably renders like the ones that were. That inference is precisely what put the
 # service bullet in the allow-list above, and it had to be taken back out.

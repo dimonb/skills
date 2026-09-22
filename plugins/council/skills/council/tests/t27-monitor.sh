@@ -151,7 +151,7 @@ ok "...not the clock-is-wrong arm"       0 "$(printf '%s' "$h1" | grep -c 'clock
 # It was an alarm in the first draft. Measured single turns of 24, 51, 55 and 84 minutes — every
 # one a healthy seat thinking — would each have raised it, which is the alarm-on-the-normal-path
 # failure this repo has been bitten by three times; and raising the threshold past that
-# measurement would put it ABOVE the 900s hard tier it exists to sit below. So it moved to the
+# measurement would put it ABOVE the 900s stall tier it exists to sit below. So it moved to the
 # block. These assertions are what stop it moving back.
 RQ="$COUNCIL_TEST_ROOT/t27q"; rm -rf "$RQ"
 mkroom "$RQ" a b c
@@ -242,9 +242,14 @@ ok "past COUNCIL_STALL_SECS it is 🛑"    1 "$(printf '%s' "$a" | grep -c '🛑
 a=$(COUNCIL_STALL_WARN_SECS=100000 bash "$CLI" status 2>/dev/null)
 ok "COUNCIL_STALL_WARN_SECS raises it"   0 "$(printf '%s' "$a" | grep -c '^quiet:')"
 
-# The quiet tier must not push, and this is mechanical rather than a matter of taste:
-# _stall_escalate de-duplicates on `[stall:<peer>:<turns>]`, so a push from the early tier would
-# consume the key the real STALL needs and silence the alarm it exists to warn about.
+# The quiet tier must not push. The reason USED to be mechanical — one de-duplication key for
+# every tier, so a push from here would consume the key the real STALL needs and silence the alarm
+# it exists to warn about. That argument no longer holds on its own: since #188 the key carries the
+# tier (`[<tier>:<peer>:<turns>]`), precisely so a calm notice cannot eat a loud one. What keeps
+# this tier push-free now is what it is: a line on the BLOCK rather than an alarm, at a threshold
+# (300s) chosen to cost nothing because it never leaves the console. Pushing from here would put a
+# notice in the mailbox for every seat that thinks for five minutes, which is the noise #188 was
+# filed about, one tier lower.
 rm -f "$POLICY_MAILBOX_DIR"/council-t27q-*.json 2>/dev/null
 bash "$CLI" status >/dev/null 2>&1
 n=$(ls "$POLICY_MAILBOX_DIR"/council-t27q-*.json 2>/dev/null | wc -l | tr -d ' ')
@@ -307,10 +312,12 @@ ok "...and on tick N+1"               1 "$(printf '%s' "$c2" | grep -c '^=== cou
 ok "no pin ⇒ no terminal alarm"       0 "$(printf '%s' "$c1" | grep -c 'terminals are still up')"
 
 # THE LIVENESS SENTENCE MUST NOT RIDE A CLOSED ROOM'S STALL. `held` is `now - last turn` and
-# grows without bound after a closure, so every decided room reaches the hard tier about fifteen
+# grows without bound after a closure, so every decided room reaches the stall tier about fifteen
 # minutes later. The 🛑 STALL alarm itself is DELIBERATE there (t22 pins it, because a closure is
 # two files a participant can forge and a withheld alarm would buy that silence) — so this asserts
-# the alarm still fires and the relaunch prescription does not ride along.
+# the alarm still fires and the relaunch prescription does not ride along. A closed room is also
+# never reclassified to `⏳ LONG TURN`, for the same reason and at any age; t22 case 10d-bis pins
+# that, under the backstop where it was briefly reachable.
 sessions_none
 printf 'fake-container\n' > "$R3/state/container-tmux"
 age_room "$R3" 20000      # the room is OLDER than its floor: the ordinary arm, see age_messages
