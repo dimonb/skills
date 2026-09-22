@@ -668,7 +668,10 @@ rather than justified into coverage, and F1–F6. B3 and B4 were **refuted** as 
 skeptics and must not be treated as such.
 
 Standing rules: `shipyard-down.sh` only after a merge or a close (it removes the worktree);
-monitors carry `SHIPYARD_CTX_WINDOW=1000000` or the ctx column lies about a 1M-window session.
+monitors carry `SHIPYARD_CTX_WINDOW=1000000` or the ctx column cannot band a 1M session until its
+peak passes the smallest listed window. (As written at the time, that clause said the column
+"lies"; since #230 it withholds the band and prints a bound instead. The instruction is unchanged
+— and #230 records that following it is precisely why the un-pinned path stopped being exercised.)
 
 **A drafting rule this lane adopted and the next one should keep:** never write the client's footer
 marker or its queued hint literally into a directive, an escalation or a comment. A child working

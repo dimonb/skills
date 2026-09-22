@@ -387,13 +387,22 @@ ctx_probe() {
   # on. So the band becomes `?` — `unknown`, which no consumer may read as healthy — and the
   # display becomes `<=<pct>% · <count>`.
   #
-  # THE BOUND IS EXACT, not a hedge, and it costs nothing to compute: ctx_window returns the
-  # SMALLEST listed size the peak fits, so scaling against it yields the LARGEST percentage any
-  # listed candidate could produce. The true figure is that or lower, which is what `<=` says.
-  # For a child whose real window IS that smallest size the bound is the reading itself; for a
-  # child on a larger one it is a ceiling that overstates, and the raw count beside it is what
-  # tells them apart. As the peak grows past the smallest size the window becomes a deduction,
-  # this branch stops firing, and the ordinary `<pct>% · <count>` reading returns.
+  # THE BOUND IS THE TIGHTEST READING THE LISTED CANDIDATES ALLOW, and that is the whole of what
+  # `<=` claims — it costs nothing to compute, because ctx_window already returns the SMALLEST
+  # listed size the peak fits, so scaling against it yields the LARGEST percentage any listed
+  # candidate could produce. For a child whose real window IS that smallest size the bound is the
+  # reading itself; for a child on a larger LISTED one it overstates, and the raw count beside it
+  # is what tells them apart. As the peak grows past the smallest size the window becomes a
+  # deduction, this branch stops firing, and the ordinary `<pct>% · <count>` reading returns.
+  #
+  # IT IS NOT AN UPPER BOUND ON THE TRUTH, and the comfortable version of this sentence — "the
+  # child is at most that" — is FALSE. It is bounded over the LIST, and ctx_window's own paragraph
+  # already says why that is not the same thing: a window smaller than the smallest listed one
+  # under-warns. Worked, because this is the third time the comfortable version has been written
+  # into this file's design and the second time in this change alone: a real 150000-token window
+  # carrying 140000 takes CTX_WINDOWS[0]=200000, prints `<=70%`, and is actually at 93%. The `<=`
+  # is a bound relative to the candidates this file knows, nothing more, and SHIPYARD_CTX_WINDOW
+  # is what closes the gap for anyone whose size is not on the list.
   #
   # WHY A BOUND RATHER THAN NOTHING. A bare `?` is right for a figure past every listed window —
   # there no candidate fits, so no bound exists — but wrong here, where a perfectly good upper
@@ -441,7 +450,11 @@ ctx_probe() {
 # TWO READINGS REACH IT, and ctx_probe is where they are told apart, not here — this function sees
 # only the `?` sentinel. A total past every listed window, and a total high enough to alarm against
 # a window ctx_window had to guess at (ctx_window_unproven). They share a band because they share
-# what is missing — a window to scale against — and they share the remedy, which is to state one.
+# what is missing — a window to assert against. They do NOT share the remedy, and an earlier draft
+# of this file said they did: naming the window clears either, but ADDING a CTX_WINDOWS entry
+# clears only the past-the-list one and cannot clear a bound, whose size is already listed.
+# ctx_probe renders the two differently and shipyard-report.sh's block dispatches on that display,
+# so the distinction lives in one place rather than being restated here.
 ctx_band() {
   case "$1" in
     ''|-) printf 'ok'; return ;;

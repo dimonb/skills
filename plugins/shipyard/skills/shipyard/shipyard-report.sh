@@ -31,7 +31,14 @@
 # column was blind: the old pane-scraping ctx_of returned "—" on current builds, so the
 # band was permanently `ok`. Reading it from the transcript makes it a live signal, which
 # is why it is named here now — a band crossing is exactly the tick worth breaking
-# silence for, and it is the only thing in the ctx column that does.
+# silence for.
+#
+# What the signature carries is `sig_band`, not `band`, and the difference is one case: where the
+# band is `unknown` AND the display is a `<=` bound, the bound's own band is appended
+# (`unknown-warn`, `unknown-crit`). Without that, an un-pinned child sits at plain `unknown` from
+# the warn threshold to its ceiling and the signature never moves again — silence exactly where
+# the old 🛑 crossing used to print. The bound's PERCENTAGE stays out, deliberately: it would tick
+# on every point of growth, which is the noise this contract exists to keep out.
 #
 # Design notes:
 #  * running-vs-idle comes from a snapshot DIFF (two captures $SHIPYARD_MOTION_INTERVAL apart,
@@ -978,15 +985,42 @@ for slot in "${SLOTS[@]}"; do
   # `unknown` gets a glyph of its own and is collected below. It must never read as healthy:
   # it is the one band where the report is holding a number it cannot scale, so an unmarked
   # row would be the silent-blind column this whole file was rewritten to remove.
+  # sig_band is what the --only-changed signature carries; it is the band unless the band is
+  # `unknown`, in which case it carries the BOUND's band too. See the block right below.
+  sig_band="$band"
   case "$band" in
     warn)    ctx="⚠️ $ctx" ;;
     crit)    ctx="🛑 $ctx" ;;
-    # The DISPLAY is carried alongside the slot, not just the slot: the block below tells the two
-    # `?` causes apart by whether ctx_probe printed a `<=` bound or a bare count, because their
-    # remedies differ. A parallel associative array would be the obvious way and is bash 4+; this
-    # file is sourced into a bash-3.2 floor, so it uses the same `|`-joined entry shape ATTENTION
-    # does. Captured before the glyph is prefixed, so the test is over ctx_probe's own output.
-    unknown) UNSCALED+=("$slot|$ctx"); ctx="❓ $ctx" ;;
+    # The DISPLAY is carried alongside the slot, not just the slot: the block further down tells
+    # the two `?` causes apart by whether ctx_probe printed a `<=` bound or a bare count, because
+    # their remedies differ. A parallel associative array would be the obvious way and is bash 4+;
+    # this script must stay bash-3.2-clean (stock macOS /bin/bash — see the note at the foot of
+    # this file), so it uses the same `|`-joined entry shape ATTENTION does. Captured before the
+    # glyph is prefixed, so the test is over ctx_probe's own output.
+    unknown)
+      UNSCALED+=("$slot|$ctx")
+      # THE BAND ALONE STOPPED BEING ENOUGH TO BREAK SILENCE, and that is a regression this
+      # change introduced rather than inherited. `unknown` used to mean "past every listed
+      # window", which is rare; it now also covers every un-pinned child from the warn threshold
+      # to its ceiling — and for a child whose window IS the smallest listed size it covers that
+      # whole range permanently, because its peak can never settle the window. With only $band in
+      # the signature, such a child flips ok -> unknown once at 65% and then produces a
+      # byte-identical SIG for ever: the 80% crossing, which used to raise 🛑 and print, becomes
+      # no output at all under --only-changed. That is the ceiling alarm going quiet by the back
+      # door, for the commonest deployment.
+      #
+      # So the bound's OWN band joins the signature. `unknown-warn` -> `unknown-crit` is one more
+      # silence-breaking tick, at the same 80% crossing the glyph used to mark, and nothing else
+      # changes: the row, the glyph and the block are untouched, and a bare-count `?` (no `<=`)
+      # keeps plain `unknown` exactly as before. The percentage itself is deliberately NOT in the
+      # signature — that would tick on every point of growth, which is the noise the header's
+      # contract keeps out.
+      case "$ctx" in
+        '<='*) bound_pct=${ctx#<=}; bound_pct=${bound_pct%%\%*}
+               sig_band="unknown-$(ctx_band "$bound_pct")" ;;
+      esac
+      ctx="❓ $ctx"
+      ;;
   esac
 
   # --- WHY is it not moving? asked BEFORE the clock is consulted ---------------
@@ -1077,7 +1111,7 @@ for slot in "${SLOTS[@]}"; do
   # IS meaningful: entering or leaving a stated wait is exactly the tick worth breaking silence
   # for, and it is the news the first time it appears, which is why it is not left to the (now
   # suppressed) stall block to announce.
-  SIG+=("$slot|$mr_label|term=1|$state|$stage|$pend|$band|$wait_class|$reap_note")
+  SIG+=("$slot|$mr_label|term=1|$state|$stage|$pend|$sig_band|$wait_class|$reap_note")
   :
 done
 
@@ -1280,8 +1314,13 @@ fi
       echo "  3. ONLY THEN COMPACT: \`bash $DIR/shipyard-compact.sh $sl\` (compacts AND resumes) — and only if"
       echo "     ctx is ⚠️/🛑, or the unconfirmed nudge turns out to be a child REFUSING input. An unconfirmed"
       echo "     on a child that was running all window is the healthy case and is NOT a compaction trigger."
-      echo "     A ❓ ctx is NOT a compaction trigger and NOT a clearance: it means the figure could not be"
-      echo "     scaled, so resolve that first (see the block below) and act on the band it turns into."
+      echo "     A ❓ ctx is NOT a compaction trigger and NOT a clearance: it means the figure has no window"
+      echo "     this report can defend asserting it against, so resolve that first (see the block below)"
+      echo "     and act on the band it turns into. NOTE: on an un-pinned claude fleet ⚠️/🛑 may never appear"
+      echo "     at all — a child whose window IS the smallest size this report knows can never settle it, so"
+      echo "     every reading above the warn threshold stays a ❓ bound. There, a bound whose raw count is"
+      echo "     approaching that smallest size is what stands in for the glyph; pin SHIPYARD_CTX_WINDOW so"
+      echo "     this condition can fire properly."
     done
   fi
   # The two blocks the STALLED one used to swallow. Each is a slot that is motionless for a reason
@@ -1316,28 +1355,43 @@ fi
   # measures against. The row already distinguishes them (ctx_probe prints a bare count for one
   # and a `<=` bound for the other), so this block reads the same distinction off the display
   # rather than keeping a second copy of the rule.
+  #
+  # THE EXPLANATION IS PER CAUSE, THE SLOTS ARE A LIST, and that shape is load-bearing rather than
+  # tidiness. `unknown` used to mean "past every listed window" — rare, a slot or two. It now also
+  # covers every un-pinned child above the warn threshold, permanently for one whose window is the
+  # smallest listed size, so a six-slot fleet under the earlier per-slot form printed six copies of
+  # the same six lines on every tick. Output that repeats on the normal case is output the operator
+  # learns to skip, which is the failure this whole change is about — so each paragraph is printed
+  # once, with its slots named on one line.
   if [ "${#UNSCALED[@]}" -gt 0 ]; then
-    echo
-    echo "### ❓ ctx UNSCALED — a token count with no window to assert it against"
-    echo "Do NOT read a missing percentage as healthy: these children may be at their ceiling or nowhere near it."
+    bounded=""; pastlist=""
     for x in "${UNSCALED[@]}"; do
       sl=${x%%|*}; disp=${x#*|}
       case "$disp" in
-      '<='*)
-        echo "- \`$sl\` — the figure is an UPPER BOUND, not a measurement: the window is not pinned"
-        echo "  down yet, so the child is at most that fraction and possibly far less. Name the window"
-        echo "  — \`SHIPYARD_CTX_WINDOW=<tokens>\` — to turn it into a real band. Adding a CTX_WINDOWS"
-        echo "  entry will NOT clear this one; the size is already listed."
-        echo "  A bound that never resolves as the count climbs is itself the answer: that child's"
-        echo "  window IS the smallest size this report knows, and only the override will say so."
-        ;;
-      *)
-        echo "- \`$sl\` — the count exceeds every window this report knows of, so no percentage exists"
-        echo "  to print. Add the size to CTX_WINDOWS in shipyard-ctx.sh if a new model has shipped,"
-        echo "  or name it with \`SHIPYARD_CTX_WINDOW=<tokens>\`."
-        ;;
+        '<='*) bounded="$bounded \`$sl\` ($disp)" ;;
+        *)     pastlist="$pastlist \`$sl\` ($disp)" ;;
       esac
     done
+    echo
+    echo "### ❓ ctx UNSCALED — a token count with no window to assert it against"
+    echo "Do NOT read a missing percentage as healthy: these children may be at their ceiling or nowhere near it."
+    if [ -n "$bounded" ]; then
+      echo
+      echo "**Bounded —$bounded**"
+      echo "The figure is an UPPER BOUND against the smallest window this report still considers"
+      echo "possible, not a measurement: the child is at most that fraction of THAT window, and less"
+      echo "on any larger one. Name the window — \`SHIPYARD_CTX_WINDOW=<tokens>\` — to turn it into a"
+      echo "real band. Adding a CTX_WINDOWS entry will NOT clear these; the size is already listed."
+      echo "A bound that never resolves as the count climbs is itself the answer: that child's window"
+      echo "IS the smallest size this report knows, and only the override will say so."
+    fi
+    if [ -n "$pastlist" ]; then
+      echo
+      echo "**Past every known window —$pastlist**"
+      echo "The count exceeds every window this report knows of, so no percentage and no bound exist."
+      echo "Add the size to CTX_WINDOWS in shipyard-ctx.sh if a new model has shipped, or name it"
+      echo "with \`SHIPYARD_CTX_WINDOW=<tokens>\`."
+    fi
   fi
   # What this tick TORE DOWN, and what it refused to. A destructive act the operator did not
   # ask for must never be inferable only from a row that quietly changed, so the first block

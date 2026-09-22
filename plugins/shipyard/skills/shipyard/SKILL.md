@@ -802,10 +802,13 @@ the default remedy (below).
 **A `❓` ctx is neither a compaction trigger nor a clearance** — but it is not contentless, and
 what it carries decides how urgent it is. The same token count is a small fraction of one window
 this script might be looking at and past the ceiling of another, so compacting on it blind would
-compact a healthy child and skipping it would leave a dying one. **Read the bound if there is
-one**: `❓ <=40% · 80k` is a child that is fine on every reading the report can construct, while
-`❓ <=97% · 195k` is one that is either near its ceiling or nowhere near it, and that is the one to
-resolve now. Resolve the instrument, not the child: name the window with `SHIPYARD_CTX_WINDOW`
+compact a healthy child and skipping it would leave a dying one. **Read the bound and the raw
+count together if there is a bound.** Every bound printed is already at or above the warn
+threshold — that is the only region this form appears in — so the question is not whether it is
+high but whether the *count* is near the smallest window the report knows: `❓ <=97% · 195k` is a
+child that may genuinely be at its ceiling, while `❓ <=66% · 132k` is one whose next turns will
+either settle the window or not. Resolve the instrument, not the child: name the window with
+`SHIPYARD_CTX_WINDOW`
 (the fix for a bound), or add the size to `CTX_WINDOWS` (the fix for a bare count past every
 listed window). That turns `❓` into a real band, and you act on that. The report prints the right
 one of those two beside each slot it flags.
@@ -863,11 +866,17 @@ has, nothing is ruled out — the same token count is a comfortable fraction of 
 and an emergency against another — and a percentage would be a choice wearing the clothes of a
 measurement. So in that state the column prints **`❓` and an upper bound**: `❓ <=92% · 185k`.
 
-The bound is exact, not a hedge. The window it scales against is the smallest listed size the peak
-fits, so the figure is the **largest** percentage any candidate could produce — the child is at
-most that and possibly far less, and the raw count beside it is what tells those apart. It appears
-only where the reading would otherwise warn or crit; below that every candidate agrees the child
-is fine, so the ordinary `<pct>% · <tokens>` reading stands.
+The bound is the tightest reading the **listed** candidates allow. The window it scales against is
+the smallest listed size the peak fits, so the figure is the largest percentage any *listed*
+candidate could produce, and the raw count beside it is what tells a child on a larger listed
+window apart from one sitting at that size. It appears only where the reading would otherwise warn
+or crit; below that every candidate agrees the child is fine, so the ordinary `<pct>% · <tokens>`
+reading stands.
+
+**`<=` is a bound over the list, not over the truth** — do not read it as "at most that". A window
+*smaller* than the smallest listed size under-warns here exactly as it does everywhere else in
+this column: a real 150k child carrying 140k prints `❓ <=70% · 140k` and is actually at 93%.
+`SHIPYARD_CTX_WINDOW` is what closes that gap, and the raw count is what makes it visible.
 
 **How it ends depends on which child it is, and one of the two never ends.** For a child on a
 window *larger* than the smallest listed size, the peak eventually passes that size, the window
@@ -905,10 +914,14 @@ so, one glance before compacting three healthy children mid-review.
 and a default would be a guess carrying the glyph of a fact — the blindness this column was
 rebuilt to remove, in the reassuring direction. A **per-agent-kind** default was proposed for
 exactly this stretch and rejected on evidence (#228): codex already reads its real window from
-the rollout, so a declared default there would be dead code, and a claude child's window is a
+the rollout **when one resolves** — so a declared default there would be *near*-dead, live only on
+the pane fall-through, where the figure it scaled would be a pane scrape this column already
+distrusts and where a codex window is as model-dependent as a claude one. What carries the
+rejection is the other leg: a claude child's window is a
 property of the **model**, not of the kind — nothing pins the model at launch, and the transcript
 does not name it in a way that distinguishes the windows. A kind that genuinely knows its own
-window should declare it, and neither of today's two is such a kind. If you know your window and
+window on every path should declare it; codex knows its own on one path and not the other. If you
+know your window and
 want the band exact from the first turn, set `SHIPYARD_CTX_WINDOW` — it wins unconditionally,
 including downwards, for a window smaller than any the report knows.
 
@@ -970,9 +983,14 @@ So reach for a manual compaction when the figure keeps climbing through `🛑` w
 firing, or when an `unconfirmed` nudge turns out to be a child **refusing input** — not on an
 `unconfirmed` by itself, which also fires for a healthy child that was mid-turn all window, and
 whose first act would be the Escape that clears the box (step 2b above). And on `❓`, resolve the
-window first rather than compacting or ignoring, per the rule in the order above — a bound that
-keeps climbing toward `<=100%` is the same urgency as a rising `🛑`, and naming the window is what
-turns it into one you can act on. Once you have
+window first rather than compacting or ignoring, per the rule in the order above. **On an un-pinned
+claude fleet `⚠️`/`🛑` may never appear at all** — a child whose window is the smallest size the
+report knows can never settle it, so every reading above the warn threshold is a bound and this
+step's own condition can never fire for it. What stands in for the glyph there is a bound whose
+raw count is approaching that smallest size; pin `SHIPYARD_CTX_WINDOW` so the step can fire
+properly, and treat that reading as the trigger meanwhile. A bound climbing with a count well
+below the smallest listed size is the ordinary passage of a larger-window child and resolves
+itself. Once you have
 decided to, do not put it off:
 compaction is itself an API call and needs working room, so run it before the figure reaches
 the ceiling rather than at it. The footer hint

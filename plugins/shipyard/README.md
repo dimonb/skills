@@ -235,10 +235,13 @@ window smaller than N. The override beats all of that, in both directions.
 
 **Pin it for a Claude fleet.** Nothing names the model when a child is launched, so where the
 inference has not yet ruled anything out and the reading would otherwise raise a glyph, the column
-shows an upper bound (`❓ <=92% · 185k`) rather than a percentage it cannot defend. For a child
-whose window *is* the smallest size the report knows, that is its permanent reading above the warn
-threshold — a peak cannot exceed the window that carried it, so the ambiguity never resolves on
-its own. Setting this variable replaces the bound with an exact band, for good.
+shows a bound (`❓ <=92% · 185k`) rather than a percentage it cannot defend. That bound is taken
+against the smallest size the report still considers possible, so it is the tightest reading its
+own list allows — it is **not** a guarantee the child is below it, since a window smaller than
+anything listed under-warns the same way an unpinned window always has. For a child whose window
+*is* the smallest size the report knows, the bound is its permanent reading above the warn
+threshold: a peak cannot exceed the window that carried it, so the ambiguity never resolves on its
+own. Setting this variable replaces the bound with an exact band, for good.
 
 `SHIPYARD_EFFORT` (unset by default) is an operator's explicit `--effort` level for a Claude
 child. Unset, the child is launched with no such flag: how hard to think and how deep to review
