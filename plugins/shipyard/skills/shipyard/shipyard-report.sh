@@ -482,11 +482,13 @@ STALL_ROWS=()
 # "progressing, waiting" several times in a row. It was not a missed alarm; it was an alarm read,
 # recognised and discounted, because the fourth copy said nothing the first had not.
 #
-# So an episode — one unbroken run of the same `since`, i.e. one slot motionless without a break,
-# a supervision gap, or a stated wait (any of which restarts the clock and so ends the episode) —
-# is counted in extra fields of $STALLFILE — `fired_epoch`, `fired_at` (the same instant as
-# shipyard_now prints it, for comparing against directive records) and `firings` — and the block takes
-# one of three shapes per slot:
+# So an episode — one slot motionless without a break, a supervision gap, or a stated wait (any of
+# which ends it) — is counted in extra fields of $STALLFILE: `fired_epoch`, `fired_at` (the same
+# instant as shipyard_now prints it, for comparing against directive records), `firings`, and
+# `last_fired` (the epoch of the latest firing). The record rides with the stall clock's `since`,
+# plus ONE exception: a signature change that a directive caused, which the carry in the slot loop
+# describes — a nudge types into the very screen whose hash is the signature. The block takes one of
+# three shapes per slot:
 #   * FIRST firing: the full remedy, unchanged.
 #   * later firings: ONE line leading with the delta — still motionless, now N min, raised M min
 #     ago, and whether anything was sent since.
@@ -505,15 +507,19 @@ STALL_ROWS=()
 # matters because both new inputs are peer-writable — AGENTS.md, "untrusted evidence may annotate
 # an operator-facing signal, never suppress one":
 #   * $STALLFILE lives in the mailbox every child writes into. Its new fields can move a slot
-#     between full and one-line, and hold back or bring forward the UNANSWERED heading. They cannot
-#     remove the slot from the block. (Its pre-existing `since` field is a different matter and is
-#     NOT closed by this change: a child that rewrites `since` to now resets its own clock, which
-#     keeps it under the threshold. That route predates #182 and still stands.)
+#     between full and one-line, and hold back or bring forward the UNANSWERED heading. Every number
+#     read from it passes stall_num first, because one value bash arithmetic rejects (a leading
+#     zero is octal: `08` is an error) aborts the whole slot loop and so drops EVERY slot from the
+#     block — that route, which the `since` field had before #182 as well, is what stall_num closes.
+#     NOT closed, and predating #182: a child that rewrites its own `since` to a recent epoch resets
+#     its own clock and so stays under the threshold, which removes it from the block outright.
 #   * directive records (`directive-<slot>-<n>.json`, written by shipyard-tell.sh) live in the same
-#     mailbox. A forged one can withhold the UNANSWERED heading. What this achieves there is
-#     SELF-REVELATION, not prevention: the one-line form prints the directive's time and delivery
-#     verdict as "nudged <time> (<delivery>)", so a forged record shows up as a nudge the operator
-#     knows they never sent. The slot's line still appears on every tick either way.
+#     mailbox. A forged one can withhold the UNANSWERED heading, and can keep an episode's count
+#     across a screen change (the carry). What this achieves there is SELF-REVELATION, not
+#     prevention: the one-line form prints the directive's time and delivery verdict as "nudged at
+#     <time> (<delivery>)", so a forged record shows up as a nudge the operator knows they never
+#     sent — and a record dated in the future is ignored rather than printed as a plausible time.
+#     The slot's line appears on every tick either way.
 STALL_ESCALATE_AT=3
 
 # stall_remedy <slot> — the full remedy, printed at a stall's FIRST firing and once more at its
@@ -541,22 +547,46 @@ stall_remedy() {
   echo "     this condition can fire properly."
 }
 
+# stall_num <value> — <value> if it is a number bash arithmetic reads as the decimal it looks like,
+# else nothing. A leading zero is refused (it is octal to `$(( ))`, and `08` is an error there), and
+# so is anything longer than twelve digits (an epoch is ten; a longer one could wrap).
+stall_num() {
+  case "$1" in 0) printf '0' ;; ''|0*|*[!0-9]*|?????????????*) ;; *) printf '%s' "$1" ;; esac
+}
+
+# stall_iso <value> — succeeds when <value> has shipyard_now's shape, `YYYY-MM-DDTHH:MM:SSZ`.
+stall_iso() {
+  case "$1" in [0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]T[0-9][0-9]:[0-9][0-9]:[0-9][0-9]Z) return 0 ;; esac
+  return 1
+}
+
 # last_directive_since <slot> <iso> — "<created_at>\t<delivery>" of the newest directive recorded for
-# <slot> at or after <iso>, or nothing. Both timestamps are shipyard_now's UTC `YYYY-MM-DDTHH:MM:SSZ`,
-# which orders lexically, so no date arithmetic (and no GNU-vs-BSD `date`) is needed. A `--submit-only`
-# tell records nothing and so is not seen here: it reads as "nothing sent", the louder side.
+# <slot> at or after <iso> and not after now, or nothing. Both timestamps are shipyard_now's UTC
+# `YYYY-MM-DDTHH:MM:SSZ`, which orders lexically, so no date arithmetic (and no GNU-vs-BSD `date`) is
+# needed. A `--submit-only` tell records nothing and so is not seen here: it reads as "nothing
+# sent", the louder side. An <iso> without that shape matches nothing, for the same reason.
 last_directive_since() {
-  local f c d best="" bestd=""
+  local f c d n s now best="" bestd=""
   [ -d "$MAILBOX_DIR" ] || return 0
+  stall_iso "$2" || return 0
+  now=$(shipyard_now)
   for f in "$MAILBOX_DIR/directive-$1-"*.json; do
     [ -f "$f" ] || continue
+    # The glob alone also matches `directive-<slot>-2-1.json`, which is slot `<slot>-2`'s record —
+    # the launcher's own name for a second slot from the same idea. What follows the prefix must be
+    # the record's number and nothing else, and the record must name this slot.
+    n=${f##*/directive-$1-}; n=${n%.json}
+    case "$n" in ''|*[!0-9]*) continue ;; esac
+    s=$(jq -r '.slot // empty' "$f" 2>/dev/null) || continue
+    [ "$s" = "$1" ] || continue
     c=$(jq -r '.created_at // empty' "$f" 2>/dev/null) || continue
     d=$(jq -r '.delivery // "unknown"' "$f" 2>/dev/null) || d=unknown
     # The record is peer-writable and both values are printed into the block, so each is held to
     # the shape its writer produces: anything else is not a directive this report can date.
-    case "$c" in [0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]T[0-9][0-9]:[0-9][0-9]:[0-9][0-9]Z) ;; *) continue ;; esac
+    stall_iso "$c" || continue
     case "$d" in ''|*[!a-z_-]*) d=unknown ;; esac
     [[ "$c" < "$2" ]] && continue
+    [[ "$c" > "$now" ]] && continue
     if [ -z "$best" ] || [[ "$c" > "$best" ]]; then best="$c"; bestd="$d"; fi
   done
   [ -n "$best" ] && printf '%s\t%s\n' "$best" "$bestd"
@@ -1202,21 +1232,46 @@ for slot in "${SLOTS[@]}"; do
   # when it crosses the threshold, bypassing --only-changed entirely.
   slot_sig="$state|$stage|$pend|$(printf '%s' "$b" | md5 -q 2>/dev/null || printf '%s' "$b" | md5sum | cut -d" " -f1)"
   now_epoch=$(date +%s)
-  since=""; fired_epoch=""; fired_at=""; firings=0
+  since=""; fired_epoch=""; fired_at=""; firings=0; last_fired=""
   if [ -n "$STALLFILE" ] && [ -f "$STALLFILE" ]; then
-    prev=$(grep -F "$slot	" "$STALLFILE" 2>/dev/null | head -1)
+    # The slot is matched as an exact FIELD: a substring match on "<slot><TAB>" also hits the row of
+    # a slot whose name ends in this one, which the launcher's `<slot>-N` naming makes ordinary.
+    prev=$(awk -F'\t' -v s="$slot" '$1 == s { print; exit }' "$STALLFILE" 2>/dev/null)
     prev_sig=$(printf '%s' "$prev" | cut -f2)
-    prev_epoch=$(printf '%s' "$prev" | cut -f3)
-    if [ "$prev_sig" = "$slot_sig" ]; then
-      since="$prev_epoch"
-      # The episode's firing record rides with `since` and nowhere else: a new `since` is a new
-      # episode. A row from before #182 has three fields and so carries none, which reads as a
-      # first firing — the full block, the louder side. A non-numeric count reads the same way.
-      fired_epoch=$(printf '%s' "$prev" | cut -f4)
-      fired_at=$(printf '%s' "$prev" | cut -f5)
-      firings=$(printf '%s' "$prev" | cut -f6)
-      case "$firings" in ''|*[!0-9]*) firings=0; fired_epoch=""; fired_at="" ;; esac
-      case "$fired_epoch" in ''|*[!0-9]*) firings=0; fired_epoch=""; fired_at="" ;; esac
+    # Every number in the row goes through stall_num: the row is peer-writable, and a value bash
+    # arithmetic rejects (a leading zero reads as octal, so `08` is an error) aborts the whole slot
+    # loop — every slot's alarm, not only this one's. Anything it refuses reads as absent.
+    prev_epoch=$(stall_num "$(printf '%s' "$prev" | cut -f3)")
+    p_fired_epoch=$(stall_num "$(printf '%s' "$prev" | cut -f4)")
+    p_fired_at=$(printf '%s' "$prev" | cut -f5)
+    p_firings=$(stall_num "$(printf '%s' "$prev" | cut -f6)")
+    p_last=$(stall_num "$(printf '%s' "$prev" | cut -f7)")
+    # A row from before #182 has three fields and so carries no firing record, which reads as a
+    # first firing — the full block, the louder side. A partial record reads the same way.
+    if [ -z "$p_firings" ] || [ -z "$p_fired_epoch" ] || [ -z "$p_last" ] || ! stall_iso "$p_fired_at"; then
+      p_firings=0; p_fired_epoch=""; p_fired_at=""; p_last=""
+    fi
+    carry=0
+    if [ "$prev_sig" = "$slot_sig" ] && [ -n "$prev_epoch" ]; then
+      since="$prev_epoch"; carry=1
+    elif [ "$p_firings" -gt 0 ] && [ "${prev_sig%|*}" = "${slot_sig%|*}" ] \
+         && [ $(( now_epoch - p_last )) -le "$STALL_SECS" ] \
+         && [ -n "$(last_directive_since "$slot" "$p_fired_at")" ]; then
+      # A NUDGE CHANGES THE SCREEN IT IS ANSWERING. shipyard-tell.sh types a visible line into the
+      # pane, so a real directive moves the pane hash in `slot_sig`, restarts the clock — and, if
+      # the firing record rode with `since` alone, would end the episode it was sent about: the
+      # child stays stuck, and half an hour later the operator is told of a brand-new stall with
+      # "nothing sent to it", about a slot they nudged. So the record survives a signature change
+      # when all three hold: only the SCREEN part of the signature moved (state, stage and open
+      # escalations did not), a directive was recorded for this slot since the episode's first
+      # firing, and the last firing was within one stall threshold — so a child that goes on to
+      # work for longer than that sheds the record and its next stall is a new one. The clock
+      # itself still restarts (`since` stays unset here): "motionless for N min" counts from the
+      # screen's last change, as it always has.
+      carry=1
+    fi
+    if [ "$carry" = 1 ]; then
+      fired_epoch="$p_fired_epoch"; fired_at="$p_fired_at"; firings="$p_firings"; last_fired="$p_last"
     fi
   fi
   [ -z "$since" ] && since="$now_epoch"
@@ -1225,7 +1280,7 @@ for slot in "${SLOTS[@]}"; do
   # idle in the sense the alarm means. Both rebase `since`, so the figure the NEXT tick reports is
   # measured from an instant this script was actually watching — and both end the episode.
   if [ "$GAP" != 0 ] || [ -n "$wait_kind" ]; then
-    since="$now_epoch"; fired_epoch=""; fired_at=""; firings=0
+    since="$now_epoch"; fired_epoch=""; fired_at=""; firings=0; last_fired=""
   fi
   motionless=$(( now_epoch - since ))
   stalled_now=0
@@ -1240,7 +1295,7 @@ for slot in "${SLOTS[@]}"; do
       *)    ATTENTION+=("$slot|$wait_class|$ctx|$wait_action") ;;
     esac
   elif [ "$run" = "⏸ idle/wait" ] && [ "$pend" = 0 ] && [ "$motionless" -ge "$STALL_SECS" ]; then
-    firings=$(( firings + 1 ))
+    firings=$(( firings + 1 )); last_fired="$now_epoch"
     [ -z "$fired_epoch" ] && { fired_epoch="$now_epoch"; fired_at=$(shipyard_now); }
     nudge=""
     [ "$firings" -gt 1 ] && [ -n "$fired_at" ] && nudge=$(last_directive_since "$slot" "$fired_at")
@@ -1249,7 +1304,7 @@ for slot in "${SLOTS[@]}"; do
   fi
   # Written for every visited slot, stalled or not, as the three-field row was: a slot that does not
   # fire on this tick carries its clock and its firing record forward unchanged.
-  STALL_ROWS+=("$slot	$slot_sig	$since	$fired_epoch	$fired_at	$firings")
+  STALL_ROWS+=("$slot	$slot_sig	$since	$fired_epoch	$fired_at	$firings	$last_fired")
 
   # Paint the same verdict on the sidebar glyph (agterm only; a no-op on tmux), so the
   # board is readable without reading the table: blocked = it is waiting on YOU. The
@@ -1483,7 +1538,7 @@ EOF
         # the other half of it: "nudged and still not moving" is a different state from "untouched".
         if [ -n "$nudge" ]; then
           nat=${nudge%%$TAB*}; ndel=${nudge#*$TAB}
-          sent="nudged at ${nat:11:5} UTC (${ndel}) and it has not moved since"
+          sent="nudged at ${nat:11:5} UTC (${ndel}), and motionless again"
         else
           sent="nothing sent to it yet"
         fi
