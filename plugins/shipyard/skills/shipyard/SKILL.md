@@ -800,12 +800,12 @@ context, which is the same mistake the `❓` ctx rule below exists to prevent. C
 the default remedy (below).
 
 **A `❓` ctx is neither a compaction trigger nor a clearance.** It says the figure could not be
-scaled — the child may be at 5% of a window this script has not heard of, or past a ceiling it
-cannot see, and nothing in the reading distinguishes those. So compacting on it would compact a
-healthy child, and skipping it would leave a dying one. Resolve the instrument first: name the
-window with `SHIPYARD_CTX_WINDOW`, or add the size to `CTX_WINDOWS` in `shipyard-ctx.sh`. That
-turns `❓` into a real band, and you act on that. The report prints the same rule beside any slot
-it flags.
+scaled — the same token count is a small fraction of one window this script might be looking at
+and past the ceiling of another, and nothing in the reading distinguishes them. So compacting on
+it would compact a healthy child, and skipping it would leave a dying one. Resolve the instrument
+first: name the window with `SHIPYARD_CTX_WINDOW`, or add the size to `CTX_WINDOWS` in
+`shipyard-ctx.sh`. That turns `❓` into a real band, and you act on that. The report prints the
+same rule beside any slot it flags.
 
 Two traps that each produced a wrong diagnosis, and neither is visible from the report:
 
@@ -838,23 +838,29 @@ banded `⚠️` from 65% and `🛑` from 80%. Both halves are there on purpose:
 
 * the percentage is what matters, because a token count means nothing without a window —
   400k is 40% of a 1M window and 100% of a 400k one;
-* **no live signal states the window**, so it is inferred: a request that carried N tokens
-  cannot have run on a window smaller than N, so the window is the smallest known size that
-  fits the largest total that session has ever reached. That is a proof where it fires, and
-  `SHIPYARD_CTX_WINDOW` overrides it outright;
-* the raw count is printed **so that you can catch the inference being wrong**. Its one soft
-  spot is a young session on a big model: below the smallest known window there is nothing
-  yet to prove the window is larger, so a 1M child at 185k reads `🛑 92% · 185k` until it
-  crosses 200k and the figure resolves to `18%`. If the band and the raw count disagree with
-  each other, believe the raw count.
+* **the window comes from a different place for each agent kind**, and the difference decides
+  what the column may claim. A **codex** child's rollout states its window outright, so its
+  percentage is measured. A **claude** child states nothing usable — the transcript names a model
+  but not a window, and the name reads the same for a 1M session as for a 200k one — so its
+  window is **inferred** from the peak: a request that carried N tokens cannot have run on a
+  window smaller than N, so the window is the smallest known size that still fits the largest
+  total that session has ever reached. A kind added later declares which of the two it is.
+  `SHIPYARD_CTX_WINDOW` overrides any of them, for any kind;
+* the raw count is printed **so that you can catch the inference being wrong**, and it is the
+  only defence against the case the column cannot detect — a window that is on nobody's list
+  (below). If the band and the raw count disagree with each other, believe the raw count.
 
-**Below the smallest listed window, expect that band — it is the inference doing what it says,
-not a reading.** A child on a larger model reads `ok` until it passes 65% of that size — 130k of
-a 200k window — and shows `⚠️`/`🛑` only from there until its peak crosses the window: measured,
-`50% · 100k` bands `ok`, 130k warns, 160k crits. It self-clears once the peak crosses: for a 1M
-child 200k is 20% in, early in any real run. So the noisy stretch really is narrow — 130k to
-200k, not the whole range below it — and it is the price of not falling silent on a 200k child at
-65%. An operator who knows the window sets `SHIPYARD_CTX_WINDOW` and never sees it.
+**A GLYPH IS AN ASSERTION, so the column raises one only against a window the evidence
+established.** The inference proves upward and only upward: once a claude child's peak has passed
+the smallest listed size, that size is ruled out and the next one up is a deduction. Until it
+has, nothing is ruled out — the same token count is a comfortable fraction of one listed window
+and an emergency against another — and a percentage would be a choice wearing the clothes of a
+measurement. So in that state the column prints **`❓` and the raw count instead of a band**.
+
+It appears only where the reading would otherwise warn or crit. Below that every listed candidate
+agrees the child is fine, so the ordinary `<pct>% · <tokens>` reading stands and a child's early
+life looks like nothing in particular — which is what it is. The `❓` ends by itself once the peak
+settles the window, and `SHIPYARD_CTX_WINDOW` ends it immediately.
 
 **Read the raw figure next to the glyph, every time.** That habit is the whole defence against
 a wrong inference, and it catches the mirror defect too: an absolute token threshold is secretly
@@ -863,28 +869,38 @@ an assumption about which model is running. Three children in another workspace 
 were 1M sessions at 46% and the glyph was a false alarm on all three. The raw count is what said
 so, one glance before compacting three healthy children mid-review.
 
-**That 92%-to-18% jump is correct behaviour, not a bug — do not "fix" it by pinning a default
-window.**
-In the ambiguous band the column errs toward alarm on purpose: an over-warning costs one
-glance at the raw count, and falling silent is what cost the 8.5 hours. Pinning a default
-would restore exactly the failure this column was rebuilt to remove. If you know your window
-and want the band exact from the first turn, set `SHIPYARD_CTX_WINDOW` — it wins
-unconditionally, including downwards, for a window smaller than any the report knows.
+**Do not replace that `❓` with a pinned default window.** It is the column declining to guess,
+and a default would be a guess carrying the glyph of a fact — the blindness this column was
+rebuilt to remove, in the reassuring direction. A **per-agent-kind** default was proposed for
+exactly this stretch and rejected on evidence (#228): codex already reads its real window from
+the rollout, so a declared default there would be dead code, and a claude child's window is a
+property of the **model**, not of the kind — nothing pins the model at launch, and the transcript
+does not name it in a way that distinguishes the windows. A kind that genuinely knows its own
+window should declare it, and neither of today's two is such a kind. If you know your window and
+want the band exact from the first turn, set `SHIPYARD_CTX_WINDOW` — it wins unconditionally,
+including downwards, for a window smaller than any the report knows.
+
+**The case the column cannot detect** is a window on nobody's list. A real 400k session whose
+peak has passed the smallest listed size lands on the next listed one and reads as measured,
+under-warning all the way to its ceiling — the inference is honest about the candidates it has,
+not about the ones it has never heard of. Nothing in the reading gives that away, which is why
+the raw count is printed beside every percentage and why `SHIPYARD_CTX_WINDOW` exists.
 
 Two readings mean *the report does not know*, and neither is `0%`. They are deliberately
-different marks, because they are different facts and you act differently on them — the first
-resolves itself on the child's next turn, the second never does:
+different marks, because they are different facts and you act differently on them:
 
 * **`—`** — no figure was obtainable at all: no completed turn yet, no transcript, or the child
   resolved a different config directory from the parent (`CLAUDE_CONFIG_DIR` / `CLAUDE_HOME` are
   propagated to a child only when they are set in the parent, so a child's login profile can
-  still send it somewhere else).
-* **`❓` and a bare token count** (`❓ 1240k`) — the figure exceeds every window size this script
-  knows of, so a percentage would have to be invented. Its band is `unknown`, which is neither
-  ok nor crit: the script is holding a number it cannot scale, and asserting either would be a
-  lie. **Do not read the missing percentage as healthy.** Your next step is to name the window —
-  `SHIPYARD_CTX_WINDOW=<tokens>` — or add the size to `CTX_WINDOWS` in `shipyard-ctx.sh` if a
-  new model has shipped. The report prints a block under the table saying exactly that.
+  still send it somewhere else). It resolves on the child's next completed turn, if anything is
+  going to resolve it.
+* **`❓` and a bare token count** (`❓ 162k`, `❓ 1240k`) — there is no window the report can
+  defend scaling that count by, so a percentage would have to be invented. Its band is `unknown`,
+  which is neither ok nor crit: the script is holding a number it cannot scale, and asserting
+  either would be a lie. **Do not read the missing percentage as healthy.** Your next step is the
+  same however it arose — name the window with `SHIPYARD_CTX_WINDOW=<tokens>`, or add the size to
+  `CTX_WINDOWS` in `shipyard-ctx.sh` if a new model has shipped. The report prints a block under
+  the table saying exactly that.
 
 There is a fourth form, rare and easy to mistake for a bug: **a bare percentage with no token
 count** (`⚠️ 68%`). That is a figure read straight from the client's own footer, on a build that
@@ -1095,7 +1111,7 @@ starts a fresh watcher for its own parent session.
 | session | ▶️ running / ⏸ idle-wait (snapshot diff) / ⛔ no terminal — or, when a motionless slot's reason is known, `⏳ rate-limited`, `⏳ overloaded`, `✅ finished` or `🙋 needs you` (Step 2). `🧹 torn down` means this tick removed the slot's worktree, and its terminal if one was still there (Step 6) — it is the report's own act, not something the child did to itself |
 | MR state / stage | forge state (opened/merged/closed) + ship's pipeline stage |
 | esc | open escalations for this slot |
-| ctx | child context usage as `<pct>% · <tokens>`, read from its transcript; `⚠️` ≥65%, `🛑` ≥80%. A bare `<pct>%` is the client's own footer figure, used when no transcript was found. Two non-readings, neither meaning healthy: `—` = nothing measurable yet; `❓ <tokens>` = the figure exceeds every window this script knows, so the percentage would be invented — resolve it with `SHIPYARD_CTX_WINDOW` or a new `CTX_WINDOWS` entry before acting (Step 5) |
+| ctx | child context usage as `<pct>% · <tokens>`, read from its transcript; `⚠️` ≥65%, `🛑` ≥80%. A bare `<pct>%` is the client's own footer figure, used when no transcript was found. Two non-readings, neither meaning healthy: `—` = nothing measurable yet; `❓ <tokens>` = no window this script can defend scaling the figure by, so the percentage would be invented — resolve it with `SHIPYARD_CTX_WINDOW` or a new `CTX_WINDOWS` entry before acting (Step 5) |
 | last line | last meaningful line of the screen |
 
 ⏸ idle-wait is **normal** for ship: it waits on CI or on a self-review round and re-wakes

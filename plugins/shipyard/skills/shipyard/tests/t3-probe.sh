@@ -64,6 +64,61 @@ ok "far over the ceiling does not band ok" "unknown" "$(SHIPYARD_CTX_WINDOW=4000
 # With no override at all, past the top of CTX_WINDOWS.
 ok "past the whole window list is unknown" "unknown" "$(band_of '1400000 tokens')"
 
+# --- AN UNPROVEN WINDOW MAY NOT RAISE A GLYPH (#228) ----------------------------------------
+# A glyph is an assertion. Before a claude child's peak passes the smallest listed window nothing
+# has been ruled out — the same token count is a comfortable fraction of one listed window and an
+# emergency against another — so the column prints `?` and the raw count instead of choosing.
+#
+# What it replaces, measured on one child: 162k read `🛑 81% · 162k` and cleared only when the
+# peak crossed 200k, so a 1M child alarmed through its ordinary early life. An alarm on the
+# common path is one the operator learns to ignore, and this one invited compacting a healthy
+# child mid-review — discarding live context to cure a condition it did not have.
+ok "the #228 reading is no longer an alarm" "? 162k"   "$(probe '162000 tokens')"
+ok "...and it bands unknown, never ok"      "unknown"  "$(band_of '162000 tokens')"
+
+# BELOW the band nothing changes, and that is the half that keeps `?` rare: every listed
+# candidate agrees the child is fine there, so the ordinary reading stands and a child's early
+# life is not painted `❓` on the way past.
+ok "an unproven reading below the band prints normally" "50 50% · 100k" "$(probe '100000 tokens')"
+ok "...and bands ok"                                    "ok"            "$(band_of '100000 tokens')"
+ok "one token under the threshold still prints"         "64 64% · 129k" "$(probe '129999 tokens')"
+
+# It resolves ITSELF once the peak settles the window. That is what makes this a narrow state
+# rather than a permanent one, and it is why no operator action is REQUIRED to leave it.
+ok "past the smallest window the percentage returns" "20 20% · 200k" "$(probe '200001 tokens')"
+ok "...and bands ok"                                 "ok"            "$(band_of '200001 tokens')"
+
+# A PROVEN window still alarms. The quiet above must not have been bought by switching the alarm
+# off: a child really at 90% of a window the evidence established is the case this column exists
+# for, and it is the reading that would be silently lost if the guard were too wide.
+ok "a proven window still crits" "90 90% · 900k" "$(probe '900000 tokens')"
+ok "...and bands crit"           "crit"          "$(band_of '900000 tokens')"
+
+# A STATED window is never unproven, in EITHER direction — the operator said what it is.
+ok "override alarms below the smallest listed size" "81 81% · 162k" \
+   "$(SHIPYARD_CTX_WINDOW=200000 probe '162000 tokens')"
+ok "...and bands crit"                              "crit" \
+   "$(SHIPYARD_CTX_WINDOW=200000 band_of '162000 tokens')"
+ok "override resolves the #228 reading outright"    "16 16% · 162k" \
+   "$(SHIPYARD_CTX_WINDOW=1000000 probe '162000 tokens')"
+
+# The footer PERCENTAGE form needs no window at all, so none of this touches it: the client did
+# the scaling, and there is nothing to be unproven about.
+ok "footer percentage still alarms" "crit" "$(band_of '98% context used')"
+
+# --- THE THRESHOLD IS ONE VALUE, READ BY BOTH --------------------------------------------
+# ctx_probe withholds the glyph at CTX_WARN_PCT and ctx_band raises it at the same variable. A
+# second literal 65 in either would keep every assertion above green while the guarded region
+# drifted away from the alarm it guards on the next threshold change — the "mutation never
+# applied to the call site" shape. Both halves are checked: the behaviour follows the variable,
+# and no bare literal is left behind to stop it following.
+ok "raising the threshold narrows the suppression" "86 86% · 172k" \
+   "$(CTX_WARN_PCT=90 probe '172188 tokens')"
+ok "lowering it widens the suppression"            "? 100k" \
+   "$(CTX_WARN_PCT=40 probe '100000 tokens')"
+ok "no bare band threshold remains in the source" "0" \
+   "$(grep -cE '\-ge (65|80)\b' "$SKILL_DIR/shipyard-ctx.sh")"
+
 # --- the two "we do not know" sentinels must stay distinguishable ---------------------------
 read -r p1 d1 <<<"$(probe '')"
 read -r p2 d2 <<<"$(probe '1400000 tokens')"
@@ -78,5 +133,37 @@ for pane in '' '98% context used' '628k tokens' '1400000 tokens'; do
   ok "split yields a non-empty band key for [${pane:-empty}]" "yes" "$([ -n "$pct" ] && echo yes || echo no)"
   ok "split yields a non-empty display for [${pane:-empty}]"  "yes" "$([ -n "$disp" ] && echo yes || echo no)"
 done
+
+# --- WHICH of cur/peak feeds the window question — the one case that tells them apart --------
+# Everything above runs through the PANE fallback, where ctx_probe assigns peak from cur, so no
+# assertion there can distinguish a guard reading the peak from one reading the current total.
+# ctx_window_unproven made that distinction load-bearing: it gates a percentage derived from
+# `cur` on a question about `peak`. The case that separates them is the ordinary one — the
+# client's own autocompact drops `cur` sharply and leaves `peak` where it was — and reading the
+# CURRENT total there would let the inferred window bounce back down with it and re-band a
+# healthy child, which is the defect `peak` was introduced to prevent in the first place.
+#
+# WHAT THIS FAKES, and what it therefore does not prove: `ctx_claude_transcript` is replaced, so
+# the project-directory slug, the newest-by-mtime choice and the config-directory resolution stay
+# exactly as uncovered as run-all.sh says they are. Only the lookup is faked — ctx_totals and the
+# window logic under test run for real over a real fixture file.
+ctx_claude_transcript() { printf '%s' "$FAKE_TRANSCRIPT"; }
+
+# Autocompacted: the session peaked at 900000 (which rules the smallest window out) and now
+# carries 140000. The window question is settled by the peak, so this prints a percentage.
+FAKE_TRANSCRIPT=$(transcript compacted)
+usage_record 10 300 899690 0 >> "$FAKE_TRANSCRIPT"
+usage_record 10 300 139690 0 >> "$FAKE_TRANSCRIPT"
+ok "cur and peak really differ in the fixture" "140000 900000" "$(ctx_totals "$FAKE_TRANSCRIPT")"
+ok "the peak settles the window, not the current total" "14 14% · 140k" "$(probe '')"
+ok "...and it bands ok"                                 "ok"            "$(band_of '')"
+
+# The mirror: a young session whose peak has ruled nothing out, at a current total high enough
+# to alarm. Same current figure as above, and it reads differently — which is the whole point.
+FAKE_TRANSCRIPT=$(transcript young)
+usage_record 10 300 179690 0 >> "$FAKE_TRANSCRIPT"
+usage_record 10 300 139690 0 >> "$FAKE_TRANSCRIPT"
+ok "an unsettled peak withholds the percentage" "? 140k"  "$(probe '')"
+ok "...and it bands unknown"                    "unknown" "$(band_of '')"
 
 done_ t3-probe

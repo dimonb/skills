@@ -228,9 +228,12 @@ them), repaints sidebar glyphs, closes pending notices, and re-arms the Codex pa
 watcher.
 
 `SHIPYARD_CTX_WINDOW` pins the context window, in tokens as a plain integer, that the `ctx`
-percentage is measured against. Without it the window is inferred from the largest total the
-child's transcript has ever carried — a request that carried N tokens cannot have run on a
-window smaller than N — and the override beats that inference in both directions.
+percentage is measured against. Without it, a Codex child's window is read from its own rollout,
+while a Claude child's is inferred from the largest total its transcript has ever carried — a
+request that carried N tokens cannot have run on a window smaller than N. The override beats
+either in both directions. Where that inference has not yet ruled anything out and the reading
+would otherwise raise a glyph, the column shows `❓` and the raw token count rather than a
+percentage it cannot defend; setting this variable replaces it with a real band.
 
 `SHIPYARD_EFFORT` (unset by default) is an operator's explicit `--effort` level for a Claude
 child. Unset, the child is launched with no such flag: how hard to think and how deep to review

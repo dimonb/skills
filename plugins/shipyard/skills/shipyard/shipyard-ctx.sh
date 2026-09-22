@@ -41,11 +41,28 @@
 # indistinguishable from a footer total. The transcript has none of these problems, and it alone
 # carries the PEAK (below). The footer forms are kept, but as the fallback now.
 #
-# NO LIVE SIGNAL NAMES THE MODEL, so none is read and the window is inferred instead
-# (ctx_window). Three places were checked and all three are dead ends — recorded here so the next
-# reader does not re-check them:
+# WHERE EACH KIND'S WINDOW COMES FROM, stated as a scope rather than an absolute, because the two
+# kinds differ and a reader who adds a third should be corrected by this sentence:
+#
+#   codex   STATES it. Every token_count event carries `model_context_window`, so ctx_codex_totals
+#           reads the real figure and ctx_window is never consulted on that path.
+#   claude  states nothing usable, so the window is INFERRED from the peak (ctx_window) and
+#           ctx_window_unproven marks the readings where that inference is a guess.
+#   a new kind declares its own answer here; neither of the above is a default for it.
+#
+# That asymmetry is why a DECLARED PER-KIND DEFAULT was examined for #228 and rejected: it would
+# be dead code for the one kind that already knows (codex), and for claude the window is a
+# property of the MODEL rather than of the kind — nothing pins the model at launch (adp_cmd
+# renders no --model and shipyard-launch.sh records none), so a per-kind figure would be a guess
+# wearing the clothes of a fact.
+#
+# NO LIVE SIGNAL NAMES CLAUDE'S MODEL, so none is read. Three places were checked and all three
+# are dead ends — recorded here so the next reader does not re-check them:
 #   * `message.model` in the transcript OMITS the `[1m]` marker even for sessions that really are
-#     1M: it reads the same either way;
+#     1M: it reads the same either way. Re-checked for #228 on a live 1M child's own transcript —
+#     every assistant record read `claude-opus-5`, and no field anywhere in the file named a
+#     window. This is the fact that makes a per-kind default impossible, and it is not deducible
+#     from the code, so it is written down rather than left to be re-derived;
 #   * the `cost-state` record DOES carry the marker, but it is written once at session EXIT —
 #     absent from every live child, which is the only kind this reads;
 #   * a subagent's `.meta.json` carries an aliased model id, but that is what the SUBAGENT was
@@ -155,6 +172,14 @@ ctx_totals() {
 # entry is silently ignored and the correction does nothing — with no error anywhere.
 CTX_WINDOWS=(200000 1000000)
 
+# The band thresholds, as percentages. DATA for the same reason, and kept here rather than inline
+# in ctx_band because TWO readings must agree on them: ctx_band turns a percentage into a glyph,
+# and ctx_probe (below) asks whether a percentage is high enough to be worth asserting at all. A
+# second copy of 65 would let those two drift, and the drift would be invisible — the guard would
+# simply start scoping a different region than the alarm it guards.
+CTX_WARN_PCT=65
+CTX_CRIT_PCT=80
+
 # The malformed-override warning, RAISED ONCE, FROM THE CALLER'S OWN SHELL.
 #
 # It cannot live in ctx_window. ctx_window is reached only as $(ctx_window ...) inside
@@ -215,6 +240,35 @@ ctx_window() {
   printf '%s' "${CTX_WINDOWS[${#CTX_WINDOWS[@]}-1]}"
 }
 
+# ctx_window_unproven <peak> — rc 0 when ctx_window's answer for that peak is a GUESS between
+# listed sizes rather than something the peak established.
+#
+# The inference proves upward and only upward: a request that carried N tokens cannot have run on
+# a window smaller than N. So a peak that has passed 200000 has PROVEN the window is not 200000,
+# and picking the next listed size up is a deduction. A peak that has NOT passed the smallest
+# listed size has proven nothing at all, and "smallest that fits" is then a choice among the
+# listed candidates, made by picking the first one.
+#
+# The test is therefore "is a larger size listed?", not "is the peak small?": whenever ctx_window
+# returns an entry that is not the last, some listed window is equally consistent with the
+# evidence. That degenerates correctly at both ends — a single-entry list is never unproven
+# (nothing listed is being passed over), and a peak past the whole list lands on the last entry
+# and is likewise not unproven, which leaves ctx_probe's existing >100% branch to speak for it.
+#
+# An explicit SHIPYARD_CTX_WINDOW is never unproven: the operator stated the window, and this
+# file does not second-guess a stated fact. That mirrors ctx_window's own precedence, so the
+# override continues to win in both directions and to leave the `?` band immediately.
+#
+# WHAT THIS DOES NOT COVER, because no evidence reaches it: a window that is not on the list at
+# all. A real 400k session whose peak has passed 200000 lands on 1000000 and reads as proven,
+# because relative to the listed candidates it is. That under-warning is the one SHIPYARD_CTX_WINDOW
+# exists for and it is unchanged by this function.
+ctx_window_unproven() {
+  local peak="$1" last="${CTX_WINDOWS[${#CTX_WINDOWS[@]}-1]}"
+  [[ "${SHIPYARD_CTX_WINDOW:-}" =~ ^[1-9][0-9]*$ ]] && return 1
+  [ "$(ctx_window "$peak")" != "$last" ]
+}
+
 ctx_human() { awk -v n="$1" 'BEGIN{ if (n >= 1000) printf "%dk", n/1000; else printf "%d", n }'; }
 
 # The session token total an OLDER build printed in its footer ("512k tokens", or the
@@ -236,10 +290,15 @@ ctx_pane_tokens() {
 # "<band-key> <display>" for the ctx column: transcript first, footer as fallback.
 #
 # The band key is a PERCENTAGE, or one of two sentinels that are deliberately NOT the same value:
-#   -   nothing could be measured          -> band ok, display "—"
-#   ?   measured, but larger than any known window -> band unknown, display the bare figure
+#   -   nothing could be measured                -> band ok, display "—"
+#   ?   measured, but no window to scale it by    -> band unknown, display the bare figure
 # Collapsing those two into one sentinel is what made the alarm switch OFF at the ceiling: with
 # an override of 400000, 400001 tokens banded crit and 450000 banded ok.
+#
+# `?` covers two situations, both of them "there is no window I can defend this percentage with",
+# and the branches below raise it separately: a figure past every listed window, and a figure that
+# would alarm against a window ctx_window had to guess at. A reader who wants the second's full
+# argument will find it at that branch; what matters here is that neither may print a percentage.
 ctx_probe() {
   local slot="$1" pane="$2" agent f tot cur peak win pct
   agent=$(ctx_agent "$slot")
@@ -274,6 +333,23 @@ ctx_probe() {
   # too low. Either way what is missing is KNOWLEDGE, and it must look like missing knowledge: the
   # raw figure alone, no percentage.
   if [ "$pct" -gt 100 ] 2>/dev/null; then printf '%s %s' '?' "$(ctx_human "$cur")"; return; fi
+  # AN ALARM IS AN ASSERTION, SO IT NEEDS A WINDOW THE PEAK ESTABLISHED. Where ctx_window had to
+  # choose between listed sizes (ctx_window_unproven), the percentage is an assumption, and a
+  # percentage that would raise a glyph is an assumption the operator is being asked to act on.
+  # Below the warn threshold every listed candidate agrees the child is fine, so the reading is
+  # printed as usual and the ordinary early life of a child is untouched. At or above it the
+  # candidates disagree about whether anything is wrong, and the honest output is the `?` the
+  # report already renders as ❓ with the raw count — "I cannot scale this number", whose remedy
+  # is to name the window, not to compact the child.
+  #
+  # This is not the column falling silent, which is the failure it was rebuilt to remove: `?`
+  # bands `unknown`, which no consumer may read as healthy, and the report collects it into a
+  # block that prints the remedy. What it removes is the FALSE PRECISION — a 1M child reading
+  # `🛑 81% · 162k` through its normal early life, an alarm on the common path that an operator
+  # learns to ignore and that has invited compacting healthy children mid-review.
+  if [ "$pct" -ge "$CTX_WARN_PCT" ] 2>/dev/null && ctx_window_unproven "$peak"; then
+    printf '%s %s' '?' "$(ctx_human "$cur")"; return
+  fi
   # The RAW FIGURE travels with the band, always. The percentage is derived from an inferred
   # window; a reader who cannot see the token count it came from cannot tell a wrong inference
   # from a real ceiling, and a bare percentage reads authoritative either way.
@@ -292,12 +368,17 @@ ctx_probe() {
 # be untrue — ok goes silent at the worst reading the report can produce, and crit would pin every
 # child of a new model generation to a permanent alarm until the list is updated, which is the
 # glyph nobody reads. No consumer may treat it as healthy.
+#
+# TWO READINGS REACH IT, and ctx_probe is where they are told apart, not here — this function sees
+# only the `?` sentinel. A total past every listed window, and a total high enough to alarm against
+# a window ctx_window had to guess at (ctx_window_unproven). They share a band because they share
+# what is missing — a window to scale against — and they share the remedy, which is to state one.
 ctx_band() {
   case "$1" in
     ''|-) printf 'ok'; return ;;
     '?')  printf 'unknown'; return ;;
   esac
-  if   [ "$1" -ge 80 ] 2>/dev/null; then printf 'crit'
-  elif [ "$1" -ge 65 ] 2>/dev/null; then printf 'warn'
+  if   [ "$1" -ge "$CTX_CRIT_PCT" ] 2>/dev/null; then printf 'crit'
+  elif [ "$1" -ge "$CTX_WARN_PCT" ] 2>/dev/null; then printf 'warn'
   else printf 'ok'; fi
 }

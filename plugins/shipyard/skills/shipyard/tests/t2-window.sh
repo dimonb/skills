@@ -15,6 +15,33 @@ ok "peak at the top of the list"   "1000000" "$(ctx_window 1000000)"
 # resulting >100% into the `?` band; see t3.
 ok "peak past the whole list"      "1000000" "$(ctx_window 1000001)"
 
+# --- ctx_window_unproven: was that window a DEDUCTION, or a CHOICE between listed sizes? -----
+# The inference proves upward and only upward. A peak that has not passed the smallest listed
+# size has ruled nothing out, so "smallest that fits" picked one candidate out of several; once
+# the peak has passed it, that size is excluded and the next one up is a deduction. ctx_probe
+# withholds a glyph in the first case (see t3), so this predicate is what decides where the alarm
+# is allowed to speak — and a defect in it is silent in BOTH directions: too wide and the column
+# stops warning a child that really is filling up, too narrow and #228's false alarm comes back.
+unproven() { ctx_window_unproven "$1" && echo yes || echo no; }
+ok "peak 0 has ruled nothing out"         "yes" "$(unproven 0)"
+ok "peak just under the smallest size"    "yes" "$(unproven 199999)"
+ok "peak exactly on the smallest size"    "yes" "$(unproven 200000)"
+ok "peak one over -> the next size is a deduction" "no" "$(unproven 200001)"
+ok "peak well over"                       "no"  "$(unproven 461514)"
+# Past the whole list ctx_window returns the last entry, so nothing listed is being passed over.
+# ctx_probe's >100% branch speaks for that reading instead; this one must stay out of its way.
+ok "peak past the whole list"             "no"  "$(unproven 1000001)"
+
+# A STATED window is never a guess — the operator said what it is, and nothing here re-opens it.
+ok "override, peak below the whole list"  "no"  "$(SHIPYARD_CTX_WINDOW=1000000 unproven 5000)"
+ok "override, peak above it"              "no"  "$(SHIPYARD_CTX_WINDOW=100000 unproven 900000)"
+# A MALFORMED override is not a stated window. ctx_window ignores it and infers, so this must
+# report the inference's state too — otherwise the operator's already-dead escape hatch would
+# ALSO silently switch the guard off, and the column would go quiet for a reason nobody can see.
+for bad in "1M" "1000k" "0" "abc"; do
+  ok "malformed override '$bad' is not a stated window" "yes" "$(SHIPYARD_CTX_WINDOW="$bad" unproven 5000)"
+done
+
 # --- CTX_WINDOWS must stay ascending, or "smallest that fits" silently stops being true -----
 prev=0; ascending=yes
 for w in "${CTX_WINDOWS[@]}"; do
@@ -79,7 +106,7 @@ drive='
   ctx_check_env
   n=0
   for t in 1 2 3; do for s in 1 2 3 4 5; do
-    read -r a b <<<"$(ctx_probe "$s" "accept edits 172188 tokens")"
+    read -r a b <<<"$(ctx_probe "$s" "accept edits 860000 tokens")"
     n=$((n+1))
   done; done
   printf "%s %s %s\n" "$n" "${a:-}" "${b:-}"
@@ -87,8 +114,14 @@ drive='
 out=$(SHIPYARD_CTX_WINDOW=1M bash -c "$drive" _ "$SKILL_DIR" 2>"$CTX_TEST_DIR/drive.err")
 n=$(grep -c '^warning:' "$CTX_TEST_DIR/drive.err")
 ok "15 probes in one shell warn exactly once" "1" "$n"
-# ...and the probes actually ran, and actually reached ctx_window. 172188 against an inferred
-# 200000 window is 86%; if ctx_probe returned early the band would be empty instead.
+# ...and the probes actually ran, and actually reached ctx_window. 860000 against an inferred
+# 1000000 window is 86%; if ctx_probe returned early the band would be empty instead.
+#
+# THE FIGURE IS ABOVE THE SMALLEST LISTED WINDOW ON PURPOSE. The evidence this block needs is a
+# PERCENTAGE — that is what proves the probe got as far as ctx_window rather than returning on
+# an earlier branch. A figure below the smallest listed size now renders `?` at this band
+# (ctx_window_unproven, t3), which ctx_probe also reaches after ctx_window but which the `?` at
+# the top of the list produces too, so it would no longer tell those apart.
 ok "the drive really ran 15 probes"          "15"          "$(printf '%s' "$out" | cut -d' ' -f1)"
 ok "the drive's probes really banded"        "86"          "$(printf '%s' "$out" | cut -d' ' -f2)"
 

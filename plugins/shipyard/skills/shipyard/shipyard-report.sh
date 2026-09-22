@@ -466,7 +466,7 @@ STALLED=()
 STALL_ROWS=()
 WAITING=()    # motionless for a stated, self-healing reason — nothing to do
 ATTENTION=()  # motionless for a known reason that needs a person, but never compaction
-UNSCALED=()   # slots whose ctx figure exceeds every window size the report knows of
+UNSCALED=()   # slots whose ctx figure has no window the report can defend scaling it by
 
 # --- the supervision gap ---------------------------------------------------------------
 # THE STALL CLOCK ONLY MEASURES WHAT THIS SCRIPT WATCHED. `since` is carried across runs in
@@ -1299,11 +1299,14 @@ fi
     done
   fi
   # An unscalable ctx figure is NOT a healthy one, and the band alone is easy to miss in a wide
-  # table — so it gets its own line. It means the report is holding a token count larger than any
-  # window it knows of, which is the one state where it can neither reassure nor alarm honestly.
+  # table — so it gets its own line. It means the report is holding a token count and no window it
+  # can defend scaling the count by, which is the one state where it can neither reassure nor
+  # alarm honestly. The causes are ctx_probe's business, not this block's: what the operator does
+  # about them is the same act, so the text states the missing thing and the remedy rather than
+  # sorting the slots into kinds it would then have to keep in step with ctx_probe.
   if [ "${#UNSCALED[@]}" -gt 0 ]; then
     echo
-    echo "### ❓ ctx OUT OF RANGE — a figure larger than any window this report knows of"
+    echo "### ❓ ctx UNSCALED — a token count with no window to measure it against"
     for sl in "${UNSCALED[@]}"; do
       echo "- \`$sl\` — the token count is shown without a percentage because none can be computed."
       echo "  Do NOT read the missing glyph as healthy: this child may be at its ceiling or nowhere near it."
