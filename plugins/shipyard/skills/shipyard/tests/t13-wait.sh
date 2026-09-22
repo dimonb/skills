@@ -425,6 +425,9 @@ jq -n --arg now "$(shipyard_now)" \
   '{id:"directive-43-1", slot:"43", kind:"directive", text:"resume", created_at:$now,
     status:"sent", delivery:"delivered"}' >"$FAKE_GIT/ship-escalations/directive-43-1.json"
 export T13_PANE43='❯ [supervisor directive] resume'
+# Back-dated first, so this check can fail: were `since` carried across the nudge, 43 would be
+# 200s motionless against a 100s threshold and stall right here.
+backdate_stall 200
 tick_now; outE4a=$(run_report 100)
 ok "E4: the tick the nudge lands restarts the clock"     0 "$(stall_43 "$outE4a")"
 # Five firings so far: B, E1, E2, E3 and E3's --only-changed run, which is a firing like any other.
@@ -464,9 +467,25 @@ tick_now; outE6=$(run_report 100)
 ok "E6: a leading-zero count does not drop the stall"    1 "$(stall_43 "$outE6")"
 ok "E6: ...it reads as a first firing"                   1 \
    "$(printf '%s' "$outE6" | grep -c '^- `43` — motionless for .* announcing no reason')"
-unset T13_PANE43
-rm -f "$FAKE_GIT/ship-escalations/directive-43-"*.json
+# The same guard on every other number in the row — `since` among them, the route the report's
+# trust note names as closed. Refused values restart the clock or the record rather than abort, so
+# the assertion is that the report got through 43 at all: its table row is printed.
+awk -F'\t' 'BEGIN{OFS="\t"} $1 == "43" {$3="08"; $4="09"; $7="08"} {print}' \
+  "$FAKE_GIT/ship-escalations/report-stall" >"$FAKE_GIT/ship-escalations/report-stall.tmp" \
+  && mv "$FAKE_GIT/ship-escalations/report-stall.tmp" "$FAKE_GIT/ship-escalations/report-stall"
+tick_now; outE6b=$(run_report 100)
+ok "E6: leading zeros in since, fired_epoch and last_fired do not abort the report" 1 \
+   "$(printf '%s' "$outE6b" | grep -c '^| 43 ')"
 
+# E7 — the carry is bounded. With no directive on record, a screen change sheds the firing record:
+# the next stall of this slot is a new one, not the old episode with a stale count.
+backdate_stall 200
+tick_now; run_report 100 >/dev/null     # 43 fires again, so it has a live record to shed
+rm -f "$FAKE_GIT/ship-escalations/directive-43-"*.json
+unset T13_PANE43
+tick_now; run_report 100 >/dev/null
+ok "E7: a screen change with no directive sheds the episode" 0 \
+   "$(awk -F'\t' '$1 == "43" { print $6 }' "$FAKE_GIT/ship-escalations/report-stall")"
 
 # --- run C: --only-changed is silent when nothing moved, which is what makes suppressing the
 # stall block for a classified slot cost the operator nothing.

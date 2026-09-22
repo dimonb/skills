@@ -486,9 +486,12 @@ STALL_ROWS=()
 # which ends it) — is counted in extra fields of $STALLFILE: `fired_epoch`, `fired_at` (the same
 # instant as shipyard_now prints it, for comparing against directive records), `firings`, and
 # `last_fired` (the epoch of the latest firing). The record rides with the stall clock's `since`,
-# plus ONE exception: a signature change that a directive caused, which the carry in the slot loop
-# describes — a nudge types into the very screen whose hash is the signature. The block takes one of
-# three shapes per slot:
+# plus ONE exception, the carry in the slot loop, which exists because a nudge types into the very
+# screen whose hash is the signature: a change to the screen part alone, within one stall threshold
+# of the last firing, once a directive has been recorded since the episode's first firing. That is
+# a condition on timing, not proof that the directive CAUSED the change — a child that moves by
+# itself inside that window after a nudge keeps its episode too, and its line still truthfully
+# names the nudge. The block takes one of three shapes per slot:
 #   * FIRST firing: the full remedy, unchanged.
 #   * later firings: ONE line leading with the delta — still motionless, now N min, raised M min
 #     ago, and whether anything was sent since.
@@ -620,7 +623,8 @@ GAP=0
 if [ -n "$TICKFILE" ] && [ -f "$TICKFILE" ]; then
   prev_tick=$(cat "$TICKFILE" 2>/dev/null)
   case "${prev_tick:-}" in
-    ''|*[!0-9]*) ;;   # unreadable or not an epoch: claim no gap rather than a wrong one
+    # A leading zero is refused too: it is octal to `$(( ))` below, where `08` is an error.
+    ''|0*|*[!0-9]*) ;;   # unreadable or not an epoch: claim no gap rather than a wrong one
     *) if [ "$RUN_EPOCH" -gt "$prev_tick" ] && [ $(( RUN_EPOCH - prev_tick )) -gt "$STALL_SECS" ]; then
          GAP=$(( RUN_EPOCH - prev_tick ))
        fi ;;
@@ -1236,7 +1240,9 @@ for slot in "${SLOTS[@]}"; do
   if [ -n "$STALLFILE" ] && [ -f "$STALLFILE" ]; then
     # The slot is matched as an exact FIELD: a substring match on "<slot><TAB>" also hits the row of
     # a slot whose name ends in this one, which the launcher's `<slot>-N` naming makes ordinary.
-    prev=$(awk -F'\t' -v s="$slot" '$1 == s { print; exit }' "$STALLFILE" 2>/dev/null)
+    # Concatenating "" forces a STRING comparison: awk compares numeric-looking fields as numbers,
+    # so a bare `$1 == s` would let slot `43` match a row for `043`.
+    prev=$(awk -F'\t' -v s="$slot" '$1 "" == s "" { print; exit }' "$STALLFILE" 2>/dev/null)
     prev_sig=$(printf '%s' "$prev" | cut -f2)
     # Every number in the row goes through stall_num: the row is peer-writable, and a value bash
     # arithmetic rejects (a leading zero reads as octal, so `08` is an error) aborts the whole slot
