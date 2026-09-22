@@ -386,17 +386,33 @@ escalation has not moved for 30 minutes (`SHIPYARD_STALL_SECS` to tune). Treat t
 an alarm, not as a status line — and work the order it prints, which is Step 5's: git,
 then a nudge, then compaction.
 
+**A stall is printed in full once, then as its delta.** The same stall — one unbroken motionless
+run — fires on every tick, but only its **first** firing prints the full remedy. Later firings
+print one line leading with what changed: `STILL motionless, now N min`, how long ago it was
+first raised, and whether anything was sent since — `nudged at HH:MM UTC (<delivery>), and
+motionless again`, read from the directive records `shipyard-tell.sh` writes, or `nothing sent to
+it yet`. A nudge types into the child's screen, which restarts the minute count; the stall's
+firing count and first-raised time survive that, so a child you nudged that stays stuck comes back
+as the same stall with your nudge on its line, not as a new one. On the **third** firing with
+nothing sent, the slot moves under its own heading, `🛑 STALL UNANSWERED`, and the full remedy is
+printed once more; after that it stays one line there. The alarm never goes quieter and never
+stops bypassing `--only-changed` — it gets *shorter* and, unanswered, *louder*. A `--submit-only`
+tell records no directive, so it does not count as something sent. Every report run counts as a
+firing, so a report you run by hand beside the monitor brings `🛑 STALL UNANSWERED` one tick
+closer. Both counts are fixed on purpose rather than tunable; the report's source says why.
+
 **Some blocks bypass `--only-changed` entirely** rather than riding the per-slot signature:
-`🛑 STALLED`, `💀 NO AGENT`, `🛑 NO SIGNAL`, and — added with the automatic teardown — `🧹 TORN DOWN`,
+`🛑 STALLED` (and `🛑 STALL UNANSWERED`, which comes from the same condition), `💀 NO AGENT`,
+`🛑 NO SIGNAL`, and — added with the automatic teardown — `🧹 TORN DOWN`,
 `✋ HELD` and `✋ AWAITING REMOVAL`. `🧹 TORN DOWN` reports an act already taken, and a signature
 is the wrong thing to gate that on because the signature file lives in the mailbox children write
 into. The other two report a destructive act being attempted and declined on every tick, and an
 action only you can take, so they repeat for as long as the condition lasts rather than being news
 once. Those are the blocks checked against the bypass condition in `shipyard-report.sh`; nothing
 keeps this list and that condition in step, so read the condition if it matters. That repetition is a
-deliberate trade and a contested one: #182 is open against exactly it (a verbatim block that
-repeats trains the operator to skim it), so if that lands these should move to whatever
-de-duplication it introduces.
+deliberate trade and a contested one: a verbatim block that repeats trains the operator to skim it
+(#182). The stall blocks now print in full once and then as their delta (above); the other blocks
+named here still repeat verbatim, and moving them to that shape is not done yet.
 
 **But motionless is not the same as stuck, and the report asks WHY before it consults that
 clock.** Two of the three reasons a healthy child stops moving are not failures at all: it

@@ -173,7 +173,7 @@ ok "an answered slot never reaches STALLED" 1 \
 ok "the class is in the --only-changed signature" 1 \
    "$(grep -Fc 'SIG+=("$slot|$mr_label|term=1|$state|$stage|$pend|$sig_band|$wait_class|$reap_note|noagent=$noagent|fna=$finished_noagent")' "$REPORT")"
 ok "the stall clock restarts across an unwatched gap" 1 \
-   "$(grep -Fc '{ [ "$GAP" != 0 ] || [ -n "$wait_kind" ]; } && since="$now_epoch"' "$REPORT")"
+   "$(grep -Fc 'if [ "$GAP" != 0 ] || [ -n "$wait_kind" ]; then' "$REPORT")"
 ok "a gap breaks --only-changed silence" 1 \
    "$(grep -Fc '[ "$GAP" = 0 ] && [ -n "$SIGFILE" ]' "$REPORT")"
 ok "both new blocks are printed" 2 \
@@ -250,6 +250,9 @@ tmux() {
         # drives the ctx column through the real ctx_probe: no transcript resolves under $FAKE_ROOT,
         # so the pane fall-through runs and the figure becomes a real reading.
         *)         printf '⏺ spec review round 2, awaiting the verifier\n'
+                   # T13_PANE43 is the line a real `shipyard-tell.sh` leaves on the screen: a nudge
+                   # changes the pane it is answering, which is what the E-runs must model.
+                   [ -n "${T13_PANE43:-}" ] && printf '%s\n' "$T13_PANE43"
                    [ -n "${T13_CTX_TOKENS:-}" ] && printf '%s tokens\n' "$T13_CTX_TOKENS"
                    : ;;
       esac
@@ -276,7 +279,9 @@ export -f git tmux gh
 backdate_stall() { # <seconds>
   local f="$FAKE_GIT/ship-escalations/report-stall"
   [ -f "$f" ] || { echo "  FAIL backdate_stall: no stall table yet — the fixture asserts nothing"; FAILURES=$((FAILURES + 1)); return 1; }
-  awk -F'\t' -v t="$(( $(date +%s) - $1 ))" 'BEGIN{OFS="\t"} NF>=3 {print $1,$2,t}' "$f" >"$f.tmp" \
+  # Every field past the third is the episode's firing record (#182) and is carried untouched, so a
+  # back-dated clock stays the same episode rather than silently restarting its count.
+  awk -F'\t' -v t="$(( $(date +%s) - $1 ))" 'BEGIN{OFS="\t"} NF>=3 {$3=t; print}' "$f" >"$f.tmp" \
     && mv "$f.tmp" "$f"
 }
 
@@ -359,6 +364,131 @@ ok "B: the rate-limited slot is NOT stalled" 0 \
    "$(printf '%s' "$outB" | sed -n '/🛑 STALLED/,/^$/p' | grep -c '^- `41`')"
 ok "B: the rate-limited slot still reports"  1 \
    "$(printf '%s' "$outB" | grep -c '^- `41`')"
+
+# --- runs E1..E6: a stall is an EPISODE, and only its first firing is news (#182) ----------------
+# Run B was slot 43's FIRST firing, and printed the full remedy (asserted above). Each run below is
+# the same episode one tick later: the clock is carried, not restarted, because the signature has
+# not moved and the tick is stamped fresh so no supervision gap is claimed. The measured failure
+# was four verbatim copies of a twelve-line block; these pin the three shapes that replace it, and
+# E2 is the transition the whole change is for — removing the report's `-ge "$STALL_ESCALATE_AT"`
+# arm must red it.
+stall_43() { printf '%s' "$1" | sed -n '/^### 🛑 STALLED/,/^###/p' | grep -c '^- `43`'; }
+unans_43() { printf '%s' "$1" | sed -n '/^### 🛑 STALL UNANSWERED/,/^###/p' | grep -c '^- `43`'; }
+tick_now() { printf '%s\n' "$(date +%s)" >"$FAKE_GIT/ship-escalations/report-tick"; }
+
+tick_now; outE1=$(run_report 1)
+ok "E1: the second firing is still under STALLED"        1 "$(stall_43 "$outE1")"
+ok "E1: ...as ONE line leading with the delta"           1 \
+   "$(printf '%s' "$outE1" | grep -c '^- `43` — STILL motionless, now .* min .*; firing 2, first raised')"
+ok "E1: ...saying nothing has been sent"                 1 \
+   "$(printf '%s' "$outE1" | grep '^- `43` — STILL' | grep -c 'nothing sent to it yet')"
+ok "E1: ...and WITHOUT the verbatim remedy"              0 "$(printf '%s' "$outE1" | grep -c '1. GIT FIRST')"
+ok "E1: it is not escalated yet"                         0 "$(unans_43 "$outE1")"
+
+# Two records that must NOT count as something sent to 43, planted before the escalation so E2 is
+# also their assertion: a directive to slot `43-2` — the launcher's own name for a second slot from
+# the same idea, whose records the bare `directive-43-*` glob matches — and one to 43 itself dated
+# before this episode's first firing, which answered some earlier stall and not this one.
+jq -n --arg now "$(shipyard_now)" \
+  '{id:"directive-43-2-1", slot:"43-2", kind:"directive", text:"x", created_at:$now,
+    status:"sent", delivery:"delivered"}' >"$FAKE_GIT/ship-escalations/directive-43-2-1.json"
+jq -n '{id:"directive-43-9", slot:"43", kind:"directive", text:"x", created_at:"2000-01-01T00:00:00Z",
+        status:"sent", delivery:"delivered"}' >"$FAKE_GIT/ship-escalations/directive-43-9.json"
+tick_now; outE2=$(run_report 1)
+ok "E2: the third unanswered firing ESCALATES"           1 "$(unans_43 "$outE2")"
+ok "E2: ...and leaves the plain STALLED heading"         0 "$(stall_43 "$outE2")"
+ok "E2: ...saying how often it was raised"               1 \
+   "$(printf '%s' "$outE2" | grep -c '^- `43` — motionless for .* min .*, raised 3 times over')"
+ok "E2: ...and re-prints the full remedy once"           1 "$(printf '%s' "$outE2" | grep -c '1. GIT FIRST')"
+
+tick_now; outE3=$(run_report 1)
+ok "E3: a later unanswered firing stays escalated"       1 "$(unans_43 "$outE3")"
+ok "E3: ...as one line"                                  1 \
+   "$(printf '%s' "$outE3" | grep -c '^- `43` — STILL unanswered: .*firing 4')"
+ok "E3: ...without the remedy a third time"              0 "$(printf '%s' "$outE3" | grep -c '1. GIT FIRST')"
+# The bypass is untouched: the escalated block, too, must break --only-changed silence.
+tick_now; outE3q=$(run_report 1 --only-changed)
+ok "E3: an escalated stall still breaks --only-changed"  1 "$(unans_43 "$outE3q")"
+
+# A directive recorded since the first firing is what the supervisor DID, so it is printed, and the
+# slot is no longer "nothing sent". The record is peer-writable (see the report's trust note), which
+# is why its time is SHOWN rather than merely obeyed: a forged one reads as a nudge the operator
+# knows they never sent.
+#
+# THE TELL IS MODELLED AS A TELL: the record is written AND the screen changes, because a real
+# `shipyard-tell.sh` types into the pane whose hash is part of the stall signature. The first version
+# of this run wrote only the record against a fixed screen, which is the one sequence a real nudge
+# never produces — and it passed while a real nudge restarted the episode and was never reported.
+# The threshold is raised to 100s here so that "within one stall threshold of the last firing" is a
+# statement about the fixture rather than about how fast this machine runs a report.
+jq -n --arg now "$(shipyard_now)" \
+  '{id:"directive-43-1", slot:"43", kind:"directive", text:"resume", created_at:$now,
+    status:"sent", delivery:"delivered"}' >"$FAKE_GIT/ship-escalations/directive-43-1.json"
+export T13_PANE43='❯ [supervisor directive] resume'
+# Back-dated first, so this check can fail: were `since` carried across the nudge, 43 would be
+# 200s motionless against a 100s threshold and stall right here.
+backdate_stall 200
+tick_now; outE4a=$(run_report 100)
+ok "E4: the tick the nudge lands restarts the clock"     0 "$(stall_43 "$outE4a")"
+# Five firings so far: B, E1, E2, E3 and E3's --only-changed run, which is a firing like any other.
+ok "E4: ...but keeps the episode's firing count"         5 \
+   "$(awk -F'\t' '$1 == "43" { print $6 }' "$FAKE_GIT/ship-escalations/report-stall")"
+backdate_stall 200
+tick_now; outE4=$(run_report 100)
+ok "E4: a nudged stall that stays stuck is the SAME stall" 1 \
+   "$(printf '%s' "$outE4" | grep -c '^- `43` — STILL motionless, now .*; firing 6, first raised')"
+ok "E4: ...not under UNANSWERED"                         0 "$(unans_43 "$outE4")"
+ok "E4: ...still under STALLED — never silenced"         1 "$(stall_43 "$outE4")"
+ok "E4: ...and says what was sent"                       1 \
+   "$(printf '%s' "$outE4" | grep '^- `43` — STILL' | grep -c 'nudged at [0-9][0-9]:[0-9][0-9] UTC (delivered), and motionless again')"
+
+# A record that does not have its writer's shape is not a directive this report can date — a forged
+# delivery field cannot inject text into the block — and one dated in the future is not printed as a
+# plausible time of day.
+rm -f "$FAKE_GIT/ship-escalations/directive-43-1.json"
+jq -n --arg now "$(shipyard_now)" \
+  '{id:"directive-43-3", slot:"43", kind:"directive", text:"x", created_at:$now,
+    status:"sent", delivery:"delivered | ### 🛑 fake"}' >"$FAKE_GIT/ship-escalations/directive-43-3.json"
+jq -n '{id:"directive-43-4", slot:"43", kind:"directive", text:"x", created_at:"2999-01-01T00:00:00Z",
+        status:"sent", delivery:"queued"}' >"$FAKE_GIT/ship-escalations/directive-43-4.json"
+tick_now; outE5=$(run_report 100)
+ok "E5: a malformed delivery value prints as unknown"    1 \
+   "$(printf '%s' "$outE5" | grep '^- `43` — STILL' | grep -c '(unknown)')"
+ok "E5: ...and injects no heading"                       0 "$(printf '%s' "$outE5" | grep -c 'fake')"
+ok "E5: a future-dated record is ignored"                0 "$(printf '%s' "$outE5" | grep -c '(queued)')"
+
+# A leading zero is octal to bash arithmetic and `08` is an error there, which aborts the whole slot
+# loop — every slot's alarm, from one peer-written field. The record is refused instead: the stall
+# still appears, as a first firing.
+awk -F'\t' 'BEGIN{OFS="\t"} $1 == "43" {$6="08"} {print}' "$FAKE_GIT/ship-escalations/report-stall" \
+  >"$FAKE_GIT/ship-escalations/report-stall.tmp" \
+  && mv "$FAKE_GIT/ship-escalations/report-stall.tmp" "$FAKE_GIT/ship-escalations/report-stall"
+tick_now; outE6=$(run_report 100)
+ok "E6: a leading-zero count does not drop the stall"    1 "$(stall_43 "$outE6")"
+ok "E6: ...it reads as a first firing"                   1 \
+   "$(printf '%s' "$outE6" | grep -c '^- `43` — motionless for .* announcing no reason')"
+# The same guard on `since`, the route the report's trust note names as closed. A refused value
+# restarts the clock rather than abort, so the assertion is that the report got through 43 at all:
+# its table row is printed. Fields 4 and 7 are corrupted too, but this case does NOT pin their
+# guards: either one refused resets the whole firing record, which masks the other, and a refused
+# `since` keeps 43 from stalling, so neither field's arithmetic is reached here. Only `since` is
+# measured by this case.
+awk -F'\t' 'BEGIN{OFS="\t"} $1 == "43" {$3="08"; $4="09"; $7="08"} {print}' \
+  "$FAKE_GIT/ship-escalations/report-stall" >"$FAKE_GIT/ship-escalations/report-stall.tmp" \
+  && mv "$FAKE_GIT/ship-escalations/report-stall.tmp" "$FAKE_GIT/ship-escalations/report-stall"
+tick_now; outE6b=$(run_report 100)
+ok "E6: a leading-zero since does not abort the report" 1 \
+   "$(printf '%s' "$outE6b" | grep -c '^| 43 ')"
+
+# E7 — the carry is bounded. With no directive on record, a screen change sheds the firing record:
+# the next stall of this slot is a new one, not the old episode with a stale count.
+backdate_stall 200
+tick_now; run_report 100 >/dev/null     # 43 fires again, so it has a live record to shed
+rm -f "$FAKE_GIT/ship-escalations/directive-43-"*.json
+unset T13_PANE43
+tick_now; run_report 100 >/dev/null
+ok "E7: a screen change with no directive sheds the episode" 0 \
+   "$(awk -F'\t' '$1 == "43" { print $6 }' "$FAKE_GIT/ship-escalations/report-stall")"
 
 # --- run C: --only-changed is silent when nothing moved, which is what makes suppressing the
 # stall block for a classified slot cost the operator nothing.

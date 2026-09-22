@@ -470,8 +470,133 @@ autodown_consider() {
   return 1
 }
 
-STALLED=()
+STALLED=()   # "<slot>|<mins>|<ctx>|<firing>|<raised-mins-ago>|<nudge>" — every stalled slot, whatever its shape
+STALL_PLAIN=()       # STALLED entries rendered under 🛑 STALLED (first firing in full, later ones as one line)
+STALL_UNANSWERED=()  # STALLED entries rendered under 🛑 STALL UNANSWERED
 STALL_ROWS=()
+
+# --- a stall is an EPISODE, and only its first firing is news (#182) -------------------
+# The block used to be emitted as if every firing were the first: twelve lines of remedy, verbatim,
+# every tick, with the one changing fact — the minute count — buried in the first line. Measured on
+# this repo's own supervisor: an hour of fleet idle after the alarm had already fired, answered
+# "progressing, waiting" several times in a row. It was not a missed alarm; it was an alarm read,
+# recognised and discounted, because the fourth copy said nothing the first had not.
+#
+# So an episode — one slot motionless without a break, a supervision gap, or a stated wait (any of
+# which ends it) — is counted in extra fields of $STALLFILE: `fired_epoch`, `fired_at` (the same
+# instant as shipyard_now prints it, for comparing against directive records), `firings`, and
+# `last_fired` (the epoch of the latest firing). The record rides with the stall clock's `since`,
+# plus ONE exception, the carry in the slot loop, which exists because a nudge types into the very
+# screen whose hash is the signature: whenever `since` is not carried (the screen part of the
+# signature moved, or a stored `since` was refused) while the state, stage and escalation part did
+# not move, within one stall threshold of the last firing, and once a directive has been recorded
+# since the episode's first firing. That is
+# a condition on timing, not proof that the directive CAUSED the change — a child that moves by
+# itself inside that window after a nudge keeps its episode too, and its line still truthfully
+# names the nudge. The block takes one of three shapes per slot:
+#   * FIRST firing: the full remedy, unchanged.
+#   * later firings: ONE line leading with the delta — still motionless, now N min, raised M min
+#     ago, and whether anything was sent since.
+#   * the UNANSWERED escalation: from firing $STALL_ESCALATE_AT, when no directive has been recorded
+#     for the slot since the episode's first firing, the slot moves under its own louder heading,
+#     and the full remedy is printed ONCE more at that transition — a supervisor that compacted in
+#     between may no longer hold the first copy. Later firings stay one line under that heading.
+# Neither number is a knob, deliberately. ONE full firing because a second identical copy is exactly
+# the repetition being removed. THREE for the escalation because the first firing is the alarm and
+# the second is the reminder that it is still true; a third with nothing sent is the measured
+# failure itself — the alarm read and discounted — so that is where it must become a different event
+# rather than a louder copy. Tuning either upward buys back the incident; tune neither.
+#
+# WHAT DECIDES WHETHER THE BLOCK APPEARS IS UNCHANGED: `STALLED` non-empty, which bypasses
+# --only-changed exactly as before. Everything added here decides only how a line READS. That
+# matters because both new inputs are peer-writable — AGENTS.md, "untrusted evidence may annotate
+# an operator-facing signal, never suppress one":
+#   * $STALLFILE lives in the mailbox every child writes into. Its new fields can move a slot
+#     between full and one-line, and hold back or bring forward the UNANSWERED heading. Every number
+#     read from it passes stall_num first, because one value bash arithmetic rejects (a leading
+#     zero is octal: `08` is an error) aborts the whole slot loop and so drops EVERY slot from the
+#     block — that route, which the `since` field had before #182 as well, is what stall_num closes.
+#     NOT closed, and predating #182: a child that rewrites its own `since` to a recent epoch resets
+#     its own clock and so stays under the threshold, which removes it from the block outright.
+#   * directive records (`directive-<slot>-<n>.json`, written by shipyard-tell.sh) live in the same
+#     mailbox. A forged one can withhold the UNANSWERED heading, and can keep an episode's count
+#     across a screen change (the carry). What this achieves there is SELF-REVELATION, not
+#     prevention: the one-line form prints the directive's time and delivery verdict as "nudged at
+#     <time> (<delivery>)", so a forged record shows up as a nudge the operator knows they never
+#     sent — and a record dated in the future is ignored rather than printed as a plausible time.
+#     The slot's line appears on every tick either way.
+STALL_ESCALATE_AT=3
+
+# stall_remedy <slot> — the full remedy, printed at a stall's FIRST firing and once more at its
+# UNANSWERED transition, never on the firings between (see above).
+stall_remedy() {
+  # The order is load-bearing and is the whole of Step 5's diagnosis rule, restated at the point of
+  # alarm: the cheapest and most reliable evidence first, hand-driving never.
+  echo "  1. GIT FIRST: \`git -C $ROOT/.claude/worktrees/ship-$1 log --oneline -5\` and \`git status\`."
+  echo "     Git says what the child PRODUCED; the pane says only what it INTENDED, and the commonest"
+  echo "     stall silhouette is a child that left its own next instruction unsubmitted in the input box."
+  echo "  2. THEN NUDGE IT: \`bash $DIR/shipyard-tell.sh $1 \"<what to do next>\"\`. It types, submits, polls"
+  echo "     the child's turn state and reports delivered/queued, or unconfirmed and exit 6. Do not hand-drive."
+  echo "  2b. IF IT CAME BACK unconfirmed: peek, and submit what is already in the box — the nudge prints"
+  echo "     both commands. Compaction's FIRST act is Escape, which CLEARS the box, so compacting here"
+  echo "     throws the directive away. The text survives in the mailbox .txt, the delivery does not."
+  echo "  3. ONLY THEN COMPACT: \`bash $DIR/shipyard-compact.sh $1\` (compacts AND resumes) — and only if"
+  echo "     ctx is ⚠️/🛑, or the unconfirmed nudge turns out to be a child REFUSING input. An unconfirmed"
+  echo "     on a child that was running all window is the healthy case and is NOT a compaction trigger."
+  echo "     A ❓ ctx is NOT a compaction trigger and NOT a clearance: it means the figure has no window"
+  echo "     this report can defend asserting it against, so resolve that first (see the block below)"
+  echo "     and act on the band it turns into. NOTE: on an un-pinned claude fleet ⚠️/🛑 may never appear"
+  echo "     at all — a child whose window IS the smallest size this report knows can never settle it, so"
+  echo "     every reading above the warn threshold stays a ❓ bound. There, a bound whose raw count is"
+  echo "     approaching that smallest size is what stands in for the glyph; pin SHIPYARD_CTX_WINDOW so"
+  echo "     this condition can fire properly."
+}
+
+# stall_num <value> — <value> if it is a number bash arithmetic reads as the decimal it looks like,
+# else nothing. A leading zero is refused (it is octal to `$(( ))`, and `08` is an error there), and
+# so is anything longer than twelve digits (an epoch is ten; a longer one could wrap).
+stall_num() {
+  case "$1" in 0) printf '0' ;; ''|0*|*[!0-9]*|?????????????*) ;; *) printf '%s' "$1" ;; esac
+}
+
+# stall_iso <value> — succeeds when <value> has shipyard_now's shape, `YYYY-MM-DDTHH:MM:SSZ`.
+stall_iso() {
+  case "$1" in [0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]T[0-9][0-9]:[0-9][0-9]:[0-9][0-9]Z) return 0 ;; esac
+  return 1
+}
+
+# last_directive_since <slot> <iso> — "<created_at>\t<delivery>" of the newest directive recorded for
+# <slot> at or after <iso> and not after now, or nothing. Both timestamps are shipyard_now's UTC
+# `YYYY-MM-DDTHH:MM:SSZ`, which orders lexically, so no date arithmetic (and no GNU-vs-BSD `date`) is
+# needed. A `--submit-only` tell records nothing and so is not seen here: it reads as "nothing
+# sent", the louder side. An <iso> without that shape matches nothing, for the same reason.
+last_directive_since() {
+  local f c d n s now best="" bestd=""
+  [ -d "$MAILBOX_DIR" ] || return 0
+  stall_iso "$2" || return 0
+  now=$(shipyard_now)
+  for f in "$MAILBOX_DIR/directive-$1-"*.json; do
+    [ -f "$f" ] || continue
+    # The glob alone also matches `directive-<slot>-2-1.json`, which is slot `<slot>-2`'s record —
+    # the launcher's own name for a second slot from the same idea. What follows the prefix must be
+    # the record's number and nothing else, and the record must name this slot.
+    n=${f##*/directive-$1-}; n=${n%.json}
+    case "$n" in ''|*[!0-9]*) continue ;; esac
+    s=$(jq -r '.slot // empty' "$f" 2>/dev/null) || continue
+    [ "$s" = "$1" ] || continue
+    c=$(jq -r '.created_at // empty' "$f" 2>/dev/null) || continue
+    d=$(jq -r '.delivery // "unknown"' "$f" 2>/dev/null) || d=unknown
+    # The record is peer-writable and both values are printed into the block, so each is held to
+    # the shape its writer produces: anything else is not a directive this report can date.
+    stall_iso "$c" || continue
+    case "$d" in ''|*[!a-z_-]*) d=unknown ;; esac
+    [[ "$c" < "$2" ]] && continue
+    [[ "$c" > "$now" ]] && continue
+    if [ -z "$best" ] || [[ "$c" > "$best" ]]; then best="$c"; bestd="$d"; fi
+  done
+  [ -n "$best" ] && printf '%s\t%s\n' "$best" "$bestd"
+  return 0
+}
 WAITING=()    # motionless for a stated, self-healing reason — nothing to do
 ATTENTION=()  # motionless for a known reason that needs a person, but never compaction
 NOAGENT=()    # "<slot>|<ctx>" — a live terminal whose agent is gone (drv_occupant `none`, twice)
@@ -500,7 +625,8 @@ GAP=0
 if [ -n "$TICKFILE" ] && [ -f "$TICKFILE" ]; then
   prev_tick=$(cat "$TICKFILE" 2>/dev/null)
   case "${prev_tick:-}" in
-    ''|*[!0-9]*) ;;   # unreadable or not an epoch: claim no gap rather than a wrong one
+    # A leading zero is refused too: it is octal to `$(( ))` below, where `08` is an error.
+    ''|0*|*[!0-9]*) ;;   # unreadable or not an epoch: claim no gap rather than a wrong one
     *) if [ "$RUN_EPOCH" -gt "$prev_tick" ] && [ $(( RUN_EPOCH - prev_tick )) -gt "$STALL_SECS" ]; then
          GAP=$(( RUN_EPOCH - prev_tick ))
        fi ;;
@@ -1112,20 +1238,58 @@ for slot in "${SLOTS[@]}"; do
   # when it crosses the threshold, bypassing --only-changed entirely.
   slot_sig="$state|$stage|$pend|$(printf '%s' "$b" | md5 -q 2>/dev/null || printf '%s' "$b" | md5sum | cut -d" " -f1)"
   now_epoch=$(date +%s)
-  since=""
+  since=""; fired_epoch=""; fired_at=""; firings=0; last_fired=""
   if [ -n "$STALLFILE" ] && [ -f "$STALLFILE" ]; then
-    prev=$(grep -F "$slot	" "$STALLFILE" 2>/dev/null | head -1)
+    # The slot is matched as an exact FIELD: a substring match on "<slot><TAB>" also hits the row of
+    # a slot whose name ends in this one, which the launcher's `<slot>-N` naming makes ordinary.
+    # Concatenating "" forces a STRING comparison: awk compares numeric-looking fields as numbers,
+    # so a bare `$1 == s` would let slot `43` match a row for `043`.
+    prev=$(awk -F'\t' -v s="$slot" '$1 "" == s "" { print; exit }' "$STALLFILE" 2>/dev/null)
     prev_sig=$(printf '%s' "$prev" | cut -f2)
-    prev_epoch=$(printf '%s' "$prev" | cut -f3)
-    [ "$prev_sig" = "$slot_sig" ] && since="$prev_epoch"
+    # Every number in the row goes through stall_num: the row is peer-writable, and a value bash
+    # arithmetic rejects (a leading zero reads as octal, so `08` is an error) aborts the whole slot
+    # loop — every slot's alarm, not only this one's. Anything it refuses reads as absent.
+    prev_epoch=$(stall_num "$(printf '%s' "$prev" | cut -f3)")
+    p_fired_epoch=$(stall_num "$(printf '%s' "$prev" | cut -f4)")
+    p_fired_at=$(printf '%s' "$prev" | cut -f5)
+    p_firings=$(stall_num "$(printf '%s' "$prev" | cut -f6)")
+    p_last=$(stall_num "$(printf '%s' "$prev" | cut -f7)")
+    # A row from before #182 has three fields and so carries no firing record, which reads as a
+    # first firing — the full block, the louder side. A partial record reads the same way.
+    if [ -z "$p_firings" ] || [ -z "$p_fired_epoch" ] || [ -z "$p_last" ] || ! stall_iso "$p_fired_at"; then
+      p_firings=0; p_fired_epoch=""; p_fired_at=""; p_last=""
+    fi
+    carry=0
+    if [ "$prev_sig" = "$slot_sig" ] && [ -n "$prev_epoch" ]; then
+      since="$prev_epoch"; carry=1
+    elif [ "$p_firings" -gt 0 ] && [ "${prev_sig%|*}" = "${slot_sig%|*}" ] \
+         && [ $(( now_epoch - p_last )) -le "$STALL_SECS" ] \
+         && [ -n "$(last_directive_since "$slot" "$p_fired_at")" ]; then
+      # A NUDGE CHANGES THE SCREEN IT IS ANSWERING. shipyard-tell.sh types a visible line into the
+      # pane, so a real directive moves the pane hash in `slot_sig`, restarts the clock — and, if
+      # the firing record rode with `since` alone, would end the episode it was sent about: the
+      # child stays stuck, and half an hour later the operator is told of a brand-new stall with
+      # "nothing sent to it", about a slot they nudged. So the record survives a signature change
+      # when all three hold: state, stage and open escalations did not move (only the SCREEN part
+      # did — or a stored `since` was refused, which reaches here the same way), a directive was recorded for this slot since the episode's first
+      # firing, and the last firing was within one stall threshold — so a child that goes on to
+      # work for longer than that sheds the record and its next stall is a new one. The clock
+      # itself still restarts (`since` stays unset here): "motionless for N min" counts from the
+      # screen's last change, as it always has.
+      carry=1
+    fi
+    if [ "$carry" = 1 ]; then
+      fired_epoch="$p_fired_epoch"; fired_at="$p_fired_at"; firings="$p_firings"; last_fired="$p_last"
+    fi
   fi
   [ -z "$since" ] && since="$now_epoch"
   # Restart the clock rather than carry a figure nothing observed (see the supervision gap above),
   # and while a stated wait is in effect, so the timer never accumulates minutes that were never
   # idle in the sense the alarm means. Both rebase `since`, so the figure the NEXT tick reports is
-  # measured from an instant this script was actually watching.
-  { [ "$GAP" != 0 ] || [ -n "$wait_kind" ]; } && since="$now_epoch"
-  STALL_ROWS+=("$slot	$slot_sig	$since")
+  # measured from an instant this script was actually watching — and both end the episode.
+  if [ "$GAP" != 0 ] || [ -n "$wait_kind" ]; then
+    since="$now_epoch"; fired_epoch=""; fired_at=""; firings=0; last_fired=""
+  fi
   motionless=$(( now_epoch - since ))
   stalled_now=0
   if [ "$noagent" = 1 ]; then
@@ -1139,9 +1303,16 @@ for slot in "${SLOTS[@]}"; do
       *)    ATTENTION+=("$slot|$wait_class|$ctx|$wait_action") ;;
     esac
   elif [ "$run" = "⏸ idle/wait" ] && [ "$pend" = 0 ] && [ "$motionless" -ge "$STALL_SECS" ]; then
-    STALLED+=("$slot|$((motionless/60))|$ctx")
+    firings=$(( firings + 1 )); last_fired="$now_epoch"
+    [ -z "$fired_epoch" ] && { fired_epoch="$now_epoch"; fired_at=$(shipyard_now); }
+    nudge=""
+    [ "$firings" -gt 1 ] && [ -n "$fired_at" ] && nudge=$(last_directive_since "$slot" "$fired_at")
+    STALLED+=("$slot|$((motionless/60))|$ctx|$firings|$(( (now_epoch - fired_epoch) / 60 ))|$nudge")
     stalled_now=1
   fi
+  # Written for every visited slot, stalled or not, as the three-field row was: a slot that does not
+  # fire on this tick carries its clock and its firing record forward unchanged.
+  STALL_ROWS+=("$slot	$slot_sig	$since	$fired_epoch	$fired_at	$firings	$last_fired")
 
   # Paint the same verdict on the sidebar glyph (agterm only; a no-op on tmux), so the
   # board is readable without reading the table: blocked = it is waiting on YOU. The
@@ -1297,9 +1468,9 @@ fi
 #
 # The cost is a repeated block for as long as the condition lasts; that is the STALLED trade,
 # taken knowingly, and neither held nor refused is the normal case. Worth knowing before taking
-# it again: #182 is open against exactly this trade on this supervisor — a stall alarm that
-# repeats verbatim trains the operator to skim it — so if that lands, these blocks should move to
-# whatever de-duplication it introduces rather than keep a second precedent alive.
+# it again: an alarm that repeats verbatim trains the operator to skim it (#182). STALLED itself
+# now prints in full once and then as its delta (see "a stall is an EPISODE" above); the blocks
+# named here still repeat verbatim, and moving them to the same shape is not done yet.
 #
 # NOT closed by any of this: an ad-hoc `shipyard-report.sh --only-changed <slot>` run beside the
 # monitor performs the teardown and consumes the only 🧹 block, leaving the monitor to show a
@@ -1352,36 +1523,62 @@ fi
     echo "justify. If the fleet was paused on purpose, this line is the whole of the news._"
   fi
   if [ "${#STALLED[@]}" -gt 0 ]; then
+    # Split by shape — see "a stall is an EPISODE" above for the three shapes and the two constants.
+    # Every stalled slot lands in exactly one of the two lists, so both headings together name the
+    # same slots the single block used to.
+    for x in "${STALLED[@]}"; do
+      IFS='|' read -r _sl _mins _c n _ago nudge <<EOF
+$x
+EOF
+      if [ "$n" -ge "$STALL_ESCALATE_AT" ] && [ -z "$nudge" ]; then STALL_UNANSWERED+=("$x")
+      else STALL_PLAIN+=("$x"); fi
+    done
+  fi
+  if [ "${#STALL_PLAIN[@]}" -gt 0 ]; then
     echo
     echo "### 🛑 STALLED — idle, nothing asked of you, and nothing moving"
-    for x in "${STALLED[@]}"; do
-      sl=${x%%|*}; rest=${x#*|}; mins=${rest%%|*}; c=${rest#*|}
+    for x in "${STALL_PLAIN[@]}"; do
+      IFS='|' read -r sl mins c n ago nudge <<EOF
+$x
+EOF
+      if [ "$n" -gt 1 ]; then
+        # The delta leads, because it is the only thing a later firing has to say. What was SENT is
+        # the other half of it: "nudged and still not moving" is a different state from "untouched".
+        if [ -n "$nudge" ]; then
+          nat=${nudge%%$TAB*}; ndel=${nudge#*$TAB}
+          sent="nudged at ${nat:11:5} UTC (${ndel}), and motionless again"
+        else
+          sent="nothing sent to it yet"
+        fi
+        echo "- \`$sl\` — STILL motionless, now ${mins} min (ctx $c); firing $n, first raised ${ago} min ago; $sent."
+        echo "  Remedy unchanged — git first, then \`bash $DIR/shipyard-tell.sh $sl \"…\"\`, compaction only on ⚠️/🛑 ctx."
+        echo "  The full steps were printed at its first firing and are SKILL.md Step 5. At firing $STALL_ESCALATE_AT with nothing sent, this becomes 🛑 STALL UNANSWERED."
+        continue
+      fi
       # NOT "a child does not idle this long on its own" any more. That sentence was this block's
       # stated justification and it was the one assumption that failed: a child idles exactly that
       # long when it cannot move, or when nobody asked it to. Both now leave before here, so what
       # this line may claim is what the classification actually ruled out — and no more, since the
       # reason could still be one the classifier has no shape for.
       echo "- \`$sl\` — motionless for ${mins} min (ctx $c), announcing no reason and at no stage that waits by design."
-      # The order is load-bearing and is the whole of Step 5's diagnosis rule, restated at the
-      # point of alarm: the cheapest and most reliable evidence first, hand-driving never.
-      echo "  1. GIT FIRST: \`git -C $ROOT/.claude/worktrees/ship-$sl log --oneline -5\` and \`git status\`."
-      echo "     Git says what the child PRODUCED; the pane says only what it INTENDED, and the commonest"
-      echo "     stall silhouette is a child that left its own next instruction unsubmitted in the input box."
-      echo "  2. THEN NUDGE IT: \`bash $DIR/shipyard-tell.sh $sl \"<what to do next>\"\`. It types, submits, polls"
-      echo "     the child's turn state and reports delivered/queued, or unconfirmed and exit 6. Do not hand-drive."
-      echo "  2b. IF IT CAME BACK unconfirmed: peek, and submit what is already in the box — the nudge prints"
-      echo "     both commands. Compaction's FIRST act is Escape, which CLEARS the box, so compacting here"
-      echo "     throws the directive away. The text survives in the mailbox .txt, the delivery does not."
-      echo "  3. ONLY THEN COMPACT: \`bash $DIR/shipyard-compact.sh $sl\` (compacts AND resumes) — and only if"
-      echo "     ctx is ⚠️/🛑, or the unconfirmed nudge turns out to be a child REFUSING input. An unconfirmed"
-      echo "     on a child that was running all window is the healthy case and is NOT a compaction trigger."
-      echo "     A ❓ ctx is NOT a compaction trigger and NOT a clearance: it means the figure has no window"
-      echo "     this report can defend asserting it against, so resolve that first (see the block below)"
-      echo "     and act on the band it turns into. NOTE: on an un-pinned claude fleet ⚠️/🛑 may never appear"
-      echo "     at all — a child whose window IS the smallest size this report knows can never settle it, so"
-      echo "     every reading above the warn threshold stays a ❓ bound. There, a bound whose raw count is"
-      echo "     approaching that smallest size is what stands in for the glyph; pin SHIPYARD_CTX_WINDOW so"
-      echo "     this condition can fire properly."
+      stall_remedy "$sl"
+    done
+  fi
+  if [ "${#STALL_UNANSWERED[@]}" -gt 0 ]; then
+    echo
+    echo "### 🛑 STALL UNANSWERED — raised again and again, and nothing has been sent"
+    for x in "${STALL_UNANSWERED[@]}"; do
+      IFS='|' read -r sl mins c n ago nudge <<EOF
+$x
+EOF
+      if [ "$n" -gt "$STALL_ESCALATE_AT" ]; then
+        echo "- \`$sl\` — STILL unanswered: motionless ${mins} min (ctx $c), firing $n, nothing sent since it was first raised ${ago} min ago."
+        echo "  The remedy was re-printed when this heading first named it, and is SKILL.md Step 5."
+        continue
+      fi
+      echo "- \`$sl\` — motionless for ${mins} min (ctx $c), raised $n times over ${ago} min, and NOTHING has been sent to it since the first."
+      echo "  That is an alarm read and discounted. Act on it now, or record why not. The remedy again, in case the first copy is gone:"
+      stall_remedy "$sl"
     done
   fi
   if [ "${#NOAGENT[@]}" -gt 0 ]; then
