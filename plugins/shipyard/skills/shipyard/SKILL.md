@@ -712,7 +712,17 @@ guess from this list:
 * a turn began and ended between two samples, or the screen could not be read at all.
 
 **Look before re-sending** — a second send types another copy onto the first; the warning prints
-the peek command and the one-liner that submits what is already there. The bias is deliberate:
+the peek command and the command that submits what is already there:
+
+```bash
+bash <SKILL>/shipyard-tell.sh <slot> --submit
+```
+
+It types nothing and records nothing: it presses Return on the box as it stands and takes the
+same turn-state reading, so it answers with the same three verdicts and exit codes as the table
+above. Use it rather than calling `shipyard_submit` from a sourced lib: that call prints nothing
+either way, so it cannot tell *slot not resolved* from *Return sent and not taken* from *it
+worked*. The bias is deliberate:
 re-sending on a false `unconfirmed` is cheap and visible, believing a false `delivered` is
 neither. `SHIPYARD_TELL_CONFIRM_SECS` and `SHIPYARD_TELL_CONFIRM_INTERVAL` set the window and the
 sampling rate; both are validated, and the defaults live in `shipyard-tell.sh` rather than being
@@ -798,7 +808,10 @@ leftover draft, expect the child to treat your nudge as ordinary input rather th
 speaking.
 
 **2b. ON `unconfirmed`, SUBMIT THE BOX BEFORE YOU EVEN CONSIDER COMPACTING.** The nudge prints a
-peek command and a one-liner that submits what is already in the box; work those first.
+peek command and `shipyard-tell.sh <slot> --submit`, which submits what is already in the box and
+reports its own verdict; work those first. A `--submit` that also reads `unconfirmed`, with the
+draft still in the box, is not a reason to compact either — it is the case #195 tracks, and the
+draft is safest where it is until you have looked.
 `shipyard-compact.sh`'s **first act on the pane is Escape, and Escape CLEARS the box** — so
 compacting on an `unconfirmed` nudge discards the very directive the verdict was warning you
 about. The text itself survives in `directive-<slot>-<n>.txt`, so nothing is lost permanently,

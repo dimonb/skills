@@ -18,7 +18,14 @@
 #
 # Usage (parent side, from anywhere in the repo):
 #   shipyard-tell.sh <slot|escalation-id> "<the directive>"
+#   shipyard-tell.sh <slot|escalation-id> --submit   submit the draft ALREADY in the box
 #   shipyard-tell.sh --list                 every directive sent so far
+#
+# `--submit` types nothing: it presses Return on whatever the input box already holds and then
+# takes the same delivery reading as a directive, with the same exit codes. It is the recovery for
+# an `unconfirmed` directive left sitting in the box — sending the text again would type a second
+# copy onto the first, and compacting would clear it (its first key is Escape). It records nothing
+# in the mailbox: the draft's text is already in the directive record that put it there.
 #
 # An escalation id (`57-3`) is accepted as a convenience and resolves to its slot,
 # so you can reply to a notice with the id you were shown.
@@ -66,11 +73,16 @@ fi
 case "${1:-}" in -h|--help) usage; exit 0 ;; esac
 
 TARGET="${1:-}"; MSG_RAW="${2:-}"
-# `@file` / `@-` bypass the caller's shell — see shipyard_payload in shipyard-lib.sh. Use it
-# for any directive containing backticks, $(...) or code.
-MSG=$(shipyard_payload "$MSG_RAW") || exit 1
-if [ -z "$TARGET" ] || [ -z "$MSG" ]; then
-  echo 'usage: shipyard-tell.sh <slot|escalation-id> "<directive>"   |   shipyard-tell.sh --list' >&2
+SUBMIT_ONLY=""
+if [ "$MSG_RAW" = "--submit" ]; then
+  SUBMIT_ONLY=1; MSG=""
+else
+  # `@file` / `@-` bypass the caller's shell — see shipyard_payload in shipyard-lib.sh. Use it
+  # for any directive containing backticks, $(...) or code.
+  MSG=$(shipyard_payload "$MSG_RAW") || exit 1
+fi
+if [ -z "$TARGET" ] || { [ -z "$MSG" ] && [ -z "$SUBMIT_ONLY" ]; }; then
+  echo 'usage: shipyard-tell.sh <slot|escalation-id> "<directive>" | <slot> --submit | --list' >&2
   exit 2
 fi
 
@@ -94,30 +106,35 @@ WHERE=$(shipyard_where "$SLOT") || {
   exit 3
 }
 
-# --- record it first, so the full text survives regardless of delivery ----------
-n=1
-while [ -e "$MB/directive-$SLOT-$n.json" ]; do n=$((n+1)); done
-ID="directive-$SLOT-$n"
-TXT="$MB/$ID.txt"
-printf '%s\n' "$MSG" >"$TXT"
-
-# Status is deliberately NOT "pending": the escalation viewers count every pending
-# record as an open escalation, and a directive is not one.
-jq -n --arg id "$ID" --arg slot "$SLOT" --arg text "$MSG" --arg src "$SRC" \
-      --arg now "$(shipyard_now)" --arg txt "$TXT" \
-  '{id:$id, slot:$slot, kind:"directive", text:$text, in_reply_to:$src,
-    text_file:$txt, created_at:$now, status:"sent", delivery:"unknown"}' \
-  >"$MB/$ID.json" || { echo "error: failed to record the directive" >&2; exit 1; }
-
-# --- flatten to one line: a literal newline would submit the message early ------
-ONELINE=$(printf '%s' "$MSG" | tr '\n' ' ' | tr -s ' ')
-PREFIX="[supervisor directive"
-[ -n "$SRC" ] && PREFIX="$PREFIX, re $SRC"
-PREFIX="$PREFIX]"
-if [ "${#ONELINE}" -gt "$MAXLINE" ]; then
-  LINE="$PREFIX The full text is in $TXT — read that file and follow it. First line: $(printf '%s' "$ONELINE" | cut -c1-200)…"
+if [ -n "$SUBMIT_ONLY" ]; then
+  # Nothing to record and nothing to type; ID only names what was sent, in the lines below.
+  ID="the draft in its box"
 else
-  LINE="$PREFIX $ONELINE"
+  # --- record it first, so the full text survives regardless of delivery ----------
+  n=1
+  while [ -e "$MB/directive-$SLOT-$n.json" ]; do n=$((n+1)); done
+  ID="directive-$SLOT-$n"
+  TXT="$MB/$ID.txt"
+  printf '%s\n' "$MSG" >"$TXT"
+
+  # Status is deliberately NOT "pending": the escalation viewers count every pending
+  # record as an open escalation, and a directive is not one.
+  jq -n --arg id "$ID" --arg slot "$SLOT" --arg text "$MSG" --arg src "$SRC" \
+        --arg now "$(shipyard_now)" --arg txt "$TXT" \
+    '{id:$id, slot:$slot, kind:"directive", text:$text, in_reply_to:$src,
+      text_file:$txt, created_at:$now, status:"sent", delivery:"unknown"}' \
+    >"$MB/$ID.json" || { echo "error: failed to record the directive" >&2; exit 1; }
+
+  # --- flatten to one line: a literal newline would submit the message early ------
+  ONELINE=$(printf '%s' "$MSG" | tr '\n' ' ' | tr -s ' ')
+  PREFIX="[supervisor directive"
+  [ -n "$SRC" ] && PREFIX="$PREFIX, re $SRC"
+  PREFIX="$PREFIX]"
+  if [ "${#ONELINE}" -gt "$MAXLINE" ]; then
+    LINE="$PREFIX The full text is in $TXT — read that file and follow it. First line: $(printf '%s' "$ONELINE" | cut -c1-200)…"
+  else
+    LINE="$PREFIX $ONELINE"
+  fi
 fi
 
 # --- delivery: a STATE read, sampled, never a before/after screen diff --------
@@ -184,8 +201,10 @@ SETTLE_DELAY=$(knob_interval "${SHIPYARD_TELL_SETTLE_DELAY:-}" 1) \
 # The pre-send sample. It is what lets a turn seen LATER count as one our submit started, and what
 # stops a queued hint left over from an earlier send being read as being about this one.
 STATES=("$(adp_turn_state "$(shipyard_capture "$SLOT")")")
-shipyard_type "$SLOT" "$LINE" || { echo "error: typing into $WHERE failed" >&2; exit 1; }
-sleep "$SETTLE_DELAY"
+if [ -z "$SUBMIT_ONLY" ]; then
+  shipyard_type "$SLOT" "$LINE" || { echo "error: typing into $WHERE failed" >&2; exit 1; }
+  sleep "$SETTLE_DELAY"
+fi
 shipyard_submit "$SLOT" || { echo "error: submitting to $WHERE failed" >&2; exit 1; }
 
 DEADLINE=$(( $(date +%s) + CONFIRM_SECS ))
@@ -196,7 +215,7 @@ while :; do
   [ "$(date +%s)" -lt "$DEADLINE" ] || break
   sleep "$CONFIRM_INTERVAL"
 done
-shipyard_json_set "$MB/$ID.json" --arg d "$DELIVERY" '.delivery=$d'
+[ -n "$SUBMIT_ONLY" ] || shipyard_json_set "$MB/$ID.json" --arg d "$DELIVERY" '.delivery=$d'
 
 # A run-length census of what was ACTUALLY sampled, pre-send state first. This replaced a list of
 # the causes `unconfirmed` could have had: that list was incomplete the moment the rule changed
@@ -216,14 +235,23 @@ SAMPLED=${SAMPLED#,}
 case "$DELIVERY" in
   queued)      echo "told ship-$SLOT ($WHERE) — $ID queued; the child is mid-turn and will take it next" ;;
   delivered)   echo "told ship-$SLOT ($WHERE) — $ID delivered" ;;
-  unconfirmed) echo "warning: told ship-$SLOT ($WHERE) — $ID was typed and submitted, but no turn" >&2
-               echo "         was seen to start within ${CONFIRM_SECS}s and the child never said it had" >&2
-               echo "         queued it. Sampled: $SAMPLED." >&2
-               echo "         THE TEXT MAY BE SITTING UNSENT IN THE INPUT BOX. Look before re-sending —" >&2
-               echo "         a second send types another copy onto the first:" >&2
-               echo "           $(shipyard_peek_hint "$SLOT")" >&2
-               echo "         if your directive is in the box, submit what is already there:" >&2
-               echo "           bash -c '. \"$DIR/shipyard-lib.sh\"; shipyard_submit \"$SLOT\"'" >&2
+  unconfirmed) if [ -n "$SUBMIT_ONLY" ]; then
+                 echo "warning: pressed Return in ship-$SLOT ($WHERE), but no turn was seen to start" >&2
+                 echo "         within ${CONFIRM_SECS}s and the child never said it had queued anything." >&2
+                 echo "         Sampled: $SAMPLED. Look at the box before doing anything else:" >&2
+                 echo "           $(shipyard_peek_hint "$SLOT")" >&2
+                 echo "         a draft still there was not taken — do NOT compact, its first key is" >&2
+                 echo "         Escape, which clears the box (SKILL.md, Step 5, 2b)." >&2
+               else
+                 echo "warning: told ship-$SLOT ($WHERE) — $ID was typed and submitted, but no turn" >&2
+                 echo "         was seen to start within ${CONFIRM_SECS}s and the child never said it had" >&2
+                 echo "         queued it. Sampled: $SAMPLED." >&2
+                 echo "         THE TEXT MAY BE SITTING UNSENT IN THE INPUT BOX. Look before re-sending —" >&2
+                 echo "         a second send types another copy onto the first:" >&2
+                 echo "           $(shipyard_peek_hint "$SLOT")" >&2
+                 echo "         if your directive is in the box, submit what is already there:" >&2
+                 echo "           $DIR/shipyard-tell.sh $SLOT --submit" >&2
+               fi
                echo "         This is NOT proof it went nowhere — see adp_delivery_verdict in" >&2
                echo "         shared/adapters for what the verdict does and does not rule out." >&2 ;;
   *)           # Only reachable if the shared module did not load, which leaves the verdict empty.
