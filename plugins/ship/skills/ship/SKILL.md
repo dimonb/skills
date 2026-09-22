@@ -600,7 +600,7 @@ rule:
    |---|---|---|
    | markdown or other prose only — a skill, a README, a design note | `impl-spec-conformance` (does it say what was asked, does it contradict the rest of the file, and could an agent follow it as written?) and `impl-conventions` | correctness — no logic to hunt in; security — no surface; gates — nothing executes it |
    | a shell script or other code | `impl-correctness` and `impl-spec-conformance`; `impl-security` when it touches exec, paths, secrets or the network; `impl-gates-coverage` when the repo has a suite that could cover it | security when no such surface is touched (below `high` only — see 2); gates when the check command is the only thing that could run it |
-   | test-only | `impl-correctness` — does the test prove what it claims, which is where the vacuous-test shapes named in `impl-security`'s charter are hunted — `impl-gates-coverage` (is it registered, does it run) and `impl-spec-conformance` | security — no surface; conventions by rule 3 |
+   | test-only | `impl-correctness` — does the test prove what it claims, which is where the vacuous-test shapes named in `impl-security`'s charter are hunted — `impl-gates-coverage` (is it registered, does it run), `impl-spec-conformance`, and `impl-conventions` (folded or separate per 3) | security when no such surface is touched (below `high` only — see 2) |
    | CI, permissions, auth, secrets, a dependency, network exposure | **`impl-security`, always, at every effort**, plus whatever the rest of the diff calls for | nothing on the security axis |
    | a data model, a migration, anything that redefines something global | the full five, and §5.8 trigger 1 is probably true | nothing |
 
@@ -639,7 +639,9 @@ axes, and a CI change at `low` still gets its security agent.
 **Scoped rounds inherit the sizing** (§5.7): a round after the first re-opens only the axes whose
 files moved, from the set round 1 chose. One re-arm: a fix that newly touches a security surface
 re-arms `impl-security` for that round even where round 1 skipped it — a fix diff is a diff, and
-the substance rule reads it too.
+the substance rule reads it too. A re-arm moves the axis from `skipped` to `axes` and appends the
+round and its reason to `axes_rationale`, so the record reports the round it ran in and never
+lists one axis as both skipped and run.
 
 ### 5.4 Finding contract and normalization
 
