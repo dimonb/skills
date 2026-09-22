@@ -424,9 +424,16 @@ v_verdict() {
 # is still annotation. Past `COUNCIL_STALL_SECS` a seat whose client reads as mid-turn gets
 # `⏳ LONG TURN` where it used to get `🛑 STALL` — on the same alarms line, with its own push under
 # its own de-duplication key. What the read cannot do is remove either output, and past
-# `_stall_hard_secs` it is not consulted at all, so the loudest form of the signal arrives on a
+# `_stall_hard_secs` it cannot pick the TIER, so the loudest form of the signal arrives on a
 # schedule no pane can move. Softening a line is the same class of act as rewording one; deciding
 # whether a supervisor is told is not, and that boundary is where this stays.
+#
+# SAID PRECISELY, BECAUSE THE LOOSE VERSION WAS WRONG IN FOUR PLACES AT ONCE: past the backstop the
+# pane is still CAPTURED and still read for the capacity-banner annotation — only the tier
+# short-circuits. The draft of this change wrote "not consulted at all" here and in three other
+# spots, which is the kind of absolute a later reader repairs by moving the capture inside the
+# backstop branch, silently dropping the banner annotation from every stall over 5400s. What is
+# true is narrower: the tier ignores the pane there, the annotation does not.
 #
 # WHY IT HAD TO BE THIS WAY ROUND, stated as what was actually checked rather than as a claim about
 # every possible design. An earlier draft let a recognised capacity banner REPLACE the alarm. Every
@@ -466,8 +473,11 @@ _floor_screen() {
   # test still exercises the real anchor and the real policy table. It is read from the environment
   # of whichever process runs `status` — usually the supervisor's, but `status` takes no `need_me`
   # and participants are told they may read the room with it, so a seat running `status` controls
-  # this for ITS OWN invocation. That buys nothing worth having: the result can only ANNOTATE an
-  # alarm, and a seat can already put whatever it likes on its own pane.
+  # this for ITS OWN invocation. That still buys nothing worth having, though the reason is no
+  # longer that the result only annotates — since #188 it also picks the tier. It is that every
+  # outcome the read can reach is at least as loud as declining it: the alarm and its push happen
+  # either way, the backstop ignores the read entirely, and a seat can already put whatever it
+  # likes on its own pane, so the file adds no reach it did not have.
   if [ -n "${COUNCIL_WAIT_SCREEN_FILE:-}" ] && [ -f "$COUNCIL_WAIT_SCREEN_FILE" ]; then
     cat "$COUNCIL_WAIT_SCREEN_FILE"; return 0
   fi
@@ -514,14 +524,33 @@ _floor_screen() {
 # there for an operator who has measured their own rooms.
 #
 # ONE PLACE, because the number is read by the alarm arm and quoted by the notice, and a default
-# spelled at each reader is the shape that goes out of step (#151). A value that is not a plain
-# run of digits falls back rather than being believed: `[ … -gt … ]` on a non-number errors and
-# tests FALSE, which would silently switch the backstop off — the one direction this tier may
-# never fail in.
+# spelled at each reader is the shape that goes out of step (#151).
+#
+# THE VALIDATION IS `knob_uint`'s, NOT ITS OWN, and the first draft got both halves of that wrong.
+# It hand-rolled an all-digits test that `shared/knobs` already owns — the duplication the shared
+# engine exists to remove — and it justified that test with a fail-direction that is simply not
+# what the code does. Stated correctly, because the wrong version was written down confidently and
+# survived into a commit: the comparison at the call site is `-le`, and `[ … -le … ]` on a
+# non-number errors and tests FALSE, which selects `tier=stall`. Every unusable value therefore
+# fails LOUD — the backstop effectively always on — not quiet. Measured across `abc`, empty, `08`,
+# `0` and a twenty-digit value.
+#
+# So the fallback is not what keeps the backstop armed; nothing can disarm it by this route. What
+# it buys is narrower and still worth having: a printable figure in the operator-facing line and
+# in the notice (`at 5400s …`, never `at abcs …`), and no `[: integer expression expected` on
+# stderr once a minute for as long as a seat thinks. `knob_uint`'s nine-digit cap is what closes
+# that last one — a twenty-digit run of digits passes an all-digits test and then errors in `[`,
+# which is exactly the stderr-per-tick this had before.
+#
+# A caller that has not sourced `lib/knobs.sh` keeps the bare default rather than erroring, the
+# same degradation every other optional module in this verb gets.
 _stall_hard_secs() {
-  local v="${COUNCIL_STALL_HARD_SECS:-}"
-  case "$v" in ''|*[!0-9]*) v=5400 ;; esac
-  printf '%s' "$v"
+  # The default is spelled ONCE even inside this function: writing it in both the degraded arm and
+  # the knob_uint call would reinstate #151's shape three lines apart, which is where it is least
+  # likely to be noticed and exactly how the other pairs in this tree drifted.
+  local d=5400
+  command -v knob_uint >/dev/null 2>&1 || { printf '%s' "$d"; return 0; }
+  knob_uint "${COUNCIL_STALL_HARD_SECS:-}" "$d"
 }
 
 # _floor_anchored_screen <peer> — the seat's visible screen, and rc 0, only when this seat's KIND
@@ -758,6 +787,12 @@ _stall_escalate() {
   # The tier is part of the key, not a second scan: see the header for why the two must never
   # share one. An unrecognised tier degrades to `stall`, which is the loud answer — a wording bug
   # in a caller must not be able to route a notice onto a key the backstop is not watching.
+  #
+  # THAT ARM IS UNREACHABLE TODAY and is kept as a fail-loud default, not as a live guard: the one
+  # call site (`v_status`) passes `stall` or `longturn` and nothing else, so no test can exercise
+  # it and none pretends to. Said plainly because this diff labels its OTHER unreachable branch
+  # (`_floor_mid_turn`'s `unknown`) as unreachable, and leaving this one reading like a working
+  # check would be the same claim told two ways in one file.
   case "$tier" in longturn) : ;; *) tier=stall ;; esac
   key="[$tier:$peer:$turns]"
   # Fails OPEN by construction, which is the right way round for a de-duplication check: an empty
@@ -967,13 +1002,19 @@ v_terminals() {
 # on a permission prompt destroys the argument that seat was holding. What a backend
 # enumeration settles is presence: whether a terminal WITH THAT NAME exists. What it cannot
 # settle is what a present terminal is DOING, so an alive seat is never told "it is at a prompt".
-# An announced capacity wait is the only in-pane shape THIS ALARM reads (`_floor_wait_state`),
-# and it is a park, not a prompt. council does read the pane elsewhere — `say` classifies turn
-# state through `adp_turn_state` (`lib/up.sh`), which is vendored here as `lib/agent-adapters.sh`
-# — but `running`/`idle` cannot separate "at a permission prompt" from "finished and waiting",
-# so it would not answer this question either. Named rather than omitted: the sentence that used
-# to stand here said this was the only in-pane read in the skill, which was false and hid a
-# shared-engine reader from the next person to ask.
+# THIS ALARM READS TWO IN-PANE SHAPES, and neither answers "at a prompt": an announced capacity
+# wait (`_floor_wait_state`), which is a park rather than a prompt, and whether the client says a
+# turn is in flight (`_floor_mid_turn`, #188), which picks the tier. `running`/`idle` cannot
+# separate "at a permission prompt" from "finished and waiting", so the second one no more settles
+# this row than the first does. council reads the pane elsewhere too — `say` classifies turn state
+# through the same `adp_turn_state` (`lib/up.sh`, vendored here as `lib/agent-adapters.sh`).
+#
+# THE COUNT IN THIS PARAGRAPH HAS NOW BEEN WRONG TWICE, in the same direction both times, and the
+# second time was the commit that ADDED the second reader while leaving the sentence saying there
+# was one. The first version claimed a sole in-pane read in the skill and hid `say` from the next
+# reader; its replacement claimed a sole read for THIS ALARM and hid `_floor_mid_turn`. So do not
+# repair the number again — if you add a third reader, say which reader answers which question and
+# leave the counting out, because that is the shape that keeps going stale here.
 #
 # EVIDENCE, NOT A VERDICT — and unlike the first draft, THE STRINGS NOW SAY SO. `_floor_wait_state`
 # prints "this is a quote from a pane, not a verdict" and this printed an unhedged verdict that
@@ -1223,7 +1264,9 @@ v_status() {
   #   * past `COUNCIL_STALL_SECS` otherwise — `🛑 STALL`, exactly as before. `idle` is the wedge
   #     this separates out, and `unknown` (an unreadable screen) is an absence of evidence and lands
   #     here too;
-  #   * past `COUNCIL_STALL_HARD_SECS` — `🛑 STALL` whatever the pane says. No read, no gate.
+  #   * past `COUNCIL_STALL_HARD_SECS` — `🛑 STALL` whatever the pane says. The pane is still
+  #     captured and still read for the banner annotation there; what it cannot do past this point
+  #     is pick the tier.
   #
   # So a seat that forges `running` buys a calmer sentence and a delay bounded by the backstop,
   # never silence. That bound is what makes the annotation-not-suppression rule survive contact
@@ -1270,15 +1313,29 @@ v_status() {
       # exactly: the plain `🛑 STALL`, with no sentence about a client nobody has captured.
       fscreen=$(_floor_anchored_screen "$floor") || fscreen=""
       wait_ev=$(_floor_wait_state "$fscreen") || wait_ev=""
-      # THE RECLASSIFICATION, AND THE ONE CONDITION THAT OUTRANKS IT. Past the backstop the pane
-      # is not consulted at all — `$held -gt $hard` is tested FIRST and short-circuits the read's
-      # effect — so there is no arrangement of a seat's own screen that keeps `🛑 STALL` away for
-      # ever. Below the backstop, a client that says it is mid-turn changes the glyph and the
+      # THE RECLASSIFICATION, AND THE TWO CONDITIONS THAT OUTRANK IT. Past the backstop the pane
+      # cannot pick the tier — `$held -le $hard` is tested before `_floor_mid_turn` and
+      # short-circuits it — so there is no arrangement of a seat's own screen that keeps
+      # `🛑 STALL` away for ever. (The pane is still captured and read for the banner annotation
+      # above; only the tier short-circuits. The looser "not consulted at all" was written here in
+      # a draft and is the sort of absolute a later reader acts on by moving the capture.)
+      # Below the backstop, a client that says it is mid-turn changes the glyph and the
       # sentence and nothing else: the line still goes into `$alarms`, on the same channel, past
       # the same filters, and the push below still fires. That is the annotate-never-suppress rule
       # applied per OUTPUT rather than per alarm, which is the form of it this repo had to learn
       # twice.
-      if [ "$held" -le "$hard" ] && _floor_mid_turn "$fscreen"; then tier=longturn; else tier=stall; fi
+      #
+      # A CLOSED ROOM IS NEVER RECLASSIFIED, and it is the first test rather than an afterthought.
+      # `🛑 STALL` fires on a closed room on purpose — t22 case 6 pins it, because a closure is
+      # `board/status` plus `board/decision.md`, two files a participant writes in its own room,
+      # and withholding the alarm would buy exactly that forgery. A closed room also already
+      # pushes nothing (`_stall_escalate` returns on `c_recorded_status`), so the console line is
+      # the LAST loud output there is about it. Letting the pane soften that line would hand a
+      # seat the whole set: forge the closure, print the client's marker, and nothing anywhere
+      # says `🛑` any more. #188's care note (b) names this, and the regression was live for one
+      # review round — reachable only BELOW the backstop, which is why case 6, aged to 7200s,
+      # stayed green through it. `$rec` is the status captured once at the top of this verb.
+      if [ -z "$rec" ] && [ "$held" -le "$hard" ] && _floor_mid_turn "$fscreen"; then tier=longturn; else tier=stall; fi
       if [ "$tier" = longturn ]; then
         # THE CALM LINE MAY NOT CARRY THE LOUD GLYPH, even to name what it will become. A
         # supervisor's fast loop greps this channel, and `🛑` inside this sentence would match a
@@ -1317,7 +1374,7 @@ v_status() {
       # a second time by a different door because a new recogniser was added and this arm's
       # condition still named only the first one.
       elif [ "$tier" != longturn ]; then
-        alarms="$alarms Nothing this check recognises explains it; only an announced capacity wait is recognised today."
+        alarms="$alarms Nothing this check recognises explains it; the shapes recognised today are an announced capacity wait and a client that says it is mid-turn."
       fi
     fi
     # OUTSIDE the wording branches, deliberately. All of them are the same event — the floor has
@@ -1339,14 +1396,23 @@ v_status() {
     # words: an alarm that fires on the commonest healthy path is one an operator learns to skim.
     #
     # RAISING THE NUMBER CANNOT FIX IT, which is the part worth keeping. Past the measurement
-    # this threshold would sit above 5040s — i.e. above the 900s hard tier it exists to sit below.
+    # this threshold would sit above 5040s — i.e. above the 900s stall tier it exists to sit below.
+    # ("Hard tier" is what this used to call 900s; since #188 that name belongs to
+    # `COUNCIL_STALL_HARD_SECS`' 5400s backstop, so it is spelled out here rather than reused.)
     # A quiet tier above the stall tier is not a tier, it is dead code. The two states simply are
     # not separable by held time: a 323-second prompt wedge and a 5040-second think are the same
     # number to this clock, so no threshold can tell them apart and the instrument is wrong, not
     # its tuning. What could tell them apart is TURN STATE — the supervisor's own failure was a
     # seat that ENDED ITS TURN at a prompt, i.e. idle rather than running — and `adp_turn_state`
-    # in the shared adapters already reads queued/running/idle. That is a real change to make, and
-    # it is filed rather than half-made here.
+    # in the shared adapters already reads queued/running/idle.
+    #
+    # THAT READ IS NOW WIRED, but ABOVE this tier, not at it (#188): the stall arm uses it to tell
+    # a working seat from a stopped room. It is not used here, and this tier is unchanged, because
+    # the two need opposite things from it — the stall arm acts on `running`, which a client
+    # asserts, while catching a 323s wedge needs `idle` to MEAN "wedged", and it does not: `idle`
+    # cannot separate a permission prompt from a finished turn. So the sub-threshold wedge tier is
+    # still unbuilt and still filed; what changed is that the reader it needs is no longer
+    # unreferenced, so do not read this paragraph as saying turn state is wired nowhere.
     #
     # So this goes on the BLOCK, never into `$alarms`: it does not bypass the filter the way an
     # alarm does, and it never wakes the 60-second alarm loop. It is NOT invisible to

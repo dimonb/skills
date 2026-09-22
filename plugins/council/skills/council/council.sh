@@ -211,7 +211,11 @@ case "$VERB" in
   # the guard that skips rooms with no terminals, because sourcing it resolves a terminal backend
   # and every `status` would otherwise pay for that. The helpers test `command -v` for each, so a
   # caller that sources only verbs.sh degrades to the plain stall alarm instead of erroring.
+  # lib/knobs.sh joins them for `_stall_hard_secs`, which reads the backstop threshold: validating
+  # an operator-set whole number is the shared engine's job (shared/knobs), not a fourth hand-rolled
+  # digit test. It is pure and forkless, so it costs this verb nothing.
   status) . "$SKILL/lib/verbs.sh"; . "$SKILL/lib/policy.sh"; . "$SKILL/lib/agent-adapters.sh"
+          . "$SKILL/lib/knobs.sh"
           v_status "$@" ;;
   # Sources term.sh itself, on demand, inside _room_terminals — the same deferral `status` uses,
   # so a room with no container pin never resolves a terminal backend to be told it has none.

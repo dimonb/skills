@@ -151,7 +151,7 @@ ok "...not the clock-is-wrong arm"       0 "$(printf '%s' "$h1" | grep -c 'clock
 # It was an alarm in the first draft. Measured single turns of 24, 51, 55 and 84 minutes — every
 # one a healthy seat thinking — would each have raised it, which is the alarm-on-the-normal-path
 # failure this repo has been bitten by three times; and raising the threshold past that
-# measurement would put it ABOVE the 900s hard tier it exists to sit below. So it moved to the
+# measurement would put it ABOVE the 900s stall tier it exists to sit below. So it moved to the
 # block. These assertions are what stop it moving back.
 RQ="$COUNCIL_TEST_ROOT/t27q"; rm -rf "$RQ"
 mkroom "$RQ" a b c
@@ -312,10 +312,12 @@ ok "...and on tick N+1"               1 "$(printf '%s' "$c2" | grep -c '^=== cou
 ok "no pin ⇒ no terminal alarm"       0 "$(printf '%s' "$c1" | grep -c 'terminals are still up')"
 
 # THE LIVENESS SENTENCE MUST NOT RIDE A CLOSED ROOM'S STALL. `held` is `now - last turn` and
-# grows without bound after a closure, so every decided room reaches the hard tier about fifteen
+# grows without bound after a closure, so every decided room reaches the stall tier about fifteen
 # minutes later. The 🛑 STALL alarm itself is DELIBERATE there (t22 pins it, because a closure is
 # two files a participant can forge and a withheld alarm would buy that silence) — so this asserts
-# the alarm still fires and the relaunch prescription does not ride along.
+# the alarm still fires and the relaunch prescription does not ride along. A closed room is also
+# never reclassified to `⏳ LONG TURN`, for the same reason and at any age; t22 case 10d-bis pins
+# that, under the backstop where it was briefly reachable.
 sessions_none
 printf 'fake-container\n' > "$R3/state/container-tmux"
 age_room "$R3" 20000      # the room is OLDER than its floor: the ordinary arm, see age_messages

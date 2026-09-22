@@ -20,9 +20,10 @@ council.sh down            # release the terminals of a room that closed some ot
 
 Supervising a room is two loops, and the skill tells you to arm them rather than leaving you to
 invent your own: a ten-minute `status --only-changed` block that **exits by itself** when the
-room finishes, and a one-minute `status --alarms-only` check that prints nothing until something
-needs a person. Neither can be talked into silence by a room that has stopped — an alarm always
-breaks the filter, on every tick it holds.
+room finishes, and a one-minute `status --alarms-only` check that stays quiet while nothing is
+worth saying. Read the glyph rather than the fact that a line appeared: `🛑` wants a person, `⏳`
+is reporting that a seat is working. Neither loop can be talked into silence by a room that has
+stopped — an alarm always breaks the filter, on every tick it holds.
 
 ## Why a room and not a chat
 
@@ -100,17 +101,27 @@ the backend cannot be asked, or the pin says this run resolved the wrong backend
 rather than guess, because a wrong confident *gone* is what sends you to `relaunch` on a live seat
 mid-turn. It is **evidence, not proof**, and the wording says so: the session list is matched by
 name inside a container named by a file in the room, so a participant can point that read
-somewhere else. It never issues `relaunch` as an instruction. What it cannot tell you at all is
-what a terminal that IS up is doing — a trust prompt and hard thinking both read as a held floor.
-The one exception is a client that announced a capacity limit, which `status` quotes with the line
-it matched.
+somewhere else. It never issues `relaunch` as an instruction. What a terminal that IS up is doing
+it can only partly tell you: it quotes a client that announced a capacity limit, and it quotes a
+client that says a turn is in flight — but a trust prompt and a finished turn both read the same
+way, so nothing here identifies a wedge.
 
-One alarm and one annotation, and the difference matters: `🛑 STALL` at 900s goes to both monitors
-and writes a notice into the shared escalation mailbox; the earlier `quiet:` line at 300s goes on
-the block only. It was an alarm until single turns were measured at 24 to 84 minutes — all
-healthy, all past 300s — and raising the threshold past that would put it above the stall tier it
-sits below. Held time cannot separate a wedge from a long think, so the early signal is a thing to
-notice rather than a thing that is wrong.
+A held floor produces one of three lines, and they differ in kind rather than in degree. `quiet:`
+at 300s goes on the block only and asks for nothing. **`⏳ LONG TURN`** at 900s says the seat's own
+client still reads as mid-turn: it is on the alarms channel and writes its own mailbox notice, and
+it means *nothing to do yet*. **`🛑 STALL`** at 900s otherwise — and unconditionally past
+`COUNCIL_STALL_HARD_SECS` (5400s), whatever the pane says — is the one that wants a person.
+
+The tiering exists because single turns were measured at 24 to 84 minutes, all healthy, and every
+one of them used to raise the stop alarm and push a notice about a seat that was working. The pane
+read may only change how the alarm READS, never whether it happens, which is why the 5400s
+backstop reads no pane at all: forging the marker buys a calmer sentence and a bounded delay, not
+silence. It is unavailable for `agy` seats, whose pane has never been captured — those still raise
+`🛑 STALL` on a long healthy turn.
+
+The full tier table, the thresholds and the reasoning are in
+[`skills/council/SKILL.md`](skills/council/SKILL.md); this paragraph is a summary and that file is
+the authority.
 
 Nothing here edits an agent's settings file for you.
 
