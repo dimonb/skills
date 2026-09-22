@@ -1,69 +1,67 @@
 # STATE — session memory
 
-## ▶ RUNNING (2026-09-22) — one lane, and the backlog is now what steers
+## ✅ SHIPPED (2026-09-22) — two changes, two releases, and the battery's cost measured
 
-The GSD roadmap is **COMPLETE** — all four phases in prod — so no plan document names the next
-change any more. What picks the work is the backlog: **86 open issues**, 64 of them bugs
-(council 39, shipyard 25, infra 12, ship 7, security 3). The filing rate still outpaces the fix
-rate, which is what #205 and #207 are about.
+The fleet is empty, both worktrees torn down through the content gate, every branch gone. Released
+twice in one day, for the same reason both times: content had landed that no manifest had moved
+for, which is the class #20 names.
 
-**The fleet runs at one slot by the owner's instruction** (`SHIPYARD_MAX_SLOTS=1`), so the queue
-below is worked in order rather than partitioned into lanes.
-
-| order | issue | what it is |
+| PR | what | release |
 |---|---|---|
-| ~~1~~ | ~~**#188**~~ | the 900s STALL alarm fires on healthy long turns — **PR #229, in review** |
-| 2 | **#195** | the documented stall recovery ("submit the draft already in the box") does not submit |
-| 3 | **#172** | a dead agent in a live terminal is indistinguishable from an idle child |
-| 4 | **#182** | a stall alarm that repeats verbatim trains the operator to skim it |
+| **#229** | council: a working seat is a LONG TURN, and the stall alarm stays unsuppressible (#188) | council 0.6.0 |
+| **#230** | shipyard: the ctx column stops asserting a percentage it cannot prove (#228) | shipyard 0.6.3 |
+| **#231** | ship: verification runs once per head; the top two effort rungs go | ship 0.4.0 |
+| **#227** | release: ship 0.3.0, shipyard 0.6.2 — the earlier bump, for #210/#224/#225 | — |
+| **#233** | release: all three of the above | — |
 
-All four are the supervisor's own instruments, which is why they go first: every later change is
-driven through them, so a false alarm or a silent failure here is paid again on every run after.
-They were named as the ones an operator meets in normal use when they were filed on 2026-09-19.
+### The measurement that cost the most, and what it changed
 
-**#188 did not build what it proposed**, and the next item should know why: the issue preferred
-gating the stall alarm on turn state, which is suppression by evidence the supervised seat writes.
-PR #229 reclassifies instead — `⏳ LONG TURN` at 900s when the client reads as mid-turn, with a
-5400s backstop that reads no pane — so the alarm stays unsuppressible. **#187 (detect a
-prompt-wedged seat by turn state) stays open**: nothing there adds a tier below the stall
-threshold, and `idle` still cannot separate a prompt from a finished turn. #182's "repeats
-verbatim" is untouched and is now the more visible of the two, since a long turn produces one
-notice per tier per turn rather than one.
+**A battery is N agents; a fleet is M changes; a per-axis instruction to verify costs N×M runs of
+the same command.** Seven axes were each told to run the check command plus a suite's whole runner
+plus five mutation harnesses. On two slots at once that reached a **load average of 294** — and the
+symptom was not slowness but tests failing because a process could not be scheduled, so a round
+then spends itself chasing reds the reviewing caused. The duplicate runs did not merely waste
+tokens; they corrupted the evidence the round was reading.
 
-### Shipped since the 2026-09-19 entry below
+Fixed in #231, which also removed `xhigh` and `max`: measured on two changes the same afternoon,
+`high` and `max` produced **identical** batteries — same 7 agents, same 7 axes, same mode, same
+round budget, nothing skipped. The top rungs cost more to pick and bought nothing. This is the same
+lesson the timing knobs already carried, arriving in a second place: size a per-agent cost against
+the concurrency it will actually run at.
 
-| PR | what it does |
-|---|---|
-| **#210** | ship: a deferred finding is placed by a ladder (fix in flight / comment an open issue / file) |
-| **#214** | the gate goes from ~18 minutes to ~2, and three tests stop passing for the wrong reason |
-| **#218** | shipyard: issue bookkeeping is ship's own decision, never a child's question |
-| **#220** | shipyard: `SHIPYARD_EFFORT` chooses the child's reasoning effort |
-| **#221** | release: shipyard 0.6.1 |
-| **#224** | shipyard: launch the child with **no** `--effort` unless the operator names one — ship sizes its own |
-| **#225** | ship: size the review battery by substance and effort, and pick effort when none is given |
+### What the review battery earned, stated next to what it cost
 
-**#224 and #225 are one decision seen from both sides**: the launcher had been deciding max effort
-for every change, which it cannot know, and ship now sizes its own effort and its own battery from
-the shape of the diff after discovery.
+Both changes were caught, by their own reviews, introducing the defect they existed to remove:
 
-### Release posture, and the bump that was overdue
+* **#230's first fix removed the ceiling alarm outright** for every fleet that has not set the
+  override — permanently, since a 200k child's peak can never resolve the inference. Five axes found
+  it; the author's own verification came back clean, because the author's fleet sets the override.
+  That produced AGENTS.md's new section, *Your own configuration hides the path everybody else runs*.
+* **#229's rounds 2 and 3 each found a defect introduced by the previous round's fix**, both on one
+  sentence that ended up wrong four ways.
+* **The fourth round's sweep, run by a FRESH reviewer rather than the author, found TEN surviving
+  copies** of a correction already made two commits earlier — including the block an operator reads
+  every tick, and two comments eleven and fourteen lines below the author's own fix in the same
+  function. The author had found two. That is the argument for who does a sweep, not whether.
 
-`ship` had sat at **0.2.0** through both #210 and #225, and `shipyard` had landed #224 *after* its
-0.6.1 bump — so an existing install compared two identical version strings and found nothing to do.
-**PR #227** moves ship to **0.3.0** and shipyard to **0.6.2**; council is unchanged since 0.5.0 (one
-comment rewrap) and does not move. This is the class #20 names, and it has now recurred twice in
-three days: **a release bump is part of finishing a change, not a separate chore somebody
-remembers.**
+### Four escalations, and what they were for
 
-### Local branch hygiene
+All four were architectural or rule-level, and none could have been decided by the child: the issue's
+own stated direction was forbidden by repo law (#188), a proposed direction turned out to rest on an
+empty set (#228), the author's own cost claim was overstated and corrected mid-decision, and a fourth
+review round required waiving `max-rounds`, which a child may not do on its own authority. Round-trip
+was 4-18 minutes except one at 45 — and 43 of those 45 were the child **revising its own question**
+twice while its battery kept running, not idle waiting.
 
-Ninety-six local branches had accumulated, one per slot of every run since August. Fifty-four were
-merged by ancestry and are gone. The remaining forty-one need a force delete because they were
-**squash**-merged — content in `main`, commits not ancestors — which is the same distinction
-`shipyard-down.sh`'s content gate makes, met here by hand. Four of those had no PR at all and each
-was checked against `main` before being listed for deletion: two were local copies of work that
-shipped under another branch name (PR #55, PR #105), one a pre-amend backup whose content `main` has
-since extended, and one the deliberate salvage that is preserved on `origin` and tracked by #103.
+### Still open, in order
+
+**#195** (the documented stall recovery does not submit) → **#172** (a dead agent in a live terminal
+reads as an idle child) → **#182** (a verbatim-repeating alarm trains the operator to skim).
+
+**#206** is the home for battery-cost work: the round-4 budget scenario was filed there, and the
+`high`-equals-`max` measurement belongs there too. Filed on the way: **#232** (the bash 3.2 floor is
+reasoned from in four files and asserted for none of the ctx source chain); scenarios added to #114,
+#187, #198.
 
 ## ✅ ALL THREE SHIPPED (2026-09-19) — the fleet is empty and both skills are installable
 
