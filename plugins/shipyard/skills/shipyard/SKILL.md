@@ -439,9 +439,13 @@ PR number, which the child writes — so a child that is told to change somethin
 re-recording its stage also lands here. That is not prevented; it is made visible instead. The
 `(no agent)` on the row, carried in the `--only-changed` signature so the monitor prints the tick
 the agent dies once (not on every tick, as `💀` does), and the exit 8 the first `tell` gets. What
-it gives up is the `💀` block, its repetition and the `blocked` glyph. One route still bypasses it:
-an ad-hoc report run beside the monitor can consume that one tick. The reading is one-sided, and
-each side is wrong in a known way:
+it gives up is the `💀` block, its repetition and the `blocked` glyph. That one print rides the
+signature, so two routes still silence it, and neither is closed: a report over the same slots as
+the monitor, run before the monitor's tick (with or without `--only-changed` — both rewrite the
+signature file; a `<slot>`-scoped run does not consume it), and anything that can write the
+mailbox, a child included, writing the predicted signature — the reason given above for keeping
+`🧹 TORN DOWN` off the signature. What survives both is the row on any printed table and the exit 8 on `tell` and
+`compact`. The reading is one-sided, and each side is wrong in a known way:
 
 * **No verdict claims nothing.** A backend that does not answer, or an agterm build that does not
   report the field, leaves the slot exactly where it was before this check existed — row, stall
