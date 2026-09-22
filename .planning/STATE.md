@@ -1,5 +1,62 @@
 # STATE — session memory
 
+## ▶ RUNNING (2026-09-22) — one lane, and the backlog is now what steers
+
+The GSD roadmap is **COMPLETE** — all four phases in prod — so no plan document names the next
+change any more. What picks the work is the backlog: **86 open issues**, 64 of them bugs
+(council 39, shipyard 25, infra 12, ship 7, security 3). The filing rate still outpaces the fix
+rate, which is what #205 and #207 are about.
+
+**The fleet runs at one slot by the owner's instruction** (`SHIPYARD_MAX_SLOTS=1`), so the queue
+below is worked in order rather than partitioned into lanes.
+
+| order | issue | what it is |
+|---|---|---|
+| 1 | **#188** | the 900s STALL alarm fires on healthy long turns (measured 24-84 min) and pushes a notice for each |
+| 2 | **#195** | the documented stall recovery ("submit the draft already in the box") does not submit |
+| 3 | **#172** | a dead agent in a live terminal is indistinguishable from an idle child |
+| 4 | **#182** | a stall alarm that repeats verbatim trains the operator to skim it |
+
+All four are the supervisor's own instruments, which is why they go first: every later change is
+driven through them, so a false alarm or a silent failure here is paid again on every run after.
+They were named as the ones an operator meets in normal use when they were filed on 2026-09-19,
+and nothing has been done about them since.
+
+### Shipped since the 2026-09-19 entry below
+
+| PR | what it does |
+|---|---|
+| **#210** | ship: a deferred finding is placed by a ladder (fix in flight / comment an open issue / file) |
+| **#214** | the gate goes from ~18 minutes to ~2, and three tests stop passing for the wrong reason |
+| **#218** | shipyard: issue bookkeeping is ship's own decision, never a child's question |
+| **#220** | shipyard: `SHIPYARD_EFFORT` chooses the child's reasoning effort |
+| **#221** | release: shipyard 0.6.1 |
+| **#224** | shipyard: launch the child with **no** `--effort` unless the operator names one — ship sizes its own |
+| **#225** | ship: size the review battery by substance and effort, and pick effort when none is given |
+
+**#224 and #225 are one decision seen from both sides**: the launcher had been deciding max effort
+for every change, which it cannot know, and ship now sizes its own effort and its own battery from
+the shape of the diff after discovery.
+
+### Release posture, and the bump that was overdue
+
+`ship` had sat at **0.2.0** through both #210 and #225, and `shipyard` had landed #224 *after* its
+0.6.1 bump — so an existing install compared two identical version strings and found nothing to do.
+**PR #227** moves ship to **0.3.0** and shipyard to **0.6.2**; council is unchanged since 0.5.0 (one
+comment rewrap) and does not move. This is the class #20 names, and it has now recurred twice in
+three days: **a release bump is part of finishing a change, not a separate chore somebody
+remembers.**
+
+### Local branch hygiene
+
+Ninety-six local branches had accumulated, one per slot of every run since August. Fifty-four were
+merged by ancestry and are gone. The remaining forty-one need a force delete because they were
+**squash**-merged — content in `main`, commits not ancestors — which is the same distinction
+`shipyard-down.sh`'s content gate makes, met here by hand. Four of those had no PR at all and each
+was checked against `main` before being listed for deletion: two were local copies of work that
+shipped under another branch name (PR #55, PR #105), one a pre-amend backup whose content `main` has
+since extended, and one the deliberate salvage that is preserved on `origin` and tracked by #103.
+
 ## ✅ ALL THREE SHIPPED (2026-09-19) — the fleet is empty and both skills are installable
 
 The three changes that were in flight at the pause are merged, their slots torn down through the
