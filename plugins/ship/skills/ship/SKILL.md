@@ -115,9 +115,10 @@ runs; an explicit level always wins over it.
 ## 2. Discovery — learn the repo before touching it
 
 Run this ONCE per run, before anything else. **§2.8 then writes every answer into the state
-file (§4), and that step is not optional.** It is the last act of discovery and the first
-thing a supervisor can see; a run that skips it is invisible from outside for its whole life
-(§2.8 says what that costs). **Shell environment does not persist between tool calls**, so
+file (§4), and that step is not optional.** It records the last fact discovery establishes and
+is the first thing a supervisor can see; a run that skips it is invisible from outside for its
+whole life (§2.8 says what that costs; §2.9, a judgement rather than a fact, follows it and
+writes into the same file). **Shell environment does not persist between tool calls**, so
 the forge env guard from the reference file must be re-applied in *every* block that calls
 the forge CLI.
 
@@ -232,7 +233,7 @@ commit granularity and message style, protected branches, assignment discipline,
 language, attribution rules, anything about labels. Where this skill and the repo's law
 disagree, **the repo's law wins** — say so and follow it.
 
-### 2.8 Write the state file — the last act of discovery, and a real step
+### 2.8 Write the state file — the last fact of discovery, and a real step
 
 Create `.pipeline-state/<KEY>.json` (§4) now, with what §2.1–§2.7 just answered. **A
 supervisor's status table is built from two fields of this file: the PR/MR number as
@@ -594,7 +595,8 @@ rule:
    config*, *a dependency bump*, *a data model* — and run every axis that can find a real defect
    in that kind of change. Every other axis is **skipped, with the reason recorded**. A line count
    is never the reason to run an axis the substance does not call for, and neither is the effort
-   level; neither is ever the reason to skip one it does.
+   level — with the one exception rule 2 names, `impl-security` at `high` and above; neither is
+   ever the reason to skip an axis the substance does call for.
 
    | The diff is… | Runs | Skipped |
    |---|---|---|
@@ -620,7 +622,8 @@ rule:
 
 3. **Size decides whether the axes that run share an agent.** For a small diff — on the order of
    150 changed lines and five files or fewer — at `low` or `medium`, `impl-conventions` and
-   `impl-gates-coverage` fold into the correctness charter instead of getting agents of their own;
+   `impl-gates-coverage` fold into the correctness charter instead of getting agents of their own
+   (into the conformance charter where substance skipped correctness, as on a prose-only diff);
    at `high` and above, or for a larger diff, they are separate agents. **A folded axis still
    ran** — its charter went in verbatim, its findings carry its own axis name, and it is listed in
    `axes`, never in `skipped`. Folding is a size-and-effort call and skipping is a substance call,
@@ -882,7 +885,8 @@ Deferred: 2 — fixed here 1; scenario onto #123; new issues none.
 - The axes and skipped lines say what ran, as how many agents, and what was **skipped with its
   reason**, from the ledger's `axes`, `agents` and `skipped` (§5.3, *Sizing the battery*). A
   folded axis is listed as run. **A skipped axis is reported as not run, never as clean** — the
-  same claim the security line is held to below.
+  same claim the security line is held to below. A stage that skipped nothing says
+  `Skipped: none`, for the reason the `Deferred:` line gives.
 - The security line **names which lens produced the verdict**, from `security_engine`:
   - `ran` + nothing found → `Security (engine): no issues found in this diff.`
   - `unavailable` + nothing found → `Security (charter): no issues found in this diff — the
