@@ -440,9 +440,10 @@ re-recording its stage also lands here. That is not prevented; it is made visibl
 `(no agent)` on the row, carried in the `--only-changed` signature so the monitor prints the tick
 the agent dies once (not on every tick, as `💀` does), and the exit 8 the first `tell` gets. What
 it gives up is the `💀` block, its repetition and the `blocked` glyph. That one print rides the
-signature, so two routes still silence it, and neither is closed: a report over the same slots as
-the monitor, run before the monitor's tick (with or without `--only-changed` — both rewrite the
-signature file; a `<slot>`-scoped run does not consume it), and anything that can write the
+signature, so two routes still silence it, and neither is closed: a report over exactly the
+monitor's slot list, in the same order, run before the monitor's tick (with or without
+`--only-changed` — both rewrite the signature file; a run over any other list does not consume it,
+and with a one-slot monitor that includes `shipyard-report.sh <that slot>`), and anything that can write the
 mailbox, a child included, writing the predicted signature — the reason given above for keeping
 `🧹 TORN DOWN` off the signature. What survives both is the row on any printed table and the exit 8 on `tell` and
 `compact`. The reading is one-sided, and each side is wrong in a known way:

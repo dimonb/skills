@@ -1072,10 +1072,10 @@ for slot in "${SLOTS[@]}"; do
   # 💀 block, its recovery prescription and its every-tick repetition, and the `blocked` glyph (the
   # graph's `completed` stays) — the same state already exempted this slot from 🛑 STALLED before
   # #172. Because that one print rides the signature and not the bypass, two routes still silence it,
-  # and neither is closed: (1) a report over the SAME slots as the monitor, run between the death and
-  # the monitor's tick, with or without --only-changed — both branches rewrite $SIGFILE, so it
-  # consumes the tick (a <slot>-scoped run does not: its one-slot signature makes the monitor's next
-  # one differ); (2) anything that can write the shared mailbox, a child included, writing the
+  # and neither is closed: (1) a report over exactly the monitor's slot list, in the same order, run
+  # between the death and the monitor's tick, with or without --only-changed — both branches rewrite
+  # $SIGFILE with that list's signature, so the monitor's next tick matches it and prints nothing (a
+  # run over any other list writes a different signature, which makes the monitor print); (2) anything that can write the shared mailbox, a child included, writing the
   # predicted signature with `fna=1` into it — the forged-file route the bypass block near the end of
   # this file describes for a teardown. What survives both is the row on any printed table and the
   # exit 8 that tell and compact still give.
