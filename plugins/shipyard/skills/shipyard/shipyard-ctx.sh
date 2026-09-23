@@ -14,7 +14,8 @@
 # Env:
 #   CODEX_HOME                       Codex transcript root (default: $HOME/.codex)
 #   CLAUDE_CONFIG_DIR / CLAUDE_HOME  Claude transcript root (default: $HOME/.claude)
-#   SHIPYARD_CTX_WINDOW              context window in tokens, overriding ctx_window's inference
+#   SHIPYARD_CTX_WINDOW              context window in tokens, outranking both the transcript's
+#                                    declared window and ctx_window's inference
 #
 # ---------------------------------------------------------------------------------------------
 # A child that crosses its context ceiling stops accepting turns SILENTLY and reads as
@@ -51,8 +52,10 @@
 #           the codex arm FALLS THROUGH to the pane path and is inferred exactly like claude,
 #           ctx_window_unproven included. Driven, not reasoned: a codex slot with no rollout and
 #           a pane carrying a token figure renders the same bound a claude child would.
-#   claude  states nothing usable, so the window is INFERRED from the peak (ctx_window) and
-#           ctx_window_unproven marks the readings where that inference is a guess.
+#   claude  DECLARES it in the transcript's `attachment` model record, which ctx_declared_window
+#           reads — but only when the id carries a window marker. Without one the window is
+#           INFERRED from the peak (ctx_window) and ctx_window_unproven marks the readings where
+#           that inference is a guess.
 #   a new kind takes the claude arm by ctx_probe's own `elif`, so it inherits the inference
 #           silently unless an arm is written for it — see shipyard-agent.sh, which says the same
 #           about the rest of a new kind's wiring.
@@ -68,15 +71,27 @@
 # renders no --model and shipyard-launch.sh records none), so a per-kind figure would be a guess
 # wearing the clothes of a fact.
 #
-# NO LIVE SIGNAL NAMES CLAUDE'S MODEL, so none is read. Three places were checked and all three
-# are dead ends — recorded here so the next reader does not re-check them:
-#   * `message.model` in the transcript OMITS the `[1m]` marker even for sessions that really are
-#     1M: it reads the same either way. Re-checked for #228 on a live 1M child's own transcript —
-#     every assistant record read `claude-opus-5`, and no field anywhere in the file named a
-#     window. This is the fact that makes a per-kind default impossible FOR CLAUDE — the leg that
-#     actually carries the rejection above; for codex it is near-dead rather than impossible — and
-#     it is not deducible from the code, so it is written down rather than left to be re-derived;
-#   * the `cost-state` record DOES carry the marker, but it is written once at session EXIT —
+# ONE LIVE SIGNAL NAMES CLAUDE'S MODEL WITH ITS WINDOW MARKER, and ctx_declared_window reads it.
+# The transcript carries an `attachment` record of `"type":"model"` whose `identity.modelId` keeps
+# the `[1m]` suffix — `claude-opus-5[1m]`, `claude-opus-5-5[1m]` — beside a `marketingName` that
+# spells the size out ("Opus 5.5 (1M context)"). Measured across three children's transcripts it
+# sat at line 10 of every one, so it is available from the session's first turn, which is exactly
+# where the peak inference is at its weakest. Cross-checked against the one case that can be
+# settled independently: a child whose peak request carried 335521 tokens had PROVEN a window
+# larger than 200000, and its marker read `[1m]` — the two agree.
+#
+# THE ABSENCE OF THE MARKER PROVES NOTHING, so it is read in one direction only. A default-window
+# session carries no suffix, and neither would a future model whose default is large; treating a
+# bare id as 200000 would be the same guess wearing the clothes of a fact, in the more dangerous
+# direction. Without the marker this falls through to the peak inference, unchanged.
+#
+# The other two places checked for #228 ARE dead ends, recorded so the next reader does not
+# re-check them:
+#   * `message.model` OMITS the marker even for sessions that really are 1M: it reads the same
+#     either way, which is why the check that matters is the `attachment` record above and not
+#     this one. This is the fact that makes a per-kind default impossible FOR CLAUDE — the leg
+#     that actually carries the rejection above; for codex it is near-dead rather than impossible;
+#   * the `cost-state` record also carries the marker, but it is written once at session EXIT —
 #     absent from every live child, which is the only kind this reads;
 #   * a subagent's `.meta.json` carries an aliased model id, but that is what the SUBAGENT was
 #     spawned with, not the parent session's window.
@@ -178,6 +193,25 @@ ctx_totals() {
            END { if (last != "") print last, max }'
 }
 
+# The window the transcript DECLARES, in tokens, or nothing. The signal and its one-directional
+# reading are argued at the per-kind block above; this is only the parse.
+#
+# The LAST such record wins, not the first: a session whose model is switched mid-run writes
+# another one, and the newest is the model the next request will run on. `fromjson?` per line for
+# the same reason ctx_totals uses it — a partially written final line must not take the whole read
+# down with it.
+#
+# Only `[1m]` is recognised, because it is the only marker in use and a mapping table of marketing
+# names is the part that would rot. A new marker appends a branch here.
+ctx_declared_window() {
+  local id
+  id=$(jq -Rr 'fromjson? | select(.attachment.type == "model")
+               | .attachment.identity.modelId // empty' "$1" 2>/dev/null | tail -1)
+  case "$id" in
+    *'[1m]') printf '%s' 1000000 ;;
+  esac
+}
+
 # Known context window sizes, in tokens. DATA, deliberately kept out of the logic below, because
 # this list is the part that rots and a list is cheap to correct.
 #
@@ -257,9 +291,14 @@ ctx_check_env() {
 # escape hatch is worse than none, because the operator believes the band they are looking at is
 # the one they configured. The refusal lives in ctx_check_env, the precedence in ctx_window.
 ctx_window() {
-  local peak="$1" w
+  local peak="$1" declared="${2:-}" w
   if [[ "${SHIPYARD_CTX_WINDOW:-}" =~ ^[1-9][0-9]*$ ]]; then
     printf '%s' "$SHIPYARD_CTX_WINDOW"; return
+  fi
+  # A declared window is EVIDENCE, so it outranks the inference — but never the operator, who must
+  # still be able to say a smaller size downwards. Hence this sits below the override, not above.
+  if [[ "$declared" =~ ^[1-9][0-9]*$ ]]; then
+    printf '%s' "$declared"; return
   fi
   for w in "${CTX_WINDOWS[@]}"; do
     if [ "$peak" -le "$w" ] 2>/dev/null; then printf '%s' "$w"; return; fi
@@ -309,8 +348,11 @@ ctx_window() {
 # carrying no figure
 # would leave that child's operator with no reading at all, and it is the commonest deployment.
 ctx_window_unproven() {
-  local peak="$1"
+  local peak="$1" declared="${2:-}"
   [[ "${SHIPYARD_CTX_WINDOW:-}" =~ ^[1-9][0-9]*$ ]] && return 1
+  # A window the transcript named is not a choice among candidates, so it leaves the `?` band for
+  # the same reason the override does: this file does not second-guess a stated fact.
+  [[ "$declared" =~ ^[1-9][0-9]*$ ]] && return 1
   [ "${#CTX_WINDOWS[@]}" -gt 1 ] || return 1
   [ "$peak" -le "${CTX_WINDOWS[0]}" ] 2>/dev/null
 }
@@ -348,7 +390,7 @@ ctx_pane_tokens() {
 # The full argument for each lives at its own branch. What holds for both is that neither may
 # print a percentage as though it were measured.
 ctx_probe() {
-  local slot="$1" pane="$2" agent f tot cur peak win pct
+  local slot="$1" pane="$2" agent f tot cur peak win pct declared=""
   agent=$(ctx_agent "$slot")
   if [ "$agent" = codex ]; then
     if f=$(ctx_codex_transcript "$slot"); then tot=$(ctx_codex_totals "$f"); fi
@@ -361,6 +403,7 @@ ctx_probe() {
     fi
   elif f=$(ctx_claude_transcript "$slot"); then
     tot=$(ctx_totals "$f")
+    declared=$(ctx_declared_window "$f")
   fi
   if [ -n "${tot:-}" ]; then
     cur=${tot%% *}; peak=${tot##* }
@@ -374,7 +417,7 @@ ctx_probe() {
   # has no usage record at all, and that is "—" — not 0%, which reads as a measured figure and is
   # the same lie in the reassuring direction.
   [ -n "${cur:-}" ] || { printf '%s %s' '-' "—"; return; }
-  win=$(ctx_window "$peak")
+  win=$(ctx_window "$peak" "$declared")
   pct=$(awk -v c="$cur" -v w="$win" 'BEGIN{ printf "%d", (c * 100) / w }')
   # NEVER PRINT A PERCENTAGE ABOVE 100. A total larger than the window it is measured against is
   # not a reading, it is a contradiction — the window list is out of date, or an override is set
@@ -427,7 +470,7 @@ ctx_probe() {
   # thresholds stayed in order: with CTX_WARN_PCT=90 and CTX_CRIT_PCT=80 a reading of 86 skipped
   # this branch and then banded crit against a window nothing established — the exact assertion
   # this branch exists to forbid, reachable by a config edit and by no test.
-  if [ "$(ctx_band "$pct")" != ok ] && ctx_window_unproven "$peak"; then
+  if [ "$(ctx_band "$pct")" != ok ] && ctx_window_unproven "$peak" "$declared"; then
     printf '%s <=%s%% · %s' '?' "$pct" "$(ctx_human "$cur")"; return
   fi
   # The RAW FIGURE travels with the band, always. The percentage is derived from an inferred

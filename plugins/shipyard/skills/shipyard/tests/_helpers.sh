@@ -61,5 +61,14 @@ synthetic_record() {
   printf '{"type":"assistant","message":{"model":"<synthetic>","usage":{"input_tokens":0,"cache_creation_input_tokens":0,"cache_read_input_tokens":0,"output_tokens":0}},"isApiErrorMessage":true}\n'
 }
 
+# model_record <modelId> [marketingName] — the client's `attachment` model record, verbatim in
+# the fields ctx_declared_window reads. This is the only live signal that names a claude child's
+# window (see the per-kind block in shipyard-ctx.sh); measured on three real transcripts it was
+# written at line 10 of each, so a fixture may place it anywhere and still be realistic.
+model_record() {
+  printf '{"type":"user","isSidechain":false,"attachment":{"type":"model","identity":{"modelId":"%s","marketingName":"%s","knowledgeCutoff":"June 2026"}}}\n' \
+    "$1" "${2:-Opus 5.5 (1M context)}"
+}
+
 # transcript <name> — path to a new empty fixture transcript.
 transcript() { local p="$CTX_TEST_DIR/$1.jsonl"; : > "$p"; printf '%s' "$p"; }
