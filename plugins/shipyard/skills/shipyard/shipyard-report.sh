@@ -545,11 +545,12 @@ stall_remedy() {
   echo "     on a child that was running all window is the healthy case and is NOT a compaction trigger."
   echo "     A ❓ ctx is NOT a compaction trigger and NOT a clearance: it means the figure has no window"
   echo "     this report can defend asserting it against, so resolve that first (see the block below)"
-  echo "     and act on the band it turns into. NOTE: on an un-pinned claude fleet ⚠️/🛑 may never appear"
-  echo "     at all — a child whose window IS the smallest size this report knows can never settle it, so"
-  echo "     every reading above the warn threshold stays a ❓ bound. There, a bound whose raw count is"
-  echo "     approaching that smallest size is what stands in for the glyph; pin SHIPYARD_CTX_WINDOW so"
-  echo "     this condition can fire properly."
+  echo "     and act on the band it turns into. NOTE: on a claude fleet whose model carries no window"
+  echo "     marker, and that is un-pinned, ⚠️/🛑 may never appear at all — a child whose window IS the"
+  echo "     smallest size this report knows can never settle it, so every reading above the warn"
+  echo "     threshold stays a ❓ bound. There, a bound whose raw count is approaching that smallest size"
+  echo "     is what stands in for the glyph; pin SHIPYARD_CTX_WINDOW so this condition can fire"
+  echo "     properly. A marked model declares its window and never reaches this state."
 }
 
 # stall_num <value> — <value> if it is a number bash arithmetic reads as the decimal it looks like,
