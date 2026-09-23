@@ -946,11 +946,13 @@ banded `⚠️` from 65% and `🛑` from 80%. Both halves are there on purpose:
 * **the window comes from a different place for each agent kind**, and the difference decides
   what the column may claim. A **codex** child's rollout states its window outright — *when one
   resolves*; with no matching rollout, or none that has written a usage event yet, a codex child
-  falls back to the pane and is inferred exactly like a claude one. A **claude** child states
-  nothing usable — the transcript names a model but not a window, and the name reads the same for
-  a 1M session as for a 200k one — so its window is **inferred** from the peak: a request that
-  carried N tokens cannot have run on a window smaller than N, so the window is the smallest known
-  size that still fits the largest total that session has ever reached. A kind added later takes
+  falls back to the pane and is inferred exactly like a claude one. A **claude** child
+  **declares** its window when its model carries a marker: the transcript's `attachment` model
+  record keeps the `[1m]` suffix that `message.model` drops, and that is read as 1000000. Without a
+  marker nothing is declared — an unmarked id is what a default-window session carries and what a
+  future large-default model would carry too — and the window is then **inferred** from the peak: a
+  request that carried N tokens cannot have run on a window smaller than N, so the window is the
+  smallest known size that still fits the largest total that session has ever reached. A kind added later takes
   the claude path unless someone writes an arm for it. `SHIPYARD_CTX_WINDOW` overrides all of it;
 * the raw count is printed **so that you can catch the inference being wrong** — it is what
   catches the case the column cannot detect on its own, a window that is on nobody's list (below),
@@ -987,9 +989,10 @@ it cannot tell those two children apart, and **a bound that keeps climbing witho
 is itself the answer** — that child's window is the smallest size the report knows. Set
 `SHIPYARD_CTX_WINDOW` and the column bands it exactly from then on.
 
-**So pin `SHIPYARD_CTX_WINDOW` for a claude fleet at launch**, rather than waiting to meet this.
-Nothing pins a model when a child is started, so the report cannot know what you are running; one
-variable tells it, permanently, and the whole ambiguity disappears.
+**A marked model never reaches this state**: its window is declared from the child's first turn,
+so a 1M fleet sees the ordinary reading throughout and needs no configuration act. What is left
+here is the fleet whose model carries no marker, or whose window is on nobody's list — and there
+`SHIPYARD_CTX_WINDOW` is still the answer, pinned at launch rather than after meeting the bound.
 
 > **And that advice is exactly why this column's defects keep reaching review.** A fleet that sets
 > the override never walks the path the override replaces — so the inference, the bound and every
@@ -1017,8 +1020,9 @@ the rollout **when one resolves** — so a declared default there would be *near
 the pane fall-through, where the figure it scaled would be a pane scrape this column already
 distrusts and where a codex window is as model-dependent as a claude one. What carries the
 rejection is the other leg: a claude child's window is a
-property of the **model**, not of the kind — nothing pins the model at launch, and the transcript
-does not name it in a way that distinguishes the windows. A kind that genuinely knows its own
+property of the **model**, not of the kind, and nothing pins the model at launch — so a per-kind
+figure would be a guess either way. Where the model's own id carries a marker the transcript now
+settles it (above), which is evidence about that child rather than a default for its kind. A kind that genuinely knows its own
 window on every path should declare it; codex knows its own on one path and not the other. If you
 know your window and
 want the band exact from the first turn, set `SHIPYARD_CTX_WINDOW` — it wins unconditionally,

@@ -163,4 +163,97 @@ else
   ok "the call is above the per-slot loop" "yes" "no: call=$call_line loop=$loop_line"
 fi
 
+# --- THE DECLARED WINDOW: evidence, where there used to be only a guess --------------------
+# The transcript names the model WITH its window marker in an `attachment` record, so a 1M child
+# no longer has to wait for its peak to cross 200000 before the column stops bounding it. What
+# this block pins is the SHAPE of that reading, because every part of it is a way to get it wrong
+# silently: a parse that takes the first record instead of the last follows a switched model
+# backwards; one that treats a bare id as the small window turns the absence of evidence into a
+# fact; one that dies on a half-written final line takes the whole column down with it.
+f=$(transcript declared-1m)
+usage_record 10 300 120000 0 >> "$f"
+model_record "claude-opus-5-5[1m]" >> "$f"
+ok "a marked id declares the large window" "1000000" "$(ctx_declared_window "$f")"
+
+# READ IN ONE DIRECTION ONLY. A default-window session carries no suffix, and neither would a
+# future model whose default is large, so a bare id must yield NOTHING rather than 200000 — the
+# inference then handles it exactly as before. Reading it as the small window would be the same
+# guess wearing the clothes of a fact, in the direction that under-warns.
+f=$(transcript declared-bare)
+model_record "claude-opus-5" "Opus 5" >> "$f"
+ok "an unmarked id declares nothing" "" "$(ctx_declared_window "$f")"
+f=$(transcript declared-none)
+usage_record 10 300 120000 0 >> "$f"
+ok "no model record at all declares nothing" "" "$(ctx_declared_window "$f")"
+
+# THE LAST RECORD WINS. A session whose model is switched mid-run writes another record, and the
+# newest is the model the NEXT request runs on — the one the percentage is about. Taking the first
+# would pin a 1M child to a window it left, or keep asserting 1M after a switch down.
+f=$(transcript declared-switched)
+model_record "claude-opus-5-5[1m]" >> "$f"
+usage_record 10 300 120000 0 >> "$f"
+model_record "claude-opus-5" "Opus 5" >> "$f"
+ok "a switch away from the marked model is followed" "" "$(ctx_declared_window "$f")"
+f=$(transcript declared-switched-up)
+model_record "claude-opus-5" "Opus 5" >> "$f"
+model_record "claude-opus-5-5[1m]" >> "$f"
+ok "...and a switch towards it" "1000000" "$(ctx_declared_window "$f")"
+
+# A TRANSCRIPT IS READ WHILE IT IS BEING WRITTEN, so the final line is regularly a partial one.
+# `fromjson?` must swallow it; without that the column would blink out for exactly as long as the
+# child is mid-write, which is most of the time it matters.
+f=$(transcript declared-torn)
+model_record "claude-opus-5-5[1m]" >> "$f"
+printf '{"type":"assistant","message":{"usage":{"input_tok' >> "$f"
+ok "a half-written final line is survived" "1000000" "$(ctx_declared_window "$f")"
+
+# --- PRECEDENCE: override > declared > inference ---------------------------------------------
+# The middle rank is the new one and the only one in question. Above it, the operator's stated
+# window must still win IN BOTH DIRECTIONS — the escape hatch exists for a size nobody's evidence
+# names, and evidence that could overrule it would close the hatch silently.
+ok "declared beats the inference"        "1000000" "$(ctx_window 5000 1000000)"
+ok "declared where the inference agreed" "1000000" "$(ctx_window 461514 1000000)"
+ok "override beats declared, upwards"    "2000000" "$(SHIPYARD_CTX_WINDOW=2000000 ctx_window 5000 1000000)"
+ok "override beats declared, DOWNWARDS"  "100000"  "$(SHIPYARD_CTX_WINDOW=100000 ctx_window 5000 1000000)"
+# A malformed declared value is not evidence, for the same reason a malformed override is not a
+# stated window: it falls through rather than scaling anything against a garbage figure.
+for bad in "1M" "1000k" "0" "abc" ""; do
+  ok "malformed declared '$bad' falls back to the inference" "200000" "$(ctx_window 5000 "$bad")"
+done
+
+# A DECLARED WINDOW IS SETTLED, so the `?` band and its bound are not for it. This is the half
+# that actually removes the false alarm: a 1M child early in its life sits below 200000, which
+# unproven() calls a guess, and the bound then renders `<=84% · 169k` for a child at 16%.
+unproven_d() { ctx_window_unproven "$1" "$2" && echo yes || echo no; }
+ok "declared leaves the ? band"          "no"  "$(unproven_d 5000 1000000)"
+ok "...at any peak below the smallest"   "no"  "$(unproven_d 199999 1000000)"
+ok "no declaration still bounds"         "yes" "$(unproven 199999)"
+ok "malformed declared still bounds"     "yes" "$(unproven_d 199999 abc)"
+
+# --- THE CALL SITE, BEHAVIOURALLY -----------------------------------------------------------
+# This file's own recurring lesson: a callee fixed and a call site left alone leaves every other
+# check here green. ctx_probe must read the declaration AND pass it to both functions, so this
+# drives the real path — the transcript lookup ctx_claude_transcript computes from $ROOT and
+# CLAUDE_CONFIG_DIR — rather than asserting on the source text. 169365 tokens is the reading that
+# prompted the change: `? <=84%` before, `16%` after.
+probe_dir="$CTX_TEST_DIR/callsite"
+wt="$probe_dir/root/.claude/worktrees/ship-p1"
+mkdir -p "$wt"
+# pwd -P as the function does it: on macOS the temp root is itself a symlink, and a slug built
+# from the unresolved path names a directory the lookup will never visit.
+wt_real=$(cd "$wt" && pwd -P)
+slug=$(printf '%s' "$wt_real" | sed 's/[^A-Za-z0-9]/-/g')
+mkdir -p "$probe_dir/cfg/projects/$slug"
+pf="$probe_dir/cfg/projects/$slug/session.jsonl"
+usage_record 165 200 169000 0 > "$pf"     # 169365, below the smallest listed window
+probe() {
+  ROOT="$probe_dir/root" CLAUDE_CONFIG_DIR="$probe_dir/cfg" ctx_probe p1 ""
+}
+ok "without a declaration the probe bounds it" "? <=84% · 169k" "$(probe)"
+model_record "claude-opus-5-5[1m]" >> "$pf"
+ok "with one it reads plainly"                 "16 16% · 169k"  "$(probe)"
+# And the operator still outranks the evidence at the call site, not only in the callee.
+ok "the override still wins through the probe" "84 84% · 169k" "$(SHIPYARD_CTX_WINDOW=200000 probe)"
+
+
 done_ t2-window
