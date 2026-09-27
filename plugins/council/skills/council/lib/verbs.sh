@@ -1201,13 +1201,17 @@ _stall_line() {
   # Empty fields are stored as `-`: a tab is IFS whitespace, so `read` would collapse an empty
   # field into its neighbour and shift every later one.
   if [ -f "$f" ] && IFS=$'\t' read -r r_floor r_t r_state r_first r_n r_esc _ 2>/dev/null <"$f"; then
-    case "$r_first$r_n$r_esc" in
-      ''|*[!0-9]*) ;;
-      *) if [ "$r_floor" = "${floor:--}" ] && [ "$r_t" = "${t:--}" ] && [ "$r_state" = "$state" ] \
-            && [ "${#r_first}" -lt 12 ] && [ "${#r_n}" -lt 9 ] && [ "$((10#$r_first))" -le "$now" ]; then
-           first=$((10#$r_first)); n=$((10#$r_n + 1)); esc=$((10#$r_esc))
-         fi ;;
-    esac
+    # EACH FIELD ON ITS OWN. Tested as one concatenation, a record short a trailing field passed
+    # on the digits that were there, and `10#` of the empty one is a fatal error on bash 5: this
+    # subshell died printing nothing and the STALL sentence was gone for the whole episode.
+    case "$r_first" in ''|*[!0-9]*) r_first="" ;; esac
+    case "$r_n" in ''|*[!0-9]*) r_n="" ;; esac
+    case "$r_esc" in 0|1) ;; *) r_esc="" ;; esac
+    if [ -n "$r_first" ] && [ -n "$r_n" ] && [ -n "$r_esc" ] \
+       && [ "$r_floor" = "${floor:--}" ] && [ "$r_t" = "${t:--}" ] && [ "$r_state" = "$state" ] \
+       && [ "${#r_first}" -lt 12 ] && [ "${#r_n}" -lt 9 ] && [ "$((10#$r_first))" -le "$now" ]; then
+      first=$((10#$r_first)); n=$((10#$r_n + 1)); esc=$r_esc
+    fi
   fi
   mins=$(( (now - first) / 60 ))
   note=$(_stall_sent_note "$first" "$now") || note=""

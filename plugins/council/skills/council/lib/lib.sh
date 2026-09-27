@@ -1412,8 +1412,9 @@ c_conflicts() {
 #
 # THIS IS THE RECORD THAT COUNTS AS "SENT", and it is `say` rather than anything in the room log
 # because a supervisor has no seat: it reads the room without `--me` and reaches a participant
-# through `say`, which writes nothing into the room. So the one act of a supervisor's that council
-# can observe is the one this file records.
+# through `say`, which writes nothing into the room. So `say` is the act this record treats as
+# "sent". `relaunch` and `down` also leave traces in the room, and they are not counted here:
+# neither sends anything to a seat.
 #
 # In the shared mailbox, beside the status signature `_status_sigfile` keeps there, for the same
 # reason that file lives there — and with the same caveat, because nothing confines a participant

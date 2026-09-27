@@ -126,8 +126,12 @@ EP="$MB/council-stall-alarms-t28g"
 bash "$CLI" status --alarms-only >/dev/null 2>&1
 KEY=$(cut -f1-3 "$EP")
 ok "the record carries floor, turn and state"     "$F"$'\t'1$'\topen' "$KEY"
+# The two short records are the ones that used to kill the line outright on bash 5: a record one or
+# two numbers short, which a concatenated digit check let through to `10#` of an empty field.
 for junk in '' 'garbage' "$KEY"$'\tx\t1\t0' "$KEY"$'\t99999999999999999999\t1\t0' \
-            "$KEY"$'\t'"$(( $(date +%s) + 9999 ))"$'\t5\t1'; do
+            "$KEY"$'\t'"$(( $(date +%s) + 9999 ))"$'\t5\t1' \
+            "$KEY"$'\t'"$(( $(date +%s) - 120 ))"$'\t2' "$KEY"$'\t'"$(( $(date +%s) - 120 ))" \
+            "$KEY"$'\t'"$(( $(date +%s) - 120 ))"$'\t2\t7'; do
   printf '%s\n' "$junk" >"$EP"
   j=$(bash "$CLI" status --alarms-only 2>/dev/null)
   ok "record [$(printf '%s' "$junk" | tr '\t' ' ' | cut -c1-30)]: line printed" 1 "$(cnt "$j" '🛑 STALL')"
