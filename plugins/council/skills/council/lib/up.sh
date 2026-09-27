@@ -99,8 +99,10 @@ _keeper_start() { # <pid> -> start time on stdout, or rc 1
 # down on seeing the new pid) rather than a room with none. On a plain `down` it costs more, and
 # this is a known residual: `down` will not signal a keeper it cannot identify, it still removes
 # the file, and a missing file is no reason for the loop to step down — so that keeper lives on
-# in the kept room until a `relaunch` or `down --purge`. The same holds for a keeper started by a
-# version of this file that wrote the pid alone, which is also still running the old parser.
+# in the kept room until a `relaunch` or `down --purge`. A keeper started by a version of this file
+# that wrote the pid alone fares worse: it still runs that version's parser, which reads the new
+# two-word record as malformed, so it never steps down on a `relaunch` either — only `down
+# --purge` or a teardown marker ends it.
 _keeper_record() { # <pid> -> one line on stdout
   local s
   s=$(_keeper_start "$1") || s=""
@@ -505,7 +507,7 @@ _keeper_ensure() { # <room-dir> <peer>...
   fi
   # Drop the claim we just decided is not live, BEFORE forking. The keeper checks this file on its
   # very first pass, and until the write below lands the file still holds whatever was there — so
-  # on the `relaunch`-after-`down` path (a dead keeper's pid still on disk, which is precisely the
+  # on the `relaunch` path after a keeper died without `down` (a dead pid still on disk, which is the
   # path this function's header exists to serve) the newborn keeper would read its predecessor's
   # pid, see a name that is not its own, and step down within milliseconds of being forked. The
   # room would then be left with a pid file naming a dead process and no keeper at all — the exact

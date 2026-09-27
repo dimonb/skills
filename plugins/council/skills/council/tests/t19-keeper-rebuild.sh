@@ -294,7 +294,7 @@ kill "$e_loop" 2>/dev/null; wait "$e_loop" 2>/dev/null
 # keeper that is still there a poll later.
 #
 # Be clear about what this does and does not catch, because a check believed to have teeth it does
-# not have is worse than no check. It pins the OUTCOME of the documented `relaunch`-after-`down`
+# not have is worse than no check. It pins the OUTCOME of the documented `relaunch`-after-a-crashed-keeper
 # path on the ordinary schedule, where the parent rewrites the pid file long before the newborn
 # first reads it — so it passes with or without the `rm -f "$keep"` that makes that safe (measured).
 # CASE H is the one that pins the clear, by forcing the other schedule.
@@ -394,7 +394,7 @@ ok "control: not superseded, the EOF still reaps" reaped "$(canary_eof "$ROOT/G2
 echo "── case H: _keeper_ensure clears a stale claim before forking (provoked) ──"
 # The window E2 could not reach, opened deliberately. `set` is a regular builtin, so a function of
 # that name defined in the caller wins — and on this path only the PARENT runs `set +m`, between
-# the fork and the `echo` that rewrites the pid file. Holding it there for two seconds guarantees
+# the fork and the write that rewrites the pid file. Holding it there for two seconds guarantees
 # the newborn reads the file first, which is the schedule that decides whether `rm -f "$keep"`
 # matters. Without that line the newborn finds its dead predecessor's pid, steps down, and the room
 # is left with NO keeper — every bell rung at it lost, in silence.
