@@ -111,6 +111,10 @@ printf '%s\n' "$stranger" > "$kfile"
 live=$( SKILL="$SKILL"; . "$SKILL/lib/up.sh"; _keeper_live "$kfile" )
 expect "a pid-only file naming a live process is not vouched for" "" "$live"
 printf '%s %s\n' "$stranger" "$stale" > "$kfile"
+( SKILL="$SKILL"; . "$SKILL/lib/up.sh"; _keeper_teardown "$R" ) >/dev/null 2>&1; trc=$?
+expect "decide's teardown over a recycled pid finds no live keeper" 1 "$trc"
+expect "...and writes no marker nothing would take" absent \
+  "$([ -e "$R/state/teardown" ] && echo present || echo absent)"
 ( SKILL="$SKILL"; . "$SKILL/lib/up.sh"; _keeper_ensure "$R" a b ) >/dev/null 2>&1
 k1=""; read -r k1 _ < "$kfile" 2>/dev/null
 live=$( SKILL="$SKILL"; . "$SKILL/lib/up.sh"; _keeper_live "$kfile" )
