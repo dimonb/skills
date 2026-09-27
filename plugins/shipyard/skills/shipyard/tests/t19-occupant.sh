@@ -17,7 +17,7 @@
 #   3. one `none` followed by `agent` — a launch caught before its `exec` — is not a death;
 #   4. tell and compact refuse a `none` slot with exit 8, typing nothing and recording nothing, and
 #      go on exactly as before when there is no verdict;
-#   5. the 💀 block is an episode (#239): full on its first tick, one line after that, which prints
+#   5. the 💀 block is an episode (#239): full on its first tick, the short entry after that, which prints
 #      the first-raised time it read, and full again for a record it cannot trust or after a gap.
 #
 # Executed against the real scripts over a faked tmux, as t13 and t18 do.
@@ -159,7 +159,7 @@ ok "...as a finished row, with no 💀 block"                   no  "$(has "$out
 out=$(FAKE_OCC=alive FAKE_OCC45=dead run_report --only-changed)
 ok "...and once: the next tick is silent again"               ""  "$out"
 
-# The 💀 block is an EPISODE (#239): the full recovery steps on its first tick, one line on the
+# The 💀 block is an EPISODE (#239): the full recovery steps on its first tick, the short entry on the
 # ticks after, and full again when the episode ends and a new one starts. What decides whether the
 # block APPEARS is untouched, so every assertion here also checks the slots are still named.
 printf '\n── NO AGENT is printed in full once, then as its delta ──\n'
@@ -170,16 +170,16 @@ ok "first tick: the full block"                        yes "$(has "$(noagent "$o
 ok "...naming 41 and 46"                               "41 46" "$(block "$out" '💀 NO AGENT')"
 out=$(run_report --only-changed)
 ok "second tick: still printed, bypassing the filter"  "41 46" "$(block "$out" '💀 NO AGENT')"
-ok "...as the one-line delta"                          yes "$(has "$(noagent "$out")" '^- `41` — STILL no agent, first raised [0-9]* min ago (at [0-9][0-9]:[0-9][0-9] UTC), tick 2')"
+ok "...as the short entry"                          yes "$(has "$(noagent "$out")" '^- `41` — STILL no agent, first raised [0-9]* min ago (at [0-9][0-9]:[0-9][0-9] UTC), tick 2')"
 ok "...without the full steps"                         no  "$(has "$(noagent "$out")" 'on both reads of this tick')"
 ok "...and still no nudge or compaction command"       no  "$(has "$(noagent "$out")" 'bash .*shipyard-\(tell\|compact\)\.sh ')"
 # The episode ends on the tick its condition does not fire; the next death is a new one.
 FAKE_OCC=alive run_report --only-changed >/dev/null
 out=$(run_report --only-changed)
 ok "after a tick with the agent back: full again"      yes "$(has "$(noagent "$out")" 'on both reads of this tick')"
-# The record is peer-writable, so a row it cannot trust is a first firing, never a one-liner. Each
+# The record is peer-writable, so a row it cannot trust is a first firing, never the short entry. Each
 # guard gets a row of its own for 41, faulty in exactly one field, so no guard covers for another.
-# 46 carries a VALID backdated row in the same tick, which pins two things at once: the one-liner
+# 46 carries a VALID backdated row in the same tick, which pins two things at once: the short entry
 # prints the first-raised time and count it READ (the self-revealing half: a forged row shows as a
 # time the operator never saw), and the parallel episode array stays aligned when two slots of one
 # block are in different states.

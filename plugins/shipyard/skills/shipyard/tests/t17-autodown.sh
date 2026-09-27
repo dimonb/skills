@@ -85,9 +85,9 @@
 #   B19 a teardown prints even when the signature file already matches (it lives in the mailbox
 #      children write into, so it is forgeable).
 #   B20 a slot name containing `/` is refused.
-#   B21 HELD is an episode: the full block on its first tick, one line after, and full again when
+#   B21 HELD is an episode: the full block on its first tick, the short entry after, and full again when
 #      the records holding it change, including a swap that keeps their count.
-#   B22 AWAITING REMOVAL is an episode keyed on the refusal's text: full, then one line that still
+#   B22 AWAITING REMOVAL is an episode keyed on the refusal's text: full, then the short entry that still
 #      carries the command, then full again for a new reason.
 #   B23 TORN DOWN fires once per act: a slot that was really removed is not reaped or reported again.
 # That list is maintained by hand and has gone stale twice already, each time when a fix round
@@ -726,7 +726,7 @@ b_tick -- "7/" >/dev/null
 ok "B20: a slot name with a slash tears nothing down" 0 "$(grep -c . "$DOWN_CALLS")"
 
 # --- B21: HELD is an episode, keyed on the records that hold it (#239) ------------------------
-# The first held tick prints the full block, later ones one line. A DIFFERENT set of records is
+# The first held tick prints the full block, later ones the short entry. A DIFFERENT set of records is
 # news, so it prints in full again. Every tick still prints the block under --only-changed.
 b_reset; rm -f "$B_GIT/ship-escalations/report-episodes"
 b_slot 80 880 ready-to-merge
@@ -738,7 +738,7 @@ b21a=$(b_tick -- --only-changed 80)
 b21b=$(b_tick -- --only-changed 80)
 ok "B21: the first held tick prints the full block"   1 "$(printf '%s' "$b21a" | grep -c 'Tearing it down by hand first')"
 ok "B21: the next one still prints the block"         1 "$(printf '%s' "$b21b" | grep -c 'HELD — finished and merged')"
-ok "B21: ...as the one-line delta"                    1 "$(printf '%s' "$b21b" | grep -c '^- `80` — STILL held by the same 1 unsettled record(s), .* tick 2')"
+ok "B21: ...as the short entry"                    1 "$(printf '%s' "$b21b" | grep -c '^- `80` — STILL held by the same 1 unsettled record(s), .* tick 2')"
 ok "B21: ...still naming the remedy"                  1 "$(printf '%s' "$b21b" | grep -c 'the escalation block below carries the command')"
 ok "B21: ...without the full steps"                   0 "$(printf '%s' "$b21b" | grep -c 'Tearing it down by hand first')"
 printf '{"kind":"question","status":"pending","slot":"80"}\n' >"$B_GIT/ship-escalations/80-2.json"
@@ -763,7 +763,7 @@ b22a=$(b_tick -- --only-changed 81)
 b22b=$(b_tick -- --only-changed 81)
 ok "B22: the first refusal prints the full block"      1 "$(printf '%s' "$b22a" | grep -c 'uncommitted or untracked')"
 ok "B22: the next one still prints the block"          1 "$(printf '%s' "$b22b" | grep -c 'AWAITING REMOVAL')"
-ok "B22: ...as the one-line delta"                     1 "$(printf '%s' "$b22b" | grep -c '^- `81` — STILL refused for the same reason, .* tick 2')"
+ok "B22: ...as the short entry"                     1 "$(printf '%s' "$b22b" | grep -c '^- `81` — STILL refused for the same reason, .* tick 2')"
 ok "B22: ...still carrying the exact command"          1 "$(printf '%s' "$b22b" | grep -c 'shipyard-down.sh 81$')"
 ok "B22: ...without re-quoting the refusal"            0 "$(printf '%s' "$b22b" | grep -c 'uncommitted or untracked')"
 b22c=$(b_tick "DOWN_REASON=refused: ship-81 has unmerged content" -- --only-changed 81)
@@ -781,12 +781,15 @@ printf '882\tMERGED\n' >"$B_STATES"
 DOWN_REMOVE=1; export DOWN_REMOVE
 b_tick -- 82 >/dev/null
 b23a=$(b_tick -- 82)
+# The live arm first: the terminal still listed, so autodown_consider is reached and must stop at
+# lock 2 on the missing stage. Then the gone-slot arm, where it is not called at all.
+b23live=$(b_tick -- 82)
 printf '1 ship-79\n' >"$B_WINS"; printf 'ship-79\n' >"$B_ENUM"   # its terminal is gone too
 b23b=$(b_tick -- 82)
 b23c=$(b_tick -- 82)
 DOWN_REMOVE=0; export DOWN_REMOVE
 ok "B23: the removing tick reports the teardown"       1 "$(printf '%s' "$b23a" | grep -c 'TORN DOWN — merged, finished')"
-ok "B23: ...and later ticks do not report it again"    0 "$(printf '%s%s' "$b23b" "$b23c" | grep -c 'TORN DOWN')"
+ok "B23: ...and later ticks do not report it again"    0 "$(printf '%s%s%s' "$b23live" "$b23b" "$b23c" | grep -c 'TORN DOWN')"
 ok "B23: ...nor call the teardown again"               1 "$(grep -c '^82$' "$DOWN_CALLS")"
 
 printf '\n%s: %d checks, %d failures\n' "$(basename "$0")" "$CHECKS" "$FAILURES"
