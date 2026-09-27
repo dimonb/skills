@@ -69,7 +69,7 @@ mkroom_faked() { # <dir> <mark-subdir> <peer>...
     '{order:., mode:"token", decide_by:"unanimous", order_rotate:true,
       turn_deadline_ms:3000, turns_budget:$t, created_at:"test", created_ms:$cms}' > "$room/roster.json"
 }
-kpid_of() { local v; v=$(cat "$1" 2>/dev/null || true); case "$v" in ''|*[!0-9]*) printf '' ;; *) printf '%s' "$v" ;; esac; }
+kpid_of() { local v="" _r; read -r v _r < "$1" 2>/dev/null || true; case "$v" in ""|*[!0-9]*) printf "" ;; *) printf "%s" "$v" ;; esac; }
 
 # ================================================================================================
 echo "--- A. the keeper takes the marker, reaps every seat, consumes it and exits ---"

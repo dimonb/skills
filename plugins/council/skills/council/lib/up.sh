@@ -42,7 +42,7 @@ _council_prompt() { # <mode> <protocol-path>
   esac
 }
 
-# The keeper's pid, or nothing. Both callers hand the result to `kill`, and `kill` reads a
+# The keeper's pid, or nothing. Its result reaches `kill`, and `kill` reads a
 # `0` as EVERY PROCESS IN THE SENDER'S PROCESS GROUP -- which is the supervisor's own session,
 # not the room. That is not a hypothetical: an early probe for this wrote `0` into a pid file
 # and its own cleanup then killed the probe's process group for real.
@@ -53,20 +53,71 @@ _council_prompt() { # <mode> <protocol-path>
 # keeper is running", never starts one, and every bell in the room is then silently lost --
 # the exact failure that function's own header says it exists to prevent.
 #
-# So both readers go through here and `kill` only ever sees a positive integer. Digits then
+# So every reader goes through here and `kill` only ever sees a positive integer. Digits then
 # `10#`, the idiom c_slurp carries for the same reason: a value like `010` is a legal pid file
 # and `$(( ))` would read it as octal. The ten-digit ceiling is there to make the arithmetic
 # itself exact rather than to judge what a plausible pid is -- past it `$(( ))` wraps a
 # 64-bit signed integer, and a wrapped value can land on a positive number that is somebody
 # else's live process.
+#
+# THIS PARSES, IT DOES NOT VOUCH. The file's first word is the pid and the rest of its line is the
+# keeper's start time (`_keeper_record`); this returns the first word only, and says nothing about
+# whether that number is still the keeper. `_keeper_loop`'s step-down wants exactly that — "does
+# the file name somebody other than me", alive or not. Every caller that goes on to TRUST the pid
+# — to decide a keeper is running, or to signal it — goes through `_keeper_live` instead.
 _keeper_pid() { # <pid-file> -> a positive integer on stdout, or nothing and rc 1
-  local v=""
+  local v="" _rest
   [ -s "$1" ] || return 1
-  read -r v < "$1" 2>/dev/null
+  read -r v _rest < "$1" 2>/dev/null
   case "$v" in ''|*[!0-9]*) return 1 ;; esac
   [ "${#v}" -le 10 ] || return 1
   v=$((10#$v)); [ "$v" -gt 0 ] || return 1
   printf '%s' "$v"
+}
+
+# A process's start time as `ps` reports it, whitespace collapsed, or nothing and rc 1 when there
+# is no such process. The collapse is not tidiness: `lstart` pads a one-digit day with a second
+# space and macOS pads the end of the field, and the recorded copy goes through `read`, which
+# does not keep either.
+_keeper_start() { # <pid> -> start time on stdout, or rc 1
+  local s
+  s=$(ps -o lstart= -p "$1" 2>/dev/null | awk '{$1=$1; print}') || return 1
+  [ -n "$s" ] || return 1
+  printf '%s' "$s"
+}
+
+# The pid file's content for a just-forked keeper: its pid, then its start time. If `ps` cannot
+# say, the pid goes in alone, and `_keeper_live` then never vouches for it — a keeper nobody can
+# identify is treated as absent, which costs a redundant keeper (the old one steps down on
+# seeing the new pid) rather than a room with none.
+_keeper_record() { # <pid> -> one line on stdout
+  local s
+  s=$(_keeper_start "$1") || s=""
+  printf '%s %s\n' "$1" "$s"
+}
+
+# The keeper's pid, ONLY if that pid is still the process the file was written for (#30). A pid
+# is not unique over time: `down` kills the keeper, the OS hands the number to something else, and
+# a bare `kill -0` then answers "alive" for a process that is not a keeper at all — so
+# `_keeper_ensure` never restarts it and every bell rung at a seat outside `recv` is lost in
+# silence, `decide` reports the seats are going when nothing will reap them, and `down` sends
+# SIGTERM to whatever now holds the number. Comparing the start time the file recorded with the
+# LIVE process's own start time turns that into an ordinary mismatch.
+#
+# AN ACCIDENT CHECK, NOT AUTHENTICATION (#204). A seat can read any process's start time and write
+# pid and start into the file together, so a deliberate forgery still passes — the room is not a
+# trust boundary. What this closes is the route with nobody attacking: a stale file and a recycled
+# pid. It compares against the live process rather than against a second copy in another file
+# because two writable copies agreeing prove nothing about the process. A file with no start time
+# (one written before this check existed, or by a `ps` that could not answer) is never vouched for.
+_keeper_live() { # <pid-file> -> the verified pid on stdout, or nothing and rc 1
+  local pid _p want have
+  pid=$(_keeper_pid "$1") || return 1
+  read -r _p want < "$1" 2>/dev/null
+  [ -n "$want" ] || return 1
+  have=$(_keeper_start "$pid") || return 1
+  [ "$(printf '%s' "$want" | awk '{$1=$1; print}')" = "$have" ] || return 1
+  printf '%s' "$pid"
 }
 
 # A rename cannot be redirected by a symlink at the destination, but it can still land inside
@@ -136,10 +187,12 @@ _keeper_teardown_file() { printf '%s/state/teardown' "$1"; }
 # Routes that bypass it — the ones found so far, and an earlier version of this comment presented
 # its list as complete, which is how the symlink one below survived a round:
 #
-#   * `state/keeper.pid` naming a live process that is not this room's keeper. `kill -0` cannot
-#     tell them apart, so this returns 0, a marker is written that nothing will ever take, and
-#     `decide` reports the seats are going. Reachable WITHOUT a hostile seat: `down` leaves the
-#     pid file behind and the OS recycles pids (#30).
+#   * `state/keeper.pid` naming a live process that is not this room's keeper, WRITTEN SO ON
+#     PURPOSE — its pid and its start time together, both of which a seat can read. `_keeper_live`
+#     then vouches for it, a marker is written that nothing will ever take, and `decide` reports
+#     the seats are going. The ACCIDENTAL form of this route — `down` leaving a stale pid the OS
+#     then recycles (#30) — is closed: `down` removes the file, and a recycled pid's start time
+#     does not match the one recorded.
 #   * the marker removed between this write and the keeper's next poll — up to five seconds, and
 #     `relaunch` does exactly that legitimately.
 #   * the keeper killed after the marker is written.
@@ -164,8 +217,7 @@ _keeper_teardown_file() { printf '%s/state/teardown' "$1"; }
 _keeper_teardown() { # <room> -> 0 asked, 1 no live keeper to ask, 2 the request could not be written
   local room="$1" pid f
   # Liveness first: with no keeper nothing will ever reap, whatever the directory looks like.
-  pid=$(_keeper_pid "$room/state/keeper.pid") || return 1
-  kill -0 "$pid" 2>/dev/null || return 1
+  pid=$(_keeper_live "$room/state/keeper.pid") || return 1
   _room_dirs_sane "$room" || return 2
   f=$(_keeper_teardown_file "$room") || return 2
   # WRITE A TEMP AND RENAME IT IN, never `>` onto the name — the same remedy `_write_launcher`
@@ -274,9 +326,9 @@ _canary_fifo() { # <room> -> a freshly created fifo path on stdout, or rc 1
 # this keeper, under the one that superseded it:
 #   * the room directory going away — a deletion by hand, or `down --purge`. This is the BACKSTOP
 #     rather than the usual cause, and the distinction has now been got wrong twice in this
-#     comment. Whenever the pid file names a process, BOTH forms of `down` SIGTERM the keeper
-#     before the purge branch — the kill is gated on `_keeper_pid` resolving, so a missing or
-#     malformed pid file sends nothing at all — and a signal ends it in ~11 ms measured while
+#     comment. Whenever the pid file names this keeper, BOTH forms of `down` SIGTERM it before
+#     the purge branch — the kill is gated on `_keeper_live` vouching for the pid, so a missing,
+#     malformed or stale pid file sends nothing at all — and a signal ends it in ~11 ms measured while
 #     this poll can take up to five seconds, so on `--purge` the signal gets there first and the
 #     loop never sees the removal. A plain `down` does not remove the directory at all: it prints
 #     "room kept". So this trigger is what catches a room that went away without anyone signalling
@@ -405,7 +457,7 @@ _keeper_loop() { # <room> <pid-file> <canary-read-fd-or-empty> <poll-interval> <
 _keeper_ensure() { # <room-dir> <peer>...
   local room="$1"; shift
   local keep="$room/state/keeper.pid" p pid poll
-  pid=$(_keeper_pid "$keep") && kill -0 "$pid" 2>/dev/null && return 0
+  _keeper_live "$keep" >/dev/null && return 0
   # The keeper's poll period, read HERE and not in the loop: the fork below detaches the keeper's
   # stderr to /dev/null, so this is the last point at which an operator can be told their value
   # was unusable. Five seconds is the production answer and is not being changed — the knob
@@ -475,7 +527,10 @@ _keeper_ensure() { # <room-dir> <peer>...
   pid=$!
   [ "$had_m" = 1 ] || set +m
   [ -n "$cw" ] && exec {cr}<&-        # the owner never reads the canary; keep only the write end open here
-  echo "$pid" > "$keep"
+  # Built BEFORE the redirection truncates the file, so the `ps` it runs does not stretch the
+  # window in which the pid file exists and is empty.
+  local rec; rec=$(_keeper_record "$pid")
+  printf '%s\n' "$rec" > "$keep"
 }
 
 # ct_launch for a participant, with the owner canary write end (if any) closed for the launched
@@ -1315,7 +1370,11 @@ council_down() {
     ct_kill "$p" 2>/dev/null && echo "terminal closed: $p"
   done
   local keep="$ROOM/state/keeper.pid" pid
-  pid=$(_keeper_pid "$keep") && kill "$pid" 2>/dev/null
+  # Signal only a pid still verified as this room's keeper — a recycled one belongs to some other
+  # process of the user's — and then drop the file, so no later reader is left with a dead
+  # keeper's pid to misread (#30). A missing file is what `_keeper_ensure` treats as "no keeper".
+  pid=$(_keeper_live "$keep") && kill "$pid" 2>/dev/null
+  rm -f "$keep"
   if [ "$purge" = 1 ]; then
     # The room IS the record — the ADR and the transcript live in it. Deleting it throws
     # away the only durable output the room produced, so it takes an explicit flag.

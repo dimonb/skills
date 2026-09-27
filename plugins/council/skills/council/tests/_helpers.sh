@@ -130,7 +130,7 @@ ROOM_KEEPERS=()
 kill_keeper() { # <pid-file> [signal]
   local v=""
   [ -s "$1" ] || return 0
-  read -r v < "$1" 2>/dev/null
+  read -r v _ < "$1" 2>/dev/null
   case "$v" in ''|*[!0-9]*) return 0 ;; esac
   [ "${#v}" -le 10 ] || return 0
   v=$((10#$v)); [ "$v" -gt 0 ] || return 0

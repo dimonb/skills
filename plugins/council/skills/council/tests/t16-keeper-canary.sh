@@ -231,7 +231,7 @@ E_REPO="$ROOT/e-repo"; mkdir -p "$E_REPO"   # under $ROOT so the cleanup trap sw
 e_owner=$!; OWNERS+=("$e_owner")
 E_KP="$E_REPO/.git/council/r/state/keeper.pid"
 ok "up --hold created a room + keeper via the real CLI" yes "$(wait_file "$E_KP" 100)"
-e_kpid=$(cat "$E_KP" 2>/dev/null); [ -n "$e_kpid" ] && KEEPERS+=("$e_kpid")
+e_kpid=""; read -r e_kpid _ < "$E_KP" 2>/dev/null; [ -n "$e_kpid" ] && KEEPERS+=("$e_kpid")
 ok "the --hold owner is still holding (blocked on wait)" yes "$(kill -0 "$e_owner" 2>/dev/null && echo yes || echo no)"
 kill -TERM "$e_owner" 2>/dev/null
 ok "killing the --hold owner reaps its keeper" gone "$(wait_gone "$e_kpid" "$REAP_WAIT")"

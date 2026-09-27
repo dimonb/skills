@@ -125,7 +125,7 @@ hold() { # <seconds> <pid>...
 read_pid() { # <pid-file> -> a positive integer, or nothing and rc 1
   local v=""
   [ -s "$1" ] || return 1
-  read -r v < "$1" 2>/dev/null
+  read -r v _ < "$1" 2>/dev/null
   case "$v" in ''|*[!0-9]*) return 1 ;; esac
   [ "${#v}" -le 10 ] || return 1
   v=$((10#$v)); [ "$v" -gt 0 ] || return 1

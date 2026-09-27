@@ -343,9 +343,12 @@ Three consequences worth knowing:
   the difference matters because [the room is not a trust
   boundary](#the-room-is-not-a-trust-boundary). Whether exit 5 *appears* is decided by
   `state/keeper.pid` and by `state/` being writable, which are room state any participant can
-  write. A pid file naming a live process that is not this room's keeper — a seat's own doing, or
-  just `down` leaving a stale pid the OS then recycles — makes the close report success while
-  nothing ever reaps. So `decide` says the keeper **has been asked**, which is all it establishes;
+  write. A pid file naming a live process that is not this room's keeper makes the close report
+  success while nothing ever reaps. The file records the keeper's start time beside its pid and
+  every reader that trusts it checks both against the live process, so a stale file whose pid the
+  OS has recycled no longer passes, and `down` removes the file in any case. That is an accident
+  check, not authentication: a seat can still write another process's pid and start time on
+  purpose. So `decide` says the keeper **has been asked**, which is all it establishes;
   it does not say the seats are gone. Neither prevented nor made self-revealing here, and
   `_keeper_teardown`'s header names the routes found so far — and says itself to read them as
   that and never as the set. What the room's own bookkeeping cannot report, a backend read can —

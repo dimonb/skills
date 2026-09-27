@@ -127,7 +127,7 @@ cdp=$(jq -r '.cwd // "<missing>"' "$REPO/.git/council/cdp/roster.json" 2>/dev/nu
 [ "$(printf '%s' "$cdp" | wc -l | tr -d ' ')" = 0 ] \
   || { echo "FAIL the recorded cwd is more than one line: $cdp"; fail=1; }
 ck="$REPO/.git/council/cdp/state/keeper.pid"
-[ -s "$ck" ] && kill -9 "$(cat "$ck")" 2>/dev/null
+kill_keeper "$ck" -9
 
 # --- the roster is the authority on who has a seat -------------------------------
 if want 2 "a peer that is not in the room" bash "$CLI" relaunch nosuch; then
@@ -202,14 +202,14 @@ grep -q "cd $ELSE_P" "$ROOM/state/launch-claude.sh" \
 # A seat restarted into a room whose keeper is dead looks perfectly healthy and hears
 # nothing: a bell rung at a participant not at that instant inside `recv` is lost.
 keep="$ROOM/state/keeper.pid"
-old=$(cat "$keep")
+old=""; read -r old _ < "$keep"
 kill -9 "$old" 2>/dev/null      # -9 so the test cannot race the keeper's own exit
 for _i in 1 2 3 4 5 6 7 8 9 10; do kill -0 "$old" 2>/dev/null || break; sleep 0.2; done
 if kill -0 "$old" 2>/dev/null; then
   echo "FAIL could not kill the keeper for the test (pid $old)"; fail=1
 else
   run_capped 10 bash "$CLI" relaunch claude
-  new=$(cat "$keep" 2>/dev/null)
+  new=""; read -r new _ < "$keep" 2>/dev/null
   if [ -z "$new" ] || ! kill -0 "$new" 2>/dev/null; then
     echo "FAIL relaunch left the room without a keeper (was $old, now ${new:-none})"; fail=1
   else
