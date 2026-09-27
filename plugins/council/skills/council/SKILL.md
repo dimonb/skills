@@ -46,8 +46,8 @@ producing polite agreement.
                          (a room without it keeps the plain stall threshold)
   agenda.md              the question
   protocol-<peer>.md     what each participant was told (channel rules + its role)
-  lane/<peer>/NNNNNN.json    ← exactly ONE writer per lane, ever
-  cursor/<me>/<peer>         ← exactly ONE writer per cursor (me)
+  lane/<peer>/NNNNNN.json    ← ONE writer per lane, by protocol (not enforced)
+  cursor/<me>/<peer>         ← ONE writer per cursor (me), by protocol
   bell/<peer>.fifo       the doorbell
   board/decision.md      the output; board/status holds decided|unresolved
   state/                 counters, launchers, the pinned terminal container, keeper pid,
@@ -510,6 +510,15 @@ scenario and the names still select a file to render and text to interpolate, an
 `roster.json` is in the room too. The **agent kind no longer selects a file at all**: it is
 matched against `case` labels in the shared adapter module (below).
 
+The second reason is the ordinary one: a regenerated launcher picks up **adapter changes
+made since the room opened**, which is exactly what "killed to pick up new permissions"
+asks for. A stored launcher would bring the seat back with the command line it had when
+the room was created.
+
+**The cost, and you will not discover it any other way: a hand-edited launcher or protocol
+is discarded.** If you tuned a participant's protocol by hand, `relaunch` throws that away
+and writes the generated one.
+
 ### The room is not a trust boundary
 
 **Do not read any of the above as containment, because it is not.** Measured, all three
@@ -590,15 +599,6 @@ not read as covering them:
   why no digest, HMAC or key is used: each would be seat-readable and seat-rewritable.
 
 Run rooms accordingly.
-
-The second reason is the ordinary one: a regenerated launcher picks up **adapter changes
-made since the room opened**, which is exactly what "killed to pick up new permissions"
-asks for. A stored launcher would bring the seat back with the command line it had when
-the room was created.
-
-**The cost, and you will not discover it any other way: a hand-edited launcher or protocol
-is discarded.** If you tuned a participant's protocol by hand, `relaunch` throws that away
-and writes the generated one.
 
 ### `--cwd`
 
