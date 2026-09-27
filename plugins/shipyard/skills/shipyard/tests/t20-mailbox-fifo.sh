@@ -23,7 +23,10 @@
 #     shared/policy's t-policy.
 #   * `slot_unsettled` / `slot_unsettled_files` (the teardown hold) run only on the merged-slot
 #     path; their non-regular-file arm is not driven here.
-#   * the launcher's three writes (protocol, launcher, launch record): no test drives
+#   * the `[ -f ]` in ask's `answer_of` and in `shipyard_json_set`: each is reached only by a FIFO
+#     swapped in over a record that was regular a moment earlier (during `--wait`'s sleep, or
+#     between a caller's own check and the update), which no fixture can time.
+#   * the launcher's writes (protocol, launcher, launch record): no test drives
 #     shipyard-launch.sh end to end (t9 says the same), so they are covered only by reading.
 #
 # MUTATION CHECK, run by hand when this file changes: put back a plain `>` for any report-* write,
