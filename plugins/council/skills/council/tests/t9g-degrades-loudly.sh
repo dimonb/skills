@@ -54,7 +54,10 @@ pidgate '0'                     ''
 pidgate ''                      ''
 pidgate '-1'                    ''
 pidgate 'abc'                   ''
-pidgate '12 34'                 ''
+pidgate '12x 34'                ''
+# The file's first word is the pid and the rest of the line the keeper's start time, so a
+# second word no longer makes the file malformed — the parser still hands on the first word only.
+pidgate '12 34'                 '12'
 pidgate '99999999999999999999'  ''
 pidgate '4321'                  '4321'
 pidgate '010'                   '10'
@@ -67,12 +70,74 @@ fresh
 kill_keeper "$R/state/keeper.pid"
 printf '0' > "$R/state/keeper.pid"
 ( SKILL="$SKILL"; . "$SKILL/lib/up.sh"; _keeper_ensure "$R" a b ) >/dev/null 2>&1
-kp=$(cat "$R/state/keeper.pid" 2>/dev/null)
+kp=""; read -r kp _ < "$R/state/keeper.pid" 2>/dev/null
 case "$kp" in
   ''|*[!0-9]*|0) echo "FAIL a '0' keeper.pid passed for a live keeper (pid file now '$kp')"; fail=1 ;;
   *) if kill -0 "$kp" 2>/dev/null; then echo "ok   a '0' keeper.pid started a real keeper (pid $kp)"
      else echo "FAIL keeper.pid holds $kp but no such process"; fail=1; fi ;;
 esac
+
+# --- 2b. a recycled pid must not pass for a live keeper (#30) --------------------
+# `down` kills the keeper and the OS later hands its number to some other process of the same
+# user. `kill -0` cannot tell the two apart, so a pid file trusted on the pid alone makes
+# `_keeper_ensure` skip the restart (every bell rung outside `recv` is then lost), makes
+# `decide` report a teardown nothing will perform, and makes `down` SIGTERM the stranger. The
+# collision is simulated rather than waited for: a live stand-in process is written into the
+# file beside a start time that is not its own, which is exactly what a recycle leaves. Not the
+# dead keeper's own recorded time: `lstart` has one-second resolution and this whole case runs
+# inside one second, so the stand-in would share it — a real recycle cannot, because the keeper
+# must die before its number is reused.
+expect() { # <label> <expected> <actual>
+  if [ "$2" = "$3" ]; then echo "ok   $1"
+  else echo "FAIL $1 (expected '$2', got '$3')"; fail=1; fi
+}
+stale='Thu Jan  1 00:00:00 1970'
+fresh
+kfile="$R/state/keeper.pid"
+live=$( SKILL="$SKILL"; . "$SKILL/lib/up.sh"; _keeper_live "$kfile" )
+k0=""; read -r k0 old_start < "$kfile" 2>/dev/null
+# The positive row first: without it every negative below would pass over a reader that
+# vouches for nothing at all.
+if [ -n "$k0" ] && [ "$live" = "$k0" ] && [ -n "$old_start" ]; then
+  echo "ok   a freshly written keeper.pid is vouched for (pid $k0, started $old_start)"
+else echo "FAIL a fresh keeper.pid was not vouched for (file '$(cat "$kfile" 2>/dev/null)', got '$live')"; fail=1; fi
+# The writer and the readers are different processes: `up` in the operator's shell, `decide` in a
+# seat whose terminal does not inherit that shell's TZ. A record written in one zone must still be
+# vouched for from another, or `decide` reports "no live keeper" over a live one.
+( export TZ=AAA-9; SKILL="$SKILL"; . "$SKILL/lib/up.sh"; _keeper_record "$k0" ) > "$kfile"
+live=$( export TZ=BBB+5; SKILL="$SKILL"; . "$SKILL/lib/up.sh"; _keeper_live "$kfile" )
+expect "a record written in one TZ is vouched for from another" "$k0" "$live"
+kill_keeper "$kfile"
+for i in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20; do kill -0 "$k0" 2>/dev/null || break; sleep 0.1; done
+sleep 30 & stranger=$!
+printf '%s %s\n' "$stranger" "$stale" > "$kfile"
+live=$( SKILL="$SKILL"; . "$SKILL/lib/up.sh"; _keeper_live "$kfile" )
+expect "a recycled pid with a stale start time is not vouched for" "" "$live"
+printf '%s\n' "$stranger" > "$kfile"
+live=$( SKILL="$SKILL"; . "$SKILL/lib/up.sh"; _keeper_live "$kfile" )
+expect "a pid-only file naming a live process is not vouched for" "" "$live"
+printf '%s %s\n' "$stranger" "$stale" > "$kfile"
+( SKILL="$SKILL"; . "$SKILL/lib/up.sh"; _keeper_teardown "$R" ) >/dev/null 2>&1; trc=$?
+expect "decide's teardown over a recycled pid finds no live keeper" 1 "$trc"
+expect "...and writes no marker nothing would take" absent \
+  "$([ -e "$R/state/teardown" ] && echo present || echo absent)"
+( SKILL="$SKILL"; . "$SKILL/lib/up.sh"; _keeper_ensure "$R" a b ) >/dev/null 2>&1
+k1=""; read -r k1 _ < "$kfile" 2>/dev/null
+live=$( SKILL="$SKILL"; . "$SKILL/lib/up.sh"; _keeper_live "$kfile" )
+if [ -n "$k1" ] && [ "$k1" != "$stranger" ] && [ "$live" = "$k1" ]; then
+  echo "ok   _keeper_ensure over a recycled pid started a real keeper (pid $k1)"
+else echo "FAIL _keeper_ensure trusted a recycled pid (file names '$k1', vouched '$live')"; fail=1; fi
+# `down` over the same recycled file: the stranger must not be signalled, and the file goes.
+kill_keeper "$kfile"
+printf '%s %s\n' "$stranger" "$stale" > "$kfile"
+( export COUNCIL_ROOM="$R" COUNCIL_BACKEND=none-for-tests
+  SKILL="$SKILL"; ROOM="$R"
+  . "$SKILL/lib/up.sh"
+  council_down ) >/dev/null 2>&1
+expect "down did not signal the process holding a recycled pid" alive \
+  "$(kill -0 "$stranger" 2>/dev/null && echo alive || echo gone)"
+expect "down removed the pid file" gone "$([ -e "$kfile" ] && echo present || echo gone)"
+kill "$stranger" 2>/dev/null; wait "$stranger" 2>/dev/null
 
 # --- 3. tearing a room down must not signal the caller's process group ----------
 # The regression this pins would kill the test that is running, so the call is made from a

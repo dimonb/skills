@@ -125,7 +125,7 @@ hold() { # <seconds> <pid>...
 read_pid() { # <pid-file> -> a positive integer, or nothing and rc 1
   local v=""
   [ -s "$1" ] || return 1
-  read -r v < "$1" 2>/dev/null
+  read -r v _ < "$1" 2>/dev/null
   case "$v" in ''|*[!0-9]*) return 1 ;; esac
   [ "${#v}" -le 10 ] || return 1
   v=$((10#$v)); [ "$v" -gt 0 ] || return 1
@@ -259,7 +259,7 @@ kill -9 "$d_owner" 2>/dev/null
 
 # ---------------------------------------------------------------------------------------------
 echo "── case E: a stale pid file does not kill the keeper started to replace it ──"
-# `relaunch` after `down` is exactly this: `down` kills the keeper and leaves its pid on disk, then
+# `relaunch` after a keeper died without `down` (a crash, a SIGKILL) is exactly this: its pid is left on disk, then
 # `_keeper_ensure` starts a replacement — the path that function's header says it exists to serve.
 # The pid there is DEAD, but the rule is "a different positive pid", not "a live one" (a keeper
 # cannot ask whether another process is a keeper, and `kill -0` also fails on EPERM). E1 pins that
@@ -294,7 +294,7 @@ kill "$e_loop" 2>/dev/null; wait "$e_loop" 2>/dev/null
 # keeper that is still there a poll later.
 #
 # Be clear about what this does and does not catch, because a check believed to have teeth it does
-# not have is worse than no check. It pins the OUTCOME of the documented `relaunch`-after-`down`
+# not have is worse than no check. It pins the OUTCOME of the documented `relaunch`-after-a-crashed-keeper
 # path on the ordinary schedule, where the parent rewrites the pid file long before the newborn
 # first reads it — so it passes with or without the `rm -f "$keep"` that makes that safe (measured).
 # CASE H is the one that pins the clear, by forcing the other schedule.
@@ -394,13 +394,13 @@ ok "control: not superseded, the EOF still reaps" reaped "$(canary_eof "$ROOT/G2
 echo "── case H: _keeper_ensure clears a stale claim before forking (provoked) ──"
 # The window E2 could not reach, opened deliberately. `set` is a regular builtin, so a function of
 # that name defined in the caller wins — and on this path only the PARENT runs `set +m`, between
-# the fork and the `echo` that rewrites the pid file. Holding it there for two seconds guarantees
+# the fork and the write that rewrites the pid file. Holding it there for two seconds guarantees
 # the newborn reads the file first, which is the schedule that decides whether `rm -f "$keep"`
 # matters. Without that line the newborn finds its dead predecessor's pid, steps down, and the room
 # is left with NO keeper — every bell rung at it lost, in silence.
 ROOM_H="$ROOT/room-h"
 h0=$(mkroom "$ROOM_H" a b); track "$h0"
-kill "$h0" 2>/dev/null                       # `down` kills the keeper and LEAVES its pid on disk
+kill "$h0" 2>/dev/null                       # a keeper that died without `down` LEAVES its pid on disk
 ok "the predecessor is dead, its pid still on disk" gone "$(wait_gone "$h0" 60)"
 ok "the stale claim is there to be misread" "$h0" "$(read_pid "$ROOM_H/state/keeper.pid")"
 ( SKILL="$SKILL"; . "$SKILL/lib/up.sh"

@@ -69,7 +69,7 @@ mkroom_faked() { # <dir> <mark-subdir> <peer>...
     '{order:., mode:"token", decide_by:"unanimous", order_rotate:true,
       turn_deadline_ms:3000, turns_budget:$t, created_at:"test", created_ms:$cms}' > "$room/roster.json"
 }
-kpid_of() { local v; v=$(cat "$1" 2>/dev/null || true); case "$v" in ''|*[!0-9]*) printf '' ;; *) printf '%s' "$v" ;; esac; }
+kpid_of() { local v="" _r; read -r v _r < "$1" 2>/dev/null || true; case "$v" in ""|*[!0-9]*) printf "" ;; *) printf "%s" "$v" ;; esac; }
 
 # ================================================================================================
 echo "--- A. the keeper takes the marker, reaps every seat, consumes it and exits ---"
@@ -250,7 +250,7 @@ errf="$COUNCIL_TEST_ROOT/t26f.err"
 # say out loud what the fixture needs rather than to slow the suite back down until luck returns.
 #
 # The premise is untouched: a fifo held open by this shell is not a keeper. `_keeper_teardown`
-# still asks `_keeper_pid` + `kill -0`, still gets nothing, and still returns 1 — which is the
+# still asks `_keeper_live`, still gets nothing, and still returns 1 — which is the
 # exit-5 arm every assertion below is about.
 #
 # (The blocking `c_ring` itself is a production hazard, not a test one — a `decide` against a
