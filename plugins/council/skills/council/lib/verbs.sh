@@ -1094,11 +1094,160 @@ _status_sigfile() {
   printf '%s/council-status-sig-%s' "$mb" "$(basename "$ROOM")"
 }
 
+# --- a STALL is an EPISODE, and only its first firing is news (#238, council's half of #182) ----
+# The `🛑 STALL` line is kept out of `--only-changed`'s signature so that a room which has stopped
+# cannot go quiet, and so it printed on every monitor tick for as long as the stall held — each copy
+# the first copy again with a bigger number. An alarm read, recognised and discounted is the failure
+# shipyard measured on its own supervisor (see STALL_ESCALATE_AT in shipyard-report.sh); this is the
+# same answer, kept in council's own storage because the two skills store it differently and would
+# share only a counter.
+#
+# An EPISODE is one unbroken hold of the floor by the same seat at the same turn count, in the same
+# open-or-closed state: `floor` + `t` (what `_stall_escalate` keys on) + whether the room carries a
+# recorded status. A new turn, a different holder or the room closing starts a new one. Each
+# monitor keeps its own record, `council-stall-<alarms|block>-<room>` beside the status signature:
+# the two loops SKILL.md tells a supervisor to arm tick at different rates, and one shared count
+# would let the 60-second loop spend the first firing, so the ten-minute block would never show the
+# full line at all. A plain `status` (neither flag) has no memory, reads no record and writes none:
+# it is a person asking once, and it always gets the full line.
+#
+# Per episode, per monitor, the line takes one of three shapes:
+#   * FIRST firing: the full line, unchanged.
+#   * later firings: ONE line leading with the delta — now N s, firing k, first raised M min ago,
+#     and whether anything was sent into the room since the first firing (`_stall_sent_note`).
+#   * from firing STALL_ESCALATE_AT with nothing sent: `🛑 STALL UNANSWERED`, with the full remedy
+#     printed ONCE more at that transition — a supervisor that compacted in between may no longer
+#     hold the first copy — and one line under the UNANSWERED form after that.
+# Neither number is a knob. ONE full firing because a second identical copy is exactly the
+# repetition being removed. THREE for the escalation because the first firing is the alarm, the
+# second the reminder that it is still true, and a third with nothing sent is the measured failure
+# itself — the alarm read and discounted — so that is where it has to become a different event
+# rather than a louder copy. Tuning either upward buys back the incident.
+#
+# WHAT DECIDES WHETHER THE LINE APPEARS IS UNCHANGED, and that is PREVENTION rather than
+# self-revelation: the stall arm appends one of these shapes to `$alarms` on every tick it is
+# reached, in every branch below, so `$alarms` is non-empty for as long as the stall holds and
+# `--only-changed` and `--alarms-only` print it exactly as before. Every input added here is
+# peer-writable (AGENTS.md, "untrusted evidence may annotate an operator-facing signal, never
+# suppress one"), and each moves only the WORDING:
+#   * the firing record lives in the mailbox, which nothing stops a seat writing, and a seat can
+#     also advance it just by running `status --alarms-only` itself. Either way it can move a line
+#     between full, delta and UNANSWERED, and fake its count and age. Every number read from it is
+#     validated first — a non-digit, or a first firing in the future, starts a fresh episode, i.e.
+#     the FULL line — and read base 10, because one leading-zero value is an arithmetic error that
+#     would abort the verb and take every alarm with it.
+#   * the said log (`c_said_file`) is written by `say`, which any caller can run, and by anything
+#     that can write the mailbox. A forged entry can WITHHOLD the UNANSWERED form. That half is
+#     SELF-REVELATION, not prevention: the delta prints what was sent, to whom and how long ago,
+#     so a forged record reads as a message the operator knows they never sent. An entry dated
+#     before the first firing or in the future is ignored rather than printed as a plausible one.
+# One route found still removes the line, and it is a HANG, not a wording: a FIFO put in place of
+# the firing record blocks the record write in open(), so the tick never prints anything. That is
+# not new here: `_stall_escalate`'s jq READ over the mailbox glob hangs the same way on the same
+# tick, and so does the status signature write on an `--only-changed` tick. The class is council's
+# mailbox access through a plain `>`, `>>` or glob read — those two, this record, and `say`'s
+# c_said_file — and it is recorded on #204 for a change that fixes them together. (Shipyard's
+# continuity records are written by rename and are not in it.) It reveals itself, because the
+# monitor stops returning; it is not prevented. The other record shapes review tried (short, long,
+# CRLF, a directory, mode 000, a dangling symlink) fall back to the full line; a symlink to a
+# record-shaped file is read through, like any forged record. The routes that already removed or bypassed the stall arm
+# before this change are unchanged by it and named where the threshold is tested in v_status.
+STALL_ESCALATE_AT=3
+
+# _stall_remedy — the remedy half of the STALL line: printed at the first firing and once more at
+# the UNANSWERED transition, never on the firings between.
+_stall_remedy() {
+  printf '%s' "A seat sitting on a permission or first-launch trust prompt needs that prompt ANSWERED IN PLACE; council.sh relaunch is only for a seat that is genuinely dead, and it discards everything that seat has read."
+}
+
+# _stall_sent_note <first-epoch> <now-epoch> — `nothing sent`, or what `say` recorded (c_said_file)
+# since the episode's first firing: the latest entry's peer, age and excerpt, and how many there
+# were. Prints nothing and returns 1 when nothing was sent — the caller escalates on that — and
+# also when the log cannot be read, which is the louder of the two readings to fall back to.
+_stall_sent_note() {
+  local first="$1" now="$2" f
+  f=$(c_said_file) || return 1
+  [ -f "$f" ] || return 1
+  # Validated per line in awk, so one malformed entry drops that entry and nothing else. The peer
+  # and excerpt are cleaned and cut again HERE although `say` already did both, because the reader
+  # cannot know `say` wrote the line: a forged entry is text a seat chooses, bound for the
+  # operator's console, and a control character in it is a terminal escape.
+  LC_ALL=C awk -F'\t' -v a="$first" -v b="$now" '
+    $1 ~ /^[0-9]+$/ && length($1) < 12 && ($1 + 0) >= (a + 0) && ($1 + 0) <= (b + 0) {
+      n++; e = $1; p = $2; x = $3
+    }
+    END {
+      if (!n) exit 1
+      gsub(/[[:cntrl:]"]/, "", p); gsub(/[[:cntrl:]]/, "", x)
+      m = int((b - e) / 60)
+      printf "sent since: say to %s %d min ago — \"%s\"", substr(p, 1, 40), m, substr(x, 1, 60)
+      if (n > 1) printf " (%d says since the first firing)", n
+    }' "$f" 2>/dev/null
+}
+
+# _stall_epfile <alarms|block> — the firing record for one monitor of this room, beside the status
+# signature. Fails when the mailbox cannot be resolved, and the caller then has no memory: every
+# tick is a first firing and prints the full line, which is the safe direction.
+_stall_epfile() {
+  local s
+  s=$(_status_sigfile) || return 1
+  printf '%s/council-stall-%s-%s' "${s%/*}" "$1" "$(basename "$ROOM")"
+}
+
+# _stall_line <alarms|block|""> <floor> <turns> <held-seconds> <open|closed> — the `🛑 STALL`
+# sentence for this tick, in whichever of the three shapes above the episode has reached, and the
+# firing record updated. An empty monitor is a plain `status`: the full line, and no record read or
+# written. Every path that returns prints a line beginning `🛑 STALL`; the caller appends it
+# unconditionally, and that is the whole of the prevention claim above, so do not give this
+# function a path that returns having printed nothing. (The FIFO hang named above is the one way it
+# does not return at all.)
+_stall_line() {
+  local mode="$1" floor="$2" t="$3" held="$4" state="$5" full f now first n=1 esc=0 mins note line
+  local r_floor r_t r_state r_first r_n r_esc
+  full="🛑 STALL: $floor has held the floor for ${held}s — the room has stopped; go and look at it. $(_stall_remedy)"
+  f=""; [ -n "$mode" ] && { f=$(_stall_epfile "$mode") || f=""; }
+  [ -n "$f" ] || { printf '%s' "$full"; return 0; }
+  now=$(date +%s); first=$now
+  # Empty fields are stored as `-`: a tab is IFS whitespace, so `read` would collapse an empty
+  # field into its neighbour and shift every later one.
+  if [ -f "$f" ] && IFS=$'\t' read -r r_floor r_t r_state r_first r_n r_esc _ 2>/dev/null <"$f"; then
+    # EACH FIELD ON ITS OWN. Tested as one concatenation, a record short a trailing field passed
+    # on the digits that were there, and `10#` of the empty one is a fatal error on bash 5: this
+    # subshell died printing nothing and the STALL sentence was gone for the whole episode.
+    case "$r_first" in ''|*[!0-9]*) r_first="" ;; esac
+    case "$r_n" in ''|*[!0-9]*) r_n="" ;; esac
+    case "$r_esc" in 0|1) ;; *) r_esc="" ;; esac
+    if [ -n "$r_first" ] && [ -n "$r_n" ] && [ -n "$r_esc" ] \
+       && [ "$r_floor" = "${floor:--}" ] && [ "$r_t" = "${t:--}" ] && [ "$r_state" = "$state" ] \
+       && [ "${#r_first}" -lt 12 ] && [ "${#r_n}" -lt 9 ] && [ "$((10#$r_first))" -le "$now" ]; then
+      first=$((10#$r_first)); n=$((10#$r_n + 1)); esc=$r_esc
+    fi
+  fi
+  mins=$(( (now - first) / 60 ))
+  note=$(_stall_sent_note "$first" "$now") || note=""
+  if [ "$n" -le 1 ]; then
+    line=$full
+  elif [ -z "$note" ] && [ "$n" -ge "$STALL_ESCALATE_AT" ]; then
+    if [ "$esc" = 0 ]; then
+      line="🛑 STALL UNANSWERED: $floor has held the floor for ${held}s — raised $n times over $mins min and nothing has been sent into this room since the first; the room has stopped, go and look at it. $(_stall_remedy)"
+      esc=1
+    else
+      line="🛑 STALL UNANSWERED (still): $floor — now ${held}s, firing $n, first raised $mins min ago; nothing sent. The remedy was printed in full at firing $STALL_ESCALATE_AT."
+    fi
+  elif [ -z "$note" ]; then
+    line="🛑 STALL (still): $floor — now ${held}s, firing $n, first raised $mins min ago; nothing sent — at firing $STALL_ESCALATE_AT with nothing sent it becomes STALL UNANSWERED."
+  else
+    line="🛑 STALL (still): $floor — now ${held}s, firing $n, first raised $mins min ago; $note."
+  fi
+  printf '%s\t%s\t%s\t%s\t%s\t%s\n' "${floor:--}" "${t:--}" "$state" "$first" "$n" "$esc" 2>/dev/null >"$f"
+  printf '%s' "$line"
+}
+
 v_status() {
   local j verd g t floor held conf room_age alarms="" phase wait_ev="" wait_note="" rec=""
   local only_changed=0 alarms_only=0 term_live="" term_total="" term_rc term_out="" live_note=""
   local out="" round_line="" openct sig sigfile TAB term_line="" quiet_line=""
-  local hard fscreen="" tier=stall mid=0
+  local hard fscreen="" tier=stall mid=0 stall_mon=""
   TAB=$(printf '\t')
   while [ $# -gt 0 ]; do
     case "$1" in
@@ -1353,7 +1502,13 @@ v_status() {
         # fix. Caught by the test that asserts the glyph is absent; keep both.
         alarms="$alarms ⏳ LONG TURN: $floor has held the floor for ${held}s and its own client still reads as mid-turn, so this looks like a seat thinking rather than a room that has stopped — that is a quote from a pane the seat writes, not a verdict. Nothing to do yet; at ${hard}s it is raised as a stall whatever the pane says."
       else
-        alarms="$alarms 🛑 STALL: $floor has held the floor for ${held}s — the room has stopped; go and look at it. A seat sitting on a permission or first-launch trust prompt needs that prompt ANSWERED IN PLACE; council.sh relaunch is only for a seat that is genuinely dead, and it discards everything that seat has read."
+        # Full at an episode's first firing, then its delta (#238) — see STALL_ESCALATE_AT. The
+        # wording is the only thing the firing record chooses: this arm appends a line on every
+        # tick it is reached, whatever `_stall_line` reads. Only a monitor tick has memory; a plain
+        # `status` passes no monitor and always gets the full line.
+        stall_mon=""
+        if [ "$alarms_only" = 1 ]; then stall_mon=alarms; elif [ "$only_changed" = 1 ]; then stall_mon=block; fi
+        alarms="$alarms $(_stall_line "$stall_mon" "$floor" "$t" "$held" "$([ -n "$rec" ] && echo closed || echo open)")"
       fi
       # WHAT the seat looks like, where the backend can be asked. It narrows the two remedies
       # above whenever presence is corroborated, and says nothing rather than guessing when it is
@@ -1537,8 +1692,12 @@ v_status() {
     # alarm channel that says "alarms: —" sixty times an hour is one an operator stops reading,
     # and the thing it is competing with for attention is the alarm itself. Silence here is not
     # the silence `--only-changed` can produce — it means "asked, nothing wrong", on every tick,
-    # with no memory between them and so nothing that could go stale and suppress a standing
-    # alarm. The two flags are NOT independent, and the sentence that used to stand here saying so
+    # with no memory between them that decides WHETHER anything prints, and so nothing that could
+    # go stale and suppress a standing alarm. It does now keep one memory, and that one is about
+    # wording only: the STALL firing record (#238, see STALL_ESCALATE_AT) turns a later firing of
+    # one episode into its one-line delta. Whether the line prints is still decided by `$alarms`
+    # alone, which the stall arm fills on every tick the stall holds, whatever the record says.
+    # The two flags are NOT independent, and the sentence that used to stand here saying so
     # was falsified by the guard thirty lines above it: in this mode the `--only-changed` block is
     # skipped entirely, so no tick is read against a signature and none is written. That is the
     # point — only a tick that could print a block may write the block loop's memory.

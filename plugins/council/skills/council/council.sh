@@ -229,7 +229,9 @@ case "$VERB" in
   # process would buy nothing and every close would pay for it.
   decide) need_me; . "$SKILL/lib/verbs.sh"; . "$SKILL/lib/policy.sh"; . "$SKILL/lib/up.sh"
           v_decide "$@" ;;
-  say)    . "$SKILL/lib/up.sh"; council_say "$@" ;;
+  # lib/policy.sh for `policy_mailbox_dir` alone: `say` records what it sent beside `status`'s
+  # signature in the mailbox (c_said_file), which is what the STALL line's "sent" note reads.
+  say)    . "$SKILL/lib/up.sh"; . "$SKILL/lib/policy.sh"; council_say "$@" ;;
   relaunch) . "$SKILL/lib/up.sh"; council_relaunch "$@" ;;
   down)   . "$SKILL/lib/up.sh"; council_down "$@" ;;
   *) echo "council: unknown verb '$VERB'" >&2; usage >&2; exit 2 ;;

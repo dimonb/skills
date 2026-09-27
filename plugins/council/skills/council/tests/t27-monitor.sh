@@ -144,7 +144,9 @@ ok "a standing STALL prints on tick N"   1 "$(printf '%s' "$h1" | grep -c '🛑 
 ok "...and on tick N+1, unchanged"       1 "$(printf '%s' "$h2" | grep -c '🛑 STALL')"
 # ...and it is the ORDINARY arm, not the clock-is-wrong one. Asserted explicitly because the two
 # read differently and only this one carries the liveness sentence every later case is about.
-ok "...on the ordinary STALL arm"        1 "$(printf '%s' "$h1" | grep -c 'has held the floor for')"
+# h1 is this episode's SECOND firing of the block monitor (the settling tick was the first), so it
+# is the one-line delta t28 covers — `(still)` marks the ordinary arm in that shape.
+ok "...on the ordinary STALL arm"        1 "$(printf '%s' "$h1" | grep -c '🛑 STALL (still): ')"
 ok "...not the clock-is-wrong arm"       0 "$(printf '%s' "$h1" | grep -c 'clock is wrong')"
 
 # --- 3. the quiet tier is an ANNOTATION, not an alarm -----------------------------------
