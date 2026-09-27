@@ -104,10 +104,13 @@ name inside a container named by a file in the room, so a participant can point 
 somewhere else. It never issues `relaunch` as an instruction. What a terminal that IS up is doing
 it can only partly tell you: it quotes a client that announced a capacity limit, and it quotes a
 client that says a turn is in flight — but a trust prompt and a finished turn both read the same
-way, so nothing here identifies a wedge.
+way, so nothing here identifies a wedge. What it can tell is a terminal whose agent has **exited**:
+it asks the backend which process owns the pane, which nothing an agent prints can forge.
 
-A held floor produces one of three lines, and they differ in kind rather than in degree. `quiet:`
-at 300s goes on the block only and asks for nothing. **`⏳ LONG TURN`** at 900s says the seat's own
+A held floor produces the lines below, and they differ in kind rather than in degree. `quiet:`
+at 300s goes on the block only and asks for nothing — unless the floor holder's terminal holds no
+agent on two reads, when **`🛑 NO AGENT`** replaces it on the alarms channel with `relaunch` as the
+remedy (there is no live agent to lose). It writes no notice of its own. **`⏳ LONG TURN`** at 900s says the seat's own
 client still reads as mid-turn: it is on the alarms channel and writes its own mailbox notice, and
 it means *nothing to do yet*. **`🛑 STALL`** at 900s otherwise — and unconditionally past
 `COUNCIL_STALL_HARD_SECS` (5400s), whatever the pane says — is the one that wants a person.

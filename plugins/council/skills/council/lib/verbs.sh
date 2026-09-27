@@ -1076,6 +1076,25 @@ EOF
     "$(ct_backend)" "$name" "$peer"
 }
 
+# _floor_no_agent <peer> — prints the backend's name and succeeds when this seat's terminal is up
+# but the agent launched into it is not (#235): `c_seat_no_agent`'s two `none` reads. Fails, with
+# nothing printed, on every other answer — `agent`, no verdict, no pin, no term.sh — and a failure
+# is never evidence the seat is alive (lib.sh says why), so v_status removes nothing on a failure.
+# The same pin guard and on-demand source as `_seat_liveness`, for the same reasons.
+_floor_no_agent() { # <peer>
+  local peer="${1:-}" f pinned=0
+  [ -n "$peer" ] || return 1
+  for f in "$ROOM"/state/container-*; do [ -f "$f" ] && pinned=1; done
+  [ "$pinned" = 1 ] || return 1
+  if ! command -v ct_occupant >/dev/null 2>&1; then
+    [ -n "${SKILL:-}" ] && [ -f "$SKILL/lib/term.sh" ] || return 1
+    . "$SKILL/lib/term.sh" || return 1
+    command -v ct_occupant >/dev/null 2>&1 || return 1
+  fi
+  c_seat_no_agent "$peer" || return 1
+  ct_backend
+}
+
 # _status_sigfile — where the last PRINTED status block's signature lives, for --only-changed.
 #
 # OUTSIDE THE ROOM, deliberately, and that is the only interesting thing about it. Every other
@@ -1247,7 +1266,7 @@ v_status() {
   local j verd g t floor held conf room_age alarms="" phase wait_ev="" wait_note="" rec=""
   local only_changed=0 alarms_only=0 term_live="" term_total="" term_rc term_out="" live_note=""
   local out="" round_line="" openct sig sigfile TAB term_line="" quiet_line=""
-  local hard fscreen="" tier=stall mid=0 stall_mon=""
+  local hard fscreen="" tier=stall mid=0 stall_mon="" noagent=0 na_backend=""
   TAB=$(printf '\t')
   while [ $# -gt 0 ]; do
     case "$1" in
@@ -1422,6 +1441,26 @@ v_status() {
   # with a threshold at all, and it is the part to keep if this block is ever rewritten.
   hard=$(_stall_hard_secs)
   room_age=$(c_room_age_s) || room_age=""
+  # A FLOOR HOLDER WITH NO AGENT IN ITS TERMINAL IS A CRASH, NOT A STALL (#235), and it gets its
+  # own alarm rather than a sentence on the stall line: nothing will ever arrive from that seat,
+  # and unlike a stall its remedy is not in doubt — there is no live agent for `relaunch` to cost.
+  # It is raised from the quiet tier's threshold rather than the stall's, so a crash surfaces
+  # there instead of fifteen minutes in, and the occupant read is never paid on a moving room.
+  #
+  # IT NEVER REMOVES OR SOFTENS AN ALARM: the stall arm, its tier and its push run exactly as
+  # before. `$noagent` does gate two calm, non-alarm outputs that this evidence would contradict —
+  # `_seat_liveness`' "listed, which is what a live seat looks like" in the stall arm, and the
+  # block's `quiet:` line ("not a thing that is wrong") — each at its own call site below. No
+  # push of its own: the stall push still fires at the stall threshold, and a push for this
+  # condition is left to #21. What gates it is the same state that gates the stall alarm — the
+  # held time, the floor and the recorded status, all peer-writable (SKILL.md, "The room is not a
+  # trust boundary") — so it opens no suppression route that alarm does not already have; and an
+  # agent that dies leaving another process in the foreground reads `agent` and never reaches it.
+  if [ -z "$rec" ] && _is_seat "$floor" && [ "$held" -gt "${COUNCIL_STALL_WARN_SECS:-300}" ] \
+     && na_backend=$(_floor_no_agent "$floor"); then
+    noagent=1
+    alarms="$alarms 🛑 NO AGENT: $floor holds the floor, but the agent launched into its terminal is not running — the ${na_backend:-terminal} backend reports a shell prompt or an exited pane there, on two reads. Nothing will arrive from that seat and there is no live agent to lose: council.sh relaunch $floor"
+  fi
   if [ "$held" -gt "${COUNCIL_STALL_SECS:-900}" ]; then
     if [ -n "$room_age" ] && [ "$held" -gt "$room_age" ]; then
       alarms="$alarms 🛑 STALL: the floor has been held for ${held}s, which is longer than this room has existed (${room_age}s) — one seat's clock is wrong, so check every terminal rather than trusting the figure"
@@ -1525,7 +1564,9 @@ v_status() {
       # label `— (barrier)`, and this printed `council.sh relaunch — (barrier)` while
       # `_stall_escalate`'s notice for the same event degraded correctly, because that one had the
       # membership test and this did not.
-      if [ -z "$(c_recorded_status)" ] && _is_seat "$floor"; then
+      # Not when the NO AGENT alarm fired: its evidence is the stronger read of the same seat, and
+      # this sentence's "listed, which is what a live seat looks like" would contradict it.
+      if [ -z "$(c_recorded_status)" ] && _is_seat "$floor" && [ "$noagent" = 0 ]; then
         live_note=$(_seat_liveness "$floor") || live_note=""
         [ -n "$live_note" ] && alarms="$alarms $live_note"
       fi
@@ -1634,7 +1675,10 @@ v_status() {
     # backend, which on agterm is a control-socket probe) and enumerates the container. Left
     # ungated, the documented 60-second alarm loop paid one backend enumeration a minute, for the
     # whole time a seat was thinking, to compose a sentence it then discarded.
-    if [ "$alarms_only" = 0 ]; then
+    # Nor when the NO AGENT alarm fired, which replaces this line rather than joining it: "a thing
+    # to notice rather than a thing that is wrong" is false about a seat whose agent has exited,
+    # and the louder line is already on `$alarms`, which no filter suppresses.
+    if [ "$alarms_only" = 0 ] && [ "$noagent" = 0 ]; then
       quiet_line="quiet: $floor has held the floor for ${held}s with nothing arriving — under the ${COUNCIL_STALL_SECS:-900}s stall threshold, and a long think looks exactly like this, so it is a thing to notice rather than a thing that is wrong."
       live_note=$(_seat_liveness "$floor") || live_note=""
       [ -n "$live_note" ] && quiet_line="$quiet_line $live_note"

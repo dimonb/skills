@@ -88,6 +88,8 @@ TYPED="$ROOT/typed"                         # what ct_type was handed
 PINS="$ROOT/pins"; mkdir -p "$PINS"         # the container pins drv_pins_elsewhere reads
 SESSIONS="$ROOT/sessions"                   # what ct_sessions prints
 SESSIONS_RC="$ROOT/sessions-rc"             # ...and the status it exits with
+OCC="$ROOT/occupant"                        # one ct_occupant answer per line: agent|none|- (no verdict)
+OCC_N="$ROOT/occupant-n"                    # how many occupant reads have been taken
 
 cat >"$SHADOW/lib/term.sh" <<SHADOWEOF
 # A fake council terminal. The DRIVER is real — sourced here exactly as the shipped term.sh does
@@ -117,6 +119,17 @@ ct_capture() {
 }
 ct_type()   { [ "\${FAKE_TYPE_RC:-0}" = 0 ] || return "\$FAKE_TYPE_RC"; printf '%s\n' "\$2" >>"$TYPED"; }
 ct_submit() { [ "\${FAKE_SUBMIT_RC:-0}" = 0 ] || return "\$FAKE_SUBMIT_RC"; return 0; }
+# The occupant read (#235), one scripted answer per call, so a case can say what the FIRST and the
+# SECOND read return. No file means no verdict, which is what every case above this section gets —
+# the read must change nothing for them. \`-\` is also no verdict, spelled explicitly.
+ct_occupant() {
+  local n v
+  [ -f "$OCC" ] || return 1
+  n=\$(cat "$OCC_N" 2>/dev/null); n=\$(( \${n:-0} + 1 )); printf '%s\n' "\$n" >"$OCC_N"
+  v=\$(sed -n "\${n}p" "$OCC"); [ -n "\$v" ] || v=\$(tail -1 "$OCC")
+  [ "\$v" = - ] && return 1
+  printf '%s' "\$v"
+}
 ct_sessions() { cat "$SESSIONS" 2>/dev/null; return "\$(cat "$SESSIONS_RC" 2>/dev/null || printf 0)"; }
 ct_absence_class()  { _ct_pin_dir; drv_absence_class "\$1" "\${2:-}" "\${3:-}"; }
 ct_pins_elsewhere() { _ct_pin_dir; drv_pins_elsewhere; }
@@ -157,7 +170,7 @@ run_say() { # <peer> <text> -> stdout+stderr, then a last line "rc=<n>"
   out=$( SKILL="$SHADOW" council_say "$1" "$2" 2>&1 ) || rc=$?
   printf '%s\nrc=%s\n' "$out" "$rc"
 }
-reset() { rm -f "$PANES"/* "$NCALLS" "$TYPED" "$SESSIONS" "$SESSIONS_RC" "$PINS"/container-*; }
+reset() { rm -f "$PANES"/* "$NCALLS" "$TYPED" "$SESSIONS" "$SESSIONS_RC" "$PINS"/container-* "$OCC" "$OCC_N"; }
 rc_of() { printf '%s' "$1" | sed -n 's/^rc=//p' | tail -1; }
 
 # ============================================================ 1. IS THERE SUCH A SEAT? (#29)
@@ -451,6 +464,42 @@ ok "5b: typed but unsubmitted is still recorded" 2 "$(wc -l <"$SAID" 2>/dev/null
 reset; : >"$PINS/container-tmux"
 FAKE_TYPE_RC=1 run_say codex 'third' >/dev/null
 ok "5c: a send that reached no terminal is not" 2 "$(wc -l <"$SAID" 2>/dev/null | tr -d ' ')"
+
+# ============================================================ 6. IS THE AGENT THERE? (#235)
+# A terminal outlives the agent launched into it, and `say` then typed `[supervisor] …` into a
+# shell, which starts no turn — so it exited 6, "busy or left in the box", about a seat that was
+# neither. The read is `drv_occupant` (shared/driver, its own suite); what is under test here is
+# the two-read rule and the exit mapping.
+printf '\n── the occupant read ──\n'
+reset; : >"$PINS/container-tmux"; pane "$IDLE" pre; pane "$RUNNING" last
+printf 'none\nnone\n' >"$OCC"
+out=$(run_say codex 'hello')
+ok "6a: no agent on two reads -> exit 8"       8   "$(rc_of "$out")"
+ok "6a: ...saying the agent is not running"    yes "$(has "$out" 'agent launched into it is not running')"
+ok "6a: ...and pointing at relaunch"           yes "$(has "$out" 'council.sh relaunch codex')"
+ok "6a: ...having read it twice"               2   "$(cat "$OCC_N" 2>/dev/null)"
+ok "6a: ...and typed nothing"                  ""  "$(cat "$TYPED" 2>/dev/null)"
+ok "6a: ...and recorded no send"               2   "$(wc -l <"$SAID" 2>/dev/null | tr -d ' ')"
+# One `none` is a launch caught before its `exec`; the second read is what keeps a seat that is
+# starting up from being refused.
+reset; : >"$PINS/container-tmux"; pane "$IDLE" pre; pane "$RUNNING" last
+printf 'none\nagent\n' >"$OCC"
+out=$(run_say codex 'hello')
+ok "6b: none then agent -> delivered as before" 0  "$(rc_of "$out")"
+ok "6b: ...and the text was typed"             yes "$(has "$(cat "$TYPED" 2>/dev/null)" 'hello')"
+# NO VERDICT IS NEVER `none`: a backend that would not answer leaves `say` exactly where it was.
+reset; : >"$PINS/container-tmux"; pane "$IDLE" pre; pane "$RUNNING" last
+printf -- '-\n' >"$OCC"
+out=$(run_say codex 'hello')
+ok "6c: no verdict -> delivered as before"     0   "$(rc_of "$out")"
+reset; : >"$PINS/container-tmux"; pane "$IDLE" pre; pane "$RUNNING" last
+printf 'none\n-\n' >"$OCC"
+out=$(run_say codex 'hello')
+ok "6d: none then no verdict -> not refused"   0   "$(rc_of "$out")"
+reset; : >"$PINS/container-tmux"; pane "$IDLE" pre; pane "$RUNNING" last
+printf 'agent\n' >"$OCC"
+out=$(run_say codex 'hello')
+ok "6e: agent -> delivered, one read only"     "0 1" "$(rc_of "$out") $(cat "$OCC_N" 2>/dev/null)"
 unset POLICY_MAILBOX_DIR
 
 # --- done -------------------------------------------------------------------------------------
