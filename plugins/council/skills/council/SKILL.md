@@ -920,7 +920,27 @@ files, one of which was missed.
 |---|---|---|---|
 | `quiet: …` | `COUNCIL_STALL_WARN_SECS`, 300s | the **block only** — never the alarms line, never `--alarms-only`. Entering or leaving the quiet state breaks `--only-changed`'s silence **once**; holding it does not | no |
 | `⏳ LONG TURN` | `COUNCIL_STALL_SECS`, 900s, **and** the seat's own client reads as mid-turn — which needs an agent kind whose pane has been captured, so it is unreachable for `agy` (see below) | the alarms line: both loops, and it bypasses every filter, exactly as the row below does | yes, one `notice`, keyed `[longturn:<peer>:<turns>]` |
-| `🛑 STALL` | `COUNCIL_STALL_SECS`, 900s, otherwise — and `COUNCIL_STALL_HARD_SECS`, 5400s, **whatever the pane says**. Also **always** on a closed room, at any age | the alarms line: both loops, and it bypasses every filter | yes, one `notice`, keyed `[stall:<peer>:<turns>]` |
+| `🛑 STALL` | `COUNCIL_STALL_SECS`, 900s, otherwise — and `COUNCIL_STALL_HARD_SECS`, 5400s, **whatever the pane says**. Also **always** on a closed room, at any age | the alarms line: both loops, and it bypasses every filter — in full at an episode's first firing, then as its delta (below) | yes, one `notice`, keyed `[stall:<peer>:<turns>]` |
+
+**A `🛑 STALL` is printed in full once per episode, then as what changed.** An episode is one
+unbroken hold of the floor by the same seat at the same turn count, in the same open-or-closed
+state; a new turn, a different holder or the room closing starts a new one. Each monitor keeps its
+own count, so the ten-minute block still gets the full line even when the fast loop has already
+fired on the same stall, and a plain `status` has no memory and always prints it in full.
+
+* **first firing** — `🛑 STALL: <seat> has held the floor for <N>s — …`, the remedy included;
+* **later firings** — one line, `🛑 STALL (still): <seat> — now <N>s, firing <k>, first raised <M>
+  min ago; …`, ending in `nothing sent` or in what `council.sh say` sent since the first firing:
+  to whom, how long ago, and its opening words;
+* **the third firing with nothing sent** — `🛑 STALL UNANSWERED`, with the remedy printed once more,
+  and one line under that form after it.
+
+This changes only how the line **reads**. It prints on every tick the stall holds, under
+`--only-changed` and `--alarms-only` alike, and the push is unchanged. Both new records live in the
+shared mailbox — `council-stall-<alarms|block>-<room>` for the count, `council-said-<room>` for what
+`say` sent — and, like everything else there, a seat can write them: a forged count moves the
+wording, a forged `say` withholds the UNANSWERED form but is **printed** as a message sent, so check
+that you sent what it says you sent. `STALL_ESCALATE_AT` in `lib/verbs.sh` carries the reasoning.
 
 The early line exists because the wedges that actually cost rooms were **323s and 344s**, well
 under the 900s threshold, so nothing fired for either. It was first written as an alarm, and that

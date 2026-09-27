@@ -430,6 +430,29 @@ reset; : >"$PINS/container-tmux"; pane "$IDLE" pre; pane "$RUNNING" last
 out=$( COUNCIL_SAY_CONFIRM_INTERVAL=0.05 run_say codex 'hello' )
 ok "4c: a small but positive interval is kept" no  "$(has "$out" 'not a usable positive number')"
 
+# ============================================================ 5. WHAT `say` RECORDS (#238)
+# `status`'s STALL line reads whether anything was sent into the room since an episode's first
+# firing, and this record is its only evidence of that. t28 covers the reader; this covers that the
+# writer writes it, once the text reached a terminal, and not for a send that never got there.
+printf '\n── the said record ──\n'
+# shellcheck source=../lib/policy.sh
+. "$REAL_SKILL/lib/policy.sh"
+export POLICY_MAILBOX_DIR="$ROOT/mailbox"; rm -rf "$POLICY_MAILBOX_DIR"
+SAID="$POLICY_MAILBOX_DIR/council-said-demo"
+reset; : >"$PINS/container-tmux"; pane "$IDLE" pre; pane "$RUNNING" last
+out=$(run_say codex $'look at\tthe prompt\nplease')
+ok "5a: a delivered say is recorded"           1   "$(wc -l <"$SAID" 2>/dev/null | tr -d ' ')"
+ok "5a: ...naming the peer"                    codex "$(cut -f2 "$SAID" 2>/dev/null)"
+ok "5a: ...with the text flattened to one field" "look at the prompt please" "$(cut -f3 "$SAID" 2>/dev/null)"
+ok "5a: ...stamped with an epoch"              yes "$(cut -f1 "$SAID" | grep -qE '^[0-9]+$' && printf yes || printf no)"
+reset; : >"$PINS/container-tmux"; pane "$IDLE" pre; pane "$IDLE" last
+FAKE_SUBMIT_RC=1 run_say codex 'second' >/dev/null
+ok "5b: typed but unsubmitted is still recorded" 2 "$(wc -l <"$SAID" 2>/dev/null | tr -d ' ')"
+reset; : >"$PINS/container-tmux"
+FAKE_TYPE_RC=1 run_say codex 'third' >/dev/null
+ok "5c: a send that reached no terminal is not" 2 "$(wc -l <"$SAID" 2>/dev/null | tr -d ' ')"
+unset POLICY_MAILBOX_DIR
+
 # --- done -------------------------------------------------------------------------------------
 printf '\n'
 if [ "$FAILURES" -eq 0 ]; then

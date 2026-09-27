@@ -1405,3 +1405,25 @@ c_room_age_s() {
 c_conflicts() {
   c_canon | jq -s '[.[] | select(.hand == false and .turn != null and (.valid | not))] | length'
 }
+
+# c_said_file — where `say` records that something was sent into this room, for the STALL line's
+# "sent since the first firing" note in v_status (#238). One line per `say` that got its text into
+# a seat's terminal, appended: `<epoch>\t<peer>\t<excerpt>`.
+#
+# THIS IS THE RECORD THAT COUNTS AS "SENT", and it is `say` rather than anything in the room log
+# because a supervisor has no seat: it reads the room without `--me` and reaches a participant
+# through `say`, which writes nothing into the room. So the one act of a supervisor's that council
+# can observe is the one this file records.
+#
+# In the shared mailbox, beside the status signature `_status_sigfile` keeps there, for the same
+# reason that file lives there — and with the same caveat, because nothing confines a participant
+# (SKILL.md, "The room is not a trust boundary"): a seat can write this file too, and any caller
+# can run `say`. What either buys is stated at the reader, `_stall_sent_note` in verbs.sh. Fails
+# when the mailbox cannot be resolved, and then nothing is recorded or read.
+c_said_file() {
+  local mb
+  command -v policy_mailbox_dir >/dev/null 2>&1 || return 1
+  mb=$(policy_mailbox_dir) || return 1
+  mkdir -p "$mb" 2>/dev/null || return 1
+  printf '%s/council-said-%s' "$mb" "$(basename "$ROOM")"
+}

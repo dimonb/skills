@@ -890,6 +890,17 @@ council_say() {
   local -a states=("$(adp_turn_state "$(ct_capture "$peer" 2>/dev/null)")")
 
   ct_type "$peer" "$one" || { _council_say_absence "$peer"; return $?; }
+  # RECORDED ONCE THE TEXT IS IN THE SEAT'S TERMINAL, before the submit and whatever the delivery
+  # verdict turns out to be: this is `status`'s evidence that the operator ACTED on a stall (#238,
+  # see c_said_file), and a message sitting unsent in a box is still something they sent — the
+  # verdict below tells them whether it landed. Best-effort: a mailbox that cannot be written
+  # records nothing, which leaves the STALL line saying `nothing sent`, the louder reading.
+  local said
+  if said=$(c_said_file); then
+    printf '%s\t%s\t%s\n' "$(date +%s)" "$peer" \
+      "$(printf '%s' "$text" | tr '\t\n' '  ' | LC_ALL=C tr -d '[:cntrl:]' | cut -c1-60)" \
+      >>"$said" 2>/dev/null || true
+  fi
   sleep 0.3
   # A failed submit is the one case where the text is DEFINITELY sitting in the box, so it is
   # reported as that rather than folded into the sampled verdict below.
