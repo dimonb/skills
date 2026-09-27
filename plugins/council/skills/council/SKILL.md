@@ -960,6 +960,7 @@ files, one of which was missed.
 | `🛑 NO AGENT` | `COUNCIL_STALL_WARN_SECS`, 300s, **and** the floor holder's terminal holds no agent on two reads (above). Not on a closed room or an open barrier round. It **replaces** the `quiet:` line and the "is listed, which is what a live seat looks like" sentence, which would contradict it, and changes nothing else — the stall tiers below still fire as they would | the alarms line: both loops, and it bypasses every filter. Its remedy is `council.sh relaunch <peer>`, because there is no live agent to lose | no push of its own: the `🛑 STALL` push still fires at 900s. A push for this condition is part of what #21 settles |
 | `⏳ LONG TURN` | `COUNCIL_STALL_SECS`, 900s, **and** the seat's own client reads as mid-turn — which needs an agent kind whose pane has been captured, so it is unreachable for `agy` (see below) | the alarms line: both loops, and it bypasses every filter, exactly as the row below does | yes, one `notice`, keyed `[longturn:<peer>:<turns>]` |
 | `🛑 STALL` | `COUNCIL_STALL_SECS`, 900s, otherwise — and `COUNCIL_STALL_HARD_SECS`, 5400s, **whatever the pane says**. Also **always** on a closed room, at any age | the alarms line: both loops, and it bypasses every filter — in full at an episode's first firing, then as its delta (below) | yes, one `notice`, keyed `[stall:<peer>:<turns>]` |
+| `🛑 STALL: the floor's held time cannot be read` | none: the instant the floor is timed from (the last turn's `sent_ms`, or `created_ms` before a token room's first turn) is stamped more than 60s **in the future**, so there is no held time to hold against a threshold. An unknown held time in a live room is the alarm | the alarms line: both loops, and it bypasses every filter — the whole line on every tick, with no episode delta | yes, one `notice`, keyed `[clock:<peer>:<turns>]` |
 
 **A `🛑 STALL` is printed in full once per episode, then as what changed.** An episode is one
 unbroken hold of the floor by the same seat at the same turn count, in the same open-or-closed
@@ -1066,7 +1067,9 @@ participant list could not be read, so the lines above it are incomplete and non
 should be believed; the diagnostic on stderr says what could not be read, and
 `council.sh decision` still prints the record if the room had already closed).
 A `STALL` whose held time is longer than the room has existed says so in the same alarm: one
-seat's clock is wrong, so the figure cannot be trusted even though the stall is real.
+seat's clock is wrong, so the figure cannot be trusted even though the stall is real. A held time
+that is stamped in the **future** raises a `STALL` of its own: the `floor:` line still reads `held 0s` there,
+because there is no figure to show, and the alarm is what tells you that 0 is not a fresh turn.
 
 **A `STALL` says which remedy goes with which cause, and quotes the terminal where it can.** The
 alarm used to guess — *"it may be sitting on a permission prompt"* — and the guess mattered because
@@ -1095,14 +1098,16 @@ terminal before relaunching"*, with the matched line printed as evidence.
 >
 > **It does not make this verb unsuppressible, and no rule about how untrusted evidence is *used*
 > could — while every input is room state.** Narrowing it needs a held time that is not room
-> state; #165's suggested direction is one, and a launch record written outside the room is
-> another. Neither closes it: under the trust contract a record outside the room is only a second
-> forgery away.
+> state, such as a launch record written outside the room. Even that does not close it: under the
+> trust contract a record outside the room is only a second forgery away.
 > Every field in the block above
-> is a function of room state, `held` included: a seat that stamps a message in the future clamps
-> the held time to 0 and takes the `STALL` line and its push with it (measured — #165). That is
-> #40's fact, not this read's — what the read adds is annotation only, so it adds no new way to go
-> dark.
+> is a function of room state, `held` included. A message stamped in the *future* no longer
+> removes the `STALL` line and its push (#165): it raises its own `STALL`, saying the held time
+> cannot be read, and pushes it, so hiding a stalled floor that way means sounding an alarm about
+> the room's clock. What still reads a stalled floor as a live one: a stamp less than 60s ahead
+> (for as long as it stays ahead), a stamp kept *recent* by being rewritten, and a forged closure
+> (which stops the push). That is #40's fact, not this read's — what the read adds is annotation
+> only, so it adds no new way to go dark.
 
 A `STALL` also **pushes**: one `notice` into the shared escalation mailbox — the same
 fire-and-forget channel an `unresolved` close uses (`.git/ship-escalations/`, which a shipyard
@@ -1127,8 +1132,8 @@ participant, so a latch anywhere is a file the seat the notice is about could pr
 pre-writing it is silence. Keying on the mailbox makes suppression **through that check**
 self-revealing — to stop the notice there you must leave an entry carrying its key where you look.
 Weaker than preventing suppression, stronger than pretending to. It is a property of the check and
-not of the push: a forged closure, an unwritable mailbox and #165 each stop the notice by other
-routes, and `_stall_escalate`'s header lists them.
+not of the push: a forged closure, an unwritable mailbox and a floor stamp kept recent each stop
+the notice by other routes, and `_stall_escalate`'s header lists them.
 
 `status` therefore writes, on that one path: a stalled room appends an entry to the mailbox.
 (`recv` already writes too — it advances cursors, even with `--peek` — so this is not the only

@@ -408,11 +408,12 @@ v_verdict() {
 #   * the STUCK / ready-to-decide / unresolved alarms — the claim graph, i.e. the lanes;
 #   * `status`'s exit code and `rooms`' listing — `board/status` + `board/decision.md`;
 #   * the STALL alarm — `c_floor_held_ms`, hence the last turn's peer-written `sent_ms` and
-#     `created_ms`. A seat that stamps a message in the FUTURE clamps the held time to 0 and
-#     removes the alarm and the push together; measured, and filed as #165. That is a live
-#     counterexample to the rule above, it predates this change, and it is named here rather than
-#     left for a reader to find, because a rule stated absolutely and contradicted by the same file
-#     is worse than a rule stated with its hole;
+#     `created_ms`. A stamp in the FUTURE used to clamp the held time to 0 and remove the alarm and
+#     the push together (#165); past C_CLOCK_SKEW_MS it now raises its own clock STALL and push
+#     instead. What still reads a stalled floor as live is a stamp inside that tolerance, for as
+#     long as it stays ahead, and a stamp kept RECENT by rewriting it — both room state, so both
+#     are named here rather than left for a reader to find, because a rule stated absolutely and
+#     contradicted by the same file is worse than a rule stated with its hole;
 #   * the mailbox push — everything the alarm is gated on, PLUS the closed-room early return
 #     (`board/status` + `board/decision.md`, forgeable, #66) and the mailbox's own contents, which
 #     are not room state. It carries strictly more gates than the alarm, so "same condition as the
@@ -654,8 +655,10 @@ _floor_wait_state() {
 # shared mailbox for a room whose floor has been held past a tier. Best-effort: it can never fail
 # the status block that called it.
 #
-# `<tier>` is `stall` or `longturn`, and it is the SAME event's classification the printed alarm
-# used — never a second decision taken here. It chooses this notice's wording and its
+# `<tier>` is one of the names the `case` in the body accepts, and it is the SAME event's
+# classification the printed alarm used — never a second decision taken here. (`clock` is the
+# odd one: it is raised when the held time is UNKNOWN because its anchor is stamped in the future,
+# so `<held-seconds>` arrives as 0 and its wording does not print it.) It chooses this notice's wording and its
 # de-duplication key, and it chooses nothing else; whichever tier the caller reached, a notice is
 # pushed. See the alarm arm in v_status for which evidence picks which.
 #
@@ -691,7 +694,9 @@ _floor_wait_state() {
 # healthy turn ever measured — would be de-duplicated into silence. That is the trap #188 named:
 # an earlier or more frequent push silences a later one. Separate keys make the two independent:
 # `longturn` never consumes what `stall` needs, so a seat whose pane reads mid-turn buys a calmer
-# line and a bounded delay, never the absence of a stall notice.
+# line and a bounded delay, never the absence of a stall notice. `clock` keys apart for the same
+# reason: once a future stamp passes, the same (peer, turn) can genuinely stall, and that `stall`
+# notice must not find its key already spent.
 #
 # The cost is that one (peer, turn) can produce BOTH notices — a long turn that then crosses the
 # backstop, or a seat whose pane changes classification mid-turn. That is two entries at most per
@@ -714,8 +719,10 @@ _floor_wait_state() {
 #     every other reader report the room decided, which is the larger pre-existing lie (#66) rather
 #     than something this gate adds;
 #   * a mailbox that cannot be resolved or written pushes nothing at all;
-#   * upstream of this function entirely, a held time clamped to 0 removes the alarm and the push
-#     together (#165).
+#   * upstream of this function entirely, a floor stamp that reads as a fresh turn — one inside
+#     C_CLOCK_SKEW_MS of the future, or one kept recent by rewriting it — keeps the held time under
+#     every threshold, so neither the alarm nor this push is reached. (A stamp further ahead than
+#     that is no longer a route: it reaches this function under the `clock` tier — #165.)
 # _is_seat <name> — is this a participant of this room, as the roster reads it?
 #
 # ONE predicate, called from three places, because all three are asking the same question and a
@@ -788,12 +795,12 @@ _stall_escalate() {
   # share one. An unrecognised tier degrades to `stall`, which is the loud answer — a wording bug
   # in a caller must not be able to route a notice onto a key the backstop is not watching.
   #
-  # THAT ARM IS UNREACHABLE TODAY and is kept as a fail-loud default, not as a live guard: the one
-  # call site (`v_status`) passes `stall` or `longturn` and nothing else, so no test can exercise
-  # it and none pretends to. Said plainly because this diff labels its OTHER unreachable branch
+  # THAT ARM IS UNREACHABLE TODAY and is kept as a fail-loud default, not as a live guard: the
+  # call sites (all in `v_status`) pass only tiers this `case` names, so no test can exercise it
+  # and none pretends to. Said plainly because this diff labels its OTHER unreachable branch
   # (`_floor_mid_turn`'s `unknown`) as unreachable, and leaving this one reading like a working
   # check would be the same claim told two ways in one file.
-  case "$tier" in longturn) : ;; *) tier=stall ;; esac
+  case "$tier" in longturn|clock) : ;; *) tier=stall ;; esac
   key="[$tier:$peer:$turns]"
   # Fails OPEN by construction, which is the right way round for a de-duplication check: an empty
   # glob, an unreadable mailbox, a malformed entry or a missing jq all make this print nothing, and
@@ -845,6 +852,9 @@ _stall_escalate() {
     # grep as often as by eye, and a notice that carries the stop glyph is a notice that sorts
     # with the ones a person must act on.
     ctx="turn $turns; nothing to do yet. The mid-turn read is a quote from a pane the seat itself writes, not a verdict, so it cannot stop a stall being reported: at $(_stall_hard_secs)s this room raises a stall alarm whatever the pane says. Look at $where now only if you have another reason to."
+  elif [ "$tier" = clock ]; then
+    text="council room '$room': $who holds the floor, but how long cannot be read — the instant it is timed from is stamped in the future $key"
+    ctx="turn $turns; one seat's clock is wrong or a stamp was written forward, so no held time from this room can be trusted — it may have stopped long ago. Go and look at every participant's terminal."
   else
     text="council room '$room': $who has been held for ${held}s — the room has stopped $key"
     ctx="turn $turns; go and look at $where. A permission or first-launch trust prompt is answered IN PLACE; council.sh relaunch is only for a seat that is genuinely dead, and it discards everything that seat has read."
@@ -1266,7 +1276,7 @@ v_status() {
   local j verd g t floor held conf room_age alarms="" phase wait_ev="" wait_note="" rec=""
   local only_changed=0 alarms_only=0 term_live="" term_total="" term_rc term_out="" live_note=""
   local out="" round_line="" openct sig sigfile TAB term_line="" quiet_line=""
-  local hard fscreen="" tier=stall mid=0 stall_mon="" noagent=0 na_backend=""
+  local hard fscreen="" tier=stall mid=0 stall_mon="" noagent=0 na_backend="" ahead=""
   TAB=$(printf '\t')
   while [ $# -gt 0 ]; do
     case "$1" in
@@ -1401,7 +1411,8 @@ v_status() {
   # falls outside it. Since c_floor_held_ms learned to time a token room's first holder from
   # `created_ms`, a room that has never moved raises STALL where it used to raise nothing — and
   # for THAT case the alarm's condition is the peer-written field itself, not just its wording, so
-  # a seat can switch it off by writing `created_ms` forward or by rewriting `mode` to roundtable.
+  # a seat can switch it off by writing `created_ms` forward to a recent instant or by rewriting
+  # `mode` to roundtable. (Forward into the FUTURE no longer: that raises the clock STALL below.)
   # Nothing that fired before became suppressible; this one arrives that way, which is still
   # better than the silence it replaced but is not what the paragraphs above promise. Closing it
   # means a never-moved-room alarm that does not read the floor's age at all; that is filed.
@@ -1629,6 +1640,24 @@ v_status() {
     # `$tier` is passed IN rather than recomputed here for the same reason, so the console and the
     # mailbox can never disagree about which tier this was.
     _stall_escalate "$floor" "$t" "$held" "$tier" "$wait_note"
+  elif ahead=$(c_floor_anchor_ahead_s); then
+    # THE HELD TIME IS UNKNOWN, AND THAT IS AN ALARM, NOT A ZERO (#165). The instant this floor is
+    # timed from — the last turn's peer-written `sent_ms`, or `created_ms` in a token room that has
+    # never moved — lies further ahead of this clock than any honest skew, so `$held` above read 0
+    # and every threshold arm was skipped. That 0 is right for a participant's `floor` line, where
+    # it means "time the holder yourself"; here it was one forged stamp removing the STALL alarm
+    # and its push together, the direction the "held longer than the room has existed" arm above
+    # does not face. It mirrors that arm: no pane read and no LONG TURN, because no figure about
+    # this seat can be believed, and a push under its own tier so a later true stall on the same
+    # turn is never de-duplicated away by it.
+    #
+    # WHAT THIS MAKES TRUE is that a future stamp is self-revealing rather than silent: the only way
+    # to hide a stalled floor behind one is to raise a 🛑 about the room's clock. WHAT IT DOES NOT:
+    # a stamp less than C_CLOCK_SKEW_MS ahead still buys that long of reading held 0, a stamp kept
+    # RECENT by rewriting it still reads as a live floor, and a forged closure still stops the push.
+    # Each is room state, which is #204's question rather than this arm's.
+    alarms="$alarms 🛑 STALL: the floor's held time cannot be read — the instant it is timed from is stamped ${ahead}s in the future, so one seat's clock is wrong or a stamp was written forward; check every terminal rather than trusting any figure"
+    _stall_escalate "$floor" "$t" "$held" clock
   elif [ "$held" -gt "${COUNCIL_STALL_WARN_SECS:-300}" ] && [ -z "$(c_recorded_status)" ] \
        && ! c_round_open && _is_seat "$floor"; then
     # THE EARLY TIER IS AN ANNOTATION, NOT AN ALARM, and the measurement is what decides that.

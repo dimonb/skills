@@ -1372,19 +1372,44 @@ c_last_turn_ms() {
 #
 # Where it answers 0 that means "this room has not moved yet, and I cannot tell you how long that
 # has been" rather than "held for no time", and protocol/_channel.md says exactly that to
-# participants, handing the waiting seat its own wait to time the holder with instead.
+# participants, handing the waiting seat its own wait to time the holder with instead. It answers
+# 0 as well when the anchor is stamped in the FUTURE, where the honest reading is "cannot say" —
+# the same thing c_room_age_s means by printing nothing for that shape. The two cases need opposite
+# things from a supervisor, and c_floor_anchor_ahead_s is what tells them apart (#165).
 #
 # ONE CONSEQUENCE FOR THE SUPERVISOR, stated because it is easy to miss from here: in token mode
 # this function now makes a never-moved room raise v_status's STALL, which it never did before.
 # That alarm is accurate — `order[0]` really has held the floor since the room was created, and a
 # permission prompt is the usual reason — but its CONDITION is now a peer-written field, so a seat
-# can switch it off by writing `created_ms` forward or by rewriting `mode`. v_status's own header
+# can switch it off by writing `created_ms` forward to a recent instant or by rewriting `mode`.
+# (Writing it into the FUTURE no longer does: past C_CLOCK_SKEW_MS that raises v_status's
+# clock-wrong STALL instead, via c_floor_anchor_ahead_s — #165.) v_status's own header
 # forbids that direction, and it still holds for every alarm that existed before this: nothing
 # previously firing became suppressible. The new one arrives suppressible. The roundtable half is
 # still unalarmed, and a never-moved-room alarm that does not read the floor at all — which would
 # fix both — is filed rather than smuggled in here.
 c_floor_held_ms() {
   local last now
+  last=$(c_floor_anchor_ms)
+  [ "$last" = 0 ] && { printf '0'; return; }
+  # `sent_ms` is written by whichever peer took that turn, so a clock ahead of ours reads as a
+  # floor held for a negative time. c_room_age_s refuses the same shape for the same reason, and
+  # both mean "this room cannot say" by it; 0 keeps a nonsense figure out of the comparison
+  # participants make. What 0 must NOT do is read as "held for no time" to the supervisor, which
+  # is what let one future stamp remove the STALL alarm and its push (#165): v_status asks
+  # c_floor_anchor_ahead_s separately and alarms on the answer, so this function keeps its 0 for
+  # the participant-facing `floor` line and never has to carry the distinction itself.
+  now=$(c_ms)
+  [ "$now" -gt "$last" ] || { printf '0'; return; }
+  printf '%s' $(( now - last ))
+}
+
+# c_floor_anchor_ms — the instant the current floor holder is timed FROM, in epoch ms, or 0 when
+# this room has none. c_floor_held_ms measures from it and c_floor_anchor_ahead_s checks it against
+# the clock; one derivation for both, so the two can never disagree about which stamp they read.
+# The header above c_floor_held_ms is the authority on which stamp that is and why.
+c_floor_anchor_ms() {
+  local last
   last=$(c_last_turn_ms)
   # A damaged roster takes this branch too, and what it then reports varies by damage shape — the
   # same split c_barrier's header records, for the same reason (jq streams, so a usable first line
@@ -1393,13 +1418,39 @@ c_floor_held_ms() {
   # leave a usable first object report that room's real age instead. Neither is worse than the
   # room already is, and c_barrier's header is the authority on which shape does which.
   if [ "$last" = 0 ] && [ "$(c_mode)" != roundtable ]; then last=$(c_int_field created_ms 0); fi
-  [ "$last" = 0 ] && { printf '0'; return; }
-  # `sent_ms` is written by whichever peer took that turn, so a clock ahead of ours reads as a
-  # floor held for a negative time. c_room_age_s refuses the same shape for the same reason; 0
-  # keeps the two agreeing and keeps a nonsense figure out of the comparison participants make.
+  printf '%s' "$last"
+}
+
+# How far ahead of this clock a floor anchor may be before it is called a wrong clock, in ms.
+#
+# Every seat runs on one host and stamps from the same clock, so an honest anchor is ahead by
+# nothing, or by an equal-millisecond read, or by an NTP step — seconds at the very most. Sixty
+# seconds is far outside that and it bounds what a forger buys: a stamp written less than this far
+# ahead still reads as held 0 until it passes, then counts from itself, so it can delay the STALL
+# alarm by at most this long and never remove it.
+#
+# A FIXED CONSTANT, NOT A KNOB, on purpose. The tests forge leads far beyond it and so never need
+# to tune it, and an override is surface nobody has asked for — plus, per AGENTS.md, an override
+# its maintainer sets is the default path nobody maintaining it observes. t22 asserts the value.
+C_CLOCK_SKEW_MS=60000
+
+# c_floor_anchor_ahead_s — how many whole seconds the floor anchor is AHEAD of this clock, and rc 0,
+# when that lead is past C_CLOCK_SKEW_MS; nothing and rc 1 otherwise, including for a room with no
+# anchor at all.
+#
+# It exists because 0 from c_floor_held_ms means two things that need opposite answers from a
+# supervisor: "this room has not moved yet" (a fresh room — nothing to report) and "the stamp this
+# room is timed from is in the future" (a wrong clock or a forged stamp — the held time is UNKNOWN,
+# and an unknown held time in a live room is itself an alarm). Only this function tells them apart,
+# and it does so without trusting the peer-written number as a duration: the only thing read off
+# it is that it lies ahead of now. v_status turns an answer here into a STALL and a push (#165).
+c_floor_anchor_ahead_s() {
+  local last now
+  last=$(c_floor_anchor_ms)
+  [ "$last" -gt 0 ] || return 1
   now=$(c_ms)
-  [ "$now" -gt "$last" ] || { printf '0'; return; }
-  printf '%s' $(( now - last ))
+  [ $(( last - now )) -gt "$C_CLOCK_SKEW_MS" ] || return 1
+  printf '%s' $(( (last - now) / 1000 ))
 }
 
 # How long this room has existed, in seconds — or NOTHING, which means "this room cannot say".
@@ -1430,7 +1481,10 @@ c_room_age_s() {
   ms=$(c_int_field created_ms 0)
   [ "$ms" -gt 0 ] || return 1
   now=$(c_ms)
-  # A room stamped in the future says nothing about how long anything has been held.
+  # A room stamped in the future says nothing about how long anything has been held. Nothing here
+  # means "this room cannot say", as c_floor_held_ms's 0 does for the same shape — and here that is
+  # safe because this value only picks a wording; the case where a future stamp would otherwise
+  # silence an alarm is caught by c_floor_anchor_ahead_s, not by this.
   [ "$now" -gt "$ms" ] || return 1
   printf '%s' $(( (now - ms) / 1000 ))
 }
