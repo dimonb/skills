@@ -507,5 +507,59 @@ out=$(COUNCIL_ROOM="$R17" COUNCIL_STALL_HARD_SECS=100000 COUNCIL_WAIT_SCREEN_FIL
       bash "$CLI" status 2>&1)
 ok "...and raise it"                         1 "$(printf '%s' "$out" | grep -c '⏳ LONG TURN')"
 
+# --- 11. a floor stamped in the FUTURE is an unknown held time, and that alarms (#165) ------
+# The other direction from case 7. c_floor_held_ms clamps a held time whose anchor lies ahead of
+# the clock to 0, which is right for a participant's `floor` line and was one forged stamp
+# removing the STALL line and its push together: two rooms stalled for two hours, one of them
+# with a single message stamped a day ahead, and that one read `held 0s`, `alarms: —`, no notice.
+# Both outputs are asserted, for case 7's reason: a case that builds an attack asserts every
+# output the attack can reach.
+future_turn() { # <room> <sent_ms> — alpha takes turn 1, stamped as given
+  jq -n --argjson ms "$2" \
+    '{id:"alpha-1",from:"alpha",lamport:1,deps:{},act:"msg",refs:[],to:["*"],
+      hand:false,turn:1,round:null,text:"from a fast clock",created_at:"test",sent_ms:$ms}' \
+    > "$1/lane/alpha/000001.json"
+  printf '1' > "$1/state/alpha.seq"
+}
+now_ms() { printf '%s' "$(( 10#${EPOCHREALTIME/./} / 1000 ))"; }
+
+R18="$COUNCIL_TEST_ROOT/t22v"; stalled_room "$R18" claude alpha beta
+future_turn "$R18" "$(( $(now_ms) + 86400000 ))"
+out=$(COUNCIL_ROOM="$R18" COUNCIL_WAIT_SCREEN_FILE="$QUIET" bash "$CLI" status 2>&1)
+ok "a future-stamped turn raises a STALL"    1 "$(printf '%s' "$out" | grep -c "🛑 STALL: the floor's held time cannot be read")"
+ok "...and pushes it"                        1 "$(notices t22v)"
+body=$(cat "$(ls "$POLICY_MAILBOX_DIR"/council-t22v-*.json 2>/dev/null | head -1)" 2>/dev/null)
+ok "...under its own clock key"              0 "$(printf '%s' "$body" | grep -qF '[clock:beta:1]'; echo $?)"
+# The participant half is deliberately unchanged: 0 is what protocol/_channel.md tells a seat to
+# read as "time the holder yourself", and nothing about a forged stamp makes a bigger number true.
+ok "...while floor still reads held_ms=0"    1 "$(COUNCIL_ROOM="$R18" bash "$CLI" floor | grep -c ' held_ms=0 ')"
+COUNCIL_ROOM="$R18" COUNCIL_WAIT_SCREEN_FILE="$QUIET" bash "$CLI" status >/dev/null 2>&1
+ok "...and a second tick pushes nothing new" 1 "$(notices t22v)"
+# The keys are apart so that the stamp PASSING cannot spend the stall's: the same (peer, turn)
+# stalling for real afterwards must still be pushed.
+future_turn "$R18" "$(( $(now_ms) - 7000000 ))"
+out=$(COUNCIL_ROOM="$R18" COUNCIL_WAIT_SCREEN_FILE="$QUIET" bash "$CLI" status 2>&1)
+ok "once the stamp is past it is a plain stall" 1 "$(printf '%s' "$out" | grep -c '🛑 STALL: beta has held the floor')"
+ok "...and that stall is pushed too"         2 "$(notices t22v)"
+
+# The never-moved token room times its first holder from `created_ms`, so the same forgery works
+# through the roster; the same guard reads the same anchor, so the same alarm answers it.
+R19="$COUNCIL_TEST_ROOT/t22w"; stalled_room "$R19" claude alpha beta
+jq --argjson cms "$(( $(now_ms) + 86400000 ))" '.created_ms = $cms' \
+   "$R19/roster.json" > "$R19/r.tmp" && mv "$R19/r.tmp" "$R19/roster.json"
+out=$(COUNCIL_ROOM="$R19" COUNCIL_WAIT_SCREEN_FILE="$QUIET" bash "$CLI" status 2>&1)
+ok "a future created_ms raises it as well"   1 "$(printf '%s' "$out" | grep -c "held time cannot be read")"
+ok "...and pushes it"                        1 "$(notices t22w)"
+
+# Inside the tolerance it is an honest skew, and alarming there would fire on the commonest
+# healthy path — a turn read in the same millisecond it was stamped. The tolerance itself is a
+# fixed constant, asserted by value, so changing it is a decision a diff has to show.
+R20="$COUNCIL_TEST_ROOT/t22x"; stalled_room "$R20" claude alpha beta
+future_turn "$R20" "$(( $(now_ms) + 30000 ))"
+out=$(COUNCIL_ROOM="$R20" COUNCIL_WAIT_SCREEN_FILE="$QUIET" bash "$CLI" status 2>&1)
+ok "a lead inside the skew tolerance does not alarm" 0 "$(printf '%s' "$out" | grep -c '🛑')"
+ok "...and pushes nothing"                   0 "$(notices t22x)"
+ok "the skew tolerance is 60s"               1 "$(grep -c '^C_CLOCK_SKEW_MS=60000$' "$DIR/../lib/lib.sh")"
+
 printf '\n'
 if [ "$FAILURES" -eq 0 ]; then echo "t22 PASS ($CHECKS checks)"; else echo "t22 FAIL ($FAILURES/$CHECKS)"; exit 1; fi
