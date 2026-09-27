@@ -18,7 +18,9 @@ No participant can end the room by saying it feels resolved.
 Those rules are author-gated — only an objection's own author withdraws it, only a
 proposal's own author kills it — so **a message's author is derived, never believed**: every
 reader takes it from the lane the file was read at and overwrites what the message says
-about itself. A lane has exactly one writer, so the lane *is* the author. And the room is
+about itself. A lane has one writer by protocol, so the lane *is* the author as far as the
+room's rules go — a correctness property, not authentication (see
+["The room is not a trust boundary"](#the-room-is-not-a-trust-boundary)). And the room is
 closed only when its **decision record** has been written, never because a `decide` message
 is present — a message says somebody ran `decide`, the record says it finished.
 
@@ -44,8 +46,8 @@ producing polite agreement.
                          (a room without it keeps the plain stall threshold)
   agenda.md              the question
   protocol-<peer>.md     what each participant was told (channel rules + its role)
-  lane/<peer>/NNNNNN.json    ← exactly ONE writer per lane, ever
-  cursor/<me>/<peer>         ← exactly ONE writer per cursor (me)
+  lane/<peer>/NNNNNN.json    ← ONE writer per lane, by protocol (not enforced)
+  cursor/<me>/<peer>         ← ONE writer per cursor (me), by protocol
   bell/<peer>.fifo       the doorbell
   board/decision.md      the output; board/status holds decided|unresolved
   state/                 counters, launchers, the pinned terminal container, keeper pid,
@@ -508,6 +510,15 @@ scenario and the names still select a file to render and text to interpolate, an
 `roster.json` is in the room too. The **agent kind no longer selects a file at all**: it is
 matched against `case` labels in the shared adapter module (below).
 
+The second reason is the ordinary one: a regenerated launcher picks up **adapter changes
+made since the room opened**, which is exactly what "killed to pick up new permissions"
+asks for. A stored launcher would bring the seat back with the command line it had when
+the room was created.
+
+**The cost, and you will not discover it any other way: a hand-edited launcher or protocol
+is discarded.** If you tuned a participant's protocol by hand, `relaunch` throws that away
+and writes the generated one.
+
 ### The room is not a trust boundary
 
 **Do not read any of the above as containment, because it is not.** Measured, all three
@@ -552,18 +563,42 @@ the original `from` intact. It does **not** cover a seat running under the wrong
 `from` from the same variable, so such a seat writes into the wrong lane with a *matching*
 `from`, and deriving one from the other changes nothing.
 
-Nothing here makes a room safe to share with a participant you would not trust with your
-shell. Run rooms accordingly. The trust model itself is an open question, not a settled one;
-it is being argued rather than assumed.
+#### The trust contract
 
-The second reason is the ordinary one: a regenerated launcher picks up **adapter changes
-made since the room opened**, which is exactly what "killed to pick up new permissions"
-asks for. A stored launcher would bring the seat back with the command line it had when
-the room was created.
+This used to be an open question. It was argued in a council room of all three agent kinds and
+decided (#204), and this is what was decided:
 
-**The cost, and you will not discover it any other way: a hand-edited launcher or protocol
-is discarded.** If you tuned a participant's protocol by hand, `relaunch` throws that away
-and writes the generated one.
+* **council does not confine a participant, by decision, and will not.** The approval-skipping
+  launch flags in the table above are what keep a room running unattended; a participant that
+  asks before it acts sits on a prompt holding the floor, which is how rooms wedged before (#7,
+  #18). Confinement would cost the thing a room is for.
+* **The shared mailbox is exactly as seat-writable as the room.** `.git/ship-escalations/` sits in
+  the same git directory any participant can reach, so evidence kept "outside the room" there — a
+  firing record, a de-duplication key, a launch record — only means a forger needs a **second,
+  consistent** edit. It is an accident check, never authentication.
+* **Every supervisor-facing signal is therefore accident-grade.** Each alarm, push, glyph and exit
+  code is designed to be right when nobody is forging it, and to be **self-revealing** where that
+  can be arranged — so that silencing it means writing something the supervisor sees anyway. None
+  is designed to survive a participant that is trying. Where this file calls a read *evidence, not
+  proof*, or a check *self-revealing*, that is the grade it is claiming, and no stronger one.
+* **Running a participant you would not trust with your shell needs OS isolation you supply** — a
+  separate user, a container, a VM. The skill has no in-process answer, and nothing in it becomes
+  one by being added to.
+
+The routes that stay open after the rest of #204's sequence has landed, named so a green gate is
+not read as covering them:
+
+* **FIFO read TOCTOU** — a glob reader checks `[ -f ]` and then opens, and a participant can swap
+  the file for a FIFO between the two;
+* **coordinated evidence edits** — a participant that rewrites the room state and the mailbox
+  record together, consistently, defeats every cross-check between them;
+* **backend manipulation** — anything that can reach the terminal backend can create, rename or
+  kill the sessions the room's reads enumerate;
+* **replacing the checker itself** — `council.sh`, the shared modules and this skill directory are
+  files a participant can write, so any check can be rewritten along with its baseline. This is
+  why no digest, HMAC or key is used: each would be seat-readable and seat-rewritable.
+
+Run rooms accordingly.
 
 ### `--cwd`
 
@@ -891,7 +926,7 @@ on the first throws away the argument that seat was holding.
 | the seat's terminal is **up** | **partly — same read, same limit** | a session named `council-<room>-<peer>` is listed. Anything that can reach the backend can create that name, so this is a reason not to reach for `relaunch` first, not proof of identity |
 | a terminal that is up **holds no agent** — the agent exited and left a shell or an exited pane | **yes, one way** | the backend is asked which process owns the pane (`drv_occupant`, shared driver) — process state, so nothing an agent prints can forge it. `none` on two reads raises `🛑 NO AGENT` (below). The converse is not available: an agent that dies leaving another process in the foreground reads as occupied, so the absence of the alarm is not proof of life |
 | a terminal that is up is **at a prompt** rather than working | **no — and the read it has runs the other way** | `adp_turn_state` (shared adapters) reads running/queued/idle off the pane, and `status` uses it for the `⏳ LONG TURN` tier below: a client that says it is *working* is quoted as such. The converse is not available — `idle` cannot tell a permission prompt from a finished turn, and no committed capture separates them — so the absence of that quote is not a claim that a seat is wedged |
-| a terminal that is up is in an announced **capacity wait** | **partly** | `status` quotes a `rate_limited`-style banner where the client's chrome makes it forgery-proof — two of the three agent kinds have a committed pane capture, the third gets no annotation at all |
+| a terminal that is up is in an announced **capacity wait** | **partly** | `status` quotes a `rate_limited`-style banner where the client's chrome makes it unforgeable by anything the agent prints — two of the three agent kinds have a committed pane capture, the third gets no annotation at all |
 
 So the alarm says what a live seat and a dead seat **look like** (*"a session named … is listed,
 which is what a live seat looks like — so do not reach for relaunch first"* / *"its terminal is
@@ -904,9 +939,10 @@ guessing. Two things that wording is doing deliberately:
   discarding everything that seat has read.
 * **the corroboration rules out the two accidental misreads** — a backend that did not answer,
   and a run resolved to the other backend. It does not rule out a room file that has been
-  rewritten. Making this a verdict rather than evidence needs an identity a participant cannot
-  forge: the backend-assigned handle (a tmux window id, an agterm session UUID) recorded outside
-  the room at launch. That is filed, not done here.
+  rewritten. The next step is the backend-assigned handle (a tmux window id, an agterm session
+  UUID) recorded outside the room at launch — filed as #247, not done here. Under the trust
+  contract that raises the bar to a second, consistent forgery rather than closing it: the record
+  is accident-grade evidence too.
 
 A seat the room never gave a terminal — the one a human took with `--me` — is named as exactly
 that rather than as a dead seat, because `relaunch` refuses it and the room is simply waiting on
@@ -1058,8 +1094,10 @@ terminal before relaunching"*, with the matched line printed as evidence.
 > for each thing a supervisor reads, ask what decides whether it appears.
 >
 > **It does not make this verb unsuppressible, and no rule about how untrusted evidence is *used*
-> could — while every input is room state.** Closing it needs a held time that is not room state;
-> #165's suggested direction is one, and a launch record written outside the room is another.
+> could — while every input is room state.** Narrowing it needs a held time that is not room
+> state; #165's suggested direction is one, and a launch record written outside the room is
+> another. Neither closes it: under the trust contract a record outside the room is only a second
+> forgery away.
 > Every field in the block above
 > is a function of room state, `held` included: a seat that stamps a message in the future clamps
 > the held time to 0 and takes the `STALL` line and its push with it (measured — #165). That is
