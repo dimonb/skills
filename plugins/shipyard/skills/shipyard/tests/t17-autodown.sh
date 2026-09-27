@@ -85,6 +85,11 @@
 #   B19 a teardown prints even when the signature file already matches (it lives in the mailbox
 #      children write into, so it is forgeable).
 #   B20 a slot name containing `/` is refused.
+#   B21 HELD is an episode: the full block on its first tick, one line after, and full again when
+#      the records holding it change, including a swap that keeps their count.
+#   B22 AWAITING REMOVAL is an episode keyed on the refusal's text: full, then one line that still
+#      carries the command, then full again for a new reason.
+#   B23 TORN DOWN fires once per act: a slot that was really removed is not reaped or reported again.
 # That list is maintained by hand and has gone stale twice already, each time when a fix round
 # added cases and left it ending where it was. The file below is the authority.
 #
@@ -739,8 +744,14 @@ ok "B21: ...without the full steps"                   0 "$(printf '%s' "$b21b" |
 printf '{"kind":"question","status":"pending","slot":"80"}\n' >"$B_GIT/ship-escalations/80-2.json"
 b21c=$(b_tick -- --only-changed 80)
 ok "B21: a new record holding it prints in full again" 1 "$(printf '%s' "$b21c" | grep -c 'Tearing it down by hand first')"
+# A swap that keeps the COUNT is still a different set of records, so the key must be the records
+# themselves and not only how many there are.
+b_tick -- --only-changed 80 >/dev/null
+mv "$B_GIT/ship-escalations/80-1.json" "$B_GIT/ship-escalations/80-3.json"
+b21d=$(b_tick -- --only-changed 80)
+ok "B21: a same-count swap of records prints in full again" 1 "$(printf '%s' "$b21d" | grep -c 'Tearing it down by hand first')"
 ok "B21: ...and nothing was torn down"                0 "$(grep -c . "$DOWN_CALLS")"
-rm -f "$B_GIT/ship-escalations/80-1.json" "$B_GIT/ship-escalations/80-2.json"
+rm -f "$B_GIT/ship-escalations/80-2.json" "$B_GIT/ship-escalations/80-3.json"
 
 # --- B22: AWAITING REMOVAL is an episode, keyed on the refusal's text (#239) ------------------
 b_reset; rm -f "$B_GIT/ship-escalations/report-episodes"; printf '1\n' >"$DOWN_RC_FILE"
@@ -758,6 +769,25 @@ ok "B22: ...without re-quoting the refusal"            0 "$(printf '%s' "$b22b" 
 b22c=$(b_tick "DOWN_REASON=refused: ship-81 has unmerged content" -- --only-changed 81)
 ok "B22: a new reason prints in full again"            1 "$(printf '%s' "$b22c" | grep -c 'merged and finished, but the teardown refused')"
 printf '0\n' >"$DOWN_RC_FILE"
+
+# --- B23: TORN DOWN fires once per act, which is why it keeps no episode (#239) ---------------
+# The report says TORN DOWN needs no bookkeeping because a real removal takes the slot's stage file
+# with its worktree. Pin that: after a genuine removal, a named-slot monitor ticking the same slot
+# again neither calls the teardown nor reports one.
+b_reset
+b_slot 82 882 ready-to-merge
+printf '1 ship-82\n' >"$B_WINS"; printf 'ship-82\n' >"$B_ENUM"
+printf '882\tMERGED\n' >"$B_STATES"
+DOWN_REMOVE=1; export DOWN_REMOVE
+b_tick -- 82 >/dev/null
+b23a=$(b_tick -- 82)
+printf '1 ship-79\n' >"$B_WINS"; printf 'ship-79\n' >"$B_ENUM"   # its terminal is gone too
+b23b=$(b_tick -- 82)
+b23c=$(b_tick -- 82)
+DOWN_REMOVE=0; export DOWN_REMOVE
+ok "B23: the removing tick reports the teardown"       1 "$(printf '%s' "$b23a" | grep -c 'TORN DOWN — merged, finished')"
+ok "B23: ...and later ticks do not report it again"    0 "$(printf '%s%s' "$b23b" "$b23c" | grep -c 'TORN DOWN')"
+ok "B23: ...nor call the teardown again"               1 "$(grep -c '^82$' "$DOWN_CALLS")"
 
 printf '\n%s: %d checks, %d failures\n' "$(basename "$0")" "$CHECKS" "$FAILURES"
 [ "$FAILURES" -eq 0 ]

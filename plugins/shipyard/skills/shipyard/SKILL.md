@@ -413,18 +413,19 @@ keeps this list and that condition in step, so read the condition if it matters.
 repeats verbatim trains the operator to skim it (#182), so what repeats is no longer the whole
 block. The stall blocks print in full once and then as their delta (above). So do `💀 NO AGENT`,
 `✋ HELD` and `✋ AWAITING REMOVAL`: on the first tick of an episode, the full block; on later ticks,
-one line per slot that says how long ago the block was first raised (with the time), which tick
-this is, and that the remedy is unchanged. `✋ AWAITING REMOVAL` still carries the exact
-`shipyard-down.sh` command on that line. `✋ HELD` prints in full again when the set of records
+a short entry per slot. Its first line says how long ago the block was first raised (with the time)
+and which tick this is. Its second line names the remedy, and for `✋ AWAITING REMOVAL` that line
+is the exact `shipyard-down.sh` command. `✋ HELD` prints in full again when the set of records
 holding the slot changes, and `✋ AWAITING REMOVAL` does the same when the refusal's text changes,
 because each of those is news. An episode ends on the first tick its condition does not fire, and
 after a supervision gap every episode starts over. `🧹 TORN DOWN` needs none of this: it fires once
 per act, because the slot's stage file goes with its worktree, so nothing is left to tear down a
-second time. `🛑 NO SIGNAL` still prints
-in full on every tick. Episodes are recorded in `report-episodes` in the mailbox, and that file can
-only change which form a slot's entry takes. It never decides whether the entry appears. A forged
-row shows up as a first-raised time you never saw. As with stalls, a report you run by hand counts
-as a tick.
+second time. `🛑 NO SIGNAL` still prints in full on every tick. Episodes are recorded in
+`report-episodes` in the mailbox, and that file can only change which form a slot's entry takes.
+It never decides whether the entry appears. A forged row can still hold back the full remedy. It
+shows up as a first-raised time you never saw, but you can only catch that against your own memory
+or your scrollback: nothing on the current screen contradicts it. As with stalls, a report you run
+by hand counts as a tick.
 
 **But motionless is not the same as stuck, and the report asks WHY before it consults that
 clock.** Two of the three reasons a healthy child stops moving are not failures at all: it

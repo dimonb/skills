@@ -16,7 +16,9 @@
 #      missing;
 #   3. one `none` followed by `agent` — a launch caught before its `exec` — is not a death;
 #   4. tell and compact refuse a `none` slot with exit 8, typing nothing and recording nothing, and
-#      go on exactly as before when there is no verdict.
+#      go on exactly as before when there is no verdict;
+#   5. the 💀 block is an episode (#239): full on its first tick, one line after that, which prints
+#      the first-raised time it read, and full again for a record it cannot trust or after a gap.
 #
 # Executed against the real scripts over a faked tmux, as t13 and t18 do.
 set -uo pipefail
@@ -175,12 +177,26 @@ ok "...and still no nudge or compaction command"       no  "$(has "$(noagent "$o
 FAKE_OCC=alive run_report --only-changed >/dev/null
 out=$(run_report --only-changed)
 ok "after a tick with the agent back: full again"      yes "$(has "$(noagent "$out")" 'on both reads of this tick')"
-# The record is peer-writable, so a row it cannot trust is a first firing, never a one-liner.
-future=$(( $(date +%s) + 86400 ))
-printf 'noagent\t41\t%s\t2099-01-01T00:00:00Z\t5\t-\nnoagent\t46\tabc\t2020-01-01T00:00:00Z\t5\t-\n' "$future" >"$MB/report-episodes"
-out=$(run_report --only-changed)
-ok "a future-dated or malformed record reads as a first firing" 2 \
-   "$(noagent "$out" | grep -c 'on both reads of this tick')"
+# The record is peer-writable, so a row it cannot trust is a first firing, never a one-liner. Each
+# guard gets a row of its own for 41, faulty in exactly one field, so no guard covers for another.
+# 46 carries a VALID backdated row in the same tick, which pins two things at once: the one-liner
+# prints the first-raised time and count it READ (the self-revealing half: a forged row shows as a
+# time the operator never saw), and the parallel episode array stays aligned when two slots of one
+# block are in different states.
+past=$(( $(date +%s) - 600 )); future=$(( $(date +%s) + 86400 ))
+for bad in "future epoch|$future	2020-01-01T03:04:05Z	5" \
+           "future first_at|$past	2099-01-01T00:00:00Z	5" \
+           "malformed first_at|$past	2020-01-01 03:04:05	5" \
+           "zero ticks|$past	2020-01-01T03:04:05Z	0" \
+           "octal ticks|$past	2020-01-01T03:04:05Z	08" \
+           "octal epoch|0$past	2020-01-01T03:04:05Z	5"; do
+  printf 'noagent\t41\t%s\t-\nnoagent\t46\t%s\t2020-01-01T03:04:05Z\t5\t-\n' "${bad#*|}" "$past" >"$MB/report-episodes"
+  out=$(run_report --only-changed)
+  ok "a record with a ${bad%%|*} reads as a first firing" yes \
+     "$(has "$(noagent "$out")" '^- `41` — on both reads of this tick')"
+  ok "...beside a trusted record printing what it read"   yes \
+     "$(has "$(noagent "$out")" '^- `46` — STILL no agent, first raised 1[0-9] min ago (at 03:04 UTC), tick 6')"
+done
 # A supervision gap ends every episode, as it does for stalls.
 run_report --only-changed >/dev/null
 printf '%s\n' "$(( $(date +%s) - 7200 ))" >"$MB/report-tick"

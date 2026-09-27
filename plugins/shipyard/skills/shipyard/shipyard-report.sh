@@ -1374,9 +1374,10 @@ fi
 # fixed that for 🛑 STALLED; the same repetition sat in 💀 NO AGENT, ✋ HELD and ✋ AWAITING REMOVAL,
 # each of which bypasses --only-changed and printed its full remedy on every tick its condition
 # held. Each is now an episode per (block, slot): the FIRST tick prints the full block, and later
-# ticks print one line that leads with how long it has held and says the remedy is unchanged.
+# ticks print a short entry — a line that leads with how long it has held, and a line naming the
+# remedy (for AWAITING REMOVAL, the exact command).
 #
-# Per block, because the four are not one case:
+# Per block, because these blocks are not one case:
 #   * 💀 NO AGENT — nothing about a dead agent changes between ticks but its age, so the key is the
 #     slot alone.
 #   * ✋ HELD — keyed on WHAT holds it: a fingerprint of the records slot_unsettled_files names and
@@ -1385,7 +1386,9 @@ fi
 #     news, so it prints the full block again.
 #   * 🧹 TORN DOWN — NOT an episode, and no bookkeeping is kept for it, because it already fires
 #     once per act. After a reap the worktree and its .pipeline-state are gone, so slot_stage reads
-#     empty, autodown_consider returns at lock 2, and REAPED never names that slot again.
+#     empty: on the live arm autodown_consider returns at lock 2, and on the gone-slot arm it is
+#     not called at all. REAPED therefore never names that worktree twice; a slot relaunched under
+#     the same name is a new worktree and its reap a new act. t17's B23 pins this.
 #
 # $EPISODEFILE rows are `block<TAB>slot<TAB>first_epoch<TAB>first_at<TAB>ticks<TAB>fp`. The file is
 # REWRITTEN WHOLE from this tick's blocks, like $MERGEDFILE and unlike the stall table, so an
@@ -1397,15 +1400,20 @@ fi
 # prints it (SKILL.md says the same for stalls). The discovery-mode early exit returns before this
 # point, so a tick that enumerated nothing preserves the file.
 #
-# WHAT DECIDES WHETHER A BLOCK APPEARS IS UNCHANGED: the four arrays, exactly as before. The episode
-# record decides only whether a slot's entry reads in full or as one line. AGENTS.md, "untrusted
-# evidence may annotate an operator-facing signal, never suppress one": $EPISODEFILE lives in the
-# mailbox every child writes into, so a forged row can turn a genuine first firing into the one-line
-# form. It cannot remove the line, which is printed either way. What this achieves is SELF-
-# REVELATION, not prevention: the one-line form prints the first-raised time it read, so a forged
-# row shows up as an episode the operator never saw start. A number that fails stall_num, a
-# first_at without shipyard_now's shape, or either one in the future is ignored, which makes that
-# tick a first firing again.
+# WHAT DECIDES WHETHER A BLOCK APPEARS IS UNCHANGED: the NOAGENT, REAP_HELD, REAP_REFUSED and REAPED
+# arrays, exactly as before. The episode record decides only whether a slot's entry reads in full or
+# in its short form. AGENTS.md, "untrusted evidence may annotate an operator-facing signal, never
+# suppress one": $EPISODEFILE lives in the mailbox every child writes into, so a forged row can turn
+# a genuine first firing into the short form, withholding the full remedy (the refusal's text, or
+# HELD's list of records and its warning against a hand teardown) for as long as the forgery is kept
+# up. It cannot remove the entry, which is printed either way. What this achieves is SELF-
+# REVELATION, not prevention, and a weaker kind than the stall block's: the short form prints the
+# first-raised time and tick it read, so a forged row shows up as an episode the operator never saw
+# start, but only against the operator's memory or scrollback. Nothing on the current screen
+# contradicts a row forged to look like the previous tick, whereas a forged directive shows up as a
+# nudge the operator knows they never sent. A number that fails stall_num, a first_at without
+# shipyard_now's shape, or either one in the future is ignored, which makes that tick a first firing
+# again.
 EP_ROWS=()
 NOAGENT_EP=()   # parallel to NOAGENT:      "<full>|<ticks>|<minutes held>|<first HH:MM>"
 HELD_EP=()      # parallel to REAP_HELD
@@ -1812,7 +1820,7 @@ EOF
 ${HELD_EP[$i]}
 EOF
       i=$((i+1))
-      # The same records still hold it: one line (#239). A changed set prints the full block below.
+      # The same records still hold it: the short entry (#239). A changed set prints the full block below.
       if [ "$ep_full" = 0 ]; then
         echo "- \`$sl\` — STILL held by the same $n unsettled record(s), first raised ${ep_min} min ago (at ${ep_at} UTC), tick $ep_n. Nothing was removed."
         if [ "$shown" = "$n" ]; then
@@ -1856,7 +1864,7 @@ EOF
 ${REFUSED_EP[$i]}
 EOF
       i=$((i+1))
-      # Refused again for the same reason: one line, still carrying the command (#239). A new reason
+      # Refused again for the same reason: the short entry, still carrying the command (#239). A new reason
       # prints the full block below.
       if [ "$ep_full" = 0 ]; then
         echo "- \`$sl\` — STILL refused for the same reason, first raised ${ep_min} min ago (at ${ep_at} UTC), tick $ep_n. NOTHING was removed; to do it yourself:"
