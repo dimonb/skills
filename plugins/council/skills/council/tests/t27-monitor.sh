@@ -87,6 +87,9 @@ done
 SESSIONS="$COUNCIL_TEST_ROOT/t27-sessions"       # what the backend lists, one name per line
 SESSIONS_RC="$COUNCIL_TEST_ROOT/t27-sessions-rc" # ...and the status it answers with
 SESSIONS_CALLS="$COUNCIL_TEST_ROOT/t27-sessions-calls"  # one line per enumeration, for cost tests
+OCC="$COUNCIL_TEST_ROOT/t27-occupant"            # what ct_occupant answers (agent|none); absent = no verdict
+OCC_CALLS="$COUNCIL_TEST_ROOT/t27-occupant-calls"  # one line per occupant read
+rm -f "$OCC"; : > "$OCC_CALLS"
 : > "$SESSIONS"; printf '0\n' > "$SESSIONS_RC"; : > "$SESSIONS_CALLS"
 cat >"$SHADOW/lib/term.sh" <<SHADOWEOF
 # The shipped terminal with only the enumeration replaced. Pinned to tmux so the pin cases mean
@@ -95,6 +98,9 @@ cat >"$SHADOW/lib/term.sh" <<SHADOWEOF
 COUNCIL_BACKEND=tmux
 . "$REAL_SKILL/lib/term.sh"
 ct_sessions() { printf 'call\\n' >> "$SESSIONS_CALLS"; cat "$SESSIONS" 2>/dev/null; return "\$(cat "$SESSIONS_RC" 2>/dev/null || printf 0)"; }
+# The occupant read (#235), replaced for the same reason: a live tmux cannot be made to answer
+# \`none\` on demand. No file is no verdict, which is what every case outside section 10f gets.
+ct_occupant() { printf 'call\\n' >> "$OCC_CALLS"; [ -f "$OCC" ] || return 1; cat "$OCC"; }
 SHADOWEOF
 SCLI="$SHADOW/council.sh"
 
@@ -556,6 +562,46 @@ ok "...and prescribes no relaunch"           0 "$(printf '%s' "$out" | grep -c '
 ok "...names the removal reading too"        1 "$(printf '%s' "$out" | grep -c 'the launcher was removed')"
 ok "...and tells the operator to settle it"  1 "$(printf '%s' "$out" | grep -c 'check how this room was started')"
 printf '#!/bin/sh\n' > "$RS/state/launch-$FLOOR.sh"
+
+# 10f. A FLOOR HOLDER WHOSE TERMINAL HOLDS NO AGENT (#235). The terminal is listed, so the
+#      liveness sentence used to say "what a live seat looks like" about a seat whose agent had
+#      exited. The occupant read is process state, and `none` on two reads is its own alarm —
+#      which ADDS, so the STALL line and everything else about the tick stay as they were.
+sessions "council-$SN-$FLOOR"
+printf 'none' > "$OCC"; : > "$OCC_CALLS"
+out=$(COUNCIL_STALL_SECS=100 bash "$SCLI" status --alarms-only 2>/dev/null)
+ok "10f: no agent in a listed terminal alarms"   1 "$(printf '%s' "$out" | grep -c '🛑 NO AGENT')"
+ok "...naming the seat and the remedy"           1 "$(printf '%s' "$out" | grep -c "no live agent to lose: council.sh relaunch $FLOOR")"
+ok "...read twice before it is believed"         2 "$(wc -l < "$OCC_CALLS" | tr -d ' ')"
+ok "...and the STALL alarm is untouched"         1 "$(printf '%s' "$out" | grep -c '🛑 STALL')"
+ok "...and 'a live seat' is not claimed"         0 "$(printf '%s' "$out" | grep -c 'what a live seat looks like')"
+# Below the stall threshold: the crash surfaces from the quiet tier's 300s, on the alarms line,
+# and the calm `quiet:` sentence — "not a thing that is wrong" — gives way to it.
+out=$(COUNCIL_STALL_SECS=100000 bash "$SCLI" status --alarms-only 2>/dev/null)
+ok "10f: under the stall tier it still alarms"   1 "$(printf '%s' "$out" | grep -c '🛑 NO AGENT')"
+ok "...with no STALL yet"                        0 "$(printf '%s' "$out" | grep -c '🛑 STALL')"
+blk=$(COUNCIL_STALL_SECS=100000 bash "$SCLI" status 2>/dev/null)
+ok "...and the quiet line gives way to it"       "1 0" "$(printf '%s' "$blk" | grep -c '🛑 NO AGENT') $(printf '%s' "$blk" | grep -c '^quiet:')"
+# Under the quiet tier's own threshold nothing is read at all: a moving room pays no occupant call.
+: > "$OCC_CALLS"
+out=$(COUNCIL_STALL_SECS=100000 COUNCIL_STALL_WARN_SECS=100000 bash "$SCLI" status --alarms-only 2>/dev/null)
+ok "10f: under 300s-equivalent: no read, no alarm" "0 0" "$(printf '%s' "$out" | grep -c '🛑 NO AGENT') $(wc -l < "$OCC_CALLS" | tr -d ' ')"
+# `agent` and no verdict are no evidence either way, and change nothing.
+printf 'agent' > "$OCC"
+out=$(COUNCIL_STALL_SECS=100 bash "$SCLI" status --alarms-only 2>/dev/null)
+ok "10f: agent -> no alarm, the listed sentence" "0 1" "$(printf '%s' "$out" | grep -c '🛑 NO AGENT') $(printf '%s' "$out" | grep -c 'what a live seat looks like')"
+blk=$(COUNCIL_STALL_SECS=100000 bash "$SCLI" status 2>/dev/null)
+ok "...and the quiet line is back"               1 "$(printf '%s' "$blk" | grep -c '^quiet:')"
+rm -f "$OCC"
+out=$(COUNCIL_STALL_SECS=100 bash "$SCLI" status --alarms-only 2>/dev/null)
+ok "10f: no verdict -> no alarm"                 0 "$(printf '%s' "$out" | grep -c '🛑 NO AGENT')"
+# A closed room holds no floor anyone is waiting on, so its seats are not asked about.
+export COUNCIL_ROOM="$R3" ROOM="$R3"
+printf 'fake-container\n' > "$R3/state/container-tmux"; printf 'none' > "$OCC"; : > "$OCC_CALLS"
+out=$(COUNCIL_STALL_SECS=0 COUNCIL_STALL_WARN_SECS=0 bash "$SCLI" status --alarms-only 2>/dev/null)
+ok "10f: a closed room is never asked"           "0 0" "$(printf '%s' "$out" | grep -c '🛑 NO AGENT') $(wc -l < "$OCC_CALLS" | tr -d ' ')"
+rm -f "$OCC" "$R3/state/container-tmux"
+export COUNCIL_ROOM="$RS" ROOM="$RS"
 
 # 10e. THE BARRIER LABEL. During an open barrier round `$floor` is the label `— (barrier)`, not a
 #      seat, and this printed `council.sh relaunch — (barrier)` while `_stall_escalate`'s notice

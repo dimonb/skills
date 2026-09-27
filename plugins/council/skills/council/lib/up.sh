@@ -869,6 +869,22 @@ council_say() {
   . "$SKILL/lib/term.sh"
   local one; one=$(printf '[supervisor] %s' "$text" | tr '\n' ' ')
 
+  # --- is the AGENT there, or only its terminal? (#235) -------------------------------------
+  # A terminal outlives the agent launched into it, and then everything below goes wrong at once:
+  # the typing succeeds, a shell starts no turn so the verdict is `unconfirmed` — which the exit
+  # table describes as a busy seat or text left in the box, neither of which is the case — and
+  # the shell runs the line, where `[supervisor]` is a glob pattern. So ask the backend which
+  # process owns the pane BEFORE typing, and refuse on `none` with nothing typed and nothing
+  # recorded. Exit 8 is the number shipyard's `tell` gives the same condition. No verdict and
+  # `agent` go on exactly as before (c_seat_no_agent says why neither is proof of life).
+  if c_seat_no_agent "$peer"; then
+    echo "council say: '$peer' has a terminal, but the agent launched into it is not running: the" >&2
+    echo "             $(ct_backend) backend reports a shell prompt or an exited pane there. Nothing" >&2
+    echo "             was typed — the message would have reached a shell. There is no live agent" >&2
+    echo "             to lose, so put the seat back up with:  council.sh relaunch $peer" >&2
+    return 8
+  fi
+
   # --- did a turn actually start? (#117) ---------------------------------------------------
   # What this replaced COUNTED OUR OWN MARKER in the capture, before and after. It could not
   # answer the question it was asked: the caller TYPES `[supervisor] …` into the seat's box and
