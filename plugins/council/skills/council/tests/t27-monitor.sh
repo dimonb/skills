@@ -565,8 +565,9 @@ printf '#!/bin/sh\n' > "$RS/state/launch-$FLOOR.sh"
 
 # 10f. A FLOOR HOLDER WHOSE TERMINAL HOLDS NO AGENT (#235). The terminal is listed, so the
 #      liveness sentence used to say "what a live seat looks like" about a seat whose agent had
-#      exited. The occupant read is process state, and `none` on two reads is its own alarm —
-#      which ADDS, so the STALL line and everything else about the tick stay as they were.
+#      exited. The occupant read is process state, and `none` on two reads is its own alarm. It
+#      removes no alarm — the STALL line stays — and replaces only the two calm lines it would
+#      contradict: the listed sentence and, below the stall tier, the `quiet:` line.
 sessions "council-$SN-$FLOOR"
 printf 'none' > "$OCC"; : > "$OCC_CALLS"
 out=$(COUNCIL_STALL_SECS=100 bash "$SCLI" status --alarms-only 2>/dev/null)

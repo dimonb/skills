@@ -1447,9 +1447,10 @@ v_status() {
   # It is raised from the quiet tier's threshold rather than the stall's, so a crash surfaces
   # there instead of fifteen minutes in, and the occupant read is never paid on a moving room.
   #
-  # IT ONLY ADDS. Nothing below reads `$noagent` to remove or soften a line — the stall arm, its
-  # tier and its push run exactly as before — and the one sentence it replaces is `_seat_liveness`'
-  # "listed, which is what a live seat looks like", which on this evidence would contradict it. No
+  # IT NEVER REMOVES OR SOFTENS AN ALARM: the stall arm, its tier and its push run exactly as
+  # before. `$noagent` does gate two calm, non-alarm outputs that this evidence would contradict —
+  # `_seat_liveness`' "listed, which is what a live seat looks like" in the stall arm, and the
+  # block's `quiet:` line ("not a thing that is wrong") — each at its own call site below. No
   # push of its own: the stall push still fires at the stall threshold, and a push for this
   # condition is left to #21. What gates it is the same state that gates the stall alarm — the
   # held time, the floor and the recorded status, all peer-writable (SKILL.md, "The room is not a
