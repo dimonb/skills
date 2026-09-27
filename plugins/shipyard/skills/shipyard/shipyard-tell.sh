@@ -68,6 +68,9 @@ if [ "${1:-}" = "--list" ]; then
   if [ ${#files[@]} -eq 0 ]; then echo "_no directives sent_"; exit 0; fi
   printf '%-24s %-10s %-11s %s\n' ID SLOT DELIVERY TEXT
   for f in "${files[@]}"; do
+    # Only a regular file reaches jq: a FIFO matching the glob would block the listing (#253). The
+    # window between this check and jq's open is the read residual #246 deferred.
+    [ -f "$f" ] || continue
     jq -r '[.id, .slot, (.delivery // "?"), (.text|gsub("\n";" ")|.[0:60])] | @tsv' "$f" 2>/dev/null \
       | awk -F'\t' '{printf "%-24s %-10s %-11s %s\n", $1,$2,$3,$4}'
   done
@@ -133,19 +136,23 @@ if [ -n "$SUBMIT_ONLY" ]; then
   ID="the draft in its box"
 else
   # --- record it first, so the full text survives regardless of delivery ----------
+  # Both files are written by rename (policy_mailbox_write), never opened: every child can write
+  # this directory, and a FIFO at either name — the `.txt` is not even probed — blocked a plain `>`
+  # before anything was typed (#253).
   n=1
   while [ -e "$MB/directive-$SLOT-$n.json" ]; do n=$((n+1)); done
   ID="directive-$SLOT-$n"
   TXT="$MB/$ID.txt"
-  printf '%s\n' "$MSG" >"$TXT"
+  printf '%s\n' "$MSG" | policy_mailbox_write "$TXT"
 
   # Status is deliberately NOT "pending": the escalation viewers count every pending
   # record as an open escalation, and a directive is not one.
-  jq -n --arg id "$ID" --arg slot "$SLOT" --arg text "$MSG" --arg src "$SRC" \
+  REC=$(jq -n --arg id "$ID" --arg slot "$SLOT" --arg text "$MSG" --arg src "$SRC" \
         --arg now "$(shipyard_now)" --arg txt "$TXT" \
     '{id:$id, slot:$slot, kind:"directive", text:$text, in_reply_to:$src,
-      text_file:$txt, created_at:$now, status:"sent", delivery:"unknown"}' \
-    >"$MB/$ID.json" || { echo "error: failed to record the directive" >&2; exit 1; }
+      text_file:$txt, created_at:$now, status:"sent", delivery:"unknown"}') \
+    && printf '%s\n' "$REC" | policy_mailbox_write "$MB/$ID.json" \
+    || { echo "error: failed to record the directive" >&2; exit 1; }
 
   # --- flatten to one line: a literal newline would submit the message early ------
   ONELINE=$(printf '%s' "$MSG" | tr '\n' ' ' | tr -s ' ')

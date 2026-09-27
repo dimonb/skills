@@ -205,11 +205,18 @@ shipyard_esc_file() {
   printf '%s/%s.json' "$mb" "$1"
 }
 
-# In-place jq update of a json file.
+# In-place jq update of a json file in the mailbox.
+#
+# Every file this updates lives in the mailbox every child can write (#253), so neither end may
+# open a path a child could have replaced with a FIFO: the write goes through policy_mailbox_write,
+# which renames over the target instead of opening it, and the read is prefiltered to a regular
+# file. The window between that `[ -f ]` and jq's open is the read residual #246 deferred; a FIFO
+# swapped in there still hangs this call.
 shipyard_json_set() {
-  local f="$1"; shift
-  local tmp="$f.tmp.$$"
-  jq "$@" "$f" >"$tmp" 2>/dev/null && mv "$tmp" "$f" || { rm -f "$tmp"; return 1; }
+  local f="$1" out; shift
+  [ -f "$f" ] || return 1
+  out=$(jq "$@" "$f" 2>/dev/null) || return 1
+  printf '%s\n' "$out" | policy_mailbox_write "$f"
 }
 
 # --- payload input ------------------------------------------------------------

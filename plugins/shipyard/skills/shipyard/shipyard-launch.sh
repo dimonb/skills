@@ -280,7 +280,10 @@ PROTO="$MB/protocol-$SLOT.md"
   echo "If you re-wake yourself via a runtime-specific scheduler (a fresh session with no"
   echo "memory), restate this protocol in the payload, or have the payload read this file:"
   echo "\`$PROTO\`. The mailbox is \`$MB\`; the scripts are in \`$DIR\`."
-} >"$PROTO"
+} | policy_mailbox_write "$PROTO"
+# This file, the launcher and the launch record below all sit in the mailbox every child can
+# write, so each is written by rename (policy_mailbox_write) and never opened with `>`: a FIFO a
+# child left at one of these names — a relaunch of a slot reuses them — blocked the launch (#253).
 
 # --- the launcher --------------------------------------------------------------
 # The child is NOT spawned from this shell — agterm spawns it from the app and tmux
@@ -296,7 +299,7 @@ LAUNCHER="$MB/launch-$SLOT.sh"
   echo
   echo "cd $(shipyard_shq "$CWD") || exit 1"
   shipyard_agent_exec "$AGENT" "$NAME" "$WORKTREE" "$PROTO" "$PROMPT"
-} >"$LAUNCHER"
+} | policy_mailbox_write "$LAUNCHER"
 chmod +x "$LAUNCHER"
 
 ENVSUM=$(shipyard_env_summary "$AGENT")
@@ -336,7 +339,7 @@ jq -n --arg slot "$SLOT" --arg agent "$AGENT" --arg backend "$BACKEND" --arg con
   '{id:("launch-"+$slot), slot:$slot, kind:"launch", status:"info",
     agent:$agent, backend:$backend, container:$container, prompt:$prompt,
     protocol:$proto, launcher:$launcher, env:$env, effort:$effort, cwd:$cwd, started_at:$now}' \
-  >"$MB/launch-$SLOT.json" 2>/dev/null
+  2>/dev/null | policy_mailbox_write "$MB/launch-$SLOT.json" 2>/dev/null
 
 shipyard_note "$SLOT" active
 

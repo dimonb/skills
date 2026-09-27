@@ -27,6 +27,11 @@ FILES=("$MB"/*.json)
 
 declare -a SHOW
 for f in "${FILES[@]}"; do
+  # Only a regular file reaches jq. Every child can write this directory, and a FIFO matching the
+  # glob blocked the first jq below, which hung the escalation monitor for the whole fleet (#253).
+  # The window between this check and the opens below is the read residual #246 deferred: a FIFO
+  # swapped in there still hangs this run.
+  [ -f "$f" ] || continue
   # ALLOW-LIST, not a deny-list. The mailbox holds other records too — `directive`
   # (parent->child, shipyard-tell.sh) and `launch` (what a child was started with) — and a
   # deny-list only knows the kinds that existed when it was written. Anything whose

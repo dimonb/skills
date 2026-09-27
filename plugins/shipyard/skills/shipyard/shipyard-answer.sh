@@ -33,6 +33,9 @@ if [ "${1:-}" = "--list" ]; then
   if [ ${#files[@]} -eq 0 ]; then echo "_no escalations_"; exit 0; fi
   printf '%-22s %-10s %-9s %-9s %s\n' ID SLOT KIND STATUS TEXT
   for f in "${files[@]}"; do
+    # Only a regular file reaches jq: a FIFO matching the glob would block the listing (#253). The
+    # window between this check and jq's open is the read residual #246 deferred.
+    [ -f "$f" ] || continue
     jq -r '[.id, .slot, .kind, .status, (.text|gsub("\n";" ")|.[0:60])] | @tsv' "$f" 2>/dev/null \
       | awk -F'\t' '{printf "%-22s %-10s %-9s %-9s %s\n", $1,$2,$3,$4,$5}'
   done
@@ -119,10 +122,11 @@ elif [ "$ST" = "answered" ]; then
   echo "warning: $ID is already 'answered' — overwriting the answer" >&2
 fi
 
-TMP="$F.tmp.$$"
-jq --arg a "$ANS" --arg now "$(shipyard_now)" \
-  '.answer=$a | .status="answered" | .answered_at=$now' "$F" >"$TMP" \
-  && mv "$TMP" "$F" || { rm -f "$TMP"; echo "error: write failed" >&2; exit 1; }
+# Through shipyard_json_set, which writes by rename: a fixed `$F.tmp.$$` opened with `>` blocked on
+# a FIFO a child planted at that predictable name (#253).
+shipyard_json_set "$F" --arg a "$ANS" --arg now "$(shipyard_now)" \
+  '.answer=$a | .status="answered" | .answered_at=$now' \
+  || { echo "error: write failed" >&2; exit 1; }
 
 SLOT=$(jq -r '.slot // "?"' "$F")
 # The ~5s pickup is true only for a record the child actually POLLS. On a `notice` or a consumed
