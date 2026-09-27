@@ -1141,8 +1141,15 @@ _status_sigfile() {
 #     SELF-REVELATION, not prevention: the delta prints what was sent, to whom and how long ago,
 #     so a forged record reads as a message the operator knows they never sent. An entry dated
 #     before the first firing or in the future is ignored rather than printed as a plausible one.
-# No route found removes the line. The ones that already removed or bypassed the stall arm before
-# this change are unchanged by it and named where the threshold is tested in v_status.
+# One route found still removes the line, and it is a HANG, not a wording: a FIFO put in place of
+# the firing record blocks the record write in open(), so the tick never prints anything. That is
+# not new here: `_stall_escalate`'s mailbox glob and the status signature write can be hung the
+# same way on the same tick, so the class belongs to every writer into the mailbox (including
+# `say`'s record, c_said_file), and it is recorded on #204 for a change that fixes all of them.
+# It reveals itself (the monitor stops returning); it is not
+# prevented. The other record shapes review tried (short, long, CRLF, a directory, mode 000, a
+# symlink) fall back to the full line. The routes that already removed or bypassed the stall arm
+# before this change are unchanged by it and named where the threshold is tested in v_status.
 STALL_ESCALATE_AT=3
 
 # _stall_remedy — the remedy half of the STALL line: printed at the first firing and once more at
@@ -1188,9 +1195,10 @@ _stall_epfile() {
 # _stall_line <alarms|block|""> <floor> <turns> <held-seconds> <open|closed> — the `🛑 STALL`
 # sentence for this tick, in whichever of the three shapes above the episode has reached, and the
 # firing record updated. An empty monitor is a plain `status`: the full line, and no record read or
-# written. ALWAYS prints a line beginning `🛑 STALL`; the caller appends it unconditionally, and
-# that is the whole of the prevention claim above, so do not give this function a path that prints
-# nothing.
+# written. Every path that returns prints a line beginning `🛑 STALL`; the caller appends it
+# unconditionally, and that is the whole of the prevention claim above, so do not give this
+# function a path that returns having printed nothing. (The FIFO hang named above is the one way it
+# does not return at all.)
 _stall_line() {
   local mode="$1" floor="$2" t="$3" held="$4" state="$5" full f now first n=1 esc=0 mins note line
   local r_floor r_t r_state r_first r_n r_esc
@@ -1229,7 +1237,7 @@ _stall_line() {
   else
     line="🛑 STALL (still): $floor — now ${held}s, firing $n, first raised $mins min ago; $note."
   fi
-  printf '%s\t%s\t%s\t%s\t%s\t%s\n' "${floor:--}" "${t:--}" "$state" "$first" "$n" "$esc" >"$f" 2>/dev/null
+  printf '%s\t%s\t%s\t%s\t%s\t%s\n' "${floor:--}" "${t:--}" "$state" "$first" "$n" "$esc" 2>/dev/null >"$f"
   printf '%s' "$line"
 }
 
