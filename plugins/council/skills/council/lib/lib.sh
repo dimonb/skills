@@ -507,7 +507,10 @@ c_round0_positions() {
 # THE DEADLINE ANCHOR IS NOT THIS SET. c_barrier's `min_by(.sent_ms)` still reads
 # c_round0_positions, and `sent_ms` IS a claim the message makes, so one position stamped far in
 # the past trips the 2x backstop with one seat in. That is the peer-written-timestamp class of
-# #165, not this count, and closing it needs evidence from outside the room.
+# #165, not this count, and it is not fixed here. A floor at the roster's `created_ms` would
+# stop the accidental shapes (a harness writing seconds for milliseconds) inside the room; a
+# seat that also rewrites roster.json defeats that floor. Neither the floor nor anything
+# stronger is done here.
 c_round0_authors() {
   c_round0_positions \
     | jq -r '.from | select(length > 0 and (test("[^A-Za-z0-9_-]") | not))' \
