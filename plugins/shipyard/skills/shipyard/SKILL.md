@@ -656,6 +656,15 @@ all land in a shared mailbox at `.git/ship-escalations/` (inside the **common** 
 so the same path resolves from the main worktree and from every `ship-*` worktree; never
 committed).
 
+Every child can write that directory, and a FIFO left at a path a writer opens with `>` blocks the
+writer until something reads it. So shipyard's own scripts write their mailbox files by renaming a
+fresh `mktemp` file over the target (`policy_mailbox_write`, in shared/policy), and their glob
+readers pass only regular files to `jq` (#253). Three routes stay open, named so a quiet monitor is
+read correctly: a reader checks `[ -f ]` and then opens, and a FIFO swapped in between the two
+still hangs it; the shared driver's container pin (`container-<backend>`) is still written with
+`>`; and the Codex continuity watcher still truncates and appends to its log with `>` and `>>`.
+Each shows up as a script that stops returning, not as a wrong answer.
+
 When an escalation arrives:
 
 1. **Surface it to the user right away** — do not sit on it, the child is blocked.

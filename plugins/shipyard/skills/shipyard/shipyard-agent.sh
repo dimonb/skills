@@ -25,7 +25,7 @@
 # THE THIRD ONE FAILS OPEN, which is why it is counted rather than left to be discovered.
 # `shipyard_agent_env_pass_default` returns 1 for a kind it does not know; `shipyard_env_preamble`
 # then returns 1 having emitted NO exports and NO unsets; and its only caller
-# (`shipyard-launch.sh`, inside `{ … } >"$LAUNCHER"`) does not check that status, and no script
+# (`shipyard-launch.sh`, inside `{ … } | policy_mailbox_write "$LAUNCHER"`) does not check that status, and no script
 # here runs `set -e`. So the launch SUCCEEDS and the child is misconfigured rather than refused:
 # it falls back to the profile-default config dir — possibly with no `/ship` at all — and
 # inherits the un-scrubbed per-session variables, the parent's IPC socket and token among them.

@@ -65,6 +65,10 @@ MB=$(shipyard_mailbox_ensure) || { echo "error: not inside a git repository" >&2
 
 answer_of() { # <file> -> prints the answer, exit 0 if answered
   local f="$1" st ans
+  # A regular file only: the entry sits in the mailbox every child can write, and jq opening a FIFO
+  # swapped in for it would block the poll for good (#253). The window between this check and jq's
+  # open is the read residual #246 deferred.
+  [ -f "$f" ] || return 1
   st=$(jq -r '.status // "pending"' "$f" 2>/dev/null)
   [ "$st" = "answered" ] || return 1
   ans=$(jq -r '.answer // ""' "$f" 2>/dev/null)
@@ -116,17 +120,21 @@ SLOT=$(shipyard_slot) || SLOT="unknown"
 # Allocate the next FREE id. Without this loop every escalation writes
 # <slot>-1, silently overwriting the previous record — and the child then
 # polls that same id, so two children on one slot read each other's answers.
+#
+# The `-e` probe steps over a FIFO already sitting at a name, but a plain `>` would still block on
+# one swapped in after the probe, so the entry is written by rename (policy_mailbox_write, #253).
 n=1
 while [ -e "$MB/$SLOT-$n.json" ]; do n=$((n+1)); done
 ID="$SLOT-$n"
 F="$MB/$ID.json"
 
-jq -n --arg id "$ID" --arg slot "$SLOT" --arg kind "$KIND" \
+ENTRY=$(jq -n --arg id "$ID" --arg slot "$SLOT" --arg kind "$KIND" \
       --arg text "$TEXT" --arg ctx "$CONTEXT" --arg now "$(shipyard_now)" \
       --arg wt "$(git rev-parse --show-toplevel 2>/dev/null)" \
   '{id:$id, slot:$slot, kind:$kind, text:$text, context:$ctx,
     worktree:$wt, created_at:$now, status:"pending", notified:false,
-    answer:null, answered_at:null}' >"$F" || {
+    answer:null, answered_at:null}') \
+  && printf '%s\n' "$ENTRY" | policy_mailbox_write "$F" || {
   echo "error: failed to write escalation" >&2; exit 1; }
 
 printf 'ESCALATED:%s\n' "$ID"

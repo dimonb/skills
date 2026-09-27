@@ -788,6 +788,11 @@ slot_pending() {
   [ -d "$mb" ] || { printf 0; return; }
   shopt -s nullglob
   for f in "$mb/$slot-"*.json; do
+    # Only a regular file reaches jq: a FIFO matching the glob blocked it and hung the whole tick
+    # (#253). Skipping it is what this column already does with a record it cannot read; the
+    # teardown hold (slot_unsettled) counts it instead. The window between this check and jq's
+    # open is the read residual #246 deferred.
+    [ -f "$f" ] || continue
     # Same allow-list as shipyard-escalations.sh: only a real escalation kind counts, so a
     # `directive` (parent->child) or any future record type can never inflate this.
     [ "$(jq -r 'if (.kind|IN("question","decision","notice")) then (.status // "pending") else "" end' \
@@ -864,6 +869,9 @@ slot_unsettled_files() {
   { [ -r "$mb" ] && [ -x "$mb" ]; } || { printf '%q (unreadable mailbox directory)\n' "$mb"; return 0; }
   shopt -s nullglob
   for f in "$mb/$slot-"*.json; do
+    # Not a regular file (a FIFO would block jq, #253): listed rather than skipped, matching the
+    # count in slot_unsettled, which holds the teardown on it.
+    [ -f "$f" ] || { printf '%q (not a regular file — cannot be answered)\n' "${f##*/}"; continue; }
     st=$(jq -r '.status // "pending"' "$f" 2>/dev/null) || st=""
     case "$st" in
       done|answered) ;;
@@ -900,6 +908,11 @@ slot_unsettled() {
   { [ -r "$mb" ] && [ -x "$mb" ]; } || { printf 1; return; }
   shopt -s nullglob
   for f in "$mb/$slot-"*.json; do
+    # A FIFO, a directory, anything that is not a regular file: jq opening a FIFO blocked the whole
+    # tick (#253), so it is not opened — and it COUNTS, because this gate fails closed on evidence
+    # it cannot read and a planted FIFO must not be the way to release the hold. The window between
+    # this check and jq's open is the read residual #246 deferred.
+    [ -f "$f" ] || { n=$((n+1)); continue; }
     st=$(jq -r '.status // "pending"' "$f" 2>/dev/null) || st=""
     case "$st" in
       done|answered) ;;
@@ -1345,7 +1358,13 @@ for slot in "${SLOTS[@]}"; do
   :
 done
 
-[ -n "$STALLFILE" ] && [ "${#STALL_ROWS[@]}" -gt 0 ] && printf '%s\n' "${STALL_ROWS[@]}" >"$STALLFILE" 2>/dev/null
+# Every report-* file lives in the mailbox every child can write, so each is written by rename
+# through policy_mailbox_write and never opened with `>`: a FIFO planted at any of them blocked the
+# open, the tick never returned, and the monitor went quiet about the whole fleet (#253). The READS
+# of these files are each `[ -f ]`-checked first; a FIFO swapped in between that check and the open
+# still hangs the tick — the read residual #246 deferred, which reveals itself as a silent monitor.
+[ -n "$STALLFILE" ] && [ "${#STALL_ROWS[@]}" -gt 0 ] \
+  && printf '%s\n' "${STALL_ROWS[@]}" | policy_mailbox_write "$STALLFILE" 2>/dev/null
 # ON EVERY TICK THAT REACHES HERE, unlike the stall table above, and that difference is the
 # whole of "consecutive". (Not literally every tick: the discovery-mode early exit above,
 # taken when the backend enumerated no slots at all, returns before this write and so
@@ -1354,7 +1373,7 @@ done
 # rendered no rows; this one must be TRUNCATED then, or a slot that read `merged`, then `?`,
 # then `merged` would carry its first count across the gap and fire on two readings that were
 # never consecutive — which is precisely the flickering-forge sequence (#142) the
-# consecutive-observation requirement exists to refuse. Written with `:>` first so an empty array still empties the file.
+# consecutive-observation requirement exists to refuse. An empty array writes an empty file, so it still empties it.
 #
 # The consequence, stated rather than left to be discovered: this run replaces the whole file,
 # so an ad-hoc `shipyard-report.sh <one-slot>` run beside a monitor resets the counts of the
@@ -1362,12 +1381,12 @@ done
 # It costs one tick of delay and it errs towards not closing a terminal, which is the side of
 # the trade this mechanism should fail on.
 if [ -n "$MERGEDFILE" ]; then
-  : >"$MERGEDFILE" 2>/dev/null
-  [ "${#MERGED_ROWS[@]}" -gt 0 ] && printf '%s\n' "${MERGED_ROWS[@]}" >"$MERGEDFILE" 2>/dev/null
+  { [ "${#MERGED_ROWS[@]}" -gt 0 ] && printf '%s\n' "${MERGED_ROWS[@]}"; } \
+    | policy_mailbox_write "$MERGEDFILE" 2>/dev/null
 fi
 # Together with the stall table, never before it: a gap may only be consumed by a run that actually
 # restarted the clocks (see the supervision-gap block above).
-[ -n "$TICKFILE" ] && printf '%s\n' "$RUN_EPOCH" >"$TICKFILE" 2>/dev/null
+[ -n "$TICKFILE" ] && printf '%s\n' "$RUN_EPOCH" | policy_mailbox_write "$TICKFILE" 2>/dev/null
 
 # --- the other bypassing blocks are EPISODES too (#239) ---------------------------------
 # #182 was a block that said the same thing every tick and so taught the operator to skim it. #237
@@ -1465,8 +1484,9 @@ for x in ${REAP_REFUSED[@]+"${REAP_REFUSED[@]}"}; do
   episode refused "${x%%|*}" "$(ep_fp "${x#*|}")"; REFUSED_EP+=("$EP_OUT")
 done
 if [ -n "$EPISODEFILE" ]; then
-  : >"$EPISODEFILE" 2>/dev/null
-  [ "${#EP_ROWS[@]}" -gt 0 ] && printf '%s\n' "${EP_ROWS[@]}" >"$EPISODEFILE" 2>/dev/null
+  # By rename, like every report-* write (#253, above the stall table's write).
+  { [ "${#EP_ROWS[@]}" -gt 0 ] && printf '%s\n' "${EP_ROWS[@]}"; } \
+    | policy_mailbox_write "$EPISODEFILE" 2>/dev/null
 fi
 
 TERMINAL=0
@@ -1588,9 +1608,10 @@ if [ "$ONLY_CHANGED" = 1 ] && [ "$TERMINAL" = 0 ] && [ "${#STALLED[@]}" -eq 0 ] 
   if [ -f "$SIGFILE" ] && [ "$NOW_SIG" = "$(cat "$SIGFILE" 2>/dev/null)" ]; then
     exit 1   # still in flight, just nothing new to say
   fi
-  printf '%s\n' "$NOW_SIG" >"$SIGFILE" 2>/dev/null
+  # By rename, like every report-* write (#253, above the stall table's write).
+  printf '%s\n' "$NOW_SIG" | policy_mailbox_write "$SIGFILE" 2>/dev/null
 elif [ -n "$SIGFILE" ]; then
-  printf '%s\n' "${SIG[@]}" >"$SIGFILE" 2>/dev/null
+  printf '%s\n' "${SIG[@]}" | policy_mailbox_write "$SIGFILE" 2>/dev/null
 fi
 
 {
