@@ -21,7 +21,8 @@
 #   ESC-02  policy_dispose + the declared safe-set — access requests are DEFAULT-DENY.
 #   ESC-03  the resume-time guard — a rate-limit park never trusts a stale/past timestamp — plus
 #           policy_park_advice, the same rule said to the person reading a supervisor's report.
-#   ESC-04  policy_mailbox_dir + policy_escalate — the human mailbox, resolvable from any worktree.
+#   ESC-04  policy_mailbox_dir + policy_escalate + policy_mailbox_write — the human mailbox,
+#           resolvable from any worktree, and a write into it that a planted FIFO cannot block.
 #
 # THE SIGNAL VOCABULARY (the driver's AgentSignal `class`, DRV-03), one of:
 #   liveness    working awaiting_turn crashed
@@ -46,7 +47,7 @@
 # the table under /bin/bash, and says there what that assertion is worth where /bin/bash is newer.
 
 # A version marker, bumped when the body changes, so sync + the drift gate stay easy to prove.
-_POLICY_VERSION=3
+_POLICY_VERSION=4
 
 # --- ESC-01 · the disposition table -------------------------------------------------------------
 # policy_dispose <class> [payload] [resume_at] -> one disposition token on stdout, exit 0.
@@ -227,6 +228,47 @@ policy_mailbox_dir() {
   printf '%s/ship-escalations' "$gcd"
 }
 
+# policy_mailbox_write <target> — write stdin to <target>, a path in the mailbox, WITHOUT ever
+# opening <target> itself: stdin goes into a fresh file `mktemp` creates beside it, which is then
+# renamed over <target> with `mv -f`. Returns 0 on success; 1 when the write could not be made, with
+# nothing left behind; 2 on a missing argument.
+#
+# WHY NOT `>`. The mailbox is written by every participant a supervisor watches (council's SKILL.md,
+# "The room is not a trust boundary"), and a plain `>` or `>>` onto a path somebody replaced with a
+# FIFO blocks in open(2) for as long as nothing reads it — so the verb that was writing never
+# returns, and whatever it would have printed or submitted after the write never happens (#246).
+# rename(2) replaces a FIFO, a symlink or a regular file alike and cannot block, and `mktemp`'s
+# exclusive create cannot be handed an existing file. A predictable temp name would not do: the
+# room's own `c_atomic` writes `<target>.tmp.<pid>` with a plain `>`, and a FIFO planted at that
+# name blocks it the same way, which is why this is not that.
+#
+# The temp file is a DOTFILE in the target's own directory: the same directory so the rename is
+# atomic and never crosses a filesystem, and a dotfile so no mailbox glob (`*.json`,
+# `council-*.json`) matches a half-written or leaked one. A write that fails removes it.
+#
+# A target that is a DIRECTORY is refused, because `mv -f <file> <dir>` moves the file INTO it and
+# reports success. That check and the rename are two steps, so a directory put in place between
+# them still receives the file — misplaced, not blocking, and nothing reads it there.
+#
+# WHAT IS LEFT OPEN, named rather than implied: between `mktemp` creating the temp file and the
+# shell re-opening it for the write, a participant watching the directory could swap that name for
+# a FIFO. The name is unpredictable and the window is a few instructions wide, so this needs a
+# watcher racing a random name; the result would be the same self-revealing hang, not a silent
+# one. Reads are not this function's business: a reader's `[ -f ]` check before its open has the
+# same shape of window and is named at each reader.
+#
+# The file is created 0600 by `mktemp`, where a `>` would have honoured the umask. Every reader of
+# the mailbox runs as the user who wrote it.
+policy_mailbox_write() {
+  local target="${1:-}" tmp
+  [ -n "$target" ] || { echo "policy_mailbox_write: missing target" >&2; return 2; }
+  [ -d "$target" ] && return 1
+  tmp=$(mktemp "$(dirname "$target")/.policy-write.XXXXXXXX" 2>/dev/null) || return 1
+  if cat >"$tmp" && mv -f "$tmp" "$target"; then return 0; fi
+  rm -f "$tmp" 2>/dev/null
+  return 1
+}
+
 # _policy_now -> a UTC timestamp in the mailbox's format (matches shipyard_now).
 _policy_now() { date -u +%Y-%m-%dT%H:%M:%SZ; }
 
@@ -261,17 +303,20 @@ policy_escalate() {
   mkdir -p "$mb" || return 1
   # First free integer for this stem. The same benign race shipyard-ask.sh carries: escalations
   # are rare and the stem is per-room/per-slot, so a collision needs two writers on one stem in
-  # the same instant — and the loser would just reuse a number, not clobber, since the winner's
-  # file now exists on the next pass.
+  # the same instant — and then both write one path and the later rename wins, so one of the two
+  # entries is lost. Any later pass sees the survivor and moves on to the next number.
   local n=1
   while [ -e "$mb/$slot-$n.json" ]; do n=$((n + 1)); done
-  local id="$slot-$n" f="$mb/$slot-$n.json" wt
+  local id="$slot-$n" f="$mb/$slot-$n.json" wt body
   wt=$(git rev-parse --show-toplevel 2>/dev/null)
-  jq -n --arg id "$id" --arg slot "$slot" --arg kind "$kind" \
+  body=$(jq -n --arg id "$id" --arg slot "$slot" --arg kind "$kind" \
         --arg text "$text" --arg ctx "$ctx" --arg now "$(_policy_now)" \
         --arg wt "$wt" \
     '{id:$id, slot:$slot, kind:$kind, text:$text, context:$ctx,
       worktree:$wt, created_at:$now, status:"pending", notified:false,
-      answer:null, answered_at:null}' > "$f" || return 1
+      answer:null, answered_at:null}') || return 1
+  # Through policy_mailbox_write, never `>`: a FIFO planted at the next free name would otherwise
+  # block this in open(2), and with it the verb that raised the notice (#246).
+  printf '%s\n' "$body" | policy_mailbox_write "$f" || return 1
   printf '%s' "$f"
 }

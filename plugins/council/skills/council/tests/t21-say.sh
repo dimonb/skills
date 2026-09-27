@@ -70,7 +70,10 @@ ok() { # <label> <expected> <actual>
   if [ "$2" = "$3" ]; then printf '  ok   %s\n' "$1"
   else printf '  FAIL %s\n         expected: [%s]\n         actual:   [%s]\n' "$1" "$2" "$3"; FAILURES=$((FAILURES + 1)); fi
 }
-has() { printf '%s' "$1" | grep -q -- "$2" && printf yes || printf no; }
+# Not `grep -q`: it exits on the first match, the printf takes a SIGPIPE, and under `pipefail` the
+# pipeline's status is then the writer's — so a present string intermittently read as absent, which
+# a loaded `make test` run hit on 2c.
+has() { printf '%s' "$1" | grep -- "$2" >/dev/null && printf yes || printf no; }
 
 # --- the room ---------------------------------------------------------------------------------
 ROOM="$ROOT/demo"; mkdir -p "$ROOM/state"
@@ -85,6 +88,7 @@ SHADOW="$ROOT/shadow"; mkdir -p "$SHADOW/lib"
 PANES="$ROOT/panes"; mkdir -p "$PANES"      # PANES/pre before the send; then PANES/<n>, then PANES/last
 NCALLS="$ROOT/capture-n"                    # how many captures have been taken
 TYPED="$ROOT/typed"                         # what ct_type was handed
+SUBMITTED="$ROOT/submitted"                 # one line per ct_submit that succeeded
 PINS="$ROOT/pins"; mkdir -p "$PINS"         # the container pins drv_pins_elsewhere reads
 SESSIONS="$ROOT/sessions"                   # what ct_sessions prints
 SESSIONS_RC="$ROOT/sessions-rc"             # ...and the status it exits with
@@ -118,7 +122,7 @@ ct_capture() {
   cat "\$f" 2>/dev/null
 }
 ct_type()   { [ "\${FAKE_TYPE_RC:-0}" = 0 ] || return "\$FAKE_TYPE_RC"; printf '%s\n' "\$2" >>"$TYPED"; }
-ct_submit() { [ "\${FAKE_SUBMIT_RC:-0}" = 0 ] || return "\$FAKE_SUBMIT_RC"; return 0; }
+ct_submit() { [ "\${FAKE_SUBMIT_RC:-0}" = 0 ] || return "\$FAKE_SUBMIT_RC"; printf 'x\n' >>"$SUBMITTED"; }
 # The occupant read (#235), one scripted answer per call, so a case can say what the FIRST and the
 # SECOND read return. No file means no verdict, which is what every case above this section gets —
 # the read must change nothing for them. \`-\` is also no verdict, spelled explicitly.
@@ -170,7 +174,7 @@ run_say() { # <peer> <text> -> stdout+stderr, then a last line "rc=<n>"
   out=$( SKILL="$SHADOW" council_say "$1" "$2" 2>&1 ) || rc=$?
   printf '%s\nrc=%s\n' "$out" "$rc"
 }
-reset() { rm -f "$PANES"/* "$NCALLS" "$TYPED" "$SESSIONS" "$SESSIONS_RC" "$PINS"/container-* "$OCC" "$OCC_N"; }
+reset() { rm -f "$PANES"/* "$NCALLS" "$TYPED" "$SUBMITTED" "$SESSIONS" "$SESSIONS_RC" "$PINS"/container-* "$OCC" "$OCC_N"; }
 rc_of() { printf '%s' "$1" | sed -n 's/^rc=//p' | tail -1; }
 
 # ============================================================ 1. IS THERE SUCH A SEAT? (#29)
@@ -443,27 +447,70 @@ reset; : >"$PINS/container-tmux"; pane "$IDLE" pre; pane "$RUNNING" last
 out=$( COUNCIL_SAY_CONFIRM_INTERVAL=0.05 run_say codex 'hello' )
 ok "4c: a small but positive interval is kept" no  "$(has "$out" 'not a usable positive number')"
 
-# ============================================================ 5. WHAT `say` RECORDS (#238)
+# ============================================================ 5. WHAT `say` RECORDS (#238, #246)
 # `status`'s STALL line reads whether anything was sent into the room since an episode's first
 # firing, and this record is its only evidence of that. t28 covers the reader; this covers that the
-# writer writes it, once the text reached a terminal, and not for a send that never got there.
+# writer writes it, once the text reached a terminal, and not for a send that never got there —
+# one FILE per say, `council-said-<room>.<8 random characters>` (c_said_stem), not a shared log.
 printf '\n── the said record ──\n'
 # shellcheck source=../lib/policy.sh
 . "$REAL_SKILL/lib/policy.sh"
 export POLICY_MAILBOX_DIR="$ROOT/mailbox"; rm -rf "$POLICY_MAILBOX_DIR"
-SAID="$POLICY_MAILBOX_DIR/council-said-demo"
+said_files() { ls "$POLICY_MAILBOX_DIR"/council-said-demo.???????? 2>/dev/null | wc -l | tr -d ' '; }
+said_lines() { cat "$POLICY_MAILBOX_DIR"/council-said-demo.???????? 2>/dev/null; }
 reset; : >"$PINS/container-tmux"; pane "$IDLE" pre; pane "$RUNNING" last
 out=$(run_say codex $'look at\tthe prompt\nplease')
-ok "5a: a delivered say is recorded"           1   "$(wc -l <"$SAID" 2>/dev/null | tr -d ' ')"
-ok "5a: ...naming the peer"                    codex "$(cut -f2 "$SAID" 2>/dev/null)"
-ok "5a: ...with the text flattened to one field" "look at the prompt please" "$(cut -f3 "$SAID" 2>/dev/null)"
-ok "5a: ...stamped with an epoch"              yes "$(cut -f1 "$SAID" | grep -qE '^[0-9]+$' && printf yes || printf no)"
+ok "5a: a delivered say is recorded"           1   "$(said_files)"
+ok "5a: ...as one line"                        1   "$(said_lines | wc -l | tr -d ' ')"
+ok "5a: ...naming the peer"                    codex "$(said_lines | cut -f2)"
+ok "5a: ...with the text flattened to one field" "look at the prompt please" "$(said_lines | cut -f3)"
+ok "5a: ...stamped with an epoch"              yes "$(said_lines | cut -f1 | grep -qE '^[0-9]+$' && printf yes || printf no)"
+ok "5a: ...and no temp file left behind"       0   "$(ls -A "$POLICY_MAILBOX_DIR" | grep -c '^\.')"
 reset; : >"$PINS/container-tmux"; pane "$IDLE" pre; pane "$IDLE" last
 FAKE_SUBMIT_RC=1 run_say codex 'second' >/dev/null
-ok "5b: typed but unsubmitted is still recorded" 2 "$(wc -l <"$SAID" 2>/dev/null | tr -d ' ')"
+ok "5b: typed but unsubmitted is still recorded, in a file of its own" 2 "$(said_files)"
 reset; : >"$PINS/container-tmux"
 FAKE_TYPE_RC=1 run_say codex 'third' >/dev/null
-ok "5c: a send that reached no terminal is not" 2 "$(wc -l <"$SAID" 2>/dev/null | tr -d ' ')"
+ok "5c: a send that reached no terminal is not" 2 "$(said_files)"
+
+# A FIFO in the mailbox must not stand between the text and its submit (#246). The old record was
+# one predictable path appended with `>>` between ct_type and ct_submit, so a FIFO planted there
+# left the text typed, unsubmitted, and `say` never returning. Each case runs `say` under a bound
+# and asserts it RETURNED and that the submit HAPPENED — the second is the one that matters, since
+# a say that returns having skipped its submit is the defect in a quieter form. MUTATION CHECK, run
+# by hand: put back `>>"$said"` on a fixed path in council_say and 5d reports HUNG.
+bounded_say() { # <secs> <peer> <text> -> run_say's output, or HUNG
+  local secs="$1" pid i=0 f bout="$ROOT/bounded.out"; shift
+  run_say "$@" >"$bout" 2>&1 & pid=$!
+  while kill -0 "$pid" 2>/dev/null; do
+    if [ "$i" -ge $(( secs * 10 )) ]; then
+      kill "$pid" 2>/dev/null
+      # The descendant blocked in open(2) is out of reach of the kill; opening the FIFO read-write
+      # pairs with it so it finishes rather than outliving the suite.
+      for f in "$POLICY_MAILBOX_DIR"/* "$POLICY_MAILBOX_DIR"; do [ -p "$f" ] && : <>"$f"; done
+      wait "$pid" 2>/dev/null; printf 'HUNG'; return 0
+    fi
+    sleep 0.1; i=$((i + 1))
+  done
+  wait "$pid"; cat "$bout"
+}
+submits() { wc -l <"$SUBMITTED" 2>/dev/null | tr -d ' ' || printf 0; }
+reset; : >"$PINS/container-tmux"; pane "$IDLE" pre; pane "$RUNNING" last
+rm -f "$POLICY_MAILBOX_DIR/council-said-demo"; mkfifo "$POLICY_MAILBOX_DIR/council-said-demo"
+out=$(bounded_say 20 codex 'past the fifo')
+ok "5d: a FIFO at the old record path: say returns" no "$(has "$out" HUNG)"
+ok "5d: ...having submitted"                   1   "$(submits)"
+ok "5d: ...and still recorded the send"        3   "$(said_files)"
+rm -f "$POLICY_MAILBOX_DIR/council-said-demo"
+# A mailbox that is itself a FIFO: nothing can be recorded, and the submit must happen anyway.
+reset; : >"$PINS/container-tmux"; pane "$IDLE" pre; pane "$RUNNING" last
+MB_SAVED="$POLICY_MAILBOX_DIR"; export POLICY_MAILBOX_DIR="$ROOT/mailbox-fifo"
+rm -rf "$POLICY_MAILBOX_DIR"; mkfifo "$POLICY_MAILBOX_DIR"
+out=$(bounded_say 20 codex 'no mailbox at all')
+ok "5e: a FIFO for the mailbox: say returns"   no  "$(has "$out" HUNG)"
+ok "5e: ...having submitted"                   1   "$(submits)"
+ok "5e: ...with its ordinary verdict"          0   "$(rc_of "$out")"
+rm -f "$POLICY_MAILBOX_DIR"; export POLICY_MAILBOX_DIR="$MB_SAVED"
 
 # ============================================================ 6. IS THE AGENT THERE? (#235)
 # A terminal outlives the agent launched into it, and `say` then typed `[supervisor] …` into a
@@ -479,7 +526,7 @@ ok "6a: ...saying the agent is not running"    yes "$(has "$out" 'agent launched
 ok "6a: ...and pointing at relaunch"           yes "$(has "$out" 'council.sh relaunch codex')"
 ok "6a: ...having read it twice"               2   "$(cat "$OCC_N" 2>/dev/null)"
 ok "6a: ...and typed nothing"                  ""  "$(cat "$TYPED" 2>/dev/null)"
-ok "6a: ...and recorded no send"               2   "$(wc -l <"$SAID" 2>/dev/null | tr -d ' ')"
+ok "6a: ...and recorded no send"               3   "$(said_files)"
 # One `none` is a launch caught before its `exec`; the second read is what keeps a seat that is
 # starting up from being refused.
 reset; : >"$PINS/container-tmux"; pane "$IDLE" pre; pane "$RUNNING" last

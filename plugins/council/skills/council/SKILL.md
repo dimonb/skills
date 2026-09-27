@@ -588,8 +588,10 @@ decided (#204), and this is what was decided:
 The routes that stay open after the rest of #204's sequence has landed, named so a green gate is
 not read as covering them:
 
-* **FIFO read TOCTOU** — a glob reader checks `[ -f ]` and then opens, and a participant can swap
-  the file for a FIFO between the two;
+* **FIFO read TOCTOU** — a mailbox reader checks `[ -f ]` and then opens, and a participant can
+  swap the file for a FIFO between the two. The writes are closed (#246: each renames a fresh
+  `mktemp` file over its target, so none opens a planted path), and a FIFO that is already in
+  place is skipped; only the swap inside that window still hangs the verb, which is self-revealing;
 * **coordinated evidence edits** — a participant that rewrites the room state and the mailbox
   record together, consistently, defeats every cross-check between them;
 * **backend manipulation** — anything that can reach the terminal backend can create, rename or
@@ -977,10 +979,10 @@ fired on the same stall, and a plain `status` has no memory and always prints it
 
 This changes only how the line **reads**. It prints on every tick the stall holds, under
 `--only-changed` and `--alarms-only` alike, and the push is unchanged. Both new records live in the
-shared mailbox — `council-stall-<alarms|block>-<room>` for the count, `council-said-<room>` for what
-`say` sent — and, like everything else there, a seat can write them: a forged count moves the
-wording, a forged `say` withholds the UNANSWERED form but is **printed** as a message sent, so check
-that you sent what it says you sent. `STALL_ESCALATE_AT` in `lib/verbs.sh` carries the reasoning.
+shared mailbox — `council-stall-<alarms|block>-<room>` for the count, one
+`council-said-<room>.<8 random characters>` file per `say` for what it sent — and, like everything
+else there, a seat can write them: a forged count moves the wording, a forged `say` withholds the
+UNANSWERED form but is **printed** as a message sent, so check that you sent what it says you sent. `STALL_ESCALATE_AT` in `lib/verbs.sh` carries the reasoning.
 
 The early line exists because the wedges that actually cost rooms were **323s and 344s**, well
 under the 900s threshold, so nothing fired for either. It was first written as an alarm, and that

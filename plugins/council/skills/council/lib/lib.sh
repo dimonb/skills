@@ -1494,9 +1494,20 @@ c_conflicts() {
   c_canon | jq -s '[.[] | select(.hand == false and .turn != null and (.valid | not))] | length'
 }
 
-# c_said_file — where `say` records that something was sent into this room, for the STALL line's
-# "sent since the first firing" note in v_status (#238). One line per `say` that got its text into
-# a seat's terminal, appended: `<epoch>\t<peer>\t<excerpt>`.
+# c_said_stem — the path stem of the records `say` leaves that something was sent into this room,
+# for the STALL line's "sent since the first firing" note in v_status (#238). One FILE per `say`
+# that got its text into a seat's terminal, named `<stem>.XXXXXXXX` by `mktemp` and holding one
+# line, `<epoch>\t<peer>\t<excerpt>`. The reader takes the set: `<stem>.????????`, exactly eight
+# characters after the dot, which is what keeps a sibling room's records out of it — a room whose
+# name extends this one's by `.<anything>` leaves at least nine characters there, never eight.
+#
+# ONE FILE PER SAY, NOT A SHARED APPEND LOG, and that is #246. The log was one predictable path
+# opened with `>>` between typing the text and submitting it, so a FIFO planted at that path left
+# the text typed, unsubmitted, and `say` never returning. A fresh name from `mktemp` cannot be
+# handed an existing file, the content arrives by rename (`policy_mailbox_write`), and `say`
+# treats the whole record as best-effort. Records from before this change — the single
+# `council-said-<room>` file — are not read; the cost is one "nothing sent" reading across the
+# upgrade, the louder direction.
 #
 # THIS IS THE RECORD THAT COUNTS AS "SENT", and it is `say` rather than anything in the room log
 # because a supervisor has no seat: it reads the room without `--me` and reaches a participant
@@ -1506,12 +1517,13 @@ c_conflicts() {
 #
 # In the shared mailbox, beside the status signature `_status_sigfile` keeps there, for the same
 # reason that file lives there — and with the same caveat, because nothing confines a participant
-# (SKILL.md, "The room is not a trust boundary"): a seat can write this file too, and any caller
+# (SKILL.md, "The room is not a trust boundary"): a seat can write these files too, and any caller
 # can run `say`. What either buys is stated at the reader, `_stall_sent_note` in verbs.sh. Fails
-# when the mailbox cannot be resolved, and then nothing is recorded or read.
-c_said_file() {
+# when the mailbox cannot be resolved or written, and then nothing is recorded or read.
+c_said_stem() {
   local mb
   command -v policy_mailbox_dir >/dev/null 2>&1 || return 1
+  command -v policy_mailbox_write >/dev/null 2>&1 || return 1
   mb=$(policy_mailbox_dir) || return 1
   mkdir -p "$mb" 2>/dev/null || return 1
   printf '%s/council-said-%s' "$mb" "$(basename "$ROOM")"

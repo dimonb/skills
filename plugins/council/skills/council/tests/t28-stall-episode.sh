@@ -74,7 +74,7 @@ R="$COUNCIL_TEST_ROOT/t28b"; stalled_room "$R"
 g1=$(bash "$CLI" status --alarms-only 2>/dev/null)
 # What `say` writes (t21 section 5 covers that it does); written directly here so this file does
 # not need a terminal backend.
-printf "%s\t$F\tanswer the prompt in place\n" "$(date +%s)" >>"$MB/council-said-t28b"
+printf "%s\t$F\tanswer the prompt in place\n" "$(date +%s)" >"$MB/council-said-t28b.aaaaaaaa"
 g2=$(bash "$CLI" status --alarms-only 2>/dev/null)
 g3=$(bash "$CLI" status --alarms-only 2>/dev/null)
 ok "sent: firing 2 names what was sent"           1 "$(cnt "$g2" "sent since: say to $F 0 min ago — \"answer the prompt in place\"")"
@@ -83,7 +83,7 @@ ok "sent: ...but still printed, as its delta"     1 "$(cnt "$g3" "🛑 STALL (st
 # A record from BEFORE the first firing is not an answer to this stall, and one from the future is
 # not a plausible time — both are ignored rather than read as "sent".
 R="$COUNCIL_TEST_ROOT/t28c"; stalled_room "$R"
-printf "%s\t$F\told\n%s\t$F\tfuture\n" "$(( $(date +%s) - 600 ))" "$(( $(date +%s) + 600 ))" >"$MB/council-said-t28c"
+printf "%s\t$F\told\n%s\t$F\tfuture\n" "$(( $(date +%s) - 600 ))" "$(( $(date +%s) + 600 ))" >"$MB/council-said-t28c.aaaaaaaa"
 for i in 1 2 3; do h=$(bash "$CLI" status --alarms-only 2>/dev/null); done
 ok "stale and future-dated says are ignored"      1 "$(cnt "$h" "🛑 STALL UNANSWERED: $F")"
 
@@ -151,7 +151,7 @@ done
 # A forged say is self-revealing: it is printed as a message the operator can check they sent.
 R="$COUNCIL_TEST_ROOT/t28i"; stalled_room "$R"
 bash "$CLI" status --alarms-only >/dev/null 2>&1
-printf "%s\t$F\t\033[2Jforged\n" "$(date +%s)" >>"$MB/council-said-t28i"
+printf "%s\t$F\t\033[2Jforged\n" "$(date +%s)" >"$MB/council-said-t28i.aaaaaaaa"
 s=$(bash "$CLI" status --alarms-only 2>/dev/null)
 ok "a forged say is printed, not hidden"          1 "$(cnt "$s" "sent since: say to $F 0 min ago — \"\[2Jforged\"")"
 ok "...with its control characters stripped"      0 "$(printf '%s' "$s" | LC_ALL=C grep -c "$(printf '\033')")"
