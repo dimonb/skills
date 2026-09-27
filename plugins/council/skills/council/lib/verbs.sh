@@ -1079,7 +1079,7 @@ EOF
 # _floor_no_agent <peer> — prints the backend's name and succeeds when this seat's terminal is up
 # but the agent launched into it is not (#235): `c_seat_no_agent`'s two `none` reads. Fails, with
 # nothing printed, on every other answer — `agent`, no verdict, no pin, no term.sh — and a failure
-# is never evidence the seat is alive (lib.sh says why), so v_status only ever ADDS on success.
+# is never evidence the seat is alive (lib.sh says why), so v_status removes nothing on a failure.
 # The same pin guard and on-demand source as `_seat_liveness`, for the same reasons.
 _floor_no_agent() { # <peer>
   local peer="${1:-}" f pinned=0
