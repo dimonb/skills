@@ -70,7 +70,10 @@ ok() { # <label> <expected> <actual>
   if [ "$2" = "$3" ]; then printf '  ok   %s\n' "$1"
   else printf '  FAIL %s\n         expected: [%s]\n         actual:   [%s]\n' "$1" "$2" "$3"; FAILURES=$((FAILURES + 1)); fi
 }
-has() { printf '%s' "$1" | grep -q -- "$2" && printf yes || printf no; }
+# Not `grep -q`: it exits on the first match, the printf takes a SIGPIPE, and under `pipefail` the
+# pipeline's status is then the writer's — so a present string intermittently read as absent, which
+# a loaded `make test` run hit on 2c.
+has() { printf '%s' "$1" | grep -- "$2" >/dev/null && printf yes || printf no; }
 
 # --- the room ---------------------------------------------------------------------------------
 ROOM="$ROOT/demo"; mkdir -p "$ROOM/state"
