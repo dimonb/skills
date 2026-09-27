@@ -351,6 +351,66 @@ for act in propose msg notice clarify object support concede amend withdraw skip
 done
 [ "$agree_ok" = 1 ] && ok "send-acceptance and barrier-counting agree on every act in the table"
 
-rm -rf "$R1" "$R2" "$R3" "$R4" "$R5" "$R6"
+# ------------------------------- 6. the barrier counts SEATS, not documents (#179)
+echo "--- one lane holding several positions counts as one seat ---"
+# `posted` used to be the LINE count of c_round0_positions, which is documents. A seat may write
+# into its own lane, so three positions there closed a three-seat round on one voice, and the
+# barrier released every other seat's withheld position to it. Nothing above could see it: no
+# other fixture writes more than one round-0 document into a lane, so documents and seats agree
+# everywhere else in this suite.
+#
+# b posts for real and c never does. If a's stuffed lane counted as three, the round would close
+# and a would read b; counted as one seat it is 2/3 and must hold.
+R7="$COUNCIL_TEST_ROOT/t25h"; newroom "$R7" 600000 2 a b c
+COUNCIL_ME=b bash "$CLI" send --act propose "SECRET-B-POSITION" >/dev/null
+now=$(now_ms)
+raw_round0 a 1 5 propose "$now" "position a, once"
+raw_round0 a 2 6 propose "$now" "position a, twice"
+raw_round0 a 3 7 propose "$now" "position a, three times"
+[ "$(barrier a)" = open ] && ok "three positions in one lane do not close a three-seat round" \
+                          || bad "one lane closed the round alone: the barrier counted documents"
+seen=$(COUNCIL_ME=a bash "$CLI" transcript 2>/dev/null | grep -c "SECRET-B-POSITION" || true)
+[ "$seen" = 0 ] && ok "...so b's position is still withheld from the seat that stuffed its lane" \
+                || bad "a stuffed lane released b's position to a"
+# The display and the barrier must agree about the same fact: before #179 this line read
+# `posted 3/3` next to a waiting list that still named c.
+st=$(COUNCIL_ME=a bash "$CLI" status 2>&1 || true)
+case "$st" in *"posted 2/3, waiting for c"*) ok "status counts seats and names the one still owed" ;;
+  *) bad "status did not report 'posted 2/3, waiting for c'; it said: $st" ;; esac
+fl=$(COUNCIL_ME=a bash -c '. '"$SKILL"'/lib/lib.sh; . '"$SKILL"'/lib/verbs.sh; v_floor' 2>&1 || true)
+case "$fl" in *"posted=2/3 waiting=c "*) ok "v_floor counts seats too" ;;
+  *) bad "v_floor did not report 'posted=2/3 waiting=c'; it said: $fl" ;; esac
+
+# A lane directory for a name that is not on the roster counts for nobody.
+mkdir -p "$R7/lane/z"
+raw_round0 z 1 5 propose "$(now_ms)" "position from a non-participant"
+[ "$(barrier a)" = open ] && ok "a position in a lane for a non-participant does not count" \
+                          || bad "a non-participant's lane closed the round"
+
+# THE POSITIVE CONTROL: the one real seat still owed closes the round, and only then does the
+# withheld position reach a.
+COUNCIL_ME=c bash "$CLI" send --act propose "position c" >/dev/null
+[ "$(barrier a)" = closed ] && ok "...and the last real seat closes it" \
+                            || bad "the round did not close on the third seat — the checks above prove nothing"
+seen=$(COUNCIL_ME=a bash "$CLI" transcript 2>/dev/null | grep -c "SECRET-B-POSITION" || true)
+[ "$seen" -ge 1 ] && ok "...and then b's position is released to a" \
+                  || bad "b's position never reaches a, so the withholding check above proves nothing"
+
+# THE QUORUM PATH READS THE SAME COUNT. Past the deadline with quorum 2, one seat's two
+# documents must not be a quorum; the anchor is old enough to be past the deadline and young
+# enough to stay inside the 2x backstop, so only `posted` decides.
+R8="$COUNCIL_TEST_ROOT/t25i"; newroom "$R8" 600000 2 a b c
+old=$(( $(now_ms) - 700000 ))
+raw_round0 a 1 5 propose "$old" "position a, once"
+raw_round0 a 2 6 propose "$old" "position a, again"
+[ "$(barrier b)" = open ] && ok "one seat's two positions are not a quorum past the deadline" \
+                          || bad "one lane met the quorum alone past the deadline"
+# THE CONTROL: a second SEAT at the same age is a quorum, or the fixture's clock never reaches
+# the deadline and the assertion above is vacuous.
+raw_round0 b 1 5 propose "$old" "position b"
+[ "$(barrier b)" = closed ] && ok "...while two seats past the deadline are" \
+                            || bad "two seats past the deadline did not close the round — the check above proves nothing"
+
+rm -rf "$R1" "$R2" "$R3" "$R4" "$R5" "$R6" "$R7" "$R8"
 [ "$fail" = 0 ] && echo "t25 PASS" || echo "t25 FAIL"
 exit $fail

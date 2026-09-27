@@ -471,9 +471,10 @@ C_OPENING_ACT=propose
 
 # COUNTING. Positions posted in the opening round, as JSON lines.
 #
-# Readers: c_barrier's `posted k/N` and its `min_by(.sent_ms)` deadline anchor, c_posted_round0's
-# "have I spoken", and the `posted=`/`waiting=` lines in v_floor and v_status. Every one of them
-# asks how many POSITIONS are in, so every one of them wants the narrow answer.
+# Readers: c_round0_authors (which the `posted k/N` counts and the `waiting=` lists in v_floor and
+# v_status go through), c_barrier's `min_by(.sent_ms)` deadline anchor, and c_posted_round0's
+# "have I spoken". Every one of them asks about POSITIONS, so every one of them wants the narrow
+# answer. Its lines are DOCUMENTS, never seats: counting them is the #179 bug.
 #
 # It used to select on `.round == 0` alone, so the barrier counted by field and never consulted
 # the act: a seat whose first message was the literal string `--help`, sent as the default `msg`,
@@ -481,6 +482,27 @@ C_OPENING_ACT=propose
 # positions.
 c_round0_positions() {
   { c_all || true; } | jq -c --arg a "$C_OPENING_ACT" 'select(.round == 0 and .act == $a)'
+}
+
+# COUNTING, by SEAT. The participants that have posted an opening position, one name per line.
+#
+# Readers: c_barrier's `posted` (both the everyone-is-in test and the quorum test), and the
+# `posted` count and `waiting=` list in v_floor and v_status. The barrier asks whether N SEATS have spoken, and
+# c_round0_positions returns DOCUMENTS: counting its lines let one seat write several positions
+# into its own lane -- which it may, by design -- and close the round alone, releasing every
+# other seat's withheld position to it (#179). A harness or a restarted seat re-emitting its
+# opening does the same by accident.
+#
+# `.from` is not a claim the message makes: c_all derives it from the lane directory the
+# document was read at, so deduplicating on it cannot be forged from inside a message. It is
+# also intersected with the roster's `.order`, so a lane directory for a name that is not a
+# participant counts for nobody. Both narrow the count, which is the safe direction for this
+# accessor (see the COUNTING/WITHHOLDING table above). Each waiting= list is c_peers minus this
+# output (sorted, as comm needs), so the count and the list are two views of ONE set rather than
+# of a set and a document stream -- before #179 a stuffed lane showed `posted 3/3` beside a
+# waiting= list still naming seats.
+c_round0_authors() {
+  c_round0_positions | jq -r .from | sort -u | grep -Fx -f <(c_peers) || true
 }
 
 # WITHHOLDING. Any round-0 message, whatever its act — what the barrier is holding back.
@@ -554,7 +576,7 @@ c_barrier() {
   # c_visible does not depend on which way it went: it refuses to trust this function's answer
   # whenever the file is not one JSON object, and withholds. Its header carries that.
   [ "$n" -gt 0 ] || { printf 'open'; return; }
-  posted=$(c_round0_positions | wc -l | tr -d ' ')
+  posted=$(c_round0_authors | wc -l | tr -d ' ')
   [ "$posted" -ge "$n" ] && { printf 'closed'; return; }
   # A quorum below 2 is not a quorum: at N=2 the N-1 default would let ONE position plus a
   # deadline close the round, which is the barrier deleting itself. (Raised, blind and

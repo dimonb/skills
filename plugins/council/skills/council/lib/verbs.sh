@@ -155,8 +155,8 @@ v_floor() {
   local t f age
   if c_round_open; then
     printf 'round=0 (barrier) posted=%s/%s waiting=%s conflicts=%s\n' \
-      "$(c_round0_positions | wc -l | tr -d ' ')" "$(c_npeers)" \
-      "$(comm -23 <(c_peers | sort) <(c_round0_positions | jq -r .from | sort) | paste -sd, -)" \
+      "$(c_round0_authors | wc -l | tr -d ' ')" "$(c_npeers)" \
+      "$(comm -23 <(c_peers | sort) <(c_round0_authors) | paste -sd, -)" \
       "$(c_conflicts)"
     return 0
   fi
@@ -1300,8 +1300,8 @@ v_status() {
   c_round_open && floor="— (barrier)"
   if c_round_open; then
     round_line=$(printf 'OPEN ROUND: posted %s/%s, waiting for %s — nobody sees their positions yet\n' \
-      "$(c_round0_positions | wc -l | tr -d ' ')" "$(c_npeers)" \
-      "$(comm -23 <(c_peers | sort) <(c_round0_positions | jq -r .from | sort) | paste -sd, -)")
+      "$(c_round0_authors | wc -l | tr -d ' ')" "$(c_npeers)" \
+      "$(comm -23 <(c_peers | sort) <(c_round0_authors) | paste -sd, -)")
   fi
   case "$verd" in
     stuck) alarms="$alarms 🛑 STUCK: a whole lap and nothing new was said, while objections are open" ;;
