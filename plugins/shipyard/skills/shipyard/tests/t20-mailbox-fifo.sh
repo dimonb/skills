@@ -17,15 +17,18 @@
 #     `[ -f ]` and its open. A race inside a few instructions that no fixture can hit on purpose;
 #     it is named at each reader and in SKILL.md.
 #   * `shipyard-ask.sh`'s entry write: its `-e` probe steps over a FIFO already at the next free
-#     name (case 6 pins that), so only a FIFO swapped in after the probe reaches the write, and no
-#     fixture can time it. Likewise `shipyard-answer.sh`'s old temp name was `$F.tmp.$$`, which a
-#     test cannot predict. Both writes now go through policy_mailbox_write, covered directly by
+#     name (case 6 pins that), so only a FIFO swapped in after the probe reaches the write, and this
+#     file plants none there. `shipyard-answer.sh`'s old temp name was `$F.tmp.$$`, which this
+#     file does not predict. Both writes now go through policy_mailbox_write, covered directly by
 #     shared/policy's t-policy.
 #   * `slot_unsettled` / `slot_unsettled_files` (the teardown hold) run only on the merged-slot
 #     path; their non-regular-file arm is not driven here.
 #   * the `[ -f ]` in ask's `answer_of` and in `shipyard_json_set`: each is reached only by a FIFO
 #     swapped in over a record that was regular a moment earlier (during `--wait`'s sleep, or
-#     between a caller's own check and the update), which no fixture can time.
+#     between a caller's own check and the update). Not driven here, though it could be: the
+#     shadowed `tmux capture-pane` runs inside tell's confirm loop, after its record is written and
+#     before the delivery update, so it could swap the record for a FIFO; a shadowed `sleep` would
+#     do the same for `--wait`.
 #   * the launcher's writes (protocol, launcher, launch record): no test drives
 #     shipyard-launch.sh end to end (t9 says the same), so they are covered only by reading.
 #
