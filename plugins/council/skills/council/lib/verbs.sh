@@ -1143,12 +1143,14 @@ _status_sigfile() {
 #     before the first firing or in the future is ignored rather than printed as a plausible one.
 # One route found still removes the line, and it is a HANG, not a wording: a FIFO put in place of
 # the firing record blocks the record write in open(), so the tick never prints anything. That is
-# not new here: `_stall_escalate`'s mailbox glob and the status signature write can be hung the
-# same way on the same tick, so the class belongs to every writer into the mailbox (including
-# `say`'s record, c_said_file), and it is recorded on #204 for a change that fixes all of them.
-# It reveals itself (the monitor stops returning); it is not
-# prevented. The other record shapes review tried (short, long, CRLF, a directory, mode 000, a
-# symlink) fall back to the full line. The routes that already removed or bypassed the stall arm
+# not new here: `_stall_escalate`'s jq READ over the mailbox glob hangs the same way on the same
+# tick, and so does the status signature write on an `--only-changed` tick. The class is council's
+# mailbox access through a plain `>`, `>>` or glob read — those two, this record, and `say`'s
+# c_said_file — and it is recorded on #204 for a change that fixes them together. (Shipyard's
+# continuity records are written by rename and are not in it.) It reveals itself, because the
+# monitor stops returning; it is not prevented. The other record shapes review tried (short, long,
+# CRLF, a directory, mode 000, a dangling symlink) fall back to the full line; a symlink to a
+# record-shaped file is read through, like any forged record. The routes that already removed or bypassed the stall arm
 # before this change are unchanged by it and named where the threshold is tested in v_status.
 STALL_ESCALATE_AT=3
 
