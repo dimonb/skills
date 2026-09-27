@@ -1372,7 +1372,10 @@ c_last_turn_ms() {
 #
 # Where it answers 0 that means "this room has not moved yet, and I cannot tell you how long that
 # has been" rather than "held for no time", and protocol/_channel.md says exactly that to
-# participants, handing the waiting seat its own wait to time the holder with instead.
+# participants, handing the waiting seat its own wait to time the holder with instead. It answers
+# 0 as well when the anchor is stamped in the FUTURE, where the honest reading is "cannot say" —
+# the same thing c_room_age_s means by printing nothing for that shape. The two cases need opposite
+# things from a supervisor, and c_floor_anchor_ahead_s is what tells them apart (#165).
 #
 # ONE CONSEQUENCE FOR THE SUPERVISOR, stated because it is easy to miss from here: in token mode
 # this function now makes a never-moved room raise v_status's STALL, which it never did before.

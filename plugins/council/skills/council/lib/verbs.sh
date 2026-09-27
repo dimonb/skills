@@ -1655,7 +1655,7 @@ v_status() {
     # to hide a stalled floor behind one is to raise a 🛑 about the room's clock. WHAT IT DOES NOT:
     # a stamp less than C_CLOCK_SKEW_MS ahead still buys that long of reading held 0, a stamp kept
     # RECENT by rewriting it still reads as a live floor, and a forged closure still stops the push.
-    # All three are room state, which is #204's question rather than this arm's.
+    # Each is room state, which is #204's question rather than this arm's.
     alarms="$alarms 🛑 STALL: the floor's held time cannot be read — the instant it is timed from is stamped ${ahead}s in the future, so one seat's clock is wrong or a stamp was written forward; check every terminal rather than trusting any figure"
     _stall_escalate "$floor" "$t" "$held" clock
   elif [ "$held" -gt "${COUNCIL_STALL_WARN_SECS:-300}" ] && [ -z "$(c_recorded_status)" ] \
