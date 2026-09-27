@@ -212,6 +212,48 @@ fd=$(cd "$REPO" && policy_escalate decision room-abc "approve X?" "option A vs B
 ok "a decision with context is written" decision "$(jq -r '.kind' "$fd")"
 ok "the decision's context is carried"  "option A vs B; I recommend A" "$(jq -r '.context' "$fd")"
 
+# --- policy_mailbox_write: a write a planted FIFO cannot block (#246) -------------------------
+# Every target shape a participant could leave in the mailbox, and the three ways the write can
+# fail. The FIFO case runs under a bound, because the defect it guards is a write that never
+# returns: an unbounded assertion would hang this suite rather than fail it.
+printf '\n── mailbox write ──\n'
+W="$TMP/mbw"; mkdir -p "$W"
+mbw_rc() { local rc=0; printf '%s' "$2" | policy_mailbox_write "$1" 2>/dev/null || rc=$?; printf '%s' "$rc"; }
+dotfiles() { ls -A "$W" | grep -c '^\.'; }
+ok "a new target is written"              0     "$(mbw_rc "$W/new" 'line one')"
+ok "...byte for byte"                     "line one" "$(cat "$W/new")"
+ok "...leaving no temp file"              0     "$(dotfiles)"
+ok "an existing file is replaced"         0     "$(mbw_rc "$W/new" 'line two')"
+ok "...with the new content"              "line two" "$(cat "$W/new")"
+mkfifo "$W/fifo"
+( printf 'past it' | policy_mailbox_write "$W/fifo"; echo "rc=$?" >"$W/fifo.rc" ) & mbw_pid=$!
+i=0; while kill -0 "$mbw_pid" 2>/dev/null && [ "$i" -lt 100 ]; do sleep 0.1; i=$((i + 1)); done
+if kill -0 "$mbw_pid" 2>/dev/null; then
+  kill "$mbw_pid" 2>/dev/null; [ -p "$W/fifo" ] && : <>"$W/fifo"
+fi
+wait "$mbw_pid" 2>/dev/null
+ok "a FIFO target does not block the write" "rc=0" "$(cat "$W/fifo.rc" 2>/dev/null || printf HUNG)"
+ok "...and is replaced by a regular file" yes   "$([ -f "$W/fifo" ] && [ ! -p "$W/fifo" ] && echo yes || echo no)"
+ok "...holding what was written"          "past it" "$(cat "$W/fifo" 2>/dev/null)"
+printf 'untouched' >"$W/dest"; ln -s "$W/dest" "$W/link"
+ok "a symlink target is replaced"         0     "$(mbw_rc "$W/link" 'via rename')"
+ok "...as the link itself, not written through" "untouched" "$(cat "$W/dest")"
+ok "...which is now a regular file"       yes   "$([ -f "$W/link" ] && [ ! -L "$W/link" ] && echo yes || echo no)"
+mkdir "$W/adir"
+ok "a directory target is refused"        1     "$(mbw_rc "$W/adir" 'nope')"
+ok "...and nothing is moved into it"      0     "$(ls -A "$W/adir" | wc -l | tr -d ' ')"
+ok "a target in a missing directory fails" 1    "$(mbw_rc "$W/no/such/dir/f" 'nope')"
+mkdir "$W/ro"; printf 'kept' >"$W/ro/f"; chmod 500 "$W/ro"
+if [ -w "$W/ro" ]; then
+  printf '  note running as a user chmod does not restrict — the unwritable-directory case is skipped\n'
+else
+  ok "an unwritable directory fails"      1     "$(mbw_rc "$W/ro/f" 'nope')"
+  ok "...leaving the target as it was"    kept  "$(cat "$W/ro/f")"
+fi
+chmod 700 "$W/ro"
+ok "a missing target argument is refused" 2     "$(mbw_rc '' 'nope')"
+ok "no temp file survives any of it"      0     "$(dotfiles)"
+
 # --- the declared interpreter floor ----------------------------------------------------------
 # The module's floor is bash 3.2, lowered from bash >= 5 when shipyard's status reporter became its
 # first production caller: `shipyard-report.sh` sources this IN-PROCESS and must stay bash-3.2-clean,
@@ -237,6 +279,9 @@ ok "the disposition table answers under /bin/bash" 'park|reprobe|escalate|access
      printf '%s|' \"\$(policy_dispose rate_limited)\"
      printf '%s|' \"\$(policy_dispose access_request 'rm -rf /')\"
      printf '%s'  \"\$(policy_dispose context_full)\"")"
+ok "the mailbox write runs under /bin/bash" 'via 3.2' \
+  "$(/bin/bash -c ". '$POLICY'
+     printf 'via 3.2' | policy_mailbox_write '$TMP/mbw/floor' && cat '$TMP/mbw/floor'")"
 ok "the resume guard answers under /bin/bash" 'reprobe' \
   "$(/bin/bash -c ". '$POLICY'; _policy_resume_at 500 1000")"
 ok "the park advice answers under /bin/bash" 0 \
