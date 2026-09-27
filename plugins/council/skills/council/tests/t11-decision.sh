@@ -102,8 +102,8 @@ grep -q '^## The agenda in full' "$OUT" && { echo "FAIL a one-line agenda was qu
 echo "a one-line agenda stays inline"
 
 # A long agenda: the gist plus a link at the top, the full text at the end.
-# mkroom's EXIT trap only remembers the LAST room, so retire this keeper by hand before
-# opening the second room, or it outlives the run.
+# The EXIT trap reaps every room's keeper, so this one is retired early only to keep it from
+# polling for the rest of the file; it goes through the guarded helper like every pid-file kill.
 kill_keeper "$R/state/keeper.pid"
 R2="$COUNCIL_TEST_ROOT/t11-long"; rm -rf "$R2"
 mkroom "$R2" a b
