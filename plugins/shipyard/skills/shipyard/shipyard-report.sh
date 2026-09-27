@@ -67,7 +67,7 @@
 #    undeliverable. See the block where SHIPYARD_AUTODOWN is read for every lock and why
 #    `closed` is not a trigger. It is the one thing here that REMOVES A SLOT rather than
 #    observing it; the script's other side effects are its own mailbox bookkeeping
-#    (report-sig / -stall / -tick / -merged), the agterm sidebar glyphs it repaints, the pending
+#    (report-sig / -stall / -tick / -merged / -episodes), the agterm sidebar glyphs it repaints, the pending
 #    notices its escalation tail closes, and the Codex parent continuity watcher it re-arms. What it removed, refused or held each get their
 #    own block, and all three bypass --only-changed;
 #  * a motionless slot is asked WHY before the stall clock is consulted (shipyard_wait_state in
@@ -227,6 +227,7 @@ SIGFILE=""
 STALLFILE=""
 TICKFILE=""
 MERGEDFILE=""
+EPISODEFILE=""
 MAILBOX_DIR="(mailbox unresolved)"   # named once in the HELD block; the records are basenames
 STALL_SECS="${SHIPYARD_STALL_SECS:-1800}"   # 30 min of no movement, idle, nothing asked of you
 
@@ -247,7 +248,7 @@ MOTION_INTERVAL=$(knob_interval "${SHIPYARD_MOTION_INTERVAL:-}" 3) \
 # fires. A watchdog that fails closed is worse than none — it looks armed.
 if mb=$(shipyard_mailbox_ensure 2>/dev/null); then
   SIGFILE="$mb/report-sig"; STALLFILE="$mb/report-stall"; TICKFILE="$mb/report-tick"
-  MERGEDFILE="$mb/report-merged"
+  MERGEDFILE="$mb/report-merged"; EPISODEFILE="$mb/report-episodes"
   MAILBOX_DIR="$mb"
 fi
 
@@ -1368,6 +1369,98 @@ fi
 # restarted the clocks (see the supervision-gap block above).
 [ -n "$TICKFILE" ] && printf '%s\n' "$RUN_EPOCH" >"$TICKFILE" 2>/dev/null
 
+# --- the other bypassing blocks are EPISODES too (#239) ---------------------------------
+# #182 was a block that said the same thing every tick and so taught the operator to skim it. #237
+# fixed that for 🛑 STALLED; the same repetition sat in 💀 NO AGENT, ✋ HELD and ✋ AWAITING REMOVAL,
+# each of which bypasses --only-changed and printed its full remedy on every tick its condition
+# held. Each is now an episode per (block, slot): the FIRST tick prints the full block, and later
+# ticks print one line that leads with how long it has held and says the remedy is unchanged.
+#
+# Per block, because the four are not one case:
+#   * 💀 NO AGENT — nothing about a dead agent changes between ticks but its age, so the key is the
+#     slot alone.
+#   * ✋ HELD — keyed on WHAT holds it: a fingerprint of the records slot_unsettled_files names and
+#     of the two counts. A different set of records is news, so it prints the full block again.
+#   * ✋ AWAITING REMOVAL — keyed on the refusal's own text. A teardown refused for a new reason is
+#     news, so it prints the full block again.
+#   * 🧹 TORN DOWN — NOT an episode, and no bookkeeping is kept for it, because it already fires
+#     once per act. After a reap the worktree and its .pipeline-state are gone, so slot_stage reads
+#     empty, autodown_consider returns at lock 2, and REAPED never names that slot again.
+#
+# $EPISODEFILE rows are `block<TAB>slot<TAB>first_epoch<TAB>first_at<TAB>ticks<TAB>fp`. The file is
+# REWRITTEN WHOLE from this tick's blocks, like $MERGEDFILE and unlike the stall table, so an
+# episode ends the first tick its condition does not fire. A supervision gap ($GAP) ends every
+# episode, as it does for stalls: an operator returning after a gap gets the full blocks. Two costs
+# of the wholesale rewrite, both toward the louder side: a report run by hand over another slot
+# list ends the episodes of the slots it did not visit, which then print in full once more; and a
+# hand run over the same slots counts as a tick, so it can use up a first firing before the monitor
+# prints it (SKILL.md says the same for stalls). The discovery-mode early exit returns before this
+# point, so a tick that enumerated nothing preserves the file.
+#
+# WHAT DECIDES WHETHER A BLOCK APPEARS IS UNCHANGED: the four arrays, exactly as before. The episode
+# record decides only whether a slot's entry reads in full or as one line. AGENTS.md, "untrusted
+# evidence may annotate an operator-facing signal, never suppress one": $EPISODEFILE lives in the
+# mailbox every child writes into, so a forged row can turn a genuine first firing into the one-line
+# form. It cannot remove the line, which is printed either way. What this achieves is SELF-
+# REVELATION, not prevention: the one-line form prints the first-raised time it read, so a forged
+# row shows up as an episode the operator never saw start. A number that fails stall_num, a
+# first_at without shipyard_now's shape, or either one in the future is ignored, which makes that
+# tick a first firing again.
+EP_ROWS=()
+NOAGENT_EP=()   # parallel to NOAGENT:      "<full>|<ticks>|<minutes held>|<first HH:MM>"
+HELD_EP=()      # parallel to REAP_HELD
+REFUSED_EP=()   # parallel to REAP_REFUSED
+EP_NOW_ISO=$(shipyard_now)
+
+# ep_fp <text> — a fingerprint to compare, never printed.
+ep_fp() {
+  printf '%s' "$1" | md5 -q 2>/dev/null || printf '%s' "$1" | md5sum | cut -d" " -f1
+}
+
+# episode <block> <slot> <fp> — sets EP_OUT to "<full>|<ticks>|<minutes>|<HH:MM>" and appends this
+# tick's row to EP_ROWS. It prints nothing, and it is never called inside `$( )`, because the append
+# would then be lost.
+episode() {
+  local b="$1" s="$2" fp="$3" prev p_epoch p_at p_ticks p_fp first_epoch="$RUN_EPOCH" first_at="$EP_NOW_ISO"
+  local ticks=1 full=1
+  if [ -n "$EPISODEFILE" ] && [ -f "$EPISODEFILE" ] && [ "$GAP" = 0 ]; then
+    # Field-exact and string-exact, through ENVIRON, for the reasons given at the $MERGEDFILE lookup.
+    prev=$(B="$b" S="$s" awk -F'\t' '$1""==ENVIRON["B"]"" && $2""==ENVIRON["S"]"" {print; exit}' \
+      "$EPISODEFILE" 2>/dev/null)
+    if [ -n "$prev" ]; then
+      p_epoch=$(stall_num "$(printf '%s' "$prev" | cut -f3)")
+      p_at=$(printf '%s' "$prev" | cut -f4)
+      p_ticks=$(stall_num "$(printf '%s' "$prev" | cut -f5)")
+      p_fp=$(printf '%s' "$prev" | cut -f6)
+      if [ -n "$p_epoch" ] && [ -n "$p_ticks" ] && [ "$p_ticks" -gt 0 ] && stall_iso "$p_at" \
+         && [ "$p_epoch" -le "$RUN_EPOCH" ] && ! [[ "$p_at" > "$EP_NOW_ISO" ]]; then
+        first_epoch="$p_epoch"; first_at="$p_at"; ticks=$(( p_ticks + 1 ))
+        # A changed fingerprint keeps the episode's age and count and prints in full: what the
+        # block reports changed, even though the condition did not end.
+        [ "$p_fp" = "$fp" ] && full=0
+      fi
+    fi
+  fi
+  EP_ROWS+=("$b	$s	$first_epoch	$first_at	$ticks	$fp")
+  EP_OUT="$full|$ticks|$(( (RUN_EPOCH - first_epoch) / 60 ))|${first_at:11:5}"
+}
+
+for x in ${NOAGENT[@]+"${NOAGENT[@]}"}; do
+  episode noagent "${x%%|*}" -; NOAGENT_EP+=("$EP_OUT")
+done
+for x in ${REAP_HELD[@]+"${REAP_HELD[@]}"}; do
+  sl=${x%%|*}
+  episode held "$sl" "$(ep_fp "${x#*|}
+$(slot_unsettled_files "$sl")")"; HELD_EP+=("$EP_OUT")
+done
+for x in ${REAP_REFUSED[@]+"${REAP_REFUSED[@]}"}; do
+  episode refused "${x%%|*}" "$(ep_fp "${x#*|}")"; REFUSED_EP+=("$EP_OUT")
+done
+if [ -n "$EPISODEFILE" ]; then
+  : >"$EPISODEFILE" 2>/dev/null
+  [ "${#EP_ROWS[@]}" -gt 0 ] && printf '%s\n' "${EP_ROWS[@]}" >"$EPISODEFILE" 2>/dev/null
+fi
+
 TERMINAL=0
 # `$total_pend` AND `$total_unsettled`, because the two answer the same question from different
 # sources and the teardown uses the wider one. `total_pend` comes from `slot_pending`, which
@@ -1468,10 +1561,12 @@ fi
 # teardown then happens with zero bytes printed.
 #
 # The cost is a repeated block for as long as the condition lasts; that is the STALLED trade,
-# taken knowingly, and neither held nor refused is the normal case. Worth knowing before taking
-# it again: an alarm that repeats verbatim trains the operator to skim it (#182). STALLED itself
-# now prints in full once and then as its delta (see "a stall is an EPISODE" above); the blocks
-# named here still repeat verbatim, and moving them to the same shape is not done yet.
+# taken knowingly, and neither held nor refused is the normal case. What repeats is no longer
+# the whole block: an alarm that repeats verbatim trains the operator to skim it (#182), so
+# STALLED prints in full once and then as its delta (see "a stall is an EPISODE" above), and
+# NO AGENT, HELD and AWAITING REMOVAL do the same (see "the other bypassing blocks are EPISODES
+# too" above). TORN DOWN fires once per act and needs neither. 🛑 NO SIGNAL still prints in full
+# on every tick it holds.
 #
 # NOT closed by any of this: an ad-hoc `shipyard-report.sh --only-changed <slot>` run beside the
 # monitor performs the teardown and consumes the only 🧹 block, leaving the monitor to show a
@@ -1585,8 +1680,19 @@ EOF
   if [ "${#NOAGENT[@]}" -gt 0 ]; then
     echo
     echo "### 💀 NO AGENT — the terminal is up, the agent launched into it is not"
+    i=0
     for x in "${NOAGENT[@]}"; do
       sl=${x%%|*}; c=${x#*|}
+      IFS='|' read -r ep_full ep_n ep_min ep_at <<EOF
+${NOAGENT_EP[$i]}
+EOF
+      i=$((i+1))
+      # Later ticks of one episode: the delta leads, the remedy is named but not re-printed (#239).
+      if [ "$ep_full" = 0 ]; then
+        echo "- \`$sl\` — STILL no agent, first raised ${ep_min} min ago (at ${ep_at} UTC), tick $ep_n; ctx $c is its last figure."
+        echo "  Remedy unchanged — git first, then recover it on the SAME worktree (SKILL.md, Step 5); tell and compact refuse it with exit 8."
+        continue
+      fi
       echo "- \`$sl\` — on both reads of this tick the backend reports a shell prompt, or a pane held open"
       echo "  after its command exited, where the agent was launched. ctx $c is its LAST figure: it will not move."
       echo "  Do NOT nudge or compact it — anything typed there goes to a shell, not to an agent, which is"
@@ -1699,8 +1805,23 @@ EOF
   if [ "${#REAP_HELD[@]}" -gt 0 ]; then
     echo
     echo "### ✋ HELD — finished and merged, but somebody is owed an answer"
+    i=0
     for x in "${REAP_HELD[@]}"; do
       sl=${x%%|*}; rest=${x#*|}; n=${rest%%|*}; shown=${rest#*|}
+      IFS='|' read -r ep_full ep_n ep_min ep_at <<EOF
+${HELD_EP[$i]}
+EOF
+      i=$((i+1))
+      # The same records still hold it: one line (#239). A changed set prints the full block below.
+      if [ "$ep_full" = 0 ]; then
+        echo "- \`$sl\` — STILL held by the same $n unsettled record(s), first raised ${ep_min} min ago (at ${ep_at} UTC), tick $ep_n. Nothing was removed."
+        if [ "$shown" = "$n" ]; then
+          echo "  Answer it — the escalation block below carries the command; it then tears itself down on the next tick."
+        else
+          echo "  $shown of those are readable escalations; repair or remove the rest by hand (#197) — \`ls $MAILBOX_DIR/$sl-*.json\`."
+        fi
+        continue
+      fi
       echo "- \`$sl\` — merged, finished and otherwise ready; its teardown is HELD by $n unsettled record(s) in $MAILBOX_DIR:"
       # NAME THE FILES. Without this the block's only remedy was "answer it", which is false for
       # exactly the records the hold was widened to catch: `shipyard-escalations.sh` skips a
@@ -1728,8 +1849,20 @@ EOF
   if [ "${#REAP_REFUSED[@]}" -gt 0 ]; then
     echo
     echo "### ✋ AWAITING REMOVAL — finished work whose teardown was refused"
+    i=0
     for x in "${REAP_REFUSED[@]}"; do
       sl=${x%%|*}; why=${x#*|}
+      IFS='|' read -r ep_full ep_n ep_min ep_at <<EOF
+${REFUSED_EP[$i]}
+EOF
+      i=$((i+1))
+      # Refused again for the same reason: one line, still carrying the command (#239). A new reason
+      # prints the full block below.
+      if [ "$ep_full" = 0 ]; then
+        echo "- \`$sl\` — STILL refused for the same reason, first raised ${ep_min} min ago (at ${ep_at} UTC), tick $ep_n. NOTHING was removed; to do it yourself:"
+        echo "    bash $DIR/shipyard-down.sh $sl"
+        continue
+      fi
       echo "- \`$sl\` — merged and finished, but the teardown refused:"
       printf '%s\n' "$why" | sed 's/^/    /'
       echo "  NOTHING was removed. This is re-tried every tick; to do it yourself once you have looked:"

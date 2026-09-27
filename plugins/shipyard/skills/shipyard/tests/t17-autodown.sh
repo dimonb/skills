@@ -281,7 +281,7 @@ if [ "${DOWN_REMOVE:-0}" = 1 ]; then
   exit "$rc"
 fi
 if [ "$rc" != 0 ]; then
-  echo "refused: ship-$1 has uncommitted or untracked changes" >&2
+  echo "${DOWN_REASON:-refused: ship-$1 has uncommitted or untracked changes}" >&2
   exit "$rc"
 fi
 echo "closed t17b:1"
@@ -719,6 +719,45 @@ printf '907\tMERGED\n' >"$B_STATES"
 b_tick -- "7/" >/dev/null
 b_tick -- "7/" >/dev/null
 ok "B20: a slot name with a slash tears nothing down" 0 "$(grep -c . "$DOWN_CALLS")"
+
+# --- B21: HELD is an episode, keyed on the records that hold it (#239) ------------------------
+# The first held tick prints the full block, later ones one line. A DIFFERENT set of records is
+# news, so it prints in full again. Every tick still prints the block under --only-changed.
+b_reset; rm -f "$B_GIT/ship-escalations/report-episodes"
+b_slot 80 880 ready-to-merge
+printf '1 ship-80\n' >"$B_WINS"; printf 'ship-80\n' >"$B_ENUM"
+printf '880\tMERGED\n' >"$B_STATES"
+printf '{"kind":"question","status":"pending","slot":"80"}\n' >"$B_GIT/ship-escalations/80-1.json"
+b_tick -- --only-changed 80 >/dev/null
+b21a=$(b_tick -- --only-changed 80)
+b21b=$(b_tick -- --only-changed 80)
+ok "B21: the first held tick prints the full block"   1 "$(printf '%s' "$b21a" | grep -c 'Tearing it down by hand first')"
+ok "B21: the next one still prints the block"         1 "$(printf '%s' "$b21b" | grep -c 'HELD — finished and merged')"
+ok "B21: ...as the one-line delta"                    1 "$(printf '%s' "$b21b" | grep -c '^- `80` — STILL held by the same 1 unsettled record(s), .* tick 2')"
+ok "B21: ...still naming the remedy"                  1 "$(printf '%s' "$b21b" | grep -c 'the escalation block below carries the command')"
+ok "B21: ...without the full steps"                   0 "$(printf '%s' "$b21b" | grep -c 'Tearing it down by hand first')"
+printf '{"kind":"question","status":"pending","slot":"80"}\n' >"$B_GIT/ship-escalations/80-2.json"
+b21c=$(b_tick -- --only-changed 80)
+ok "B21: a new record holding it prints in full again" 1 "$(printf '%s' "$b21c" | grep -c 'Tearing it down by hand first')"
+ok "B21: ...and nothing was torn down"                0 "$(grep -c . "$DOWN_CALLS")"
+rm -f "$B_GIT/ship-escalations/80-1.json" "$B_GIT/ship-escalations/80-2.json"
+
+# --- B22: AWAITING REMOVAL is an episode, keyed on the refusal's text (#239) ------------------
+b_reset; rm -f "$B_GIT/ship-escalations/report-episodes"; printf '1\n' >"$DOWN_RC_FILE"
+b_slot 81 881 done
+printf '1 ship-81\n' >"$B_WINS"; printf 'ship-81\n' >"$B_ENUM"
+printf '881\tMERGED\n' >"$B_STATES"
+b_tick -- --only-changed 81 >/dev/null
+b22a=$(b_tick -- --only-changed 81)
+b22b=$(b_tick -- --only-changed 81)
+ok "B22: the first refusal prints the full block"      1 "$(printf '%s' "$b22a" | grep -c 'uncommitted or untracked')"
+ok "B22: the next one still prints the block"          1 "$(printf '%s' "$b22b" | grep -c 'AWAITING REMOVAL')"
+ok "B22: ...as the one-line delta"                     1 "$(printf '%s' "$b22b" | grep -c '^- `81` — STILL refused for the same reason, .* tick 2')"
+ok "B22: ...still carrying the exact command"          1 "$(printf '%s' "$b22b" | grep -c 'shipyard-down.sh 81$')"
+ok "B22: ...without re-quoting the refusal"            0 "$(printf '%s' "$b22b" | grep -c 'uncommitted or untracked')"
+b22c=$(b_tick "DOWN_REASON=refused: ship-81 has unmerged content" -- --only-changed 81)
+ok "B22: a new reason prints in full again"            1 "$(printf '%s' "$b22c" | grep -c 'merged and finished, but the teardown refused')"
+printf '0\n' >"$DOWN_RC_FILE"
 
 printf '\n%s: %d checks, %d failures\n' "$(basename "$0")" "$CHECKS" "$FAILURES"
 [ "$FAILURES" -eq 0 ]

@@ -157,6 +157,36 @@ ok "...as a finished row, with no 💀 block"                   no  "$(has "$out
 out=$(FAKE_OCC=alive FAKE_OCC45=dead run_report --only-changed)
 ok "...and once: the next tick is silent again"               ""  "$out"
 
+# The 💀 block is an EPISODE (#239): the full recovery steps on its first tick, one line on the
+# ticks after, and full again when the episode ends and a new one starts. What decides whether the
+# block APPEARS is untouched, so every assertion here also checks the slots are still named.
+printf '\n── NO AGENT is printed in full once, then as its delta ──\n'
+noagent() { printf '%s\n' "$1" | sed -n '/^### 💀 NO AGENT/,/^###/p'; }
+rm -f "$MB/report-sig" "$MB/report-stall" "$MB/report-episodes"
+out=$(run_report --only-changed)
+ok "first tick: the full block"                        yes "$(has "$(noagent "$out")" 'on both reads of this tick')"
+ok "...naming 41 and 46"                               "41 46" "$(block "$out" '💀 NO AGENT')"
+out=$(run_report --only-changed)
+ok "second tick: still printed, bypassing the filter"  "41 46" "$(block "$out" '💀 NO AGENT')"
+ok "...as the one-line delta"                          yes "$(has "$(noagent "$out")" '^- `41` — STILL no agent, first raised [0-9]* min ago (at [0-9][0-9]:[0-9][0-9] UTC), tick 2')"
+ok "...without the full steps"                         no  "$(has "$(noagent "$out")" 'on both reads of this tick')"
+ok "...and still no nudge or compaction command"       no  "$(has "$(noagent "$out")" 'bash .*shipyard-\(tell\|compact\)\.sh ')"
+# The episode ends on the tick its condition does not fire; the next death is a new one.
+FAKE_OCC=alive run_report --only-changed >/dev/null
+out=$(run_report --only-changed)
+ok "after a tick with the agent back: full again"      yes "$(has "$(noagent "$out")" 'on both reads of this tick')"
+# The record is peer-writable, so a row it cannot trust is a first firing, never a one-liner.
+future=$(( $(date +%s) + 86400 ))
+printf 'noagent\t41\t%s\t2099-01-01T00:00:00Z\t5\t-\nnoagent\t46\tabc\t2020-01-01T00:00:00Z\t5\t-\n' "$future" >"$MB/report-episodes"
+out=$(run_report --only-changed)
+ok "a future-dated or malformed record reads as a first firing" 2 \
+   "$(noagent "$out" | grep -c 'on both reads of this tick')"
+# A supervision gap ends every episode, as it does for stalls.
+run_report --only-changed >/dev/null
+printf '%s\n' "$(( $(date +%s) - 7200 ))" >"$MB/report-tick"
+out=$(run_report --only-changed)
+ok "after a supervision gap: full again"               2 "$(noagent "$out" | grep -c 'on both reads of this tick')"
+
 run_tell() { # <args...> -> output, then "rc=<n>"
   local out rc=0
   : > "$KEYS"; : > "$C44"
