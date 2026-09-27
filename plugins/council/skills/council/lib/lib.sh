@@ -487,22 +487,31 @@ c_round0_positions() {
 # COUNTING, by SEAT. The participants that have posted an opening position, one name per line.
 #
 # Readers: c_barrier's `posted` (both the everyone-is-in test and the quorum test), and the
-# `posted` count and `waiting=` list in v_floor and v_status. The barrier asks whether N SEATS have spoken, and
-# c_round0_positions returns DOCUMENTS: counting its lines let one seat write several positions
-# into its own lane -- which it may, by design -- and close the round alone, releasing every
-# other seat's withheld position to it (#179). A harness or a restarted seat re-emitting its
-# opening does the same by accident.
+# `posted` count and `waiting=` list in v_floor and v_status. The barrier asks whether N SEATS
+# have spoken, and c_round0_positions returns DOCUMENTS: counting its lines let one seat write
+# several positions into its own lane -- which it may, by design -- and close the round alone,
+# releasing every other seat's withheld position to it (#179). A harness or a restarted seat
+# re-emitting its opening does the same by accident.
 #
 # `.from` is not a claim the message makes: c_all derives it from the lane directory the
 # document was read at, so deduplicating on it cannot be forged from inside a message. It is
 # also intersected with the roster's `.order`, so a lane directory for a name that is not a
-# participant counts for nobody. Both narrow the count, which is the safe direction for this
-# accessor (see the COUNTING/WITHHOLDING table above). Each waiting= list is c_peers minus this
-# output (sorted, as comm needs), so the count and the list are two views of ONE set rather than
-# of a set and a document stream -- before #179 a stuffed lane showed `posted 3/3` beside a
-# waiting= list still naming seats.
+# participant counts for nobody. The name-shape test comes first, inside jq, for the reason
+# c_peers has one: `jq -r` prints a directory name holding a newline as SEVERAL lines, and each
+# of them could match a participant on its own. Both narrow the count, which is the safe
+# direction for this accessor (see the COUNTING/WITHHOLDING table above). Each waiting= list is
+# c_peers minus this output (sorted, as comm needs), so the count and the list are two views of
+# ONE set rather than of a set and a document stream -- before #179 a stuffed lane showed
+# `posted 3/3` beside a waiting= list still naming seats.
+#
+# THE DEADLINE ANCHOR IS NOT THIS SET. c_barrier's `min_by(.sent_ms)` still reads
+# c_round0_positions, and `sent_ms` IS a claim the message makes, so one position stamped far in
+# the past trips the 2x backstop with one seat in. That is the peer-written-timestamp class of
+# #165, not this count, and closing it needs evidence from outside the room.
 c_round0_authors() {
-  c_round0_positions | jq -r .from | sort -u | grep -Fx -f <(c_peers) || true
+  c_round0_positions \
+    | jq -r '.from | select(length > 0 and (test("[^A-Za-z0-9_-]") | not))' \
+    | sort -u | grep -Fx -f <(c_peers) || true
 }
 
 # WITHHOLDING. Any round-0 message, whatever its act — what the barrier is holding back.

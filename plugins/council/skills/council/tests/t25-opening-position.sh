@@ -386,6 +386,16 @@ mkdir -p "$R7/lane/z"
 raw_round0 z 1 5 propose "$(now_ms)" "position from a non-participant"
 [ "$(barrier a)" = open ] && ok "a position in a lane for a non-participant does not count" \
                           || bad "a non-participant's lane closed the round"
+# ...nor one whose directory name holds a newline, which `jq -r` would print as two lines that
+# each match a participant: here `a` and `c`, which with b's real position would make 3/3.
+nl=$'a\nc'
+mkdir -p "$R7/lane/$nl"
+jq -n --arg from "$nl" --argjson ms "$(now_ms)" \
+  '{id:"nl-1",from:$from,lamport:5,deps:{},act:"propose",refs:[],to:["*"],
+    hand:false,turn:null,round:0,text:"position from a split name",created_at:"test",sent_ms:$ms}' \
+  > "$R7/lane/$nl/000001.json"
+[ "$(barrier a)" = open ] && ok "a lane name holding a newline does not count as the seats it splits into" \
+                          || bad "a lane name holding a newline closed the round as two seats"
 
 # THE POSITIVE CONTROL: the one real seat still owed closes the round, and only then does the
 # withheld position reach a.
