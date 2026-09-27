@@ -980,9 +980,9 @@ fired on the same stall, and a plain `status` has no memory and always prints it
 This changes only how the line **reads**. It prints on every tick the stall holds, under
 `--only-changed` and `--alarms-only` alike, and the push is unchanged. Both new records live in the
 shared mailbox — `council-stall-<alarms|block>-<room>` for the count, one
-`council-said-<room>.<8 random characters>` file per `say` for what it sent — and, like everything else there, a seat can write them: a forged count moves the
-wording, a forged `say` withholds the UNANSWERED form but is **printed** as a message sent, so check
-that you sent what it says you sent. `STALL_ESCALATE_AT` in `lib/verbs.sh` carries the reasoning.
+`council-said-<room>.<8 random characters>` file per `say` for what it sent — and, like everything
+else there, a seat can write them: a forged count moves the wording, a forged `say` withholds the
+UNANSWERED form but is **printed** as a message sent, so check that you sent what it says you sent. `STALL_ESCALATE_AT` in `lib/verbs.sh` carries the reasoning.
 
 The early line exists because the wedges that actually cost rooms were **323s and 344s**, well
 under the 900s threshold, so nothing fired for either. It was first written as an alarm, and that

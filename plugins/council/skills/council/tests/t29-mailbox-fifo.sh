@@ -14,10 +14,12 @@
 # inside a few instructions, which no fixture here can hit on purpose; it is named at the code
 # (above STALL_ESCALATE_AT in lib/verbs.sh) and in SKILL.md's residuals.
 #
-# MUTATION CHECK, run by hand when this file changes: put back a plain `>"$f"` for any one of the
-# writes that now go through `policy_mailbox_write`, or drop the `[ -f ]` prefilter from
-# `_stall_escalate`'s glob read, and the case for that site reports HUNG while the others stay
-# green.
+# MUTATION CHECK, run by hand when this file changes: put back a plain `>` for the status
+# signature or either firing record, or drop the `[ -f ]` prefilter from `_stall_escalate`'s or
+# `_stall_sent_note`'s glob read, and the case for that site reports HUNG while the others stay
+# green. `policy_escalate`'s write is NOT reached here: its `-e` probe steps over a FIFO already at
+# the next free name, so only a FIFO swapped in after the probe could reach that open, and no
+# fixture can time that. Its conversion is covered only by t-policy's direct cases on the helper.
 set -uo pipefail
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 . "$DIR/_helpers.sh"
