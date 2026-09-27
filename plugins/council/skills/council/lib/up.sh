@@ -908,14 +908,20 @@ council_say() {
   ct_type "$peer" "$one" || { _council_say_absence "$peer"; return $?; }
   # RECORDED ONCE THE TEXT IS IN THE SEAT'S TERMINAL, before the submit and whatever the delivery
   # verdict turns out to be: this is `status`'s evidence that the operator ACTED on a stall (#238,
-  # see c_said_file), and a message sitting unsent in a box is still something they sent — the
+  # see c_said_stem), and a message sitting unsent in a box is still something they sent — the
   # verdict below tells them whether it landed. Best-effort: a mailbox that cannot be written
   # records nothing, which leaves the STALL line saying `nothing sent`, the louder reading.
-  local said
-  if said=$(c_said_file); then
+  #
+  # NOTHING HERE MAY STAND BETWEEN THE TEXT AND ITS SUBMIT (#246). The record is a fresh file per
+  # `say`, its name allocated by `mktemp`'s exclusive create and its content put there by rename,
+  # so no step opens a path a participant could have planted a FIFO at beforehand; every failure
+  # falls through to `ct_submit`. The one open that remains is the helper's own temp file, and its
+  # window is named at `policy_mailbox_write`.
+  local said_stem said
+  if said_stem=$(c_said_stem) && said=$(mktemp "$said_stem.XXXXXXXX" 2>/dev/null); then
     printf '%s\t%s\t%s\n' "$(date +%s)" "$peer" \
       "$(printf '%s' "$text" | tr '\t\n' '  ' | LC_ALL=C tr -d '[:cntrl:]' | cut -c1-60)" \
-      >>"$said" 2>/dev/null || true
+      | policy_mailbox_write "$said" 2>/dev/null || rm -f "$said" 2>/dev/null
   fi
   sleep 0.3
   # A failed submit is the one case where the text is DEFINITELY sitting in the box, so it is

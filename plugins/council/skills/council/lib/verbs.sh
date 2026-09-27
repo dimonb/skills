@@ -805,10 +805,21 @@ _stall_escalate() {
   # Fails OPEN by construction, which is the right way round for a de-duplication check: an empty
   # glob, an unreadable mailbox, a malformed entry or a missing jq all make this print nothing, and
   # a check that cannot read its own history must repeat a notice rather than skip one.
-  local seen
-  seen=$(jq -s --arg s "council-$room" --arg k "$key" \
-           '[.[] | select(.slot == $s) | select((.text // "") | contains($k))] | length' \
-           "$mb"/council-*.json 2>/dev/null) || seen=""
+  #
+  # Only REGULAR files reach jq (#246): a FIFO matching the glob hung it, and with it the whole
+  # `status` tick. The `[ -f ]` check and jq's open are two steps, and a FIFO swapped in between
+  # them still hangs — the read residual #246 deferred, named above STALL_ESCALATE_AT. An empty
+  # set skips jq, which given no file would read stdin; that reads as nothing seen, the open way.
+  local seen="" g
+  local -a entries=()
+  for g in "$mb"/council-*.json; do
+    [ -f "$g" ] && entries+=("$g")
+  done
+  if [ "${#entries[@]}" -gt 0 ]; then
+    seen=$(jq -s --arg s "council-$room" --arg k "$key" \
+             '[.[] | select(.slot == $s) | select((.text // "") | contains($k))] | length' \
+             "${entries[@]}" 2>/dev/null) || seen=""
+  fi
   case "$seen" in ''|*[!0-9]*) seen=0 ;; esac
   [ "$seen" -gt 0 ] && return 0
   # During an open barrier round the caller's `$floor` is a LABEL, not a seat — nobody holds the
@@ -1118,6 +1129,7 @@ _floor_no_agent() { # <peer>
 _status_sigfile() {
   local mb
   command -v policy_mailbox_dir >/dev/null 2>&1 || return 1
+  command -v policy_mailbox_write >/dev/null 2>&1 || return 1
   mb=$(policy_mailbox_dir) || return 1
   mkdir -p "$mb" 2>/dev/null || return 1
   printf '%s/council-status-sig-%s' "$mb" "$(basename "$ROOM")"
@@ -1165,22 +1177,25 @@ _status_sigfile() {
 #     validated first — a non-digit, or a first firing in the future, starts a fresh episode, i.e.
 #     the FULL line — and read base 10, because one leading-zero value is an arithmetic error that
 #     would abort the verb and take every alarm with it.
-#   * the said log (`c_said_file`) is written by `say`, which any caller can run, and by anything
-#     that can write the mailbox. A forged entry can WITHHOLD the UNANSWERED form. That half is
-#     SELF-REVELATION, not prevention: the delta prints what was sent, to whom and how long ago,
-#     so a forged record reads as a message the operator knows they never sent. An entry dated
+#   * the said records (`c_said_stem`) are written by `say`, which any caller can run, and by
+#     anything that can write the mailbox. A forged entry can WITHHOLD the UNANSWERED form. That
+#     half is SELF-REVELATION, not prevention: the delta prints what was sent, to whom and how long
+#     ago, so a forged record reads as a message the operator knows they never sent. An entry dated
 #     before the first firing or in the future is ignored rather than printed as a plausible one.
-# One route found still removes the line, and it is a HANG, not a wording: a FIFO put in place of
-# the firing record blocks the record write in open(), so the tick never prints anything. That is
-# not new here: `_stall_escalate`'s jq READ over the mailbox glob hangs the same way on the same
-# tick, and so does the status signature write on an `--only-changed` tick. The class is council's
-# mailbox access through a plain `>`, `>>` or glob read — those two, this record, and `say`'s
-# c_said_file — and it is recorded on #204 for a change that fixes them together. (Shipyard's
-# continuity records are written by rename and are not in it.) It reveals itself, because the
-# monitor stops returning; it is not prevented. The other record shapes review tried (short, long,
-# CRLF, a directory, mode 000, a dangling symlink) fall back to the full line; a symlink to a
-# record-shaped file is read through, like any forged record. The routes that already removed or bypassed the stall arm
-# before this change are unchanged by it and named where the threshold is tested in v_status.
+# A FIFO put in place of one of these files used to remove the line outright, as a HANG rather
+# than a wording: the record write blocked in open(2), and so did `_stall_escalate`'s jq read over
+# the mailbox glob and the status signature write. #246 closed the WRITES — each goes through
+# `policy_mailbox_write` (shared/policy), which renames over the target and never opens it — and
+# put a `[ -f ]` prefilter in front of the two glob reads (`_stall_escalate`'s and
+# `_stall_sent_note`'s). What is left is the READ side: this record, the signature and the said
+# files are each `[ -f ]`-checked and then opened, and a FIFO swapped in between the check and the
+# open still hangs the tick. That window is deferred and named here on purpose — the shell has no
+# portable bounded open (stock macOS ships no `timeout`) — and what it leaves is a hang, which
+# reveals itself because the monitor stops returning; it is not prevented. The other record shapes
+# review tried (short, long, CRLF, a directory, mode 000, a dangling symlink) fall back to the full
+# line; a symlink to a record-shaped file is read through, like any forged record. The routes that
+# already removed or bypassed the stall arm before #238 are unchanged by it and named where
+# the threshold is tested in v_status.
 STALL_ESCALATE_AT=3
 
 # _stall_remedy — the remedy half of the STALL line: printed at the first firing and once more at
@@ -1189,21 +1204,32 @@ _stall_remedy() {
   printf '%s' "A seat sitting on a permission or first-launch trust prompt needs that prompt ANSWERED IN PLACE; council.sh relaunch is only for a seat that is genuinely dead, and it discards everything that seat has read."
 }
 
-# _stall_sent_note <first-epoch> <now-epoch> — `nothing sent`, or what `say` recorded (c_said_file)
+# _stall_sent_note <first-epoch> <now-epoch> — `nothing sent`, or what `say` recorded (c_said_stem)
 # since the episode's first firing: the latest entry's peer, age and excerpt, and how many there
 # were. Prints nothing and returns 1 when nothing was sent — the caller escalates on that — and
-# also when the log cannot be read, which is the louder of the two readings to fall back to.
+# also when the records cannot be read, which is the louder of the two readings to fall back to.
 _stall_sent_note() {
-  local first="$1" now="$2" f
-  f=$(c_said_file) || return 1
-  [ -f "$f" ] || return 1
+  local first="$1" now="$2" stem g
+  local -a files=()
+  stem=$(c_said_stem) || return 1
+  # The set of records, one file per `say` (c_said_stem). `[ -f ]` drops a FIFO, a directory or
+  # anything else that is not a regular file before awk opens it; the window between that check
+  # and the open is the read residual #246 deferred, named above STALL_ESCALATE_AT. An empty set
+  # returns here rather than reaching awk, which given no file would read stdin instead.
+  for g in "$stem".????????; do
+    [ -f "$g" ] && files+=("$g")
+  done
+  [ "${#files[@]}" -gt 0 ] || return 1
   # Validated per line in awk, so one malformed entry drops that entry and nothing else. The peer
   # and excerpt are cleaned and cut again HERE although `say` already did both, because the reader
   # cannot know `say` wrote the line: a forged entry is text a seat chooses, bound for the
-  # operator's console, and a control character in it is a terminal escape.
+  # operator's console, and a control character in it is a terminal escape. The files arrive in
+  # glob order, which is the order of their random names, so "latest" is the greatest epoch, not
+  # the last line read.
   LC_ALL=C awk -F'\t' -v a="$first" -v b="$now" '
     $1 ~ /^[0-9]+$/ && length($1) < 12 && ($1 + 0) >= (a + 0) && ($1 + 0) <= (b + 0) {
-      n++; e = $1; p = $2; x = $3
+      n++
+      if (($1 + 0) >= (e + 0)) { e = $1; p = $2; x = $3 }
     }
     END {
       if (!n) exit 1
@@ -1211,7 +1237,7 @@ _stall_sent_note() {
       m = int((b - e) / 60)
       printf "sent since: say to %s %d min ago — \"%s\"", substr(p, 1, 40), m, substr(x, 1, 60)
       if (n > 1) printf " (%d says since the first firing)", n
-    }' "$f" 2>/dev/null
+    }' "${files[@]}" 2>/dev/null
 }
 
 # _stall_epfile <alarms|block> — the firing record for one monitor of this room, beside the status
@@ -1268,7 +1294,10 @@ _stall_line() {
   else
     line="🛑 STALL (still): $floor — now ${held}s, firing $n, first raised $mins min ago; $note."
   fi
-  printf '%s\t%s\t%s\t%s\t%s\t%s\n' "${floor:--}" "${t:--}" "$state" "$first" "$n" "$esc" 2>/dev/null >"$f"
+  # By rename, never `>`: a FIFO planted at the record's path blocked this write in open(2), so the
+  # tick printed nothing and the STALL line was gone for as long as the FIFO stood (#246).
+  printf '%s\t%s\t%s\t%s\t%s\t%s\n' "${floor:--}" "${t:--}" "$state" "$first" "$n" "$esc" \
+    | policy_mailbox_write "$f" 2>/dev/null
   printf '%s' "$line"
 }
 
@@ -1752,8 +1781,11 @@ v_status() {
     fi
     # Stored on every tick that PRINTS, including the ones that printed because of an alarm, so
     # the tick after an alarm clears is compared against what was last shown rather than against
-    # a stale line from before it.
-    printf '%s\n' "$sig" >"$sigfile" 2>/dev/null
+    # a stale line from before it. Written by rename (policy_mailbox_write), never `>`: a FIFO
+    # planted at this path blocked the tick in open(2) and it printed nothing (#246). The read
+    # above keeps its `[ -f ]` check, and the window between that check and `cat`'s open is the
+    # residual #246 deferred: bash 3.2 has no portable bounded open, and what it leaves is a hang.
+    printf '%s\n' "$sig" | policy_mailbox_write "$sigfile" 2>/dev/null
   fi
   if [ "$alarms_only" = 1 ]; then
     # The fast monitor's shape: the room's name, so several loops are tellable apart, and the
