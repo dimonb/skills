@@ -101,6 +101,12 @@ k0=""; read -r k0 old_start < "$kfile" 2>/dev/null
 if [ -n "$k0" ] && [ "$live" = "$k0" ] && [ -n "$old_start" ]; then
   echo "ok   a freshly written keeper.pid is vouched for (pid $k0, started $old_start)"
 else echo "FAIL a fresh keeper.pid was not vouched for (file '$(cat "$kfile" 2>/dev/null)', got '$live')"; fail=1; fi
+# The writer and the readers are different processes: `up` in the operator's shell, `decide` in a
+# seat whose terminal does not inherit that shell's TZ. A record written in one zone must still be
+# vouched for from another, or `decide` reports "no live keeper" over a live one.
+( export TZ=AAA-9; SKILL="$SKILL"; . "$SKILL/lib/up.sh"; _keeper_record "$k0" ) > "$kfile"
+live=$( export TZ=BBB+5; SKILL="$SKILL"; . "$SKILL/lib/up.sh"; _keeper_live "$kfile" )
+expect "a record written in one TZ is vouched for from another" "$k0" "$live"
 kill_keeper "$kfile"
 for i in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20; do kill -0 "$k0" 2>/dev/null || break; sleep 0.1; done
 sleep 30 & stranger=$!

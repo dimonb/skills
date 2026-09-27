@@ -259,7 +259,7 @@ kill -9 "$d_owner" 2>/dev/null
 
 # ---------------------------------------------------------------------------------------------
 echo "── case E: a stale pid file does not kill the keeper started to replace it ──"
-# `relaunch` after `down` is exactly this: `down` kills the keeper and leaves its pid on disk, then
+# `relaunch` after a keeper died without `down` (a crash, a SIGKILL) is exactly this: its pid is left on disk, then
 # `_keeper_ensure` starts a replacement — the path that function's header says it exists to serve.
 # The pid there is DEAD, but the rule is "a different positive pid", not "a live one" (a keeper
 # cannot ask whether another process is a keeper, and `kill -0` also fails on EPERM). E1 pins that
@@ -400,7 +400,7 @@ echo "── case H: _keeper_ensure clears a stale claim before forking (provoke
 # is left with NO keeper — every bell rung at it lost, in silence.
 ROOM_H="$ROOT/room-h"
 h0=$(mkroom "$ROOM_H" a b); track "$h0"
-kill "$h0" 2>/dev/null                       # `down` kills the keeper and LEAVES its pid on disk
+kill "$h0" 2>/dev/null                       # a keeper that died without `down` LEAVES its pid on disk
 ok "the predecessor is dead, its pid still on disk" gone "$(wait_gone "$h0" 60)"
 ok "the stale claim is there to be misread" "$h0" "$(read_pid "$ROOM_H/state/keeper.pid")"
 ( SKILL="$SKILL"; . "$SKILL/lib/up.sh"

@@ -79,17 +79,28 @@ _keeper_pid() { # <pid-file> -> a positive integer on stdout, or nothing and rc 
 # is no such process. The collapse is not tidiness: `lstart` pads a one-digit day with a second
 # space and macOS pads the end of the field, and the recorded copy goes through `read`, which
 # does not keep either.
+#
+# TZ AND LOCALE ARE PINNED HERE, because `lstart` is rendered in the CALLER's zone and language
+# and the writer and the readers are different processes with different environments: `up` runs
+# in the operator's shell, while `decide` runs inside a seat whose terminal inherits the backend's
+# environment, not that shell's (a tmux window does not take the client's TZ). Unpinned, a record
+# written in one zone never matched a reader in another — measured — and `decide` then reported
+# "no live keeper" over a live one.
 _keeper_start() { # <pid> -> start time on stdout, or rc 1
   local s
-  s=$(ps -o lstart= -p "$1" 2>/dev/null | awk '{$1=$1; print}') || return 1
+  s=$(TZ=UTC0 LC_ALL=C ps -o lstart= -p "$1" 2>/dev/null | awk '{$1=$1; print}') || return 1
   [ -n "$s" ] || return 1
   printf '%s' "$s"
 }
 
 # The pid file's content for a just-forked keeper: its pid, then its start time. If `ps` cannot
 # say, the pid goes in alone, and `_keeper_live` then never vouches for it — a keeper nobody can
-# identify is treated as absent, which costs a redundant keeper (the old one steps down on
-# seeing the new pid) rather than a room with none.
+# identify is treated as absent. On `relaunch` that costs a redundant keeper (the old one steps
+# down on seeing the new pid) rather than a room with none. On a plain `down` it costs more, and
+# this is a known residual: `down` will not signal a keeper it cannot identify, it still removes
+# the file, and a missing file is no reason for the loop to step down — so that keeper lives on
+# in the kept room until a `relaunch` or `down --purge`. The same holds for a keeper started by a
+# version of this file that wrote the pid alone, which is also still running the old parser.
 _keeper_record() { # <pid> -> one line on stdout
   local s
   s=$(_keeper_start "$1") || s=""
@@ -493,7 +504,7 @@ _keeper_ensure() { # <room-dir> <peer>...
     fi
   fi
   # Drop the claim we just decided is not live, BEFORE forking. The keeper checks this file on its
-  # very first pass, and until the `echo` below lands the file still holds whatever was there — so
+  # very first pass, and until the write below lands the file still holds whatever was there — so
   # on the `relaunch`-after-`down` path (a dead keeper's pid still on disk, which is precisely the
   # path this function's header exists to serve) the newborn keeper would read its predecessor's
   # pid, see a name that is not its own, and step down within milliseconds of being forked. The
@@ -502,8 +513,8 @@ _keeper_ensure() { # <room-dir> <peer>...
   # first read a MISSING file, which by the rule above is not a reason to stop. Ordered after the
   # canary setup so a refused canary leaves the file untouched.
   #
-  # The window is narrow — after the fork the parent has only `pid=$!`, `set +m` and one `exec`
-  # left before the redirection below truncates the file, while the newborn must open every bell
+  # The window is narrow — after the fork the parent has only a few statements left, the `ps`
+  # that builds the record among them, before the write below lands, while the newborn must open every bell
   # fifo and fork a command substitution before its first read — so an ordinary run will not show
   # it. It is still reachable, and t19 case H provokes it deterministically — it holds the parent
   # inside that window and then asserts the room still has a keeper. Without this line that case
@@ -1324,7 +1335,7 @@ council_relaunch() {
   #
   # WHAT IT CANNOT COVER is a reap already IN FLIGHT. The keeper consumes the marker before it
   # starts closing, so once that has happened there is nothing left to clear and no observable
-  # here saying a reap is running — `kill -0` reports a reaping keeper as alive, which is what
+  # here saying a reap is running — `_keeper_live` vouches for a reaping keeper, which is what
   # makes `_keeper_ensure` below return early and leave the room without one. The window is the
   # length of one reap, measured at 84-383 ms for three seats on a live tmux backend. Do not
   # "fix" that by narrowing this `rm -f` to a dead-keeper condition: the live-keeper case above

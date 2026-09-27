@@ -250,7 +250,7 @@ errf="$COUNCIL_TEST_ROOT/t26f.err"
 # say out loud what the fixture needs rather than to slow the suite back down until luck returns.
 #
 # The premise is untouched: a fifo held open by this shell is not a keeper. `_keeper_teardown`
-# still asks `_keeper_pid` + `kill -0`, still gets nothing, and still returns 1 — which is the
+# still asks `_keeper_live`, still gets nothing, and still returns 1 — which is the
 # exit-5 arm every assertion below is about.
 #
 # (The blocking `c_ring` itself is a production hazard, not a test one — a `decide` against a
