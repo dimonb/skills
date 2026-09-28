@@ -156,6 +156,12 @@ done
 printf '%s\t%s\t08\t0\n' "$KEY" "$(( $(date +%s) - 120 ))" >"$EP"
 j=$(bash "$CLI" status --alarms-only 2>/dev/null)
 ok "a leading-zero count is read base 10"         1 "$(cnt "$j" '🛑 STALL UNANSWERED: .* raised 9 times over 2 min')"
+# A record whose first firing predates the room is another room's (#200): what a room of the same
+# name, deleted by hand, leaves behind. The room here was created 9000 s ago, so a first firing
+# 20000 s ago cannot be this room's, however well the rest of the key matches.
+printf '%s\t%s\t5\t1\n' "$KEY" "$(( $(date +%s) - 20000 ))" >"$EP"
+j=$(bash "$CLI" status --alarms-only 2>/dev/null)
+ok "a record older than the room is a fresh first firing" 1 "$(cnt "$j" "🛑 STALL: $F has held")"
 # An unwritable record directory is no memory, i.e. the full line every tick.
 R="$COUNCIL_TEST_ROOT/t28h"; stalled_room "$R"
 for i in 1 2 3; do

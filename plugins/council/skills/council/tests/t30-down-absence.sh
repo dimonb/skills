@@ -95,8 +95,8 @@ keeper_up() { _keeper_live "$ROOM/state/keeper.pid" >/dev/null && printf yes || 
 # ====================================================== 1. ELSEWHERE, PLAIN: REFUSE, LEAVE EVERYTHING
 # The backend answered, the container is honestly empty, and the pin says the seats were launched
 # on the other backend. A refusal must leave the room exactly as it was: no close attempted, the
-# keeper still up, and the evidence in place. The keeper assertion pins the check's POSITION: move
-# it below the keeper kill and only that one reds.
+# keeper still up, and the evidence in place. Two assertions pin the check's POSITION: nothing
+# killed holds it above the close loop, and the keeper still up holds it above the keeper kill.
 printf '\n── plain down, room launched on the other backend ──\n'
 seed; : >"$ROOM/state/container-agterm"; : >"$SESSIONS"; printf '0\n' >"$SESSIONS_RC"
 out=$(run_down)
@@ -150,6 +150,18 @@ ok "4: ...removing the status signature"          no   "$(present "$SIGF")"
 ok "4: ...and the STALL firing record"            no   "$(present "$EPF")"
 ok "4: ...keeping the launch record"              yes  "$(present "$LRF")"
 ok "4: ...and the room"                           yes  "$(has "$out" 'room kept')"
+
+# ====================================================== 4b. THROUGH THE ENTRYPOINT
+# Every case above calls `council_down` with verbs.sh sourced by this file. What makes
+# `_status_forget` reachable in production is `council.sh` sourcing it for `down`, and the call is
+# `command -v`-guarded, so without this case dropping that source would leave every test green.
+# A backend name that cannot resolve reads unreachable: warned, continued, and forgotten.
+printf '\n── council.sh down, the real entrypoint ──\n'
+seed; : >"$ROOM/state/container-tmux"
+out=$(COUNCIL_BACKEND=none-for-tests bash "$CLI" down 2>&1); rc=$?
+ok "4b: the entrypoint takes the room down"       0    "$rc"
+ok "4b: ...removing the status signature"         no   "$(present "$SIGF")"
+ok "4b: ...and the STALL firing record"           no   "$(present "$EPF")"
 
 # ====================================================== 5. CORROBORATED --purge: EVERYTHING GOES
 printf '\n── a purge the backend corroborates ──\n'

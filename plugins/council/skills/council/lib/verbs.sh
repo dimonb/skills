@@ -1293,9 +1293,17 @@ _stall_line() {
     case "$r_first" in ''|*[!0-9]*) r_first="" ;; esac
     case "$r_n" in ''|*[!0-9]*) r_n="" ;; esac
     case "$r_esc" in 0|1) ;; *) r_esc="" ;; esac
+    # A FIRST FIRING BEFORE THE ROOM EXISTED IS ANOTHER ROOM'S (#200). The record is keyed by the
+    # room's name, which a room reopened under a freed name shares, and a room deleted by hand
+    # leaves its records behind (`down` removes them, `_status_forget`). Its fresh floor and count
+    # can match the dead room's key, and its first stall then read as that episode's delta, with
+    # no remedy. The room's `created_ms` is written once, by `up`; a seat that moves it forward
+    # only turns later firings back into full lines, and a room that records none checks nothing.
+    local born_s; born_s=$(( $(c_int_field created_ms 0) / 1000 ))
     if [ -n "$r_first" ] && [ -n "$r_n" ] && [ -n "$r_esc" ] \
        && [ "$r_floor" = "${floor:--}" ] && [ "$r_t" = "${t:--}" ] && [ "$r_state" = "$state" ] \
-       && [ "${#r_first}" -lt 12 ] && [ "${#r_n}" -lt 9 ] && [ "$((10#$r_first))" -le "$now" ]; then
+       && [ "${#r_first}" -lt 12 ] && [ "${#r_n}" -lt 9 ] && [ "$((10#$r_first))" -le "$now" ] \
+       && [ "$((10#$r_first))" -ge "$born_s" ]; then
       first=$((10#$r_first)); n=$((10#$r_n + 1)); esc=$r_esc
     fi
   fi
@@ -1794,7 +1802,7 @@ v_status() {
   if [ "$only_changed" = 1 ] && [ "$alarms_only" = 0 ] && sigfile=$(_status_sigfile); then
     # THE QUIET STATE IS IN THE SIGNATURE, and without it the annotation was unreachable through
     # the very loop this skill tells a supervisor to arm. A quiet room by definition moves none of
-    # the other four terms — that is what quiet means — so the line landed on a block that this
+    # the other terms — that is what quiet means — so the line landed on a block that this
     # filter then suppressed on every tick but the one that happened to follow a turn. It is a
     # BIT, not the text: entering or leaving the quiet state breaks silence exactly once rather
     # than every tick for as long as it lasts, which is the same treatment shipyard's reporter

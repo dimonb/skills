@@ -370,7 +370,7 @@ Three consequences worth knowing:
   — and a `relaunch` landing inside it can leave the room without a keeper until the next one
   repairs it. It is tracked separately rather than papered over here.
 
-`down` is unchanged and still the way to close a room by hand: an unresolved one, one whose
+`down` is untouched by this and still the way to close a room by hand: an unresolved one, one whose
 teardown could not happen, or any room at all before it decides. `down --purge` remains the only
 thing that deletes a record.
 
@@ -433,7 +433,7 @@ never by `$PPID` or `kill -0` — on macOS a dead owner's children reparent to `
 reads as "parent alive" and cannot be reaped after the fact, so death has to be *observed*, not
 polled for. The keeper runs in its own process group, so the very Ctrl-C that kills the owner
 does not also kill the keeper before it can do the reaping. `down` and `--purge` still tear a
-room down exactly as before; the canary is an added trigger, not a replacement.
+room down as they did without it; the canary is an added trigger, not a replacement.
 
 The keeper's loop has **four** ways to return, and it is worth keeping them straight because only
 three of them end the live room. Its directory going away — a backstop rather than the usual

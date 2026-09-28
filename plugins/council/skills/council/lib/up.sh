@@ -1488,9 +1488,10 @@ council_down() {
   # keeper's pid to misread (#30). A missing file is what `_keeper_ensure` treats as "no keeper".
   pid=$(_keeper_live "$keep") && kill "$pid" 2>/dev/null
   rm -f "$keep"
-  # The monitors' memory of this room (#200), kept in the mailbox under the room's name: a room
-  # reopened under that name must not inherit it. Guarded because it lives in verbs.sh, which
-  # council.sh sources for this verb and a library caller of this function may not have.
+  # The monitors' memory of this room (#200), kept in the mailbox under the room's name. This is
+  # cleanup: what stops a room reopened under that name inheriting it is the room's `created_ms`,
+  # in the `--only-changed` signature and in `_stall_line`'s first-firing floor. Guarded because it
+  # lives in verbs.sh, which council.sh sources for this verb and a library caller may not have.
   command -v _status_forget >/dev/null 2>&1 && _status_forget
   if [ "$purge" = 1 ]; then
     # The room IS the record — the ADR and the transcript live in it. Deleting it throws
