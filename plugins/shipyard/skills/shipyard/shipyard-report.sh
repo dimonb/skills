@@ -167,8 +167,9 @@ done
 ENUM_RC=0
 SLOTS_OUT=""
 SLOTS_OUT=$(shipyard_slots 2>/dev/null) || ENUM_RC=$?
-# The fleet's backend, from the driver's `container-<backend>` pin. Empty when they agree, when
-# nothing was ever launched here, or when this run pins nothing — i.e. silent unless it is news.
+# Any backend other than this run's that the driver's `container-<backend>` pins record (both pins
+# present included, #132). Empty when only this backend is pinned, when nothing was ever launched
+# here, or when this run pins nothing — i.e. silent unless it is news.
 PINNED_ELSEWHERE=$(shipyard_backend_pinned_elsewhere) || PINNED_ELSEWHERE=""
 
 if [ ${#SLOTS[@]} -eq 0 ]; then
@@ -184,8 +185,8 @@ fi
 TAB=$(printf '\t')
 # "May an absence be believed?" is `shipyard_signal_class` in shipyard-backend.sh — same facts
 # (did enumeration answer; does the pin name another backend; does it still list the slot), one
-# implementation. The status-only calls can return `unreachable` or `elsewhere`; the per-slot
-# re-check near the terminal exit can also return `listed`, and `no_signal_block` has an arm for each.
+# implementation. Which classes it returns, and to which call shape, is listed at that function;
+# `no_signal_block` has an arm per class and a default for one it does not know.
 # This file used to carry its own `fleet_signal` saying exactly that; #137 added the shared one and
 # named this deletion as owed to this branch, because two answers to one question is the defect the
 # shared engine exists to remove.
@@ -216,6 +217,11 @@ no_signal_block() {  # <class> <why>
     container)
       shipyard_container_remedy | sed '1s/^  /- /' ;;
     elsewhere)
+      # Both pinned (#132): "pin the other backend" is wrong advice there — that one refuses too.
+      if shipyard_both_pinned; then
+        shipyard_elsewhere_remedy | sed '1s/^  /- /'
+        return 0
+      fi
       echo "- \`SHIPYARD_BACKEND=auto\` decides per PROCESS, so one failed socket probe sends a single tick"
       echo "  to the other backend, where this repo's container is empty for entirely correct reasons."
       echo "  Pin it for the run — \`SHIPYARD_BACKEND=$PINNED_ELSEWHERE\` in the monitor's environment —"

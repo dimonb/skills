@@ -1213,16 +1213,33 @@ shipyard_continuity_stop_all() {
 }
 
 # 0 cleaned up, 1 still has slots, 2 could not prove the fleet is empty,
-# 3 could not stop every watcher.
+# 3 could not stop every watcher, 4 both backends pinned: this backend's own pin cleared, nothing
+# else touched.
 #
 # "Proved empty" is `shipyard_signal_class`'s question, not the status alone (#139(3)). A run that
 # resolved tmux while the fleet was launched on agterm gets rc 0 and an empty list — a true answer
 # about the wrong container — and on the status alone that read as drained: every watcher stopped,
 # the container pruned, the pin dropped. The classifier reads the pin as well, so that `elsewhere`
 # case returns 2 like an unanswered enumeration. No slot is named, so its `listed` arm cannot fire.
+#
+# BOTH PINS PRESENT IS THE ONE `elsewhere` THAT MAY CLEAR SOMETHING, and only its own pin (#132).
+# Since both pins disagree from either side, refusing outright left no way to clear either. The
+# narrow case: this backend answered, lists no slot, holds its OWN pin, and no launch record
+# points elsewhere on it. Then this backend's pin is proven stale and is removed, exactly the
+# clear-what-you-resolved rule `shipyard_container_unpin` states. The other backend's pin stays,
+# so a later blip resolving this backend still reads `elsewhere` (#61's guard). Watchers are NOT
+# stopped, because `shipyard_continuity_stop_all` is mailbox-wide and would stop a live fleet's on
+# the other backend, and the container is not pruned: neither is needed to prove the pin stale.
 shipyard_continuity_cleanup_last_slot() {
-  local enumeration_status="$1" slots="$2"
-  shipyard_signal_class "$enumeration_status" >/dev/null || return 2
+  local enumeration_status="$1" slots="$2" sig TAB
+  TAB=$(printf '\t')
+  if ! sig=$(shipyard_signal_class "$enumeration_status"); then
+    [ "${sig%%"$TAB"*}" = elsewhere ] && [ "$enumeration_status" = 0 ] && [ -z "$slots" ] \
+      && shipyard_both_pinned && ! shipyard_launched_into_other_container >/dev/null \
+      || return 2
+    shipyard_container_unpin
+    return 4
+  fi
   [ -z "$slots" ] || return 1
   shipyard_continuity_stop_all || return 3
   shipyard_container_prune

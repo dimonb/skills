@@ -159,6 +159,8 @@ shipyard_backend_check() {
 #     not fire here (tmux IS pinned). The justification written for it was circular: the agterm pin
 #     is invisible to the disagreement check only BECAUSE the tmux pin sits beside it, and this very
 #     call is about to delete that one. Afterwards the leftover is exactly what the check reads.
+#     (Since #132 the agterm pin is no longer invisible there — both pins disagree from either side
+#     — and `shipyard_continuity_cleanup_last_slot` calls this in that state for the resolved pin.)
 #
 # The rule that covers all three configurations without a guard is the original one: the caller
 # proved that the backend it RESOLVED holds no slots and learned nothing about the other, so clear
@@ -377,6 +379,14 @@ shipyard_slot_check() {
 # what was wrong was reading "I looked somewhere else and found nothing" as "there is nothing".
 shipyard_backend_pinned_elsewhere() { drv_pins_elsewhere; }
 
+# shipyard_both_pinned — 0 when this mailbox pins the resolved backend AND another one (#132): the
+# state in which every `elsewhere` remedy must say "one pin is stale" rather than "pin the other".
+# "Pinned" is the pin FILE existing, the same test `drv_pins_elsewhere` applies to the other one.
+shipyard_both_pinned() {
+  local f
+  drv_pins_elsewhere >/dev/null && f=$(_drv_pin_file 2>/dev/null) && [ -f "$f" ]
+}
+
 # shipyard_signal_class [<enum-rc> [<enum-output> <slot-session-name>]] — MAY AN ABSENCE BE
 # BELIEVED?
 #
@@ -531,10 +541,12 @@ EOF
 shipyard_container_remedy() {
   local var
   case "$(shipyard_backend)" in agterm) var=SHIPYARD_WORKSPACE ;; *) var=SHIPYARD_SESSION ;; esac
-  echo "  The container pin is missing or overridden, so this run looked in a different place from the one"
-  echo "  those slots were launched into. Name that container for this shell and re-run: $var=<that name>."
-  echo "  If those slots are finished, tear them down with the same variable set; that removes the"
-  echo "  worktrees this check reads."
+  echo "  This run resolved a different container from the one those slots were launched into (the pin is missing,"
+  echo "  overridden, or was re-pinned since). The name above comes from a launch record in the mailbox, which the"
+  echo "  children can write: confirm it against the launch output before trusting it. Then name it for this shell"
+  echo "  and re-run: $var=<that name>. If those slots are finished, check that the terminal listed there is really"
+  echo "  that slot's (another repo launched from the same place can hold one of the same name), then tear them down"
+  echo "  with the same variable set; that removes the worktrees this check reads."
 }
 
 # shipyard_elsewhere_remedy — the operator's next move after an `elsewhere` refusal of a LAUNCH, on
@@ -554,13 +566,21 @@ shipyard_elsewhere_remedy() {
   now=$(shipyard_backend)
   d=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
   mb=${DRV_CONTAINER_PIN_DIR:-<mailbox>}
-  if [ -n "$pin" ] && [ -f "$mb/container-$now" ]; then
-    # Both pinned (#132). One is stale and nothing on disk says which, so neither is believed:
-    # the operator finds the live fleet with the report, and clears the other pin the same way.
+  if shipyard_both_pinned; then
+    # Both pinned (#132). One is stale and nothing on disk says which, so neither is believed. The
+    # report under either backend prints the `elsewhere` NO SIGNAL naming the other for as long as
+    # both exist, so the single-pin steps below (which require no NO SIGNAL) cannot apply; the
+    # exit is down's last-slot cleanup, which clears the resolved backend's pin when that backend
+    # answered with no slot (`shipyard_continuity_cleanup_last_slot`, status 4).
     echo "  Both backends are pinned in this mailbox ($now and $pin), and it runs one at a time, so one pin is stale"
-    echo "  and nothing on disk says which. Find the live fleet first: run the report under each backend."
-    echo "  If the fleet is on $now, $pin's pin is the stale one — clear it as below. If it is on $pin, launch there"
-    echo "  and clear $now's pin the same way, with SHIPYARD_BACKEND=$now in each step."
+    echo "  and nothing on disk says which. Clear the stale one from the backend it names, never the other:"
+    echo "    1. SHIPYARD_BACKEND=<b> bash $d/shipyard-report.sh for the backend <b> you believe stale — it must list no"
+    echo "       ship-* terminal. Its only NO SIGNAL block may be the one naming the OTHER backend, which both pins cause;"
+    echo "    2. SHIPYARD_BACKEND=<b> bash $d/shipyard-down.sh <slot> ... (any one slot name if no worktree is left) —"
+    echo "       it clears <b>'s pin alone, keeps the other pin and every watcher, and says so;"
+    echo "    3. then launch, report and tear down on the other backend as usual. A pin that survives step 2 was KEPT:"
+    echo "       <b> listed a slot or could not answer. Do not remove it by hand — go back to step 1."
+    return 0
   else
     case "${SHIPYARD_BACKEND:-auto}" in
       auto) echo "  SHIPYARD_BACKEND=auto decides per process, and this process resolved $now while the fleet is on ${pin:-the other backend}." ;;
@@ -632,6 +652,10 @@ shipyard_absence_report() {
       # Asked a second time rather than parsed back out of the message above: re-reading two file names costs
       # nothing, and recovering a value from prose couples this arm to that sentence's wording.
       pin=$(shipyard_backend_pinned_elsewhere) || pin=""
+      if shipyard_both_pinned; then
+        shipyard_elsewhere_remedy | sed 's/^  /       /' >&2
+        return 1
+      fi
       echo "       \`SHIPYARD_BACKEND=auto\` decides per PROCESS, so one failed socket probe sends this" >&2
       echo "       run to the other backend, where this repo's container is empty for entirely" >&2
       echo "       correct reasons." >&2

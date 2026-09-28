@@ -275,5 +275,13 @@ if [ "$cleanup_status" -eq 2 ]; then
 elif [ "$cleanup_status" -eq 3 ]; then
   echo "warning: could not stop every parent continuity watcher; lifecycle state was preserved" >&2
   rc=1
+elif [ "$cleanup_status" -eq 4 ]; then
+  # Both backends were pinned (#132). This backend proved its own container empty, so its pin was
+  # stale and is gone; the other backend's pin, the watchers and the container were left alone.
+  other=$(shipyard_backend_pinned_elsewhere) || other=""
+  echo "notice: both backends were pinned; the $(shipyard_backend) pin was stale and is cleared." >&2
+  echo "        The ${other:-other} pin was kept, and no watcher was stopped: the fleet, if any, is there." >&2
+  echo "        Once that fleet ends, tear it down under SHIPYARD_BACKEND=${other:-<that backend>} as usual." >&2
+  rc=1
 fi
 exit "$rc"

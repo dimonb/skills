@@ -560,6 +560,15 @@ ok "agterm: a response without an id -> rc 2" 2 "$rc"
 rc=0; ( export FAKE_AT_NEW_RC=1 FAKE_AT_NEW_OUT='{"ok":true,"result":{"id":"U-1"}}' _DRV_BE=agterm DRV_CONTAINER_OVERRIDE=cont
         drv_launch_handle sess /work/dir /path/to/launcher >/dev/null ) || rc=$?
 ok "agterm: a failed launch -> rc 1" 1 "$rc"
+# A launch pins only once it went through (#132): pinned first, a launch aimed at a backend that was
+# down left a second pin beside the room's real one, and both pins disagree from either side.
+LPIN="$TMP/launch-pin"; mkdir -p "$LPIN"
+( export FAKE_AT_NEW_RC=1 _DRV_BE=agterm DRV_CONTAINER_PIN_DIR="$LPIN" DRV_REPO_KEY=lp
+  drv_launch_handle sess /work/dir /path/to/launcher >/dev/null 2>&1 )
+ok "agterm: a failed launch writes no pin" no "$([ -e "$LPIN/container-agterm" ] && echo yes || echo no)"
+( export FAKE_TMUX_HASSESSION_RC=0 FAKE_TMUX_NEW_ID=@9 _DRV_BE=tmux DRV_CONTAINER_PIN_DIR="$LPIN" DRV_REPO_KEY=lp
+  drv_launch_handle sess /work/dir /path/to/launcher >/dev/null 2>&1 )
+ok "tmux: a launch that went through pins the name it used" lp "$(cat "$LPIN/container-tmux" 2>/dev/null)"
 # ...while drv_launch keeps echoing the NAME, which shipyard relies on, handle or not.
 ok "drv_launch still echoes the name" sess \
    "$( export FAKE_TMUX_HASSESSION_RC=0 FAKE_TMUX_NEW_ID=@7 _DRV_BE=tmux DRV_CONTAINER_OVERRIDE=cont

@@ -89,10 +89,10 @@ ok "an unresolvable backend refuses (exit 1)" 1 "$rc"
 # Faked at the drv_* layer, AFTER sourcing term.sh, so the real ct_* bodies run: each fake records
 # what it was handed, including the pin directory the delegation was supposed to set.
 #
-# The tmux pin the ct_container_pin case above wrote is REMOVED first, or the last probe asserts
-# nothing: with both pins present this room has launched on each, so `drv_pins_elsewhere` reports
-# no disagreement and returns empty whether or not the pin directory was set. (That it does so is
-# the both-pins rule working — it is asserted in shared/driver/tests, not here.)
+# The tmux pin the ct_container_pin case above wrote is REMOVED first, so the probe below has
+# exactly one pin to report, the other backend's, and it does so only if the pin directory was set.
+# (With both present `drv_pins_elsewhere` reports the other one too, #132; that rule is asserted in
+# shared/driver/tests, not here.)
 rm -f "$ROOM/state/container-tmux"
 : > "$ROOM/state/container-agterm"     # a pin for a backend we are NOT resolving
 

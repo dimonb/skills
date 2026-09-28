@@ -563,7 +563,7 @@ rm -f "$MB"/container-*
 # record says where each slot went. The class can only ADD a refusal, so every case below is a
 # driver-believed absence (the tmux pin, rc 0) and the question is whether it stays believed.
 printf '\n── 6. launched into another container ──\n'
-unset -f git tmux    # sections 3-5 export fakes; this one needs git's real worktree list
+unset -f git tmux    # the sections above export fakes; this one needs git's real worktree list
 CR="$T14TMP/cont-repo"; mkdir -p "$CR"
 git -C "$CR" init -q; git -C "$CR" -c user.email=shipyard-test -c user.name=shipyard-test commit -q --allow-empty -m init
 git -C "$CR" worktree add -q "$CR/.claude/worktrees/ship-c7" -b c7 2>/dev/null
@@ -607,6 +607,50 @@ ok "6f: ...and the variable that names it"                          yes         
 # A torn-down slot's record stays in the mailbox for good; once its worktree is gone it is not read.
 git -C "$CR" worktree remove --force "$CR/.claude/worktrees/ship-c7" 2>/dev/null
 ok "6g: no worktree -> the record is not read"                      "|0"          "$(class_in "$TM_OLD_LISTS")"
+
+# --------------------------------------------- 7. both pins: the last-slot cleanup's way out (#132)
+# Both pins disagree from either side, so without this every teardown kept both and the printed
+# remedy could never complete. The resolved backend answered with no slot and holds its OWN pin, so
+# that pin alone goes (status 4); the other pin and the watchers are left. The real function runs,
+# with the watcher sweep replaced by a marker so a call to it is visible.
+printf '\n── 7. both pins, last-slot cleanup ──\n'
+BMB="$T14TMP/both-mb"; mkdir -p "$BMB"
+cleanup_in() { # <resolved backend> <enum rc> <slots> -> "<status>|<pins left>|<stop_all called?>"
+  local st=0
+  rm -f "$BMB/stop-called"
+  ( cd "$CR" || exit 99
+    export SHIPYARD_BACKEND="$1"
+    . "$SKILL_DIR/shipyard-backend.sh" >/dev/null 2>&1
+    . "$SKILL_DIR/shipyard-continuity.sh" >/dev/null 2>&1
+    DRV_CONTAINER_PIN_DIR="$BMB"
+    shipyard_continuity_stop_all() { : >"$BMB/stop-called"; }
+    shipyard_container_prune() { :; }
+    shipyard_continuity_cleanup_last_slot "$2" "$3" ) || st=$?
+  printf '%s|%s|%s' "$st" "$(ls -1 "$BMB" | grep '^container-' | tr '\n' ' ' | sed 's/ $//')" \
+    "$([ -e "$BMB/stop-called" ] && echo yes || echo no)"
+}
+: >"$BMB/container-agterm"; : >"$BMB/container-tmux"
+ok "7a: both pinned, tmux answered empty -> clears tmux's pin only, no watcher stop" \
+   "4|container-agterm|no" "$(cleanup_in tmux 0 "")"
+: >"$BMB/container-tmux"
+ok "7b: both pinned, but a slot is still listed -> nothing cleared" \
+   "2|container-agterm container-tmux|no" "$(cleanup_in tmux 0 "c9")"
+ok "7c: both pinned, the enumeration did not answer -> nothing cleared" \
+   "2|container-agterm container-tmux|no" "$(cleanup_in tmux 1 "")"
+rm -f "$BMB/container-tmux"
+ok "7d: only the OTHER backend pinned -> nothing cleared (#61)" \
+   "2|container-agterm|no" "$(cleanup_in tmux 0 "")"
+rm -f "$BMB"/container-*; : >"$BMB/container-tmux"
+ok "7e: control: only this backend pinned -> the ordinary full cleanup" \
+   "0||yes" "$(cleanup_in tmux 0 "")"
+# The printed remedy for both pins names that exit, not the single-pin steps it cannot pass.
+: >"$BMB/container-agterm"; : >"$BMB/container-tmux"
+out=$( export SHIPYARD_BACKEND=tmux; . "$SKILL_DIR/shipyard-backend.sh" >/dev/null 2>&1
+       DRV_CONTAINER_PIN_DIR="$BMB"; shipyard_elsewhere_remedy )
+ok "7f: the both-pinned remedy says one pin is stale"          yes "$(has "$out" 'so one pin is stale')"
+ok "7f: ...names down as the way to clear it"                  yes "$(has "$out" "clears <b>'s pin alone")"
+ok "7f: ...and does not demand a report with no NO SIGNAL"     no  "$(has "$out" 'print no NO SIGNAL')"
+rm -f "$BMB"/container-*
 
 if [ "$FAILURES" -eq 0 ]; then
   printf 't14-signal: %d checks, all passed\n' "$CHECKS"; exit 0

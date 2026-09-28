@@ -184,13 +184,21 @@ drv_pin() {
 # driver sources nothing: keep the two in step. The same named residual applies: between `mktemp`
 # and the shell re-opening the temp for the write, a watcher could swap that random name.
 drv_container_pin() {
-  local v f tmp
+  local v
   v=$(drv_container) || return 1
+  _drv_pin_write "$v"
+  printf '%s' "$v"
+}
+
+# Write <name> as the resolved backend's pin, by rename (above). Silent; a write that cannot happen
+# leaves no pin, which the next launch retries.
+_drv_pin_write() {
+  local v="$1" f tmp
   if f=$(_drv_pin_file 2>/dev/null) && [ ! -d "$f" ] \
     && tmp=$(mktemp "${f%/*}/.drv-pin.XXXXXXXX" 2>/dev/null); then
     { printf '%s\n' "$v" >"$tmp" && mv -f "$tmp" "$f"; } 2>/dev/null || rm -f "$tmp" 2>/dev/null
   fi
-  printf '%s' "$v"
+  return 0
 }
 
 # --- the API every caller uses -------------------------------------------------
@@ -222,8 +230,8 @@ drv_target() {
 
 # drv_launch <session-name> <cwd> <launcher> — start an agent console in its own session running
 # the launcher (an executable file the caller writes, so neither backend carries a long quoted
-# command line). Echoes the session name on success. The container is pinned here, so the first
-# launch fixes the name for every later call.
+# command line). Echoes the session name on success. The container is pinned here once the launch
+# succeeds, so the first successful launch fixes the name for every later call.
 drv_launch() {
   _drv_launch "$@" >/dev/null || return 1
   printf '%s' "$1"
@@ -259,7 +267,7 @@ _drv_launch() {
   local name="$1" cwd="$2" launcher="$3" container inner cmd out h
   case "$(drv_backend)" in
     agterm)
-      container=$(drv_container_pin) || return 1
+      container=$(drv_container) || return 1
       # `zsh -lc` gives the child a LOGIN shell: agterm spawns it from the app, so it inherits
       # the GUI environment and would otherwise miss the user's PATH entirely. --wait holds the
       # session open after the agent exits, so a crash stays readable.
@@ -272,7 +280,7 @@ _drv_launch() {
       h=$(printf '%s' "$out" | jq -r 'if .ok == true and (.result.id | type) == "string"
                                       then .result.id else empty end' 2>/dev/null) || h="" ;;
     tmux)
-      container=$(drv_container_pin) || return 1
+      container=$(drv_container) || return 1
       cmd=$(drv_shq "$launcher")
       # Scrub AGTERM_* before the tmux SERVER is born: a server started from inside an agterm
       # session captures them and hands them to everything it ever spawns, so a child's
@@ -291,6 +299,11 @@ _drv_launch() {
       fi ;;
     *) _drv_no_backend; return 1 ;;
   esac
+  # PINNED ONLY ONCE THE LAUNCH WENT THROUGH, and with the very name it used. Pinned before it, a
+  # launch on a backend that then failed — a relaunch aimed at a backend that was down — left a pin
+  # for a backend that holds nothing beside the real one, and since both pins disagree from either
+  # side (#132) every later verb refused on it.
+  _drv_pin_write "$container"
   printf '%s\t%s' "$container" "$h"
 }
 
@@ -612,8 +625,11 @@ drv_handles() {
 # both: a blip that resolved the idle backend then found an honestly empty container and was
 # believed over live children. A caller runs one backend at a time (shipyard refuses a launch on
 # the other one, #280), so two pins mean one of them is stale and nothing here can say which. The
-# answer is the refusal, naming the other backend; the way out is the caller's teardown under it,
-# which clears that pin once it has proven that backend empty.
+# answer is the refusal, naming the other backend. The way out is each caller's: shipyard's
+# last-slot teardown clears the resolved backend's own pin once that backend answered with no slot
+# (`shipyard_continuity_cleanup_last_slot`); council has no pin-clearing verb and its remedy names
+# the stale file to remove by hand. `_drv_launch` pins only after a launch succeeds, so a launch
+# that failed on a backend that was down does not create the second pin.
 drv_pins_elsewhere() {
   local d b now other=""
   d="${DRV_CONTAINER_PIN_DIR:-}"
