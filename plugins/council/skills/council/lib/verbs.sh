@@ -266,7 +266,7 @@ v_claims() {
     # so it is neither open nor closed, and it is not counted below. It is still PRINTED: this
     # section is what keeps the snapshot from hiding anything (claims.jq says why).
     (if (.late|length) > 0
-     then "after the close — in the log, not in the record, counted nowhere:",
+     then "after the close, or outside the snapshot of the record — in the log, counted nowhere:",
           (.late[] | "  ⊘ \(.id) (\(.from)) \(.act): \(.text)"), ""
      else empty end),
     "open objections: \(.open|length)"'
@@ -686,7 +686,8 @@ _floor_wait_state() {
 }
 
 # _stall_escalate <peer> <turns> <held-seconds> <tier> [annotation] — push one notice into the
-# shared mailbox for a room whose floor has been held past a tier. Best-effort: it can never fail
+# room's mailbox (the shared one for a supervised room; council.sh, #178) for a room whose floor
+# has been held past a tier. Best-effort: it can never fail
 # the status block that called it.
 #
 # `<tier>` is one of the names the `case` in the body accepts, and it is the SAME event's
@@ -1914,7 +1915,11 @@ v_status() {
     [ -n "$round_line" ] && printf '%s\n' "$round_line"
     printf '%s' "$g" | jq -r '
       if (.live|length) == 0 then "on the table: nothing" else (.live[] | "on the table: \(.id) from \(.from) — \(.current_text[0:90])") end,
-      (if (.open|length) > 0 then (.open[] | "  ✗ OPEN \(.id) (\(.from)): \(.text[0:90])") else "  no open objections" end)'
+      (if (.open|length) > 0 then (.open[] | "  ✗ OPEN \(.id) (\(.from)): \(.text[0:90])") else "  no open objections" end),
+      # A closed room lists what is outside the snapshot of its record (#176). The watched output
+      # is this block, not `claims`, so a claim the snapshot leaves out is shown here too, rather
+      # than quietly dropping out of the OPEN lines it would have occupied before.
+      (.late[]? | "  ⊘ after the close \(.id) (\(.from)) \(.act): \(.text[0:90]) (council.sh claims)")'
     printf 'alarms:%s\n' "${alarms:- —}"
     printf 'last messages:\n'
     v_transcript | tail -3 | sed 's/^/  /'

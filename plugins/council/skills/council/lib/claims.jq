@@ -46,11 +46,25 @@
 # construction. The snapshot is room state, so a seat can write it. That lets a seat move a claim
 # between "in the record" and "after the close"; it cannot make one vanish from what `claims`
 # prints. With `$closed` null, `late` is empty and nothing differs from before.
+#
+# THE KEPT SET IS CLOSED UNDER ITS REFERENCES, and that is what makes the sentence above true for a
+# PARTIAL snapshot and not only for an empty one. An objection is printed under its proposal and an
+# amend under its owner, so a snapshot that kept `b-1` and dropped the `a-1` it objects to used to
+# print `b-1` nowhere and count it nowhere: one edit of the file hid an objection the record left
+# open. So a kept message that references a message of the log which is NOT kept is late too, and
+# that is repeated until nothing moves, because moving one can orphan the next (an amend of that
+# objection). A reference to an id no message in the log carries changes nothing: it was dangling
+# before the close as well.
 ($closed // null) as $co
 | def _in_snapshot: . as $x | any($co[]; .from == $x.from and .id == $x.id);
+  def _closed_under($ids): ([ .[].id ]) as $kept
+    | ( map(select(all((.refs // [])[]; (IN($ids[]) | not) or IN($kept[])))) ) as $next
+    | if ($next | length) == length then . else ($next | _closed_under($ids)) end;
 . as $all
-| (if $co == null then $all else [ $all[] | select(_in_snapshot) ] end) as $m
-| (if $co == null then [] else [ $all[] | select(_in_snapshot | not) ] end) as $late
+| (if $co == null then $all
+   else [ $all[] | select(_in_snapshot) ] | _closed_under([ $all[].id ]) end) as $m
+| (if $co == null then []
+   else [ $all[] | select(. as $x | any($m[]; .from == $x.from and .id == $x.id) | not) ] end) as $late
 | [ $m[] | select(.act == "propose") ] as $props
 | [ $m[] | select(.act == "object")  ] as $objs
 # The first `decide` message, if any. Named for what it IS -- a message somebody sent -- and

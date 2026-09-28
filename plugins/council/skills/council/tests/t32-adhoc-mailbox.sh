@@ -7,7 +7,7 @@
 # `unresolved` close used to push "a human should look" into the real `.git/ship-escalations/` of
 # whatever repo the caller stood in. So this file UNSETS the override and builds its own repo.
 #
-# The property has two halves, and the second is the one a mistake here would break silently:
+# The property has several parts, and B is the one a mistake here would break silently:
 #   A  an ad hoc room (not directly under `<git dir>/council/`) writes into `<room>/mailbox/`, and
 #      NOTHING reaches the repo's mailbox;
 #   B  a supervised room (where `up` puts rooms) still pushes into the repo's mailbox, the same as
@@ -74,6 +74,19 @@ close_unresolved "$RB2" "$REPO"
 ok "B: set up a second supervised room"              yes "$(present "$REAL_MB/council-real2-1.json")"
 ( cd "$REPO" && COUNCIL_ROOM="$ROOT/link/real2" bash "$CLI" status --only-changed >/dev/null 2>&1 )
 ok "B: a symlinked spelling is still supervised"     yes "$(present "$REAL_MB/council-status-sig-real2")"
+
+# A bare common dir under safe.bareRepository=explicit, the bare-repo-with-worktrees layout: git
+# refuses to DISCOVER it, so a check that asked git from inside it read a real room as ad hoc.
+BARE="$ROOT/bare.git"; ( git init -q --bare "$BARE" ) || { echo "t32: git init --bare failed" >&2; exit 1; }
+BGD=$(cd "$BARE" && pwd -P); mkdir -p "$BGD/council"
+( export GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=safe.bareRepository GIT_CONFIG_VALUE_0=explicit
+  close_unresolved "$BGD/council/bare" "$REPO" )
+ok "B: a bare common dir under explicit is supervised" no "$(present "$BGD/council/bare/mailbox")"
+ok "B: ...so its notice went to the resolved mailbox"  yes "$(present "$REAL_MB/council-bare-1.json")"
+# An inherited GIT_DIR names some other repository; it must not decide what this room is.
+OTHER="$ROOT/other"; mkdir -p "$OTHER"; ( cd "$OTHER" && git init -q . )
+( export GIT_DIR="$OTHER/.git"; close_unresolved "$GD/council/inherited" "$REPO" )
+ok "B: an inherited GIT_DIR does not make it ad hoc"   no "$(present "$GD/council/inherited/mailbox")"
 
 # --- C. the explicit override wins ------------------------------------------------------------------
 RC="$ROOT/scratch/explicit"; MC="$ROOT/explicit-mb"

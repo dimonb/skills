@@ -50,6 +50,9 @@ producing polite agreement.
   cursor/<me>/<peer>         ← ONE writer per cursor (me), by protocol
   bell/<peer>.fifo       the doorbell
   board/decision.md      the output; board/status holds decided|unresolved
+  board/closed-over      the messages the record was written from (see "A closed room"
+                         below); readers of a closed room build their graph from it
+  mailbox/               only in an AD HOC room: its escalation writes (see the trust contract)
   state/                 counters, launchers, the pinned terminal container, keeper pid,
                          `teardown` — a decided close's request that the keeper reap — and
                          `reaping`, which the keeper leaves when it starts a reap
@@ -153,7 +156,7 @@ has not been decided — read this as a description of what the code does today,
 gap somebody is on their way to filling.
 
 An `amend` belongs to **one** proposal — the first proposal-typed id it references; its
-other refs are the objections it closes. (Referencing two proposals used to apply the
+other refs are objections, and it closes those raised against that proposal. (Referencing two proposals used to apply the
 amendment to both, so a room displayed two participants proposing the same words.) An
 `amend` that names only an objection belongs to the proposal that objection was raised
 against, so the decision record carries the amendment it closed the objection with. An `amend`
@@ -389,7 +392,7 @@ Three consequences worth knowing:
   that and never as the set. What the room's own bookkeeping cannot report, a backend read can —
   `status`'s closed-room alarm, `council.sh terminals` and `rooms`' `term` column all surface the
   same `_room_terminals` read. That read checks the handles the backend assigned at launch against
-  a launch record in the shared mailbox (#247), which inherits the mailbox's forgeability (below),
+  a launch record in the room's mailbox (#247; the shared one for a supervised room), which inherits the mailbox's forgeability (below),
   so it narrows the question rather than closing it.
 * **`relaunch` cancels a teardown no keeper has taken yet.** Putting a seat back up says the room
   is in use again, and it outranks a close that asked for the seats to go — it has to, or the seat
@@ -638,7 +641,11 @@ decided (#204), and this is what was decided:
   `<room>/mailbox/`, so a throwaway room's "closed unresolved, a human should look" stops landing
   on a real supervisor's screen. The test reads the room's own physical path. It never reads the
   caller's cwd or a roster field, so no edit to room state takes a real room off the supervisor's
-  mailbox. An explicit `POLICY_MAILBOX_DIR` wins either way. Set it to run a real room outside
+  mailbox. It names the git dir to git explicitly rather than letting git discover it, so a bare
+  common dir under `safe.bareRepository=explicit` and an inherited `GIT_DIR` do not change the
+  answer. What does change it is a write inside the git dir itself: replacing `council/` with a
+  symlink moves every room's physical path, and those rooms then read ad hoc. That is the same
+  reach that could delete the mailbox outright. An explicit `POLICY_MAILBOX_DIR` wins either way. Set it to run a real room outside
   `up`'s directory and keep it supervised.
 * **The shared mailbox is exactly as seat-writable as the room.** `.git/ship-escalations/` sits in
   the same git directory any participant can reach, so evidence kept "outside the room" there — a
@@ -1066,7 +1073,7 @@ fired on the same stall, and a plain `status` has no memory and always prints it
 
 This changes only how the line **reads**. It prints on every tick the stall holds, under
 `--only-changed` and `--alarms-only` alike, and the push is unchanged. Both new records live in the
-shared mailbox — `council-stall-<alarms|block>-<room>` for the count, one
+room's mailbox (the shared one for a supervised room) — `council-stall-<alarms|block>-<room>` for the count, one
 `council-said-<room>.<8 random characters>` file per `say` for what it sent — and, like everything
 else there, a seat can write them: a forged count moves the wording, a forged `say` withholds the
 UNANSWERED form but is **printed** as a message sent, so check that you sent what it says you sent. `STALL_ESCALATE_AT` in `lib/verbs.sh` carries the reasoning.
@@ -1200,7 +1207,9 @@ terminal before relaunching"*, with the matched line printed as evidence.
 
 A `STALL` also **pushes**: one `notice` into the shared escalation mailbox — the same
 fire-and-forget channel an `unresolved` close uses (`.git/ship-escalations/`, which a shipyard
-parent's escalation monitor already polls). What that buys is durability and audience: the alarm
+parent's escalation monitor already polls). That is a supervised room's mailbox. An ad hoc room,
+one built by hand outside `up`'s directory, pushes into `<room>/mailbox/` instead, which no
+monitor reads (see the trust contract). What that buys is durability and audience: the alarm
 stops being a line in a console someone has to be reading, and reaches a supervisor who never
 looked at this room. **It still does not make the room self-reporting** — something has to run
 `council.sh status` for the alarm to be reached at all, which is what the two monitors at the top

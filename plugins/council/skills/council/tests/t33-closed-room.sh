@@ -51,7 +51,7 @@ COUNCIL_ME=b bash "$CLI" send --hand --act object --refs '["a-1"]' "A hand raise
 ok "2: a --hand send is still accepted"              $((nb + 1)) "$(lane_n b)"
 c=$(bash "$CLI" claims)
 ok "2: claims lists it after the close"              yes "$(has "$c" "⊘ b-3 (b) object: A hand raised after the close.")"
-ok "2: ...under its own heading"                     yes "$(has "$c" "after the close — in the log, not in the record")"
+ok "2: ...under its own heading"                     yes "$(has "$c" "after the close, or outside the snapshot of the record")"
 ok "2: ...never as OPEN"                             no  "$(has "$c" "✗ OPEN")"
 ok "2: ...and counts no open objection"              0   "$(open_n)"
 ok "2: verdict --json agrees"                        0   "$(bash "$CLI" verdict --json | jq -r .open)"
@@ -72,6 +72,9 @@ printf '[]\n' > "$ROOM/board/closed-over"
 c=$(bash "$CLI" claims)
 ok "3: an emptied snapshot still prints the proposal" yes "$(has "$c" "⊘ a-1 (a) propose: Ship it.")"
 ok "3: ...and every late objection"                   yes "$(has "$c" "⊘ b-3 (b) object:")"
+# The status block is the output an operator watches, so late claims are shown there too.
+s=$(bash "$CLI" status 2>/dev/null)
+ok "3: status shows the late claims too"              yes "$(has "$s" "⊘ after the close b-3 (b) object:")"
 printf 'not json' > "$ROOM/board/closed-over"
 c=$(bash "$CLI" claims)
 ok "3: an unreadable snapshot falls back to the whole log" 2 "$(open_n)"
@@ -101,6 +104,24 @@ ok "4: ...and the late objection is not OPEN"        1 "$(open_n)"
 COUNCIL_ME=a bash "$CLI" decide --force >/dev/null 2>&1
 ok "4: a re-force records the late claims"           yes "$(has "$(cat "$ROOM/board/decision.md")" "No, by hand.")"
 ok "4: ...and then counts them, as the record does"  '["b-3"]' "$(bash "$CLI" claims --raw | jq -c '[.open[].id]')"
+# The record's own Objections section, not only its transcript: the re-force builds its graph
+# over the whole log, so the late withdraw closes b-1 there and b-3 is left open.
+rec=$(cat "$ROOM/board/decision.md")
+ok "4: the rewritten record closes b-1 by the withdraw"  yes "$(has "$rec" 'closed by `b-2` — withdraw from b')"
+ok "4: ...and leaves b-3 open"                           yes "$(has "$rec" '* `b-3` from b: No, by hand.')"
+
+# --- 4b. a PARTIAL snapshot cannot hide a claim ----------------------------------------------------
+# Kept objection, dropped proposal: the objection used to be printed nowhere and counted nowhere.
+ROOM="$COUNCIL_TEST_ROOT/t33p"; mkroom "$ROOM" a b c; export COUNCIL_ROOM="$ROOM"
+raw_msg a 1 1 0 propose '[]'       "P."
+raw_msg b 1 2 1 object  '["a-1"]'  "Objection kept in the snapshot."
+raw_msg c 1 3 2 amend   '["b-1"]'  "Amend of it."
+printf 'unresolved' > "$ROOM/board/status"; printf '# record\n' > "$ROOM/board/decision.md"
+printf '[{"from":"b","id":"b-1"},{"from":"c","id":"c-1"}]\n' > "$ROOM/board/closed-over"
+c=$(bash "$CLI" claims)
+ok "4b: the dropped proposal is late"                yes "$(has "$c" "⊘ a-1 (a) propose: P.")"
+ok "4b: ...and so is the objection it orphaned"      yes "$(has "$c" "⊘ b-1 (b) object: Objection kept in the snapshot.")"
+ok "4b: ...and the amend that orphaned in turn"      yes "$(has "$c" "⊘ c-1 (c) amend: Amend of it.")"
 
 # --- 5. an amend closes objections only on the proposal it amends (re-homed from #295) -------------
 ROOM="$COUNCIL_TEST_ROOT/t33a"; mkroom "$ROOM" a b c; export COUNCIL_ROOM="$ROOM"

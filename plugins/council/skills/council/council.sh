@@ -69,7 +69,8 @@ council.sh <verb> [options]
                                                        posted, wait; exit 7 = that act is not a
                                                        position, re-send with --act propose
                                                        exit 8 = the room is closed, nothing was
-                                                       sent: read `decision` and stop    floor                                              who holds it, who is next, how long it
+                                                       sent: read `decision` and stop
+    floor                                              who holds it, who is next, how long it
                                                        has been held and the room's turn
                                                        deadline (both in milliseconds)
     protocol                                           your own role and the channel rules
@@ -207,13 +208,25 @@ export COUNCIL_ROOM
 # an operator who deliberately runs a real room outside `room_base` keeps its escalations reaching
 # a supervisor. It is exported so the processes this one starts (a keeper, a relaunched seat's
 # launcher) inherit the same answer.
+#
+# The git dir is named to git explicitly (`--git-dir`), never discovered from it with `-C`, and
+# with the caller's GIT_* location variables cleared. Discovery is refused for a bare repository
+# under `safe.bareRepository=explicit` (the common dir of a bare-repo-with-worktrees layout), an
+# inherited GIT_DIR answers about some other repository, and a `.git` file planted inside the git
+# dir redirects discovery. Each of those made a room `up` had created read as ad hoc, so its
+# escalations stopped reaching the supervisor. What remains: a seat that replaces `council/` with
+# a symlink to somewhere else moves every room's physical path, and those rooms then read ad hoc.
+# That takes a write inside the git dir itself, the same reach that could delete the mailbox.
 _room_is_supervised() {
-  local r parent gd
+  local r parent gd common
   r=$(cd "$1" 2>/dev/null && pwd -P) || return 1
   parent=$(dirname "$r")
   [ "$(basename "$parent")" = council ] || return 1
   gd=$(dirname "$parent")
-  [ "$(git -C "$gd" rev-parse --is-inside-git-dir 2>/dev/null)" = true ]
+  common=$(env -u GIT_DIR -u GIT_WORK_TREE -u GIT_COMMON_DIR \
+             git --git-dir="$gd" rev-parse --git-common-dir 2>/dev/null) || return 1
+  case "$common" in /*) ;; *) common="$gd/$common" ;; esac
+  [ "$(cd "$common" 2>/dev/null && pwd -P)" = "$gd" ]
 }
 if [ -z "${POLICY_MAILBOX_DIR:-}" ] && ! _room_is_supervised "$COUNCIL_ROOM"; then
   POLICY_MAILBOX_DIR="$(cd "$COUNCIL_ROOM" && pwd -P)/mailbox"
