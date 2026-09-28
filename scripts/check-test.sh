@@ -102,6 +102,7 @@ restore() {
     shared/flow/tests/_probe-unreg.sh shared/flow/extra.sh \
     shared/adapters/tests/_probe-unreg.sh shared/policy/tests/_probe-unreg.sh \
     shared/knobs/tests/_probe-unreg.sh \
+    plugins/shipyard/skills/shipyard/tests/t1-probe-dup.sh "$TESTS_DIR/t1z-probe.sh" \
     2>/dev/null || true
   rmdir docs 2>/dev/null || true
 }
@@ -1104,6 +1105,44 @@ perl -pi -e "s{^GUARDED='[^']*'}{GUARDED_RENAMED=''}" scripts/check-test.sh
 expect_fail "check 13: an unreadable \$GUARDED is loud, not silent" \
   "could not read \$GUARDED"
 git checkout -- scripts/check-test.sh
+
+# 34 — check 14: a parent-pid lookup with no pattern reds (#265). The fixture is TEXT: the gate
+# only reads it, nothing here or in check.sh executes it, and it opens with `exit 0` besides. The
+# command word comes from a variable so that this file never spells the shape check 14 matches —
+# the gate scans this file too, and exempting it would leave the likeliest place to add a
+# violation unscanned.
+PG=pgrep
+SH_PROBE=plugins/ship/skills/ship/_probe.sh
+printf '#!/usr/bin/env bash\nexit 0\nkids=$(%s -P "$x")\n' "$PG" > "$SH_PROBE"
+expect_fail "check 14: a parent-pid pgrep with no pattern" \
+  "pgrep/pkill with -P/--parent and no pattern"
+# 34b — the long spelling, through a pipe, is the same lookup.
+printf '#!/usr/bin/env bash\nexit 0\n%s --parent "$x" | head\n' "$PG" > "$SH_PROBE"
+expect_fail "check 14: the --parent spelling with no pattern" \
+  "pgrep/pkill with -P/--parent and no pattern"
+# 34c — and the mirror: WITH a pattern the lookup filters correctly on both platforms, so the
+# check must stay green on it. Without this, an arm that fired on every `-P` would read as caught.
+printf '#!/usr/bin/env bash\nexit 0\nkids=$(%s -P "$x" sleep)\n' "$PG" > "$SH_PROBE"
+expect_pass "check 14: a parent-pid pgrep WITH a pattern stays green"
+rm -f "$SH_PROBE"
+
+# 35 — check 10b: two tests in one suite sharing a number red (#149). Registered, so that check
+# 10's unregistered arm cannot fire and claim the catch, and in the SHIPYARD suite so the arm is
+# proven to run outside council.
+SY_DIR=plugins/shipyard/skills/shipyard/tests
+perl -pi -e 's{^tests=\(}{tests=(t1-probe-dup.sh }' "$SY_DIR/run-all.sh"
+printf '#!/usr/bin/env bash\nexit 0\n' > "$SY_DIR/t1-probe-dup.sh"
+expect_fail "check 10b: two tests in one suite share a number" \
+  "share the number t1"
+rm -f "$SY_DIR/t1-probe-dup.sh"
+git checkout -- "$SY_DIR/run-all.sh"
+# 35b — the letter-suffix scheme (`t9`, `t9b`) is distinct numbers by construction, so a new
+# suffix next to an existing number stays green.
+perl -pi -e 's{^tests=\(}{tests=(t1z-probe.sh }' "$RUNNER"
+printf '#!/usr/bin/env bash\nexit 0\n' > "$TESTS_DIR/t1z-probe.sh"
+expect_pass "check 10b: a letter suffix on an existing number stays green"
+rm -f "$TESTS_DIR/t1z-probe.sh"
+git checkout -- "$RUNNER"
 
 echo
 echo "assertions proven: $pass   not proven: $nocatch"

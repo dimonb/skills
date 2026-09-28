@@ -333,6 +333,18 @@ Telling those apart needs the A/B, not an argument.
 
 The gate cannot see any of this.
 
+## A helper that signals a list of pids bounds the list
+
+A test cleanup built "the child's children" with a parent-pid `pgrep` and no pattern, which on macOS
+ignores the parent filter and prints every pid on the machine; the helper passed the list to
+`kill -9` and killed every process the user owned, on every resume of the slot that carried it. So
+**a helper that signals a LIST of pids refuses pid 1 and refuses a list longer than the handful it
+could plausibly own** — the list is exactly what a wrong lookup inflates, and a guard that only
+rejects empty, `0` and non-numeric entries passes every one of those 680 values. Look children up
+with `ps -A -o pid= -o ppid=` filtered by awk on the parent column, which behaves the same on both
+platforms. `make check` (check 14) reds the no-pattern `pgrep`/`pkill -P` shape in any `*.sh`; a
+list built any other way it cannot see, so the bound is carried by judgement.
+
 ## How to verify a change for real
 
 ```bash
