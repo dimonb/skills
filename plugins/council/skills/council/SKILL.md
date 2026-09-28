@@ -51,7 +51,8 @@ producing polite agreement.
   bell/<peer>.fifo       the doorbell
   board/decision.md      the output; board/status holds decided|unresolved
   state/                 counters, launchers, the pinned terminal container, keeper pid,
-                         and `teardown` — a decided close's request that the keeper reap
+                         `teardown` — a decided close's request that the keeper reap — and
+                         `reaping`, which the keeper leaves when it starts a reap
 ```
 
 It lives in the **shared git dir** so one path resolves from every worktree of the repo,
@@ -76,7 +77,10 @@ from the write to a sleeping reader waking), and end-to-end delivery **~60 ms** 
 25 ms is the sender publishing and 39 ms the reader parsing, i.e. `jq` spawns rather than
 the wire. A poll loop would be 0–5 s. A keeper process holds every bell open read-write for the life of the room, so a
 bell rung at a participant that is not currently listening is buffered rather than lost,
-and the ring itself is backgrounded so a dead participant can never wedge a sender.
+and the ring itself is backgrounded so a dead participant can never wedge a sender. The ring
+opens the fifo read-write, so it never blocks in open(2) waiting for a reader, even in a room
+with no keeper. There a bell rung while nobody listens is dropped, and that costs latency but never a
+message: `recv` reads the lanes before its first wait on the bell.
 A bell that is no longer a fifo — an archive-and-restore of a room directory, or any copy
 that does not preserve fifos — makes `recv` say so on stderr and fall back to a half-second
 poll (not the 0–5 s figure above: `recv` passes its own interval), because `exec` succeeds on
@@ -363,12 +367,19 @@ Three consequences worth knowing:
 * **`relaunch` cancels a teardown no keeper has taken yet.** Putting a seat back up says the room
   is in use again, and it outranks a close that asked for the seats to go — it has to, or the seat
   it launches is reaped within a poll of starting. That covers the keeper that died before taking
-  the request *and* the live keeper still inside its poll window. What it cannot
-  cancel is a reap already **in flight**: the keeper consumes the request before it starts
-  closing, so from that moment there is nothing left to clear and `relaunch` cannot see it. That
-  window is the length of one reap — measured at 84–383 ms for three seats on a live tmux backend
-  — and a `relaunch` landing inside it can leave the room without a keeper until the next one
-  repairs it. It is tracked separately rather than papered over here.
+  the request *and* the live keeper still inside its poll window. A reap already **in flight**
+  cannot be cancelled, so `relaunch` **waits it out** instead. The keeper takes a request by
+  renaming it to `state/reaping`, and writes that file itself before an owner-death reap, so a
+  running reap is visible. `relaunch` waits while that file exists and the keeper it names is
+  alive, then starts a fresh keeper and the seat. A reap takes well under a second for three seats
+  on a live tmux backend. If a reap is still running after 30 seconds, `relaunch` refuses and
+  launches nothing, and saying so is safer than launching a seat that reap may then close. The
+  wait depends on the keeper being alive, not on the file, so a keeper killed mid-reap by `down`
+  does not hold the next `relaunch` up. Two limits. First, an owner-death reap (`up --hold`) is
+  visible only once the keeper has written the file, so a `relaunch` that looked just before can
+  still race it. Second, both inputs are room state a participant can write, so this guards
+  against accidents, not against a participant. A file planted there makes `relaunch` refuse and
+  name the path. Removing that file and running `relaunch` again clears it.
 
 `down` is untouched by this and still the way to close a room by hand: an unresolved one, one whose
 teardown could not happen, or any room at all before it decides. `down --purge` remains the only
@@ -644,7 +655,8 @@ the first launch used (`zsh -lc 'exec …'`) and the same pinned container.
 
 It also puts the **keeper** back if it is missing — `down` kills it along with the
 terminals, and a seat restarted into a room with no keeper looks perfectly healthy while
-every bell rung at it is lost.
+every bell rung at it outside `recv` is dropped. No message is lost, because `recv` reads the
+lanes before it waits, so a message is read at most one bell-wait (half a second) late.
 
 The one peer it cannot restart is the seat *you* took with `--me`: that participant was
 never given a terminal, so there is no launcher, and it says so.

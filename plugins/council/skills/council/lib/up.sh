@@ -53,8 +53,8 @@ _council_prompt() { # <mode> <protocol-path>
 # A stale or malformed pid file is the ordinary case, with nobody attacking: a keeper that
 # died and left its pid behind, a room directory copied, an interrupted start that wrote an
 # empty value. `kill -0 0` also SUCCEEDS, so an unguarded `_keeper_ensure` reads `0` as "a
-# keeper is running", never starts one, and every bell in the room is then silently lost --
-# the exact failure that function's own header says it exists to prevent.
+# keeper is running", never starts one, and every bell rung outside `recv` is then silently
+# dropped -- the exact failure that function's own header says it exists to prevent.
 #
 # So every reader goes through here and `kill` only ever sees a positive integer. Digits then
 # `10#`, the idiom c_slurp carries for the same reason: a value like `010` is a legal pid file
@@ -115,7 +115,7 @@ _keeper_record() { # <pid> -> one line on stdout
 # The keeper's pid, ONLY if that pid is still the process the file was written for (#30). A pid
 # is not unique over time: `down` kills the keeper, the OS hands the number to something else, and
 # a bare `kill -0` then answers "alive" for a process that is not a keeper at all — so
-# `_keeper_ensure` never restarts it and every bell rung at a seat outside `recv` is lost in
+# `_keeper_ensure` never restarts it and every bell rung at a seat outside `recv` is dropped in
 # silence, `decide` reports the seats are going when nothing will reap them, and `down` sends
 # SIGTERM to whatever now holds the number. Comparing the start time the file recorded with the
 # LIVE process's own start time turns that into an ordinary mismatch.
@@ -158,6 +158,53 @@ _room_dirs_sane() { # <room>
 # a number that has to be maintained is the thing that stops agreeing with the tree.
 _keeper_teardown_file() { printf '%s/state/teardown' "$1"; }
 
+# The file that says a reap is IN FLIGHT (#189). The keeper takes a teardown request by RENAMING
+# `state/teardown` onto this name, never by `rm`, and writes it itself before an owner-death reap —
+# so from the moment a keeper commits to reaping until it exits, this path exists and `relaunch`
+# can see it. Without it, a consumed request left nothing anywhere saying a reap was running, and
+# `relaunch` then trusted a reaping keeper as the room's keeper for good.
+#
+# The keeper does NOT remove it as it exits. A file removed on the way out would leave an instant
+# with no file and the keeper still alive, and a `relaunch` landing there would trust the dying
+# keeper exactly as before. So the file outlives the reap, and it is what it says only while the
+# keeper named by `state/keeper.pid` is alive: `_keeper_await_reap` waits for THAT, and removes the
+# file once the keeper is gone; `_keeper_ensure` removes it before forking a new keeper, since
+# having decided no keeper is live, whatever is at this path is left over. Presence is the whole
+# signal; the word in the file (`teardown` or `owner-gone`) is for whoever reads it by hand.
+_keeper_reaping_file() { printf '%s/state/reaping' "$1"; }
+
+# Wait for a reap in flight to finish (#189), for `relaunch`, which must not trust a reaping keeper
+# as the room's keeper and must not launch a seat that reap is about to close. Returns 0 when no reap
+# is running any more — none was, or its keeper has exited — and 1 when the ceiling passed with the
+# reaping keeper still alive, which the caller reports rather than papers over.
+#
+# BOUNDED BY THE KEEPER'S LIVENESS, NOT BY THE FILE. The file outlives the reap (above), and a keeper
+# can die mid-reap without reaching its own exit: `down` kills it with a plain `kill`. A wait on the
+# file alone would then wait for ever over a file nobody will ever remove. `down` also removes the
+# pid file, so `_keeper_live` fails at once there and this returns 0 on its first test.
+#
+# The ceiling is the backstop for a reap that hangs inside a backend command. Reaps were measured at
+# 84–383 ms for three seats and up to 2157 ms for twelve on tmux; 30 s is an order of magnitude past
+# the worst of those. The argument exists for the suite, which has no reason to wait that long.
+#
+# BOTH INPUTS ARE ROOM STATE A PEER CAN WRITE, so this is an accident check and prevents nothing
+# deliberate (AGENTS.md, on untrusted evidence). Routes known so far, not the set: removing
+# `state/reaping` during a real reap, or pointing `keeper.pid` at a dead pid, skips the wait and
+# returns `relaunch` to the pre-#189 behaviour — never quieter than that; and a file planted at
+# `state/reaping` in a healthy room makes `relaunch` wait out the ceiling and refuse. The refusal
+# is loud and names the path, so that last route reveals itself rather than hiding anything.
+_keeper_await_reap() { # <room> [<ceiling-deciseconds>] -> 0 no reap in flight, 1 still reaping at the ceiling
+  local room="$1" max="${2:-300}" rp keep n=0
+  rp=$(_keeper_reaping_file "$room"); keep="$room/state/keeper.pid"
+  [ -e "$rp" ] || [ -L "$rp" ] || return 0
+  while _keeper_live "$keep" >/dev/null; do
+    [ "$n" -lt "$max" ] || return 1
+    sleep 0.1; n=$((n + 1))
+  done
+  rm -rf "$rp" 2>/dev/null   # -r: a peer may have planted a directory here
+  return 0
+}
+
 # Ask the room's keeper to reap. This is the whole of `decide`'s teardown (#48), and it is a
 # REQUEST rather than the act: the seat that closes a room is `--me`-gated to a participant, so
 # it is asking for its own terminal to be closed, and a reap written inline would race the
@@ -179,7 +226,7 @@ _keeper_teardown_file() { printf '%s/state/teardown' "$1"; }
 # makes that safe is NOT the poll interval. The interval bounds only WHEN the reap happens, not
 # that it happens after `decide` has finished writing. What bounds it is the asymmetry of the two
 # paths once the marker exists: `decide` has two write syscalls left (the record path on stdout,
-# one line on stderr), while the keeper must run `[ -f ]`, an external `rm`, `ct_kill`, the
+# one line on stderr), while the keeper must run `[ -f ]`, an external `mv`, `ct_kill`, the
 # `$(ct_name …)` subshell and finally the backend's own command — three process spawns at least
 # before any signal reaches a pane. Measured, because an asymmetry argued and not counted is how a
 # margin turns out to be the wrong sign: 5 end-to-end closes (reap 3.2-3.5 s behind), 25 at a
@@ -215,8 +262,8 @@ _keeper_teardown_file() { printf '%s/state/teardown' "$1"; }
 #   * (CLOSED, and listed because the list must not look shorter than the history) the marker path
 #     planted as a symlink to /dev/null, which made a bare `>` succeed while the keeper's `[ -f ]`
 #     stayed false for ever; and then, in the fix for THAT, a plain directory or a symlink to one,
-#     which `mv` moves the temp inside of at rc 0. The write now renames and then asks the
-#     reader's own `[ -f ]`.
+#     which `mv` moves the temp inside of at rc 0. The write now refuses a directory, renames,
+#     and then checks that the temp did not land inside one planted in between.
 #
 # NOTHING GUARANTEES THIS LIST IS COMPLETE, and nothing can: every route above was found by
 # review rather than by the author, two of them in the fix for the one before, and the gate sees
@@ -284,28 +331,30 @@ _keeper_teardown() { # <room> -> 0 asked, 1 no live keeper to ask, 2 the request
   # link to /dev/null, link to a regular file, mode-0444 regular file.
   if [ -d "$f" ]; then rm -f "$tmp" 2>/dev/null; return 2; fi
   mv -f "$tmp" "$f" 2>/dev/null || { rm -f "$tmp" 2>/dev/null; return 2; }
-  # CONFIRM WITH THE READER'S OWN PREDICATE. The test above races: a peer can `mkdir` between it
-  # and the rename, and there is no atomic rename-only-onto-a-non-directory. Asking `[ -f ]` — the
-  # exact question `_keeper_loop` will ask — stops this function claiming a success the reader's
-  # own predicate would not support. On that path the temp has been moved inside the planted
-  # directory, so clean it up there as well as at its own name.
+  # CONFIRM THE REQUEST LANDED AT ITS OWN NAME, by the one signature of a request that did not. The
+  # test above races: a peer can `mkdir` between it and the rename, and there is no atomic
+  # rename-only-onto-a-non-directory, so the rename can "succeed" by moving the temp INSIDE a
+  # directory planted in between. That leaves the temp findable at `$f/<temp name>` — and nothing
+  # else does: a rename onto a non-directory put the file at `$f` itself.
   #
-  # IT DOES NOT COVER THE CONVERSE, and an earlier version of this comment claimed it did ("what
-  # makes writer and reader unable to disagree, whatever shape arrives in between" — false, and it
-  # survived its author and a review round). `_keeper_loop`'s FIRST act on the marker is to `rm`
-  # it, so the keeper is the one actor certain to be racing this path, in the other direction: a
-  # poll landing between the rename and this check consumes the marker and reaps, and this then
-  # returns 2 over a teardown that happened. Measured at a ~2.4 ms window against a 5 s poll, so
-  # of the order of one close in two thousand. Known, unfixed, and tracked as #196 — the direction
-  # is a false alarm rather than a silent non-teardown, which is why it did not hold up the change
-  # that introduced it.
+  # So a missing `$f` here is NOT that failure, and must not be reported as it (#196). The keeper
+  # is the one actor certain to be racing this path: it takes the request by renaming `$f` onto
+  # `state/reaping`, and a poll landing between the rename above and this line leaves `$f` gone
+  # over a request that was written, seen and acted on. An earlier version asked `[ -f "$f" ]`
+  # here, returned 2 on exactly that, and `decide` then reported that the request could not be
+  # written and the keeper would never see it while the seats were closing — every clause false.
+  # A `relaunch` cancelling the request in the same instant also leaves `$f` gone, and that request
+  # was written too; whether a keeper then acts on it is the listed route "the marker removed
+  # between this write and the keeper's next poll" in the header, not a failed write.
   #
-  # THESE TWO ARE REDUNDANT FOR EVERY SHAPE A TEST CAN BUILD, and that is measured rather than
-  # assumed: deleting either one on its own leaves t26 fully green, because each catches the
-  # planted directory by itself. Only this one also covers the race, and the race cannot be
-  # provoked without instrumenting the code, so nothing pins it — do not read the suite staying
-  # green after deleting a line here as evidence the line is dead.
-  [ -f "$f" ] || { rm -f "$f/${tmp##*/}" "$tmp" 2>/dev/null; return 2; }
+  # Scope, stated rather than claimed as a set: this discriminates the two outcomes the rename can
+  # have on this platform — landed at `$f`, or moved inside a directory `$f` names (a plain one or
+  # a symlink to one, both of which `$f/<temp name>` follows). A directory still at `$f` is refused
+  # too, for a peer that planted one in the window and then removed the temp from inside it: a
+  # request the keeper took or `relaunch` cancelled is never a directory, so this raises no false
+  # alarm. For shapes planted BEFORE the write the `[ -d ]` above catches the same directory, so
+  # deleting that test alone leaves t26 green; t26 cases O2 and O3 build the race, one per arm.
+  if [ -e "$f/${tmp##*/}" ] || [ -d "$f" ]; then rm -f "$f/${tmp##*/}" "$tmp" 2>/dev/null; return 2; fi
   return 0
 }
 
@@ -380,7 +429,7 @@ _canary_fifo() { # <room> -> a freshly created fifo path on stdout, or rc 1
 # missing, empty or malformed says nothing about another keeper and is NOT a reason to stop — t9g
 # writes `0` into it on purpose, and the instant between a rebuild's `mkdir` and its keeper's pid
 # being written has the same shape. Reading either as "stop" would make a healthy keeper exit, and
-# a room without a keeper silently loses every bell rung at it (the header of `_keeper_ensure`),
+# a room without a keeper silently drops every bell rung outside `recv` (the header of `_keeper_ensure`),
 # which is worse than the leak this closes. `_keeper_pid` is the one reader that decides what
 # counts as a pid, so the negative cases arrive here as its rc 1 and cannot be confused with a
 # name.
@@ -412,6 +461,15 @@ _canary_fifo() { # <room> -> a freshly created fifo path on stdout, or rc 1
 # seat put back up would then be killed within five seconds of starting, which reads as the
 # relaunch having silently failed.
 #
+# IT CONSUMES IT BY RENAME, onto `state/reaping` (#189), and the rename's own status decides
+# whether to reap. Two things ride on that, and `rm -f` gave neither. The renamed file is the
+# observable a reap in flight otherwise lacks: `relaunch` waits on it (`_keeper_await_reap`)
+# instead of trusting a reaping keeper as the room's keeper. And a `relaunch` that cancelled the
+# request between the `[ -f ]` and the rename makes the rename FAIL, so a cancelled teardown is no
+# longer reaped — the `[ -f ]`-then-`rm -f` pair could not tell. The owner-death branch below has
+# no request to rename, so it writes the same file before its reap; the gap left there is stated
+# at that line.
+#
 # THE POLL PERIOD IS ONE VALUE USED AT BOTH SITES BELOW, and it arrives as an ARGUMENT rather
 # than being read here. The two sites are the canary `read -t` (a `--hold` room) and the `sleep`
 # fallback (a detached one) — the same period seen from the two kinds of room, so a knob that
@@ -426,14 +484,24 @@ _canary_fifo() { # <room> -> a freshly created fifo path on stdout, or rc 1
 # warning, and the effective value is handed down. The two test call sites in t19 pass their own.
 _keeper_loop() { # <room> <pid-file> <canary-read-fd-or-empty> <poll-interval> <peer>...
   local room="$1" keep="$2" cfd="$3" poll="$4"; shift 4
-  local rc named tdn
+  local rc named tdn rpn
   tdn=$(_keeper_teardown_file "$room")
+  rpn=$(_keeper_reaping_file "$room")
   while [ -d "$room" ]; do
     if named=$(_keeper_pid "$keep") && [ "$named" != "$BASHPID" ]; then return 0; fi
     if [ -f "$tdn" ]; then
-      rm -f "$tdn"
-      _keeper_reap "$room" "$@"
-      return 0
+      # A failed rename is a CANCEL only when the request has gone: `relaunch` removed it between
+      # the test above and the rename. A request still standing means the rename failed for
+      # another reason — `state/reaping` planted as a directory the keeper cannot write into, or
+      # one holding a `teardown` directory — and a peer's plant must not turn a decided close into
+      # no reap at all, which the `rm -f` this replaced never allowed. So that reap still happens,
+      # consuming the request by `rm`. What the plant costs depends on its shape: with a directory
+      # left at `state/reaping` — both shapes above — `relaunch` still sees it and waits out this
+      # reap, and the cost is the refusal route named at `_keeper_await_reap`; only a rename that
+      # fails with nothing at `state/reaping` (an unwritable `state/`, say) loses `relaunch`'s view
+      # of this one reap.
+      if mv -f "$tdn" "$rpn" 2>/dev/null; then _keeper_reap "$room" "$@"; return 0; fi
+      if [ -e "$tdn" ]; then rm -f "$tdn"; _keeper_reap "$room" "$@"; return 0; fi
     fi
     if [ -n "$cfd" ]; then
       read -t "$poll" -u "$cfd" _ 2>/dev/null; rc=$?
@@ -446,6 +514,23 @@ _keeper_loop() { # <room> <pid-file> <canary-read-fd-or-empty> <poll-interval> <
       # room that superseded it, which is the one outcome the step-down exists to avoid. Cheap, and
       # it changes nothing for a room nobody superseded: the file names us, so the reap proceeds.
       if named=$(_keeper_pid "$keep") && [ "$named" != "$BASHPID" ]; then return 0; fi
+      # Say a reap is in flight before starting it, as the teardown branch's rename does, so a
+      # `relaunch` arriving during it waits instead of trusting this keeper (#189). Temp and
+      # rename, so a link planted at the FINAL name is replaced rather than written through. The
+      # temp comes from `mktemp`, which creates it exclusively under a name nobody can guess in
+      # advance — a pid-based name could be pre-planted as a link (written through) or a fifo (the
+      # write-only open parks for good, and the reap with it). What is left: a peer that lists
+      # `state/` and swaps the fresh temp in the instant before the write — for a fifo, which parks
+      # the write and the reap with it, or for a link to a regular file, which the write then
+      # overwrites (same uid, so no privilege is gained). A failed write does not stop the reap, since the owner is gone and nothing else will close these
+      # terminals. What this does NOT close: a `relaunch` that checked the name just before this
+      # write still races the reap. Nobody asked for this reap — the owner died — so there is no
+      # request for `relaunch` to cancel, only a window to wait out once it is visible.
+      local rtmp
+      if rtmp=$(mktemp "$rpn.XXXXXX" 2>/dev/null); then
+        { printf 'owner-gone\n' 2>/dev/null > "$rtmp" && mv -f "$rtmp" "$rpn" 2>/dev/null; } \
+          || rm -f "$rtmp" 2>/dev/null
+      fi
       _keeper_reap "$room" "$@"
       return 0
     fi
@@ -456,9 +541,12 @@ _keeper_loop() { # <room> <pid-file> <canary-read-fd-or-empty> <poll-interval> <
   done
 }
 
-# The keeper holds every bell open read-write for the life of the room. Without it a bell
-# rung at a participant that is not currently in `recv` either blocks its sender or is
-# lost; with it, it is buffered and delivered the instant that participant listens.
+# The keeper holds every bell open read-write for the life of the room. With it, a bell rung at a
+# participant that is not currently in `recv` is buffered and wakes that participant the instant
+# it listens. Without it, that ring is dropped (`c_ring` in lib.sh) — which costs latency, not
+# delivery: `recv` drains the lanes before its first wait on the bell, so the message is read on
+# the participant's next `recv` all the same, at most one bell-wait interval late (#189 measured
+# the whole reachable cost as that). No ring blocks its sender either way.
 #
 # Idempotent, and called from `relaunch` as well as from room creation on purpose: `down`
 # kills the keeper, so a seat started back up in a torn-down room would otherwise look
@@ -523,8 +611,12 @@ _keeper_ensure() { # <room-dir> <peer>...
   # fifo and fork a command substitution before its first read — so an ordinary run will not show
   # it. It is still reachable, and t19 case H provokes it deterministically — it holds the parent
   # inside that window and then asserts the room still has a keeper. Without this line that case
-  # leaves the room with NONE, which loses every bell rung at it in silence.
+  # leaves the room with NONE, which drops every bell rung outside `recv` in silence.
   rm -f "$keep"
+  # And any `state/reaping` left over: having decided no keeper is live, no reap is in flight, and
+  # a file left there would make the next `relaunch` wait on the keeper about to be forked as if
+  # it were reaping (`_keeper_reaping_file`).
+  rm -rf "$(_keeper_reaping_file "$room")" 2>/dev/null   # -r, as in _keeper_await_reap
   # Own process group, so a signal to the OWNER's group — a Ctrl-C on `up --hold`, the SIGHUP of a
   # closing pane — reaches the owner but not the keeper, which must outlive that signal long
   # enough to see the EOF and reap. `setsid` would be the obvious tool and macOS does not ship it;
@@ -1385,17 +1477,30 @@ council_relaunch() {
   # version of this comment claimed only the first, and the guard is unconditional precisely
   # because it is not trying to tell them apart.
   #
-  # WHAT IT CANNOT COVER is a reap already IN FLIGHT. The keeper consumes the marker before it
-  # starts closing, so once that has happened there is nothing left to clear and no observable
-  # here saying a reap is running — `_keeper_live` vouches for a reaping keeper, which is what
-  # makes `_keeper_ensure` below return early and leave the room without one. The window is the
-  # length of one reap, measured at 84-383 ms for three seats on a live tmux backend. Do not
-  # "fix" that by narrowing this `rm -f` to a dead-keeper condition: the live-keeper case above
-  # is real and losing it costs a relaunched seat. Tracked separately; closing it needs an
-  # observable for an in-flight reap, not a tighter test here.
+  # A reap already IN FLIGHT is not cancellable — the keeper has taken the request and is closing
+  # terminals — so it is WAITED OUT instead (#189). The keeper takes a request by renaming it onto
+  # `state/reaping`, so the two cannot both miss: either this `rm -f` wins and the keeper's rename
+  # fails (no reap), or the rename wins and `state/reaping` exists by the time the wait looks. A
+  # third outcome comes from a plant: a rename that already failed on something planted at
+  # `state/reaping` reaps anyway (`_keeper_loop`), and the plant itself is then what the wait sees.
+  # Without the wait, `_keeper_live` vouched for the reaping keeper, `_keeper_ensure` returned
+  # early, and the room was left with no keeper once the reap ended — and at a large roster the
+  # reap could close the seat launched below, while this printed `relaunched:` and exited 0. So
+  # the wait comes before `_keeper_ensure` AND before the launch. Do not narrow this `rm -f` to a
+  # dead-keeper condition: the live keeper still inside its poll window is real, and losing that
+  # case costs a relaunched seat.
   rm -f "$(_keeper_teardown_file "$ROOM")"
+  if ! _keeper_await_reap "$ROOM"; then
+    echo "council relaunch: refusing — $(_keeper_reaping_file "$ROOM") says a reap is in flight, and" >&2
+    echo "                  the keeper it would belong to is still alive after 30 s. Starting '$peer'" >&2
+    echo "                  now could leave the room without a keeper, or be closed by that reap." >&2
+    echo "                  Nothing was launched. If no close is in progress, the file is left over:" >&2
+    echo "                  remove $(_keeper_reaping_file "$ROOM") and run relaunch again." >&2
+    return 1
+  fi
   # A seat can be relaunched after `down`, which killed the keeper along with the terminals.
-  # Without it every bell rung at this participant is lost while the room looks healthy.
+  # Without it every bell rung at this participant outside `recv` is dropped while the room
+  # looks healthy.
   _keeper_ensure "$ROOM" "${roster[@]}"
   # Close whatever still answers to this peer BEFORE regenerating and starting the
   # replacement. A terminal is addressed by name, and the launch does not check whether that

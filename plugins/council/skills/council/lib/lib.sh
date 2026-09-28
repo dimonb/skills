@@ -245,9 +245,31 @@ def _untrusted: map(
 c_atomic() { local p="$1" t="$1.tmp.$$"; cat > "$t" && mv -f "$t" "$p"; }
 
 # The doorbell. One byte, fire and forget.
-# Backgrounded inside a subshell: the child is reparented immediately, so a peer whose
-# fifo has no reader can never wedge the sender and can never leave us a zombie.
-c_ring() { local f="$ROOM/bell/$1.fifo"; [ -p "$f" ] || return 0; ( printf '.' > "$f" & ) ; }
+#
+# OPENED READ-WRITE (`1<>`), NEVER WRITE-ONLY (#209). A write-only open of a fifo blocks in open(2)
+# until some process holds a read end. The keeper holds every bell for the life of the room, so in
+# a healthy room that open returned at once — but in a room with no live keeper and the peer not
+# in `recv`, it never returned: the writer parked in open(2) for the life of the machine (42 such
+# orphans were counted from one verification run, five days after it), holding every fd it had
+# inherited, including a caller's `$( )` pipe, which then never closed. A read-write open of a fifo
+# does not block — the same behaviour `c_bell_open`'s `exec 3<>` and the keeper's `exec {fd}<>`
+# already rely on — so the writer never parks in open(2), in any room shape.
+#
+# What it delivers, per shape. A room with a keeper, or a peer inside `recv`: unchanged — one pipe,
+# whoever holds it, and the byte waits there for the peer. No keeper and the peer not listening:
+# the byte is dropped when this writer closes the last open end, where the old write-only open
+# delivered it late, at the peer's next `c_bell_open`. That costs latency, never a message: the
+# bell only wakes a `recv`, and `recv` drains the lanes before its first wait, so the message is
+# read on that next `recv` regardless (t31 case B pins this).
+#
+# Still backgrounded inside a subshell, so the child is reparented at once and never a zombie, and
+# so a pipe buffer filled by rings nobody drains blocks that child rather than the sender.
+#
+# `1<>` CREATES A REGULAR FILE at a missing path, as the old `>` did. The `[ -p ]` gate returns
+# before that for a missing or non-fifo bell; only a fifo removed in the instant between the gate
+# and the open lands there. The regular file is then what `c_bell_open` finds, and it refuses it
+# and falls back to its half-second poll, so no ring path can hang a `recv` either.
+c_ring() { local f="$ROOM/bell/$1.fifo"; [ -p "$f" ] || return 0; ( printf '.' 1<> "$f" & ) ; }
 
 # Read with the builtin, not `cat`: these are on the hot path of every drain, and a fork
 # each is what turned a millisecond wake into a quarter-second one. That is also why the
