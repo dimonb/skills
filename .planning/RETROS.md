@@ -136,3 +136,50 @@ In `ship` (next PR):
    issue or say in your notice that the closer must carry it.
 
 For the supervisor: `ps` for processes whose cwd is a slot's worktree before touching any file in it.
+
+Shipped in #284 (Closes #282).
+
+## Retro 4 — 2026-09-28, after #284 #283 #286 #285
+
+Batch: 4 PRs, 7 issues closed (#282 #139 #153 #165 #180 #142 #155), open count 54 → 48, no new issues
+filed by children. Open-to-merge 12-35 min; two-issue clusters now land at a steady ~30 min.
+
+### Went well
+
+* **Small clusters are the right size.** Every cluster held to the retro-2 cap and every one
+  finished in one or two review rounds.
+* **The battery found a real blocker a human would likely miss** (#286: a seat whose name starts
+  with a dash was parsed as a jq option and froze the round).
+* **A parallel merge was handled in time** — #280 landed under #283, the supervisor told the slot to
+  rebase before its review rather than after, and the conflicts were resolved against the new head.
+
+### Went badly
+
+* **A review battery passed a change that made an alarm quieter.** #285 made an unreadable screen
+  "no verdict" — right — but in doing so a slot that stays unreadable could never alarm again; the
+  old behaviour was a false but LOUD stall. Five axes and a skeptic reviewed it; the supervisor
+  caught it by reading the ready notice, and the fix (a loud UNREADABLE block past the stall
+  threshold) went in before merge. AGENTS.md states the rule ("untrusted evidence may annotate an
+  operator-facing signal, never suppress one") but the battery has no axis that asks it per output.
+* **A subagent's permission prompt stalled a slot silently.** A skeptic copied files from the
+  agent's own transcript directory into scratch; that read needed approval, the slot sat at
+  `⏸ idle/wait` with no escalation, and the report showed it only because the menu happened to be
+  the last line. The report cannot detect a prompt in general (AGENTS.md's anchor rule), so the
+  cure is not to cause one.
+
+### Change
+
+In `ship` (next PR):
+
+1. **A signal-silencing check in the review battery.** For any change that alters when an
+   operator-facing output appears (alarm, block, glyph, exit code, push, notice), the reviewer lists
+   each such output and shows, per output, that no input or state which used to make it appear now
+   makes it disappear; a quieter-by-construction path is a blocking finding unless it is replaced by
+   a louder one. Point at AGENTS.md's rule rather than restating it.
+2. **Probes and subagents copy only from the worktree or the session's scratch/temp directory**,
+   never from the agent's own config, transcript or tool-result directories: those reads prompt for
+   approval, and an unattended session stalls on the prompt with nobody to answer it. Pass content
+   to a subagent in its prompt instead of a path under those directories.
+
+For the supervisor: a slot at `⏸ idle/wait` whose last line is a menu (`Esc to cancel`, `Do you want
+to proceed?`) is a prompt — read its screen before assuming it is waiting on CI.
