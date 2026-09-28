@@ -320,25 +320,36 @@ ok "A: the rate-limited slot is NOT under WAITING FOR YOU" 0 \
 ok "A: neither block ever prescribes compaction" 0 \
    "$(printf '%s' "$outA" | sed -n '/### ⏳ WAITING —/,$p' | grep -c 'shipyard-compact.sh')"
 
+# THE THRESHOLD IS ALSO THE GAP BOUND, SO IT IS NOT ONE SECOND (#114). The report claims a
+# supervision gap when the previous tick is more than $SHIPYARD_STALL_SECS old, and every run below
+# stamps the tick fresh and then runs the report. At a 1s threshold, one second of report start-up
+# on a loaded box was enough to claim a gap, rebase every clock and red three of B's checks — seen
+# at load ~148, green alone. So the threshold is ten minutes, which no report start-up reaches, and
+# the stall clocks are back-dated an hour, which is still well past it: the deadline moved, and
+# nothing sleeps. E4 onwards use the same shape at 100s/200s for their own reasons.
+STALL_T=600
+STALL_BACK=3600
+
 # --- run A2: the SUPERVISION GAP, and this ordering is what makes the assertion mean something.
-# Run A has just seeded stall clocks; back-date them past the 1s threshold, so WITHOUT the rebase
+# Run A has just seeded stall clocks; back-date them past the $STALL_T threshold, so WITHOUT the rebase
 # slot 43 would cross it and alarm. Nothing stalling is therefore evidence the clocks restarted,
 # not an artefact of a fresh mailbox. (The previous version of this check ran first against an
 # empty mailbox, where no clock had accumulated and it could not fail — and the version before
 # this one took its elapsed time from how long run A happened to sleep, which had the same defect
 # the moment that sleep became a knob. See backdate_stall.)
-backdate_stall 60
+backdate_stall "$STALL_BACK"
 printf '%s\n' "$(( $(date +%s) - 345600 ))" >"$FAKE_GIT/ship-escalations/report-tick"
-outA2=$(run_report 1)
+outA2=$(run_report "$STALL_T")
 ok "A2: the gap is announced"               1 "$(printf '%s' "$outA2" | grep -c 'supervision resumed after')"
 ok "A2: ...with a plausible figure"         1 "$(printf '%s' "$outA2" | grep -c 'resumed after 5760 min')"
 ok "A2: a restarted clock cannot be stalled" 0 "$(printf '%s' "$outA2" | grep -c '🛑 STALLED')"
 
 # Back-date again: A2's announced gap rebased every clock to now, so run B needs its own elapsed
 # time for the same reason and by the same means.
-backdate_stall 60
+backdate_stall "$STALL_BACK"
 
-# --- run B: no gap now, and a 1s threshold, so the slot announcing NOTHING must alarm.
+# --- run B: no gap now, and clocks back-dated past the threshold, so the slot announcing NOTHING
+# must alarm.
 # An open escalation is also written for slot 42 first, so the `pend` guard is exercised rather
 # than only grepped: an escalated slot must be classified by nothing and stalled by nothing.
 cat >"$FAKE_GIT/ship-escalations/42-1.json" <<'ESCEOF'
@@ -347,7 +358,7 @@ cat >"$FAKE_GIT/ship-escalations/42-1.json" <<'ESCEOF'
  "answer":null,"answered_at":null}
 ESCEOF
 printf '%s\n' "$(date +%s)" >"$FAKE_GIT/ship-escalations/report-tick"
-outB=$(run_report 1)
+outB=$(run_report "$STALL_T")
 ok "B: no gap is claimed"                   0 "$(printf '%s' "$outB" | grep -c 'supervision resumed after')"
 ok "B: the escalated slot is classified by nothing" 0 \
    "$(printf '%s' "$outB" | sed -n '/### 🙋 WAITING FOR YOU/,/^$/p' | grep -c '^- `42`')"
@@ -376,7 +387,7 @@ stall_43() { printf '%s' "$1" | sed -n '/^### 🛑 STALLED/,/^###/p' | grep -c '
 unans_43() { printf '%s' "$1" | sed -n '/^### 🛑 STALL UNANSWERED/,/^###/p' | grep -c '^- `43`'; }
 tick_now() { printf '%s\n' "$(date +%s)" >"$FAKE_GIT/ship-escalations/report-tick"; }
 
-tick_now; outE1=$(run_report 1)
+tick_now; outE1=$(run_report "$STALL_T")
 ok "E1: the second firing is still under STALLED"        1 "$(stall_43 "$outE1")"
 ok "E1: ...as ONE line leading with the delta"           1 \
    "$(printf '%s' "$outE1" | grep -c '^- `43` — STILL motionless, now .* min .*; firing 2, first raised')"
@@ -394,20 +405,20 @@ jq -n --arg now "$(shipyard_now)" \
     status:"sent", delivery:"delivered"}' >"$FAKE_GIT/ship-escalations/directive-43-2-1.json"
 jq -n '{id:"directive-43-9", slot:"43", kind:"directive", text:"x", created_at:"2000-01-01T00:00:00Z",
         status:"sent", delivery:"delivered"}' >"$FAKE_GIT/ship-escalations/directive-43-9.json"
-tick_now; outE2=$(run_report 1)
+tick_now; outE2=$(run_report "$STALL_T")
 ok "E2: the third unanswered firing ESCALATES"           1 "$(unans_43 "$outE2")"
 ok "E2: ...and leaves the plain STALLED heading"         0 "$(stall_43 "$outE2")"
 ok "E2: ...saying how often it was raised"               1 \
    "$(printf '%s' "$outE2" | grep -c '^- `43` — motionless for .* min .*, raised 3 times over')"
 ok "E2: ...and re-prints the full remedy once"           1 "$(printf '%s' "$outE2" | grep -c '1. GIT FIRST')"
 
-tick_now; outE3=$(run_report 1)
+tick_now; outE3=$(run_report "$STALL_T")
 ok "E3: a later unanswered firing stays escalated"       1 "$(unans_43 "$outE3")"
 ok "E3: ...as one line"                                  1 \
    "$(printf '%s' "$outE3" | grep -c '^- `43` — STILL unanswered: .*firing 4')"
 ok "E3: ...without the remedy a third time"              0 "$(printf '%s' "$outE3" | grep -c '1. GIT FIRST')"
 # The bypass is untouched: the escalated block, too, must break --only-changed silence.
-tick_now; outE3q=$(run_report 1 --only-changed)
+tick_now; outE3q=$(run_report "$STALL_T" --only-changed)
 ok "E3: an escalated stall still breaks --only-changed"  1 "$(unans_43 "$outE3q")"
 
 # A directive recorded since the first firing is what the supervisor DID, so it is printed, and the
@@ -419,8 +430,8 @@ ok "E3: an escalated stall still breaks --only-changed"  1 "$(unans_43 "$outE3q"
 # `shipyard-tell.sh` types into the pane whose hash is part of the stall signature. The first version
 # of this run wrote only the record against a fixed screen, which is the one sequence a real nudge
 # never produces — and it passed while a real nudge restarted the episode and was never reported.
-# The threshold is raised to 100s here so that "within one stall threshold of the last firing" is a
-# statement about the fixture rather than about how fast this machine runs a report.
+# The threshold is 100s here (not the 600s above) so that "within one stall threshold of the last
+# firing" is a statement about the fixture rather than about how fast this machine runs a report.
 jq -n --arg now "$(shipyard_now)" \
   '{id:"directive-43-1", slot:"43", kind:"directive", text:"resume", created_at:$now,
     status:"sent", delivery:"delivered"}' >"$FAKE_GIT/ship-escalations/directive-43-1.json"
@@ -566,6 +577,29 @@ ok "D: crossing the crit threshold inside \`unknown\` still breaks silence" yes 
    "$([ -n "$outD5" ] && echo yes || echo no)"
 unset T13_CTX_TOKENS
 
+# THE INTERPRETER FLOOR FOR THE REPORT ITSELF (#232), EXECUTED, and it lives HERE, inside the rig,
+# on purpose: with the faked `git` gone the report resolves the REAL common dir, and from any
+# worktree of a repo with a live fleet it would rewrite that fleet's stall table and tick. So it
+# runs while the fakes are exported, and the last check proves it wrote the fixture's mailbox.
+# A bash-4 construct on the path a tick takes shows up as a changed exit, missing rows or stderr;
+# it guards the path THIS fixture drives, not every branch of the file. The exit code is compared
+# with the same run under this suite's bash rather than with 0: this rig has work open, and exit 1
+# is the report's documented answer to that. Section 7 below holds the rest of the floor.
+floor_run() { # <interpreter>
+  SHIPYARD_MOTION_INTERVAL=0.01 SHIPYARD_STALL_SECS=100000 SHIPYARD_BACKEND=tmux \
+    SHIPYARD_SESSION=t13ex "$1" "$REPORT" 41 42 43
+}
+floor_run bash >/dev/null 2>&1; floor_want=$?
+printf '%s\n' 1000000000 >"$FAKE_GIT/ship-escalations/report-tick"
+floor_out=$(floor_run /bin/bash 2>"$T13TMP/floor-report.err"); floor_rc=$?
+ok "shipyard-report.sh RUNS under /bin/bash, exiting as it does here" "$floor_want" "$floor_rc"
+ok "...and renders every slot's row"                 3 "$(grep -c '^| 4[123] ' <<<"$floor_out")"
+# A row only the faked pane can produce, so a run that has drifted off the rig reds here.
+ok "...from the rig's panes, not a missing terminal" 1 "$(grep -c '^| 41 .*⏳ rate-limited' <<<"$floor_out")"
+ok "...and writes nothing to stderr"                 "" "$(cat "$T13TMP/floor-report.err")"
+ok "...into the fixture's mailbox, not a real one"   yes \
+   "$([ "$(cat "$FAKE_GIT/ship-escalations/report-tick" 2>/dev/null)" != 1000000000 ] && echo yes || echo no)"
+
 unset -f git tmux gh
 fi
 
@@ -610,10 +644,34 @@ ok "...and an unexplained one returns rc 1"           "1" \
    "$(floor "shipyard_wait_state 'nothing' in-review apply >/dev/null; echo \$?")"
 ok "the policy table answers under /bin/bash" "park|reprobe" \
    "$(/bin/bash -c ". '$SKILL_DIR/policy.sh'; policy_dispose rate_limited")"
-# The report is still only PARSE-checked there: executing it needs the whole rig above, which
-# section 6 does under the test's own interpreter. Said plainly rather than implied.
 ok "shipyard-report.sh at least parses under /bin/bash" 0 \
    "$(/bin/bash -n "$REPORT" >/dev/null 2>&1; echo $?)"
+
+# THE REST OF THE SOURCE CHAIN (#232). report.sh also sources shipyard-ctx.sh in-process, and
+# nothing executed it under /bin/bash: the ctx suite runs under whatever `bash` PATH resolves. So the
+# functions the report calls per slot are CALLED here, on the pane paths that need no transcript
+# fixture (ROOT and both transcript roots point at an empty directory, so no transcript is found).
+# A construct on the transcript-reading branches is still reached only by the ctx suite.
+floor_ctx() {
+  /bin/bash -c ". '$SKILL_DIR/shipyard-lib.sh' >/dev/null 2>&1; . '$SKILL_DIR/shipyard-ctx.sh' >/dev/null 2>&1
+    ROOT='$FLOOR_EMPTY' CLAUDE_CONFIG_DIR='$FLOOR_EMPTY' CODEX_HOME='$FLOOR_EMPTY'
+    unset SHIPYARD_CTX_WINDOW; $1" 2>/dev/null
+}
+# Its own scratch directory: section 6 builds $T13TMP only when it runs, and this section runs
+# under SHIPYARD_T13_SKIP_EXEC=1 too.
+FLOOR_EMPTY=$(mktemp -d "${TMPDIR:-/tmp}/t13-floor.XXXXXXXX") || exit 1
+trap 'rm -rf "${T13TMP:-}" "$FLOOR_EMPTY"' EXIT
+ok "the ctx chain runs under /bin/bash: a crit band" "crit"    "$(floor_ctx 'ctx_band 99')"
+ok "...a warn band"                                  "warn"    "$(floor_ctx 'ctx_band 70')"
+ok "...an unknown band"                              "unknown" "$(floor_ctx "ctx_band '?'")"
+ok "...the inferred window"                          "200000"  "$(floor_ctx 'ctx_window 5000')"
+ok "...a declared window outranks it"                "400000"  "$(floor_ctx 'ctx_window 5000 400000')"
+ok "...the override outranks both"                   "123456"  "$(floor_ctx 'SHIPYARD_CTX_WINDOW=123456 ctx_window 5000 400000')"
+ok "...an unproven window says so"                   "0 1" \
+   "$(floor_ctx 'ctx_window_unproven 5000; a=$?; ctx_window_unproven 300000; echo "$a $?"')"
+ok "...ctx_probe reads a footer percentage"          "40 40%"  "$(floor_ctx "ctx_probe 77 'x 40% context used'")"
+ok "...ctx_probe bounds an unpinned token count"     "? <=92% · 185k" "$(floor_ctx "ctx_probe 77 '185000 tokens'")"
+ok "...ctx_probe says nothing it cannot measure"     "- —"     "$(floor_ctx "ctx_probe 77 'nothing'")"
 
 printf '\n'
 if [ "$FAILURES" -eq 0 ]; then

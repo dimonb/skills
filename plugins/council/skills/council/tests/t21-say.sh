@@ -418,18 +418,21 @@ ok "4b: ...and does not abort on it"           0   "$(rc_of "$out")"
 #     digit is what covers them all at once; these cases exist so the next reader cannot "fix" it
 #     back into an enumeration.
 #
-#     The FIRST case holds the seat idle for a whole second and counts the samples, so it fails if
+#     The FIRST case holds the seat idle for its whole window and counts the samples, so it fails if
 #     the fallback stops being applied even while the message still prints. The rest only have to
 #     show that the classification reaches them, so they use the fast fixture.
-#     THE WINDOW IS TWO SECONDS AND THAT IS NOT ARBITRARY. The poll's deadline compares WHOLE
+#     THE WINDOW IS FIVE SECONDS AND THAT IS NOT ARBITRARY. The poll's deadline compares WHOLE
 #     seconds (`date +%s`), so a one-second window expires anywhere between instantly and a full
 #     second depending on where in the current second the send lands. At one second this very
 #     assertion was measurably flaky — it killed the mutation on roughly two runs in three — and a
-#     guard that fires two times in three is one an operator learns to ignore. At two seconds the
-#     poll runs for at least a second even in the worst alignment, which is hundreds of samples
-#     with a no-op `sleep` and about five with a real one, so the two cases stop overlapping.
+#     guard that fires two times in three is one an operator learns to ignore. Two seconds fixed
+#     that, but left the LOWER bound below (at least two samples) resting on one sample finishing
+#     inside a second, which a loaded box does not promise (#114). At five the poll runs for at
+#     least four seconds in the worst alignment: room for a second sample under load, still about
+#     ten samples with the real interval, and still hundreds with a no-op `sleep`, so the ceiling of
+#     forty keeps the two apart.
 reset; : >"$PINS/container-tmux"; pane "$IDLE" pre; pane "$IDLE" last
-out=$( COUNCIL_SAY_CONFIRM_SECS=2 COUNCIL_SAY_CONFIRM_INTERVAL=00 run_say codex 'hello' )
+out=$( COUNCIL_SAY_CONFIRM_SECS=5 COUNCIL_SAY_CONFIRM_INTERVAL=00 run_say codex 'hello' )
 n=$(samples)
 ok "4c: a zero spelling falls back"            yes "$(has "$out" 'not a usable positive number')"
 # The COUNT is the point, not the message: the mutation this kills keeps the note and leaves the
@@ -464,7 +467,7 @@ ok "5a: a delivered say is recorded"           1   "$(said_files)"
 ok "5a: ...as one line"                        1   "$(said_lines | wc -l | tr -d ' ')"
 ok "5a: ...naming the peer"                    codex "$(said_lines | cut -f2)"
 ok "5a: ...with the text flattened to one field" "look at the prompt please" "$(said_lines | cut -f3)"
-ok "5a: ...stamped with an epoch"              yes "$(said_lines | cut -f1 | grep -qE '^[0-9]+$' && printf yes || printf no)"
+ok "5a: ...stamped with an epoch"              yes "$(grep -qE '^[0-9]+$' <<<"$(said_lines | cut -f1)" && printf yes || printf no)"
 ok "5a: ...and no temp file left behind"       0   "$(ls -A "$POLICY_MAILBOX_DIR" | grep -c '^\.')"
 reset; : >"$PINS/container-tmux"; pane "$IDLE" pre; pane "$IDLE" last
 FAKE_SUBMIT_RC=1 run_say codex 'second' >/dev/null
@@ -479,6 +482,9 @@ ok "5c: a send that reached no terminal is not" 2 "$(said_files)"
 # and asserts it RETURNED and that the submit HAPPENED — the second is the one that matters, since
 # a say that returns having skipped its submit is the defect in a quieter form. MUTATION CHECK, run
 # by hand: put back `>>"$said"` on a fixed path in council_say and 5d reports HUNG.
+# The bound is a ceiling for a HANG, not a deadline for a send: a say that returns is never charged
+# it, so it is sized for a loaded box (#114) rather than for how fast the mutation check reports.
+SAY_BOUND=120
 bounded_say() { # <secs> <peer> <text> -> run_say's output, or HUNG
   local secs="$1" pid i=0 f bout="$ROOT/bounded.out"; shift
   run_say "$@" >"$bout" 2>&1 & pid=$!
@@ -497,7 +503,7 @@ bounded_say() { # <secs> <peer> <text> -> run_say's output, or HUNG
 submits() { wc -l <"$SUBMITTED" 2>/dev/null | tr -d ' ' || printf 0; }
 reset; : >"$PINS/container-tmux"; pane "$IDLE" pre; pane "$RUNNING" last
 rm -f "$POLICY_MAILBOX_DIR/council-said-demo"; mkfifo "$POLICY_MAILBOX_DIR/council-said-demo"
-out=$(bounded_say 20 codex 'past the fifo')
+out=$(bounded_say "$SAY_BOUND" codex 'past the fifo')
 ok "5d: a FIFO at the old record path: say returns" no "$(has "$out" HUNG)"
 ok "5d: ...having submitted"                   1   "$(submits)"
 ok "5d: ...and still recorded the send"        3   "$(said_files)"
@@ -506,7 +512,7 @@ rm -f "$POLICY_MAILBOX_DIR/council-said-demo"
 reset; : >"$PINS/container-tmux"; pane "$IDLE" pre; pane "$RUNNING" last
 MB_SAVED="$POLICY_MAILBOX_DIR"; export POLICY_MAILBOX_DIR="$ROOT/mailbox-fifo"
 rm -rf "$POLICY_MAILBOX_DIR"; mkfifo "$POLICY_MAILBOX_DIR"
-out=$(bounded_say 20 codex 'no mailbox at all')
+out=$(bounded_say "$SAY_BOUND" codex 'no mailbox at all')
 ok "5e: a FIFO for the mailbox: say returns"   no  "$(has "$out" HUNG)"
 ok "5e: ...having submitted"                   1   "$(submits)"
 ok "5e: ...with its ordinary verdict"          0   "$(rc_of "$out")"

@@ -204,9 +204,9 @@ lane12() { local i; for i in 1 2 3 4 5 6 7 8 9 10 11 12; do
 fresh; lane12
 printf '010' > "$R/cursor/b/a"
 out=$(COUNCIL_ME=b bash "$CLI" recv --timeout "$RECV_WAIT" 2>/dev/null)
-if printf '%s' "$out" | grep -q '"text":"msg-9"'; then
+if grep -q '"text":"msg-9"' <<<"$out"; then
   echo "FAIL a leading-zero cursor was read as octal (msg-9 re-delivered past cursor 10)"; fail=1
-elif printf '%s' "$out" | grep -q '"text":"msg-11"'; then
+elif grep -q '"text":"msg-11"' <<<"$out"; then
   echo "ok   a leading-zero cursor was read as decimal, not octal"
 else
   echo "FAIL a leading-zero cursor delivered neither reading: $(printf '%s' "$out" | grep -c .) line(s)"; fail=1
@@ -218,7 +218,7 @@ fi
 fresh; lane12
 printf '08' > "$R/cursor/b/a"
 out=$(COUNCIL_ME=b bash "$CLI" recv --timeout "$RECV_WAIT" 2>/dev/null)
-if printf '%s' "$out" | grep -q '"text":"msg-9"'; then
+if grep -q '"text":"msg-9"' <<<"$out"; then
   echo "ok   an 08 cursor was not fatal and delivered from 9 on"
 else
   echo "FAIL an 08 cursor deafened the lane: $(printf '%s' "$out" | grep -c .) line(s)"; fail=1

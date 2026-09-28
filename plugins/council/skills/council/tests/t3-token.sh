@@ -45,16 +45,24 @@ peer c 0 & CPID=$!; PEERS+=("$CPID")
 # Gating on turns keeps the "a few clean laps first" intent while guaranteeing turns still remain
 # for the wedge to force a skip, on any hardware.
 turns_now() { bash "$CLI" floor | sed 's/.*turns=\([0-9]*\).*/\1/'; }
+# Both waits below are "eventually, within a generous ceiling", and the ceilings are only ever paid
+# by a room that really froze (#114). With c wedged, every third turn waits out the room's whole
+# turn deadline before its skip, so the run is paced by that deadline and by how fast three peers
+# are scheduled. A quiet box runs this whole file in under half a minute. Under a loaded fleet the
+# old 40s reported a healthy room as frozen at 16 and 22 of 24 turns, three runs in three, while an
+# idle box passed. A room that stops making progress still fails, just later.
+PRE_WEDGE_SECS=120
+WEDGED_SECS=240
 wedge_t0=$(date +%s)
 while [ "$(turns_now)" -lt 6 ]; do
-  [ $(( $(date +%s) - wedge_t0 )) -gt 30 ] && { echo "FAIL room never reached the pre-wedge laps"; break; }
+  [ $(( $(date +%s) - wedge_t0 )) -gt "$PRE_WEDGE_SECS" ] && { echo "FAIL room never reached the pre-wedge laps"; break; }
   sleep 0.1
 done
 kill -STOP $CPID 2>/dev/null
 echo "-- peer c wedged (SIGSTOP) after $(turns_now) turns --"
 t0=$(date +%s)
 while [ "$(turns_now)" -lt "$TURNS" ]; do
-  [ $(( $(date +%s) - t0 )) -gt 40 ] && { echo "FAIL room froze with a wedged peer"; break; }
+  [ $(( $(date +%s) - t0 )) -gt "$WEDGED_SECS" ] && { echo "FAIL room froze with a wedged peer at $(turns_now)/$TURNS turns after ${WEDGED_SECS}s"; break; }
   sleep 1
 done
 # Stop the peers BEFORE the log is read, and never with a bare `wait` (#109) — the shape

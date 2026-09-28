@@ -76,8 +76,8 @@ want() { # <exit> <what> <cmd>... ; leaves the output in $OUT
   [ "$rc" = 137 ] && { echo "FAIL $what: HUNG (killed after 10s), expected exit $w"; fail=1; return 1; }
   echo "FAIL $what: expected exit $w, got $rc"; printf '%s\n' "$OUT"; fail=1; return 1
 }
-says() { printf '%s\n' "$OUT" | grep -qi -- "$1" || { echo "FAIL $2; output was:"; printf '%s\n' "$OUT"; fail=1; }; }
-no_say() { printf '%s\n' "$OUT" | grep -qi -- "$1" && { echo "FAIL $2"; fail=1; }; return 0; }
+says() { grep -qi -- "$1" <<<"$OUT" || { echo "FAIL $2; output was:"; printf '%s\n' "$OUT"; fail=1; }; }
+no_say() { grep -qi -- "$1" <<<"$OUT" && { echo "FAIL $2"; fail=1; }; return 0; }
 
 # --- build a real room -----------------------------------------------------------
 # `--me codex` leaves that seat without a launcher, which is how `up` records "this one is

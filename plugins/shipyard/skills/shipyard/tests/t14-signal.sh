@@ -244,7 +244,7 @@ rc_of() { printf '%s' "$1" | sed -n 's/^rc=//p' | tail -1; }
 # Presence, not a line COUNT. The class-remedy checks below are about whether a piece of advice was
 # printed at all; counting lines makes them assert how the prose happens to wrap, so re-flowing a
 # sentence onto two lines reds a check whose property never changed. That already happened once.
-has() { printf '%s' "$1" | grep -q -- "$2" && printf yes || printf no; }
+has() { grep -q -- "$2" <<<"$1" && printf yes || printf no; }
 
 rm -f "$MB"/container-*
 

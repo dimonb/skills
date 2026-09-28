@@ -56,7 +56,7 @@ if [ "$since" -lt 0 ]; then
 else
   echo "ok   a string .turn did not drive the window negative (since=$since)"
 fi
-if bash "$CLI" claims | grep -q "at turn: 999"; then
+if grep -q "at turn: 999" <<<"$(bash "$CLI" claims)"; then
   echo "FAIL a string .turn was reported as the room's last claim"; fail=1
 else
   echo "ok   a string .turn was not reported as the room's last claim"
@@ -67,7 +67,7 @@ fi
 # and the floor rotation read the message directly, and they are what a peer would take
 # over: an uncoerced string turn is counted as a turn consumed and moves the floor to
 # somebody who never held it.
-if bash "$CLI" floor | grep -q 'turns=0'; then
+if grep -q 'turns=0' <<<"$(bash "$CLI" floor)"; then
   echo "ok   a string .turn was not counted as a turn consumed"
 else
   echo "FAIL a string .turn was counted as a turn: $(bash "$CLI" floor)"; fail=1
@@ -113,7 +113,7 @@ say_floor object '["a-1"]' "This breaks the thing." >/dev/null
 raw_msg a 2 9 2 amend '"a-1"' "an amendment whose refs is a string"
 
 claims=$(bash "$CLI" claims 2>/dev/null); crc=$?
-if [ "$crc" = 0 ] && printf '%s' "$claims" | grep -q 'OPEN b-1'; then
+if [ "$crc" = 0 ] && grep -q 'OPEN b-1' <<<"$claims"; then
   echo "ok   a string .refs left the argument graph readable, objection still open"
 else
   echo "FAIL a string .refs broke the argument graph (rc=$crc)"; fail=1

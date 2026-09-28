@@ -42,7 +42,7 @@ ok() { # <label> <expected> <actual>
   if [ "$2" = "$3" ]; then printf '  ok   %s\n' "$1"
   else printf '  FAIL %s\n         expected: [%s]\n         actual:   [%s]\n' "$1" "$2" "$3"; FAILURES=$((FAILURES + 1)); fi
 }
-has() { printf '%s' "$1" | grep -q -- "$2" && printf yes || printf no; }
+has() { grep -q -- "$2" <<<"$1" && printf yes || printf no; }
 # Poll, up to <deciseconds> tenths of a second, for a file to appear / a pid to go.
 wait_file() { local f="$1" n="${2:-80}" i; for ((i=0;i<n;i++)); do [ -e "$f" ] && { echo yes; return; }; sleep 0.1; done; echo no; }
 wait_gone_file() { local f="$1" n="${2:-80}" i; for ((i=0;i<n;i++)); do [ -e "$f" ] || { echo gone; return; }; sleep 0.1; done; echo there; }
@@ -173,7 +173,7 @@ ok "the keeper exits" gone "$(wait_gone "$KD" "$PATIENCE")"
 # The whole argument for closing the seats is that nothing of value goes with them.
 ok "the record survives the teardown" yes "$([ -s "$RD/board/decision.md" ] && echo yes || echo no)"
 ok "board/status still says decided" decided "$(cat "$RD/board/status" 2>/dev/null)"
-ok "the transcript still serves" yes "$(bash "$CLI" transcript 2>/dev/null | grep -q 'one lane per author' && echo yes || echo no)"
+ok "the transcript still serves" yes "$(grep -q 'one lane per author' <<<"$(bash "$CLI" transcript 2>/dev/null)" && echo yes || echo no)"
 # The announcement rings every seat so each learns now rather than at its own timeout. Closing the
 # terminals before it lands would make it pointless, so it must be in the log by the time the
 # teardown is asked for — and it is, because the request is the verb's last act.

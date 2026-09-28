@@ -308,7 +308,7 @@ jq '.order = ["al pha", "beta"]' "$R10/roster.json" > "$R10/r.tmp" && mv "$R10/r
 COUNCIL_ROOM="$R10" COUNCIL_WAIT_SCREEN_FILE="$QUIET" bash "$CLI" status >/dev/null 2>&1
 body=$(cat "$(ls "$POLICY_MAILBOX_DIR"/council-t22l-*.json 2>/dev/null | head -1)" 2>/dev/null)
 ok "an unnamed floor degrades to the room"   0 \
-   "$(printf '%s' "$body" | grep -qF "the room's floor has been held"; echo $?)"
+   "$(grep -qF "the room's floor has been held" <<<"$body"; echo $?)"
 
 # --- 9. the real capture path, with no seam ------------------------------------------------
 # Every case above replaces the capture. This one does not: a pinned container makes _floor_screen
@@ -529,7 +529,7 @@ out=$(COUNCIL_ROOM="$R18" COUNCIL_WAIT_SCREEN_FILE="$QUIET" bash "$CLI" status 2
 ok "a future-stamped turn raises a STALL"    1 "$(printf '%s' "$out" | grep -c "🛑 STALL: the floor's held time cannot be read")"
 ok "...and pushes it"                        1 "$(notices t22v)"
 body=$(cat "$(ls "$POLICY_MAILBOX_DIR"/council-t22v-*.json 2>/dev/null | head -1)" 2>/dev/null)
-ok "...under its own clock key"              0 "$(printf '%s' "$body" | grep -qF '[clock:beta:1]'; echo $?)"
+ok "...under its own clock key"              0 "$(grep -qF '[clock:beta:1]' <<<"$body"; echo $?)"
 # The participant half is deliberately unchanged: 0 is what protocol/_channel.md tells a seat to
 # read as "time the holder yourself", and nothing about a forged stamp makes a bigger number true.
 ok "...while floor still reads held_ms=0"    1 "$(COUNCIL_ROOM="$R18" bash "$CLI" floor | grep -c ' held_ms=0 ')"

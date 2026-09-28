@@ -85,14 +85,14 @@ dec=$(sed -n '/^## The decision/,/^## Objections/p' "$OUT")
 # Quotable on its own: every accepted item is in the decision section, not only in the
 # transcript. This is the assertion the old renderer failed.
 for want in ITEM-ONE ITEM-TWO ITEM-FIVE AMEND-THREE AMEND-FOUR; do
-  printf '%s\n' "$dec" | grep -q "$want" || { echo "FAIL the decision section is missing $want"; fail=1; }
+  grep -q "$want" <<<"$dec" || { echo "FAIL the decision section is missing $want"; fail=1; }
 done
-printf '%s\n' "$dec" | grep -q '^### As proposed' || { echo "FAIL no 'As proposed' heading"; fail=1; }
-printf '%s\n' "$dec" | grep -q "^### Amendment .$a1" || { echo "FAIL no heading naming amendment $a1"; fail=1; }
-printf '%s\n' "$dec" | grep -q "^### Amendment .$a2" || { echo "FAIL no heading naming amendment $a2"; fail=1; }
+grep -q '^### As proposed' <<<"$dec" || { echo "FAIL no 'As proposed' heading"; fail=1; }
+grep -q "^### Amendment .$a1" <<<"$dec" || { echo "FAIL no heading naming amendment $a1"; fail=1; }
+grep -q "^### Amendment .$a2" <<<"$dec" || { echo "FAIL no heading naming amendment $a2"; fail=1; }
 echo "the decision records the proposal as amended, under headings that say which is which"
 
-printf '%s\n' "$dec" | grep -q "as amended by .$a1., .$a2." || {
+grep -q "as amended by .$a1., .$a2." <<<"$dec" || {
   echo "FAIL the provenance line does not name the amendment ids"; fail=1; }
 echo "the provenance line names the amendments that carried the proposal"
 
@@ -132,24 +132,24 @@ OUT2=$(COUNCIL_ME=$(decider) bash "$CLI" decide) || { echo "FAIL decide refused 
 # the branch is executed but never checked: emptying it writes a blank decision section while
 # board/status still says `decided`, and the whole suite stays green.
 dec2=$(sed -n '/^## The decision/,/^## Objections/p' "$OUT2")
-printf '%s\n' "$dec2" | grep -q 'One lane per author' || {
+grep -q 'One lane per author' <<<"$dec2" || {
   echo "FAIL an unamended proposal is missing from the decision section"; fail=1; }
-printf '%s\n' "$dec2" | grep -q 'as amended by' && {
+grep -q 'as amended by' <<<"$dec2" && {
   echo "FAIL an unamended proposal claims amendments"; fail=1; }
-printf '%s\n' "$dec2" | grep -q '^### ' && {
+grep -q '^### ' <<<"$dec2" && {
   echo "FAIL an unamended proposal was given revision headings"; fail=1; }
 echo "an unamended proposal is recorded as plain text, with no headings and no amendment claim"
 
 head=$(sed -n '/^## The question/,/^## The decision/p' "$OUT2")
-printf '%s\n' "$head" | grep -q 'Where should the room keep its history?' || {
+grep -q 'Where should the room keep its history?' <<<"$head" || {
   echo "FAIL the record does not open with the agenda's opening line"; fail=1; }
-printf '%s\n' "$head" | grep -q 'Background' && {
+grep -q 'Background' <<<"$head" && {
   echo "FAIL the record opens with a later section heading, not the question"; fail=1; }
-printf '%s\n' "$head" | grep -q 'agenda.md' || { echo "FAIL no link to the agenda"; fail=1; }
-printf '%s\n' "$head" | grep -q 'another constraint' && {
+grep -q 'agenda.md' <<<"$head" || { echo "FAIL no link to the agenda"; fail=1; }
+grep -q 'another constraint' <<<"$head" && {
   echo "FAIL the whole agenda is still embedded at the top"; fail=1; }
 grep -q '^## The agenda in full' "$OUT2" || { echo "FAIL the agenda is not quoted in full at the end"; fail=1; }
-printf '%s\n' "$(sed -n '/^## The agenda in full/,$p' "$OUT2")" | grep -q 'another constraint' || {
+grep -q 'another constraint' <<<"$(sed -n '/^## The agenda in full/,$p' "$OUT2")" || {
   echo "FAIL the full agenda section lost the agenda's body"; fail=1; }
 echo "a long agenda opens as a heading plus a link, and is quoted in full at the end"
 
