@@ -357,7 +357,8 @@ body-only read closes them unread. Each scenario a comment adds is in scope, or 
 explicitly: commented onto another open issue that then owns it, and the move stated in the PR/MR
 description. `Closes #N` only when every comment on #N is addressed or re-homed; otherwise
 reference #N without the closing keyword and say what is left. The same holds for every issue the
-close sweep closes (§7.G step 4).
+close sweep closes (§7.G step 4). Intake is not the last read: a parallel run can comment a
+scenario onto #N after it, so §7.G reads the comments again before handing off or merging.
 
 ### 3.3 PR/MR path — read detail and detect the stage
 
@@ -1134,6 +1135,13 @@ Comment the scenario onto it in the shape a finding takes (§5.4): what fails, w
 concrete path. Do not re-title the issue and do not re-scope it — the comment adds evidence, and
 whoever owns the issue decides what that evidence means.
 
+**First, check that no other open PR/MR is about to close the candidate.** Use the reference
+file's linked-PRs/MRs query (§3.2). A closer that read the issue's comments before yours arrived
+merges your scenario closed, unread. If one exists, choose another home. If no other issue fits,
+comment anyway, then leave one line on the closing PR/MR naming the new scenario, and say in the
+stage record, and in a notice where a supervisor launched the run, that the closing change must
+carry it. The closer may already have handed off, and then nothing re-reads the issue for it.
+
 > **A limitation, not an exemption.** Rungs 2 and 3 publish to whatever surface the tracker is,
 > which on a public repo is a public one. So does §5.7's non-convergence record, and so does
 > §5.9's escalated-blocker comment — three routes, all of them already there, all of them posting
@@ -1389,6 +1397,12 @@ Only in a spec-engine repo whose law puts the archive in the implementation chan
 
 Run the repo's own final-push checklist, then the close sweep below, then the merge gate (§10).
 
+**Whatever the sweep finds, read the comments again before handing off or merging**, with the
+intake query,
+for every issue the description closes: the change's own, and any the sweep adds. A parallel run
+may have commented since intake. A comment newer than that read is in scope, or re-homed (§3.2),
+before its closing line stays.
+
 #### The close sweep — what this change, or an earlier one, already fixed
 
 At hand-off ship knows exactly what the change touched, and that is the moment to ask whether any
@@ -1433,8 +1447,8 @@ happens to notice. The sweep is what makes the backlog shrink as well as grow.
    PR/MR description — `Closes #N` in the form §7.A settled on — with the one-line evidence beside
    it and the head sha it was established on — and only once its comments are read and addressed,
    as for the change's own issues (§3.2); a GONE body with an open comment scenario is a reference
-   without the closing keyword. The merge then closes it, so the close happens when a
-   person merges and not before, and a change that is never merged closes nothing. Editing the
+   without the closing keyword. The hand-off re-read above covers it too. The merge then closes it,
+   so the close happens when a person merges and not before, and a change that is never merged closes nothing. Editing the
    description moves no code, so the reviewed head stays the head handed off (§5.10). Where the
    merge will not close it — the repo does not honour closing keywords, or the forge setting is off
    — ship closes it after the merge with the evidence as a comment (the reference file has the
