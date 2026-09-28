@@ -87,17 +87,28 @@ while case "$(adp_turn_state "$(pane)")" in running|queued|unknown) true ;; *) f
 done
 [ "$waited" -gt 0 ] && echo "turn ended after ${waited}s; compacting now"
 
+# The completion baseline, read BEFORE anything is typed. adp_compacted answers for the latest
+# compaction on screen, and until the command below is echoed the latest can be an earlier one —
+# a child compacted with --no-resume and not touched since still shows it. So "done" is believed
+# only after "not done" has been seen: here, or on any poll below. An unreadable pre-send frame is
+# no observation. (The same absent-then-present rule adp_delivery_verdict states for a send.)
+seen_undone=0
+pre=$(pane)
+if [ -n "$pre" ] && ! adp_compacted "$pre"; then seen_undone=1; fi
+
 echo "compacting ship-$SLOT ($T)…"
 shipyard_esc "$SLOT"; sleep 1                # Escape CLEARS the box; BSpace restores an older draft
-shipyard_type "$SLOT" "/compact"; sleep 1
+shipyard_type "$SLOT" "$ADP_COMPACT_COMMAND"; sleep 1
 submit
 
-# Wait for it to finish. "Compacted" is the marker; a compaction of a very large
-# session retries on API errors for a while, so the timeout is generous.
+# Wait for it to finish — by the client's anchored completion line (adp_compacted, shared/adapters),
+# never by the word anywhere on screen. A compaction of a very large session retries on API errors
+# for a while, so the timeout is generous.
 waited=0
 while [ "$waited" -lt "$TIMEOUT" ]; do
   p=$(pane)
-  if printf '%s' "$p" | grep -q 'Compacted'; then
+  if [ -n "$p" ] && ! adp_compacted "$p"; then seen_undone=1; fi
+  if [ "$seen_undone" = 1 ] && adp_compacted "$p"; then
     if ! adp_turn_running "$p"; then
       echo "compacted after ${waited}s"
       break
@@ -112,7 +123,7 @@ if [ "$waited" -ge "$TIMEOUT" ]; then
   # above cannot see that case: background agents keep working after the main turn ends, so
   # the session sits at a live prompt, accepts `/compact`, and then compacts slowly or not at
   # all while they run. Acting on the old wording means discarding a session that was fine.
-  echo "warning: no 'Compacted' marker after ${TIMEOUT}s. This does NOT prove the session is dead." >&2
+  echo "warning: the client showed no compaction-finished line after ${TIMEOUT}s. This does NOT prove the session is dead." >&2
   echo "         Two things produce it, and they need opposite responses:" >&2
   echo "           * BENIGN — background agents or a long turn. The pane still shows a spinner or an" >&2
   echo "             agent list. Re-run when that list is empty, or raise --timeout. Change nothing else." >&2

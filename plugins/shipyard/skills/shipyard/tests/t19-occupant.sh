@@ -91,7 +91,13 @@ tmux() {
                    if [ "$n" = 0 ]; then printf '0 zsh\n'; else printf '0 claude\n'; fi ;;
       esac
       return 0 ;;
-    capture-pane) printf 'some earlier output\n> \n'; return 0 ;;
+    # FAKE_PANE serves a committed capture instead; FAKE_PANE_AFTER replaces it once the compact
+    # command has been typed, which is the one transition the compaction cases below need.
+    capture-pane)
+      if [ -z "${FAKE_PANE:-}" ]; then printf 'some earlier output\n> \n'
+      elif [ -n "${FAKE_PANE_AFTER:-}" ] && grep -qF -- '/compact' "$KEYS" 2>/dev/null; then cat "$FAKE_PANE_AFTER"
+      else cat "$FAKE_PANE"; fi
+      return 0 ;;
   esac
   return 0
 }
@@ -261,6 +267,25 @@ compact_on() { # <slot> -> "<rc>|<keys sent>"
 }
 ok "no verdict goes on: it sends, and is not exit 8"        "4|sent" "$(compact_on 43)"
 ok "one none then agent goes on: it sends, not exit 8"      "4|sent" "$(compact_on 44)"
+
+# The completion read (#154), over live captures of both kinds from shared/adapters' fixtures. The
+# stale case is the one the old whole-capture search got wrong with no adversary at all: a
+# compaction from EARLIER still on screen read as finished on the first poll, before the new one
+# had begun, and the resume brief went into a session that had not compacted. The second kind's
+# finished line is lower-case, so the old search never matched it and every compaction there
+# timed out into exit 4.
+PANES="$(cd "$SKILL_DIR/../../../.." && pwd)/shared/adapters/tests/fixtures"
+compact_over() { # <before> [<after>] -> "<rc>|<finished line printed?>"
+  local rc=0 out
+  : > "$KEYS"; : > "$C44"
+  out=$(FAKE_PANE="$PANES/pane-$1.txt" FAKE_PANE_AFTER="${2:+$PANES/pane-$2.txt}" \
+        SHIPYARD_MOTION_INTERVAL=0.01 SHIPYARD_BACKEND=tmux SHIPYARD_SESSION=t19ex \
+        bash "$COMPACT" 42 --no-resume --timeout 1 2>&1) || rc=$?
+  printf '%s|%s' "$rc" "$(has "$out" '^compacted after')"
+}
+ok "an earlier compaction on screen is not this one"        "4|no"  "$(compact_over claude-compacted)"
+ok "first kind: idle, then finished, reads finished"        "0|yes" "$(compact_over claude-idle claude-compacted)"
+ok "second kind: idle, then finished, reads finished"       "0|yes" "$(compact_over codex-idle codex-compacted)"
 
 printf '\n'
 if [ "$FAILURES" -eq 0 ]; then

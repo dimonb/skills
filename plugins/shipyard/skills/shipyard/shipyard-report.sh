@@ -942,9 +942,20 @@ slot_unsettled() {
 # either change this filter's meaning or make the expression invalid — and an invalid one blanks
 # the `last line` column for every slot with no error anyone sees. Every other alternative keeps
 # its original quoting byte for byte.
+#
+# The composer glyphs get a fixed-string stage too, for the same reason and from the same module
+# (ADP_BOX_GLYPHS): a line carrying one is the input box or a submitted message — the supervisor's
+# text, not the child's last word. Built once, since this runs per slot per tick.
+STATUS_BOX_ARGS=()
+status_box_args() {
+  local IFS=' ' g
+  for g in $ADP_BOX_GLYPHS; do STATUS_BOX_ARGS+=(-e "$g"); done
+}
+status_box_args
 status_line() {
   grep -vF -- "$ADP_TURN_MARKER" \
-    | grep -vE '^[[:space:]]*$|──|❯|tokens$|shift\+tab|current: [0-9]|scroll with|tmux detected|Tip:' \
+    | grep -vF "${STATUS_BOX_ARGS[@]}" \
+    | grep -vE '^[[:space:]]*$|──|tokens$|shift\+tab|current: [0-9]|scroll with|tmux detected|Tip:' \
     | grep -iE '✻|✽|·|agents done|Cogitated|Waddling|Whirlpool|ship|propose|spec|apply|archive|merg|approv|pipeline|await|waiting|escalat|ready|pushed|done' \
     | tail -1 | sed -E 's/^[[:space:]]*//; s/[[:space:]]+$//'
 }

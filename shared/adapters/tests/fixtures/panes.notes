@@ -1,8 +1,9 @@
 Pane fixtures for the turn-state read (adp_turn_running / adp_turn_state).
 
 PROVENANCE MATTERS MORE THAN USUAL HERE, because the anchor these pin is a claim about what real
-clients render. Nine of the ten are verbatim captures of real client TUIs, taken at 100 columns;
-one is derived from a capture and says so.
+clients render. Of the first batch of ten, nine are verbatim captures of real client TUIs, taken
+at 100 columns, and one is derived from a capture and says so. A second batch of eight, all
+verbatim, is described further down.
 
 Machine- and person-specific text was replaced in all ten — rule zero: checkout and scratch paths,
 usernames, the numeric UID, session identifiers, model identifiers and plan tiers, quota
@@ -57,6 +58,30 @@ visible without real renders to measure against.
                                  kind to the other would have got this wrong and made every
                                  mid-turn send on this kind alarm. That line also carries the turn
                                  marker, which is why `queued` outranks `running`.
+
+A SECOND BATCH, taken later from throwaway sessions of both kinds in a detached tmux terminal at
+100x40 (tmux capture-pane), each driven by a trivial prompt in an empty scratch directory. Same
+substitutions as above, plus the model's own announcement tip and the wall-clock times. All eight
+are verbatim; the one derived screen built from them lives inline in t-turn.sh and says so.
+
+  pane-codex-ran-marker.txt      live, the second kind, IDLE after running a grep for the turn
+                                 marker. The command's header renders in column one as a service
+                                 line carrying the marker, which the bare-substring read called
+                                 mid-turn. ADVERSARIAL: must read as not running.
+  pane-codex-running-tail.txt    live, same kind, mid-turn with a background terminal. The client
+                                 APPENDS text after its live-status tail on the same line — so the
+                                 tail cannot be anchored at the end of the line.
+  pane-codex-compacting.txt      live, same kind, just after `/compact`: its status line is up and
+                                 nothing says done. The client echoes no submitted slash command.
+  pane-codex-compacted.txt       live, same kind, finished: a column-one `Context compacted`
+                                 service line, lower-case, is the last service line.
+  pane-codex-compacted-stale.txt live, same kind, the finished screen followed by one more turn.
+                                 The old completion line is still in the viewport.
+  pane-claude-compacting.txt     live, the first kind, mid-compaction: the command's echo is a
+                                 column-one glyph line and the turn marker is in the footer.
+  pane-claude-compacted.txt      live, same kind, finished: an indented result line directly
+                                 under that echo.
+  pane-claude-compacted-stale.txt live, same kind, the finished screen followed by one more turn.
 
 NOT ASSERTED: whether either kind ever renders its queued hint somewhere other than the place
 captured here. A third placement, if one exists, reads as not-queued and falls to the alarm path.

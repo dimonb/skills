@@ -1,0 +1,40 @@
+
+ ▐▛███▛█   Claude Code v2.1.284
+▝▜██████▀  example-model - Example Plan
+ ▝▝   ▝▝   ~/src/example/.claude/worktrees/ship-NN
+
+⚠ Your login expires in 3 days · run /login to renew
+
+  A newer model is available. The current model is still your
+  default. Switch with /model.
+
+❯ Reply with the single word hi.
+
+⏺ hi
+
+✻ Brewed for 2s · done HH:MM
+
+❯ /compact
+  ⎿  Compacted (ctrl+o to see full summary)
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+────────────────────────────────────────────────────────────────────────────────────────────────────
+❯ 
+────────────────────────────────────────────────────────────────────────────────────────────────────
+  ⏵⏵ auto mode on (shift+tab to cycle) · ← for agents
