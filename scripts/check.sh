@@ -881,7 +881,9 @@ fi
 # read one level deep (#272): a quoted span is one word unless it holds the command word. Not
 # unwrapped, so a space inside can still split off a fragment that reads as the pattern: an
 # escaped quote nested in a quoted command (`sh -c "pgrep -P \"$a $b\""`), and a quoted `)`
-# inside a `$(...)` within double quotes, which ends that skip early. The rule it
+# inside a `$(...)` within double quotes, which ends that skip early. A lookup inside a process
+# substitution that is itself another lookup's pattern (`pgrep -P "$x" <(pgrep -f y)`) reds,
+# loudly. The rule it
 # backs is broader and lives in AGENTS.md: a helper that signals a LIST of pids refuses pid 1 and
 # bounds the list, because the list is exactly what a wrong lookup inflates.
 pg_files=$(git $GIT_Q ls-files --cached --others --exclude-standard '*.sh'); pg_rc=$?
@@ -910,7 +912,8 @@ else
       }
       # A quoted span is one word: its blanks and separators become \001, so `-P "$a $b"` or
       # `2>"$d/a b"` leaves no fragment to read as the pattern. A span holding the command word is
-      # left as it was when it is one word (`"pgrep" -P`), and otherwise read as the command it is
+      # one word too when it has no blank or ends in that word (`"pgrep" -P`, `"$d/a b/pgrep" -P`,
+      # whose path the command word is read off), and otherwise read as the command it is
       # (`sh -c "cd d && pgrep -P $x"`), its closing quote ending that command so a word after it
       # (`sh -c "..." arg`) is not its pattern. Inside double quotes a `$(...)` is skipped whole,
       # so its own quotes (`"$(pgrep -P "$x" sleep)"`) do not close the outer span.
@@ -929,10 +932,10 @@ else
             if (c == q && d == 0) break
           }
           body = substr(s, i + 1, j - i - 1)
-          if (body !~ /(^|[^A-Za-z0-9_.-])p(grep|kill)([^A-Za-z0-9_.-]|$)/) {
+          if (body !~ /(^|[^A-Za-z0-9_.-])p(grep|kill)([^A-Za-z0-9_.-]|$)/ || body !~ /[ \t]/ ||
+              body ~ /(^|[\/\\])p(grep|kill)$/) {
             gsub(/[ \t|;&()`<>]/, "\001", body); out = out q body q
-          } else if (body ~ /[ \t]/) out = out q unquote(body) " ; "
-          else out = out q body q
+          } else out = out q unquote(body) " ; "
           i = j + 1
         }
         return out

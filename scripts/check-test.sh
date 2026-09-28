@@ -1158,11 +1158,15 @@ expect_fail "check 14: a lookup later in a quoted sh -c string" \
 # pattern after it is reached and the line stays green.
 printf '#!/usr/bin/env bash\nexit 0\nkids=$(%s -P "$x" <(true) sleep)\n' "$PG" > "$SH_PROBE"
 expect_pass "check 14: a process substitution before the pattern stays green"
-# 34e6 — what reading quotes must NOT lose, each one caught before it and missed by its first
-# draft: a quoted command word, the same through single quotes after a quoted `sh -c`, a lookup
-# inside a process substitution, and one inside a `$(...)` within double quotes...
+# 34e6 — what reading quotes must NOT lose: a quoted command word, bare and on a path holding a
+# space, a lookup inside a process substitution, and one inside a `$(...)` within double quotes
+# (all caught before quotes were read, and missed by a draft that read them), plus the single-
+# quoted form of 34e3's word after an `sh -c` string...
 printf '#!/usr/bin/env bash\nexit 0\nkids=$("%s" -P "$x")\n' "$PG" > "$SH_PROBE"
 expect_fail "check 14: a quoted command word" \
+  "pgrep/pkill with -P/--parent and no pattern"
+printf '#!/usr/bin/env bash\nexit 0\nkids=$("$d/a b/%s" -P "$x")\n' "$PG" > "$SH_PROBE"
+expect_fail "check 14: a quoted command path holding a space" \
   "pgrep/pkill with -P/--parent and no pattern"
 printf '#!/usr/bin/env bash\nexit 0\nkids=$(sh -c \047%s -P $x\047 arg)\n' "$PG" > "$SH_PROBE"
 expect_fail "check 14: a word after a single-quoted sh -c string" \
