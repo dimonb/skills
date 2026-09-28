@@ -46,3 +46,47 @@ Open-to-merge time 6-18 min per PR, except #262 (527 min — its slot was dead f
    of pids refuses pid ≤ 1 and bounds the list; `pgrep -P` never without a pattern.
 5. **On resume after a crash**, do not re-run the interrupted command until you have checked whether
    it caused the crash (the system log names a signal's sender).
+
+Shipped in #273.
+
+## Retro 2 — 2026-09-28, after #267 #271 #273 #274
+
+Batch: 4 PRs in about 1 h 45 min, 10 issues closed (one of them, #159, found already fixed by the
+now diff-scoped close sweep), open count 66 → 61. Open-to-merge 12-35 min. Five issues were
+opened in the same window: three by the supervisor (#268 the process gap, #269 and #270 holding 16
+harvested findings that had been invisible on merged PRs), two by children (#272, #275).
+
+### Went well
+
+* **Retro 1 landed within the hour** (#273, 12 min open-to-merge), and the first slot on the new
+  skill used its diff-scoped close sweep to close an issue nobody had listed.
+* **Escalations were the right ones.** Both stopped on a genuine design fork (single-sourcing roster
+  defaults; a "flake" that turned out to be a production leak) with measurements attached, and both
+  were answered within minutes.
+* **A flake investigation found a real defect instead of papering over it** — the t10 case B red is
+  an owner-hold watcher leak (#275), and the assertion was kept rather than weakened.
+
+### Went badly
+
+* **Oversized clusters stall.** The flake cluster carries three issues and about nine separate test
+  instances; it has run one turn for 40+ minutes while four smaller clusters each finished in
+  12-35. Cluster size is the supervisor's choice, and it was too big.
+* **A defect in the change's own new code was filed instead of fixed.** #272 is a false negative in
+  the gate arm #267 itself added; the filing ladder's rung 1 (fix it in place when small and in
+  scope) should have applied before rung 3.
+* **Hidden debt turned visible raises the count before it lowers it.** The harvest was worth it,
+  but it means the open count is not a clean progress measure for this run.
+
+### Change
+
+In `ship` (next PR):
+
+1. **A defect in code this change adds is fixed in this change.** Filing it as a new issue is
+   allowed only when fixing it would widen the change beyond its issue, and the ready notice then
+   says why it was not fixed in place.
+2. **Scope check at `issue-ready`:** when the listed work is more than one reviewable change (for
+   example several independent test files or subsystems), send a notice proposing a split before
+   implementing, rather than carrying it all through one review battery.
+
+For the supervisor (no skill change): cap a cluster at about three issues or five independent
+instances, and split the rest into the queue.
