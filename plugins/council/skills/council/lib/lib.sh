@@ -621,9 +621,10 @@ c_barrier() {
   #     created before it was recorded) keeps the unfloored anchor, as c_room_age_s does.
   #
   # WHAT STILL BYPASSES IT, recorded at the code as #204 decided for room-state residuals:
-  #   * a seat may stamp its own position anywhere at or after `created_ms`, with no roster write,
-  #     so the round can be timed from the room's creation rather than from its first real
-  #     position. The rewind is bounded by that gap, and nothing here prevents it;
+  #   * a seat may stamp its own position as far back as it likes, with no roster write; the floor
+  #     clamps that to `created_ms`, so the round can be timed from the room's creation rather
+  #     than from its first real position. The rewind is bounded by that gap, and nothing here
+  #     prevents it;
   #   * a seat that also rewrites roster.json's `created_ms` backwards defeats the floor, since
   #     that field is as writable as the message. Nothing here stops that deliberate route either.
   # The reverse direction — a future `created_ms` or `sent_ms` — only DELAYS the close until the
