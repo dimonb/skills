@@ -153,7 +153,9 @@ gap somebody is on their way to filling.
 
 An `amend` belongs to **one** proposal — the first proposal-typed id it references; its
 other refs are the objections it closes. (Referencing two proposals used to apply the
-amendment to both, so a room displayed two participants proposing the same words.)
+amendment to both, so a room displayed two participants proposing the same words.) An
+`amend` that names only an objection belongs to the proposal that objection was raised
+against, so the decision record carries the amendment it closed the objection with.
 
 A barrier round puts **N proposals** on the table at once, one per participant, and
 `ready-to-decide` wants exactly one. That is the work of the lap after the barrier: yield
@@ -1281,7 +1283,10 @@ produced one false test result during development. Do not pipe status through a 
   amendment's own voice: every accepted item it did not restate appeared nowhere, and the
   decision could only be reconstructed from the transcript.
 * **A long agenda is summarised at the top of the record and quoted in full at the end**, so
-  the decision is not pushed below two screens of prompt. A one-line agenda stays inline.
+  the decision is not pushed below two screens of prompt. Long is more than six non-blank lines
+  or more than 600 bytes; a shorter agenda, and any agenda of a single line, stays inline.
+* **Text the record did not write is quoted in it** — the agenda and every participant's
+  message — so a line of it that looks like a heading cannot become a section of the record.
 
 ## Files
 

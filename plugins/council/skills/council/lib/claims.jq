@@ -64,8 +64,22 @@
     # single amendment rewrite two rival positions at once, so a room showed two different
     # participants proposing the same words — observed live, and it misleads a human before
     # it misleads any code.
+    #
+    # An amend that names NO proposal -- `--refs '["<objection>"]'`, off-protocol but nothing
+    # refuses it -- belongs to the proposal its first objection-typed ref was raised against
+    # (that objection's own first proposal-typed ref). It closes that objection either way,
+    # because the closure rule above takes any `amend` that references it; without this it
+    # carried no proposal, so the room ripened on it and the record rendered the UN-amended
+    # proposal as the decision while the Objections section cited the amendment as the close.
+    # The amendment's text appeared only in the transcript.
     | ( [ $m[] | select(.act == "amend")
-          | select( [ (.refs // [])[] | select( IN($props[].id) ) ] | first == $p.id ) ] ) as $amends
+          | . as $a
+          | ( [ ($a.refs // [])[] | select( IN($props[].id) ) ] | first ) as $direct
+          | ( $direct
+              // ( [ ($a.refs // [])[] as $r | $objs[] | select(.id == $r)
+                     | [ (.refs // [])[] | select( IN($props[].id) ) ] | first // empty ]
+                   | first ) ) as $owner
+          | select($owner == $p.id) ] ) as $amends
     | ( [ $m[] | select(.act == "withdraw" and .from == $p.from
                         and ((.refs // []) | index($p.id)) != null) ] ) as $wd
     # `concede` means the sender yields, so from a proposal's own author it kills the
