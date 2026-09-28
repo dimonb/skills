@@ -51,6 +51,13 @@ age_room() { # <room> <seconds>
   now_ms=$(( $(date +%s) * 1000 ))
   jq --argjson c "$(( now_ms - back * 1000 ))" '.created_ms = $c' "$r/roster.json" > "$r/roster.tmp"
   mv "$r/roster.tmp" "$r/roster.json"
+  # A launch record is bound to the room by `created_ms`, and `up` would have written it with the
+  # value the room was created with. Keep it bound, or every aged room reads as having a record
+  # that belongs to some other room.
+  local lr; lr="$POLICY_MAILBOX_DIR/council-launch-$(basename "$r")"
+  if [ -f "$lr" ]; then
+    jq --argjson c "$(( now_ms - back * 1000 ))" '.created_ms = $c' "$lr" > "$lr.tmp" && mv "$lr.tmp" "$lr"
+  fi
 }
 
 # Age a room that HAS spoken. `c_floor_held_ms` times from the last turn-consuming message once
@@ -85,12 +92,13 @@ for e in "$REAL_SKILL"/lib/*; do
   case "${e##*/}" in term.sh) ;; *) ln -s "$e" "$SHADOW/lib/${e##*/}" ;; esac
 done
 SESSIONS="$COUNCIL_TEST_ROOT/t27-sessions"       # what the backend lists, one name per line
+HANDLES="$COUNCIL_TEST_ROOT/t27-handles"         # ...and the same sessions as handle lines
 SESSIONS_RC="$COUNCIL_TEST_ROOT/t27-sessions-rc" # ...and the status it answers with
 SESSIONS_CALLS="$COUNCIL_TEST_ROOT/t27-sessions-calls"  # one line per enumeration, for cost tests
 OCC="$COUNCIL_TEST_ROOT/t27-occupant"            # what ct_occupant answers (agent|none); absent = no verdict
 OCC_CALLS="$COUNCIL_TEST_ROOT/t27-occupant-calls"  # one line per occupant read
 rm -f "$OCC"; : > "$OCC_CALLS"
-: > "$SESSIONS"; printf '0\n' > "$SESSIONS_RC"; : > "$SESSIONS_CALLS"
+: > "$SESSIONS"; : > "$HANDLES"; printf '0\n' > "$SESSIONS_RC"; : > "$SESSIONS_CALLS"
 cat >"$SHADOW/lib/term.sh" <<SHADOWEOF
 # The shipped terminal with only the enumeration replaced. Pinned to tmux so the pin cases mean
 # the same thing here as on a machine running agterm — \`auto\` would resolve against whatever the
@@ -98,6 +106,9 @@ cat >"$SHADOW/lib/term.sh" <<SHADOWEOF
 COUNCIL_BACKEND=tmux
 . "$REAL_SKILL/lib/term.sh"
 ct_sessions() { printf 'call\\n' >> "$SESSIONS_CALLS"; cat "$SESSIONS" 2>/dev/null; return "\$(cat "$SESSIONS_RC" 2>/dev/null || printf 0)"; }
+# The handle enumeration the launch-record readers use (#247), from the same backend state: one
+# "<handle><TAB><container><TAB><name>" line per listed session, answering with the same status.
+ct_handles()  { printf 'call\\n' >> "$SESSIONS_CALLS"; cat "$HANDLES" 2>/dev/null; return "\$(cat "$SESSIONS_RC" 2>/dev/null || printf 0)"; }
 # The occupant read (#235), replaced for the same reason: a live tmux cannot be made to answer
 # \`none\` on demand. No file is no verdict, which is what every case outside section 10f gets.
 ct_occupant() { printf 'call\\n' >> "$OCC_CALLS"; [ -f "$OCC" ] || return 1; cat "$OCC"; }
@@ -106,11 +117,35 @@ SCLI="$SHADOW/council.sh"
 
 # Drive the shadow backend: `sessions <name>...` lists those sessions and answers 0;
 # `sessions_unreachable` answers non-zero, which is the case a live tmux cannot be made to give.
-sessions()             { printf '%s\n' "$@" > "$SESSIONS"; printf '0\n' > "$SESSIONS_RC"; }
+# Each listed session is also a handle, `h-<name>`, in `fake-container`, which is the handle
+# `record_launch` records for it, so "listed" means "the launched terminal is up" unless a case
+# writes $HANDLES itself.
+sessions()             { printf '%s\n' "$@" > "$SESSIONS"; printf '0\n' > "$SESSIONS_RC"
+                         local s; : > "$HANDLES"
+                         for s in "$@"; do printf 'h-%s\tfake-container\t%s\n' "$s" "$s" >> "$HANDLES"; done; }
 calls_reset()          { : > "$SESSIONS_CALLS"; }
 calls_count()          { wc -l < "$SESSIONS_CALLS" | tr -d ' '; }
-sessions_none()        { : > "$SESSIONS"; printf '0\n' > "$SESSIONS_RC"; }
-sessions_unreachable() { : > "$SESSIONS"; printf '1\n' > "$SESSIONS_RC"; }
+sessions_none()        { : > "$SESSIONS"; : > "$HANDLES"; printf '0\n' > "$SESSIONS_RC"; }
+sessions_unreachable() { : > "$SESSIONS"; : > "$HANDLES"; printf '1\n' > "$SESSIONS_RC"; }
+
+# The launch record `up` would have written for <room>: every roster seat launched on tmux into
+# `fake-container` as `h-council-<room>-<peer>`, except the seats named after `--unlaunched`,
+# for which nothing was launched (the `--me` seat, a failed launch). `record_forget` removes it.
+record_launch() { # <room> [--unlaunched <peer>...]
+  local r="$1" rp; shift
+  [ "${1:-}" = --unlaunched ] && shift
+  rp=$(cd "$r" && pwd -P)
+  jq -n --arg room "$rp" --argjson cms "$(jq '.created_ms' "$r/roster.json")" \
+        --argjson order "$(jq -c '.order' "$r/roster.json")" --arg rn "$(basename "$rp")" \
+        --argjson un "$(printf '%s\n' "$@" | jq -R . | jq -s 'map(select(length > 0))')" '
+    {room: $room, created_ms: $cms, generation: 1,
+     seats: ($order | map(. as $p | "council-\($rn)-\($p)" as $n
+       | {key: $p, value: (if ($un | index($p)) != null
+         then {backend: "tmux", container: "fake-container", name: $n, handle: null, launched: false, generation: 1}
+         else {backend: "tmux", container: "fake-container", name: $n, handle: "h-\($n)", launched: true, generation: 1} end)})
+       | from_entries)}' > "$POLICY_MAILBOX_DIR/council-launch-$(basename "$rp")"
+}
+record_forget() { rm -f "$POLICY_MAILBOX_DIR/council-launch-$(basename "$1")"; }
 
 # --- 1. the filter filters -------------------------------------------------------------
 R="$COUNCIL_TEST_ROOT/t27a"; rm -rf "$R"
@@ -210,6 +245,7 @@ export COUNCIL_ROOM="$RQ" ROOM="$RQ"
 # which that same commit's own gate had already made impossible.
 printf 'fake-container\n' > "$RQ/state/container-tmux"
 printf '#!/bin/sh\n' > "$RQ/state/launch-$(bash "$CLI" floor | sed -n 's/.*floor=\([^ ]*\).*/\1/p').sh"
+record_launch "$RQ"
 sessions_none
 blk=$(bash "$SCLI" status 2>/dev/null)
 ok "the quiet line carries the liveness note" 1 "$(printf '%s' "$blk" | grep -c '^quiet:.*terminal is GONE')"
@@ -241,7 +277,7 @@ ok "--alarms-only asks the backend nothing on a quiet room" 0 "$(calls_count)"
 calls_reset
 bash "$SCLI" status >/dev/null 2>&1
 ok "...while the block does ask it"                         1 "$(calls_count)"
-rm -f "$RQ/state/container-tmux" "$RQ"/state/launch-*.sh
+rm -f "$RQ/state/container-tmux" "$RQ"/state/launch-*.sh; record_forget "$RQ"
 
 # Past the hard threshold it IS an alarm again, and that one does everything the quiet line does
 # not.
@@ -338,12 +374,15 @@ ok "...on the ordinary arm"                  1 "$(printf '%s' "$cs" | grep -c 'h
 # whether or not the guard existed, and only its companion below did any work. Measured: dropping
 # the closed-room half of the gate left this one green until the launcher was added.
 printf '#!/bin/sh\n' > "$R3/state/launch-$holder.sh"
+# ...and a launch record, since #247: without one the read settles nothing and says nothing, so
+# the two assertions below would pass with the closed-room gate gone.
+record_launch "$R3"
 cs=$(COUNCIL_STALL_SECS=100 bash "$SCLI" status --alarms-only 2>/dev/null)
 ok "...but prescribes no relaunch"           0 "$(printf '%s' "$cs" | grep -c 'before running council.sh relaunch')"
 ok "...and claims nothing about a terminal"  0 "$(printf '%s' "$cs" | grep -c 'terminal is GONE')"
-# Both removed: section 6 asserts the never-launched answer on this room, and a launcher left
-# behind would make it rc 2 / `?` — correctly, which is exactly why it has to go.
-rm -f "$R3/state/container-tmux" "$R3"/state/launch-*.sh
+# All three removed: section 6 asserts the never-launched answer on this room, and a launcher or a
+# record left behind would make it rc 2 / `?` — correctly, which is exactly why they have to go.
+rm -f "$R3/state/container-tmux" "$R3"/state/launch-*.sh; record_forget "$R3"
 
 # --- 6. the terminals verb ---------------------------------------------------------------
 out=$(bash "$CLI" terminals 2>/dev/null); rc=$?
@@ -383,10 +422,13 @@ bash "$CLI" status --only-changed >/dev/null 2>&1;  ok "closed, --only-changed" 
 bash "$CLI" status --nope >/dev/null 2>&1; ok "an unknown option exits 2" 2 "$?"
 
 # --- 9. the closed-room terminal read, over the shadow backend ----------------------------
-# Every case here is one the alarm exists for, and every one of them used to be untested.
+# Every case here is one the alarm exists for, and every one of them used to be untested. Since
+# #247 the count is checked against the room's launch record, which names the handle each seat was
+# launched as, so `record_launch` is the fixture `up` would have left.
 export COUNCIL_ROOM="$R3" ROOM="$R3"
 RN=$(basename "$R3")
 printf 'fake-container\n' > "$R3/state/container-tmux"
+record_launch "$R3"
 
 # 9a. Two of three seats listed: the alarm fires and names the count.
 sessions "council-$RN-a" "council-$RN-b"
@@ -399,47 +441,145 @@ bash "$SCLI" status --only-changed >/dev/null 2>&1
 out=$(bash "$SCLI" status --only-changed 2>/dev/null)
 ok "...on every tick, through --only-changed" 1 "$(printf '%s' "$out" | grep -cE '[0-9]+ of [0-9]+ terminals are still up')"
 
-# 9b. An honest empty answer from a backend that DID answer — a legitimately torn-down room. No
-#     alarm is owed, but the tick must still SAY what it read: a zero comes through a pin inside
-#     the room, so it is not proof, and falling silent here is what made a retargeted pin invisible.
+# 9b. GENUINE TEARDOWN — verified absent. The record names what was launched and the backend,
+#     which answered, lists none of it. No alarm is owed, but the tick must still SAY what it
+#     read: the record is in the mailbox, which a seat can write, so the zero is not proof.
 sessions_none
 ok "terminals counts zero once they are gone" "0/3" "$(bash "$SCLI" terminals 2>/dev/null)"
 out=$(bash "$SCLI" status --alarms-only 2>/dev/null)
 ok "a torn-down room raises no alarm" 0 "$(printf '%s' "$out" | grep -c 'terminals are still up')"
+ok "...nor a could-not-tell alarm"    0 "$(printf '%s' "$out" | grep -c 'could not be determined')"
 ok "...and the block line stays off the alarm channel" 0 "$(printf '%s' "$out" | grep -c '^terminals:')"
 blk=$(bash "$SCLI" status 2>/dev/null)
 ok "...but the block says what it read"  1 "$(printf '%s' "$blk" | grep -c '^terminals: none of 3')"
 ok "...and that a zero is not proof"     1 "$(printf '%s' "$blk" | grep -c 'not proof')"
+# Teardown on tmux usually takes the server with it, and `drv_handles` reads "no server" as an
+# answered, empty backend. That half is asserted in shared/driver/tests; this is the council half.
 
-# 9c. THE SUPPRESSION ROUTE. A participant retargets the pin at a container that does not exist;
-#     the backend answers honestly that it holds nothing, so this is a RESOLVED read reporting
-#     zero while the seats run. It is indistinguishable from 9b by design — `council_down` leaves
-#     the pin in place — which is why the answer is the block line above and not an alarm. What
-#     must never happen again is the tick printing NOTHING.
+# 9c. THE SUPPRESSION ROUTE, CLOSED. A participant retargets the pin at a container that does not
+#     exist. By name, the backend answered honestly that it held nothing, so this was a RESOLVED
+#     zero while the seats ran, indistinguishable from 9b. Against the record, the pin disagrees
+#     with what was launched, so it is unknown and alarms, while the seats are listed or not.
 printf 'no-such-container\n' > "$R3/state/container-tmux"
+sessions "council-$RN-a" "council-$RN-b"
+out=$(bash "$SCLI" status --alarms-only 2>/dev/null)
+ok "a retargeted pin alarms, even while seats are up" 1 "$(printf '%s' "$out" | grep -c 'could not be determined')"
+ok "...saying the pin disagrees with the record"      1 "$(printf '%s' "$out" | grep -c 'room pin names no-such-container')"
+ok "...and terminals says ?"                          "?" "$(bash "$SCLI" terminals 2>/dev/null)"
 sessions_none
-blk=$(bash "$SCLI" status 2>/dev/null)
-ok "a retargeted pin does not silence the tick" 1 "$(printf '%s' "$blk" | grep -c '^terminals:')"
+out=$(bash "$SCLI" status --alarms-only 2>/dev/null)
+ok "...and while none are"                            1 "$(printf '%s' "$out" | grep -c 'could not be determined')"
+# Deleting the pin reads the same: unknown, not a zero.
+rm -f "$R3/state/container-tmux"
+out=$(bash "$SCLI" status --alarms-only 2>/dev/null)
+ok "a deleted pin alarms"                             1 "$(printf '%s' "$out" | grep -c 'room has no container pin')"
+printf 'fake-container\n' > "$R3/state/container-tmux"
+
+# 9c-bis. A STALE HANDLE, two ways. The launched terminal is gone and a session with its name is
+#     listed (a relaunch the record does not know about, or a planted name); and the recorded
+#     handle is listed but now belongs to another terminal (tmux ids restart with the server).
+#     Neither is live and neither is gone.
+printf 'h-other\tfake-container\tcouncil-%s-a\n' "$RN" > "$HANDLES"; printf '0\n' > "$SESSIONS_RC"
+ok "a same-named session where the launched one is gone is ?" "?" "$(bash "$SCLI" terminals 2>/dev/null)"
+out=$(bash "$SCLI" status --alarms-only 2>/dev/null)
+ok "...and alarms, naming the stale handle"            1 "$(printf '%s' "$out" | grep -c 'a stale record or a planted name')"
+printf 'h-council-%s-a\tfake-container\tsomething-else\n' "$RN" > "$HANDLES"
+ok "a recorded handle on another terminal is ?"        "?" "$(bash "$SCLI" terminals 2>/dev/null)"
+out=$(bash "$SCLI" status --alarms-only 2>/dev/null)
+ok "...and alarms as stale"                            1 "$(printf '%s' "$out" | grep -c 'so it is stale')"
+# ...and the CONTAINER half: the right name, in another container (a recycled tmux id).
+printf 'h-council-%s-a\tanother-session\tcouncil-%s-a\n' "$RN" "$RN" > "$HANDLES"
+ok "a recorded handle in another container is ?"       "?" "$(bash "$SCLI" terminals 2>/dev/null)"
+sessions_none
+
+# 9c-ter. THE RECORD ALONE. A seat that edits only the launch record — renaming its entry and
+#     giving it a handle nobody holds — must not make a live seat read gone, and copying a live
+#     seat's entry into a dead seat's must not make it read live. The recorded name is checked
+#     against the peer, so both read unknown and alarm.
+sessions "council-$RN-a" "council-$RN-b" "council-$RN-c"
+jq '.seats.a.name = "x" | .seats.a.handle = "@999"' "$POLICY_MAILBOX_DIR/council-launch-$RN" > "$R3.lr"
+mv "$R3.lr" "$POLICY_MAILBOX_DIR/council-launch-$RN"
+ok "a renamed record entry does not read a live seat as gone" "?" "$(bash "$SCLI" terminals 2>/dev/null)"
+out=$(bash "$SCLI" status --alarms-only 2>/dev/null)
+ok "...and alarms, saying the record names another session" 1 "$(printf '%s' "$out" | grep -c 'the launch record names x for this seat')"
+record_launch "$R3"
+sessions "council-$RN-a" "council-$RN-b"
+jq '.seats.c = .seats.a' "$POLICY_MAILBOX_DIR/council-launch-$RN" > "$R3.lr"
+mv "$R3.lr" "$POLICY_MAILBOX_DIR/council-launch-$RN"
+ok "a dead seat's entry copied from a live one does not read live" "?" "$(bash "$SCLI" terminals 2>/dev/null)"
+record_launch "$R3"
+# ...while a forged handle with the true name finds the real session by name, which is unknown too.
+sessions "council-$RN-a" "council-$RN-b"
+jq '.seats.a.handle = "@999"' "$POLICY_MAILBOX_DIR/council-launch-$RN" > "$R3.lr"
+mv "$R3.lr" "$POLICY_MAILBOX_DIR/council-launch-$RN"
+ok "a forged handle alone reads ?"                     "?" "$(bash "$SCLI" terminals 2>/dev/null)"
+record_launch "$R3"
+# "Nothing was launched here", in some other container: a `launched: false` entry is not checked
+# against the pin, so the search for the live session by name must not be scoped to the
+# container the record names, or this one write reads every live seat as gone.
+sessions "council-$RN-a" "council-$RN-b" "council-$RN-c"
+jq '.seats |= map_values(.launched = false | .handle = null | .container = "nowhere")' \
+  "$POLICY_MAILBOX_DIR/council-launch-$RN" > "$R3.lr"
+mv "$R3.lr" "$POLICY_MAILBOX_DIR/council-launch-$RN"
+ok "a record saying nothing was launched, elsewhere, is ? while seats are up" "?" "$(bash "$SCLI" terminals 2>/dev/null)"
+out=$(bash "$SCLI" status --alarms-only 2>/dev/null)
+ok "...and alarms"                                     1 "$(printf '%s' "$out" | grep -c 'could not be determined')"
+record_launch "$R3"
+# A live seat dropped from the ROSTER is not dropped from the count: the record still holds it.
+sessions "council-$RN-a"
+cp "$R3/roster.json" "$R3/roster.bak"
+jq '.order = ["b","c"]' "$R3/roster.bak" > "$R3/roster.json"
+ok "a live seat dropped from the roster is ? not 0/2"  "?" "$(bash "$SCLI" terminals 2>/dev/null)"
+out=$(bash "$SCLI" status --alarms-only 2>/dev/null)
+ok "...and alarms, saying the roster no longer lists it" 1 "$(printf '%s' "$out" | grep -c 'the roster no longer lists')"
+mv "$R3/roster.bak" "$R3/roster.json"
+sessions_none
+
+# 9c-quinquies. ANOTHER REPO, THE SAME ROOM NAME. Session names carry no repo, so a room of the same
+#     scenario elsewhere on the backend lists sessions with exactly this room's names, in its own
+#     container. A genuine teardown here must still read gone, and a seat nothing was launched for
+#     must still read never-launched, not unknown because of somebody else's terminals.
+for p in a b c; do printf 'h-other-%s\tother-repo\tcouncil-%s-%s\n' "$p" "$RN" "$p"; done > "$HANDLES"
+printf '0\n' > "$SESSIONS_RC"
+ok "a torn-down room beside another repo's same-named room is 0/3" "0/3" "$(bash "$SCLI" terminals 2>/dev/null)"
+out=$(bash "$SCLI" status --alarms-only 2>/dev/null)
+ok "...and raises no could-not-tell alarm"              0 "$(printf '%s' "$out" | grep -c 'could not be determined')"
+record_launch "$R3" --unlaunched a
+ok "...and a seat nothing was launched for still reads absent" "0/3" "$(bash "$SCLI" terminals 2>/dev/null)"
+record_launch "$R3"
+# Scoping the search to the pin opens nothing: a retargeted pin still reads unknown, because the
+# pin and the recorded container disagree before any name is searched.
+printf 'other-repo\n' > "$R3/state/container-tmux"
+ok "...while a pin retargeted at that other room is still ?" "?" "$(bash "$SCLI" terminals 2>/dev/null)"
+printf 'fake-container\n' > "$R3/state/container-tmux"
+sessions_none
+
+# 9c-quater. CONTROL BYTES IN A QUOTED VALUE. The alarm quotes the pin, and a pin is a file a seat
+#     writes. Cursor-control bytes in it must not reach the one-line alarms output, where they
+#     could erase the line on a terminal, and the alarm must still say what it read.
+printf 'evil\033[2K\033[1Gall clear\033[8m\n' > "$R3/state/container-tmux"
+out=$(bash "$SCLI" status --alarms-only 2>/dev/null)
+ok "an escape-laden pin still alarms"                  1 "$(printf '%s' "$out" | grep -c 'could not be determined')"
+ok "...with no control byte in the output"             0 "$(printf '%s' "$out" | LC_ALL=C tr -d '\n' | LC_ALL=C grep -c '[[:cntrl:]]')"
+err=$(bash "$SCLI" terminals 2>&1 >/dev/null)
+ok "...nor in the terminals verb's reason"             0 "$(printf '%s' "$err" | LC_ALL=C tr -d '\n' | LC_ALL=C grep -c '[[:cntrl:]]')"
+printf 'fake-container\n' > "$R3/state/container-tmux"
 
 # 9d. An unresolvable read must FAIL OPEN — the alarm still fires, worded as "could not tell".
-#     Two routes: a backend that did not answer, and a pin naming the other backend.
+#     Two routes: a backend that did not answer, and a record naming the other backend.
 sessions_unreachable
-printf 'fake-container\n' > "$R3/state/container-tmux"
 out=$(bash "$SCLI" status --alarms-only 2>/dev/null)
 ok "an unreachable backend still alarms" 1 "$(printf '%s' "$out" | grep -c 'could not be determined')"
 ok "...and says to run down"             1 "$(printf '%s' "$out" | grep -c 'council.sh down')"
 ok "terminals says ? rather than a number" "?" "$(bash "$SCLI" terminals 2>/dev/null)"
 bash "$SCLI" terminals >/dev/null 2>&1; ok "...and exits 1" 1 "$?"
-
-# The tmux pin must GO first: `drv_pins_elsewhere` treats both pins present as "this caller has
-# launched on each", i.e. no disagreement — so leaving it here would test nothing.
+ok "...giving the reason on stderr"       1 "$(bash "$SCLI" terminals 2>&1 >/dev/null | grep -c 'did not answer')"
 sessions_none
-rm -f "$R3/state/container-tmux"
-printf 'other\n' > "$R3/state/container-agterm"
+jq '.seats |= map_values(.backend = "agterm")' "$POLICY_MAILBOX_DIR/council-launch-$RN" > "$R3.lr"
+mv "$R3.lr" "$POLICY_MAILBOX_DIR/council-launch-$RN"
 out=$(bash "$SCLI" status --alarms-only 2>/dev/null)
-ok "a pin naming the other backend still alarms" 1 "$(printf '%s' "$out" | grep -c 'could not be determined')"
-rm -f "$R3/state/container-agterm"
-printf 'fake-container\n' > "$R3/state/container-tmux"
+ok "a record naming the other backend still alarms" 1 "$(printf '%s' "$out" | grep -c 'launched on agterm')"
+record_launch "$R3"
 
 # 9e. A ROSTER THE READER REFUSES IS NOT A ZERO. `c_peers` returns 1 for a roster it will not
 #     validate, and that refusal used to be swallowed by a heredoc: empty list, confident `0/0`
@@ -452,34 +592,50 @@ ok "a refused roster is ? not 0/0" "?" "$(bash "$SCLI" terminals 2>/dev/null)"
 out=$(bash "$SCLI" status --alarms-only 2>/dev/null)
 ok "...and the alarm still fires" 1 "$(printf '%s' "$out" | grep -c 'could not be determined')"
 mv "$R3/roster.bak" "$R3/roster.json"
-rm -f "$R3/state/container-tmux"
 
-# 9f. NO PIN IS TWO ANSWERS. A room with launchers but no container pin was launched by this
-#     skill (`drv_launch` writes the pin before starting anything, except when no backend
-#     resolves at all) and has since lost it — damage, or a participant removing it. That is "cannot tell", which alarms; only a room with no launchers either is
-#     "never had any", which is a block line. Before the split, one `rm state/container-*` took
-#     the closed-room alarm off the alarm channel entirely.
-sessions "council-$RN-a" "council-$RN-b"
+# 9f. NO RECORD IS UNKNOWN, AND SAYS SO. A room launched before launch records existed has none,
+#     and neither does a room whose record was deleted. Both read `?` and alarm, and the alarm
+#     says why, so an old room's permanent `?` reads as expected rather than as a fault, and a
+#     deletion reads exactly the same way: self-revealing rather than silent.
 printf 'fake-container\n' > "$R3/state/container-tmux"
-out=$(bash "$SCLI" status --alarms-only 2>/dev/null)
-ok "9f: baseline — the pin is there and seats are up" 1 "$(printf '%s' "$out" | grep -cE '[0-9]+ of [0-9]+ terminals are still up')"
-rm -f "$R3"/state/container-*
 printf '#!/bin/sh\n' > "$R3/state/launch-a.sh"
 out=$(bash "$SCLI" status --alarms-only 2>/dev/null)
-ok "a launched room with no pin still alarms" 1 "$(printf '%s' "$out" | grep -c 'could not be determined')"
-ok "...and terminals says ?"                  "?" "$(bash "$SCLI" terminals 2>/dev/null)"
-# ...and the honest limit: remove the launchers too and it is back to a block line. The test
-# asserts the limit rather than pretending the route is closed — removing this assertion is how
-# a later reader comes to believe the guard is stronger than it is.
-rm -f "$R3"/state/launch-*.sh
+ok "9f: baseline — the record is there and seats are up" 1 "$(printf '%s' "$out" | grep -cE '[0-9]+ of [0-9]+ terminals are still up')"
+record_forget "$R3"
+out=$(bash "$SCLI" status --alarms-only 2>/dev/null)
+ok "a launched room with no record alarms" 1 "$(printf '%s' "$out" | grep -c 'could not be determined')"
+ok "...saying there is no launch record"   1 "$(printf '%s' "$out" | grep -c 'no launch record (it predates launch records, or the record was removed)')"
+ok "...never counting names instead"       0 "$(printf '%s' "$out" | grep -cE '[0-9]+ of [0-9]+ terminals are still up')"
+ok "...and terminals says ?"               "?" "$(bash "$SCLI" terminals 2>/dev/null)"
+# A record left by an EARLIER room of the same name does not vouch for this one.
+record_launch "$R3"
+jq '.created_ms = 1' "$POLICY_MAILBOX_DIR/council-launch-$RN" > "$R3.lr" && mv "$R3.lr" "$POLICY_MAILBOX_DIR/council-launch-$RN"
+out=$(bash "$SCLI" status --alarms-only 2>/dev/null)
+ok "a record for another room alarms"      1 "$(printf '%s' "$out" | grep -c 'belongs to another room')"
+# ...even with the pin and every launcher gone: a record that EXISTS means something was launched
+# here, so it is never read as "never had any".
+mv "$R3/state/container-tmux" "$R3.pin"; mv "$R3/state/launch-a.sh" "$R3.launch"
+out=$(bash "$SCLI" status --alarms-only 2>/dev/null)
+ok "...even with no pin and no launchers"  1 "$(printf '%s' "$out" | grep -c 'belongs to another room')"
+mv "$R3.pin" "$R3/state/container-tmux"; mv "$R3.launch" "$R3/state/launch-a.sh"
+# With the record present, removing the pin AND every launcher no longer gets the silence back —
+# that single-kind route is what the record closes.
+record_launch "$R3"
+rm -f "$R3"/state/container-* "$R3"/state/launch-*.sh
+out=$(bash "$SCLI" status --alarms-only 2>/dev/null)
+ok "no pin and no launchers, but a record: still alarms" 1 "$(printf '%s' "$out" | grep -c 'could not be determined')"
+# ...and the honest limit: remove the record too and it is back to a block line. The test asserts
+# the limit rather than pretending the route is closed — removing this assertion is how a later
+# reader comes to believe the guard is stronger than it is.
+record_forget "$R3"
 out=$(bash "$SCLI" status --alarms-only 2>/dev/null)
 # Asserted on the TERMINAL alarm specifically, not on emptiness: this room is aged past the stall
 # threshold, so `--alarms-only` correctly carries a 🛑 STALL here and an emptiness check would
 # pass for the wrong reason (and would go red the day the fixture's age changed).
-ok "removing the launchers too gets the silence back" 0 "$(printf '%s' "$out" | grep -c 'could not be determined')"
+ok "removing the record too gets the silence back" 0 "$(printf '%s' "$out" | grep -c 'could not be determined')"
 ok "...and its block line stays off the alarm channel" 0 "$(printf '%s' "$out" | grep -c '^terminals:')"
 blk=$(bash "$SCLI" status 2>/dev/null)
-ok "...but the block still says what it read"     1 "$(printf '%s' "$blk" | grep -c '^terminals: this room carries no container pin')"
+ok "...but the block still says what it read"     1 "$(printf '%s' "$blk" | grep -c '^terminals: this room carries no container pin, no launchers and no launch record')"
 
 # 9g. A ZERO MEANS OPPOSITE THINGS BY RECORDED STATUS. `decide` reaps its own seats, so on a
 #     `decided` room a zero is the expected answer. An `unresolved` close deliberately LEAVES the
@@ -494,6 +650,7 @@ holder=$(bash "$CLI" floor | sed -n 's/.*floor=\([^ ]*\).*/\1/p')
 COUNCIL_ME="$holder" bash "$CLI" decide --force >/dev/null 2>&1
 ok "9g: the room closed as unresolved" "unresolved" "$(cat "$RU/board/status" 2>/dev/null)"
 printf 'fake-container\n' > "$RU/state/container-tmux"
+record_launch "$RU"
 sessions_none
 blk=$(bash "$SCLI" status 2>/dev/null)
 ok "an unresolved room's zero is not called expected" 0 "$(printf '%s' "$blk" | grep -c 'what a decided room looks like')"
@@ -502,10 +659,11 @@ ok "...and still sends the operator to down"          1 "$(printf '%s' "$blk" | 
 # ...while a decided room keeps the other sentence, so this is a branch and not a rewording.
 export COUNCIL_ROOM="$R3" ROOM="$R3"
 printf 'fake-container\n' > "$R3/state/container-tmux"
+record_launch "$R3"
 blk=$(bash "$SCLI" status 2>/dev/null)
 ok "a decided room's zero IS called expected"         1 "$(printf '%s' "$blk" | grep -c 'what a decided room looks like')"
-rm -f "$R3/state/container-tmux"
-rm -f "$RU/state/container-tmux"
+rm -f "$R3/state/container-tmux"; record_forget "$R3"
+rm -f "$RU/state/container-tmux"; record_forget "$RU"
 
 # --- 10. the seat-liveness sentences ------------------------------------------------------
 # ALIVE-and-idle-at-a-prompt and GONE look identical from inside the room and need opposite
@@ -516,9 +674,10 @@ export COUNCIL_ROOM="$RS" ROOM="$RS"     # the open room aged past the stall tie
 SN=$(basename "$RS")
 FLOOR=$(bash "$CLI" floor | sed -n 's/.*floor=\([^ ]*\).*/\1/p')
 printf 'fake-container\n' > "$RS/state/container-tmux"
-# `mkroom` writes no launchers; a seat with none is the `--me` case (9f below), so the seats that
-# stand in for agent seats need one.
+# `mkroom` writes no launchers and no launch record, which `up` would have. The record is what the
+# liveness read matches on (#247), and a launcher is kept beside it as `up` leaves one.
 printf '#!/bin/sh\n' > "$RS/state/launch-$FLOOR.sh"
+record_launch "$RS"
 
 # 10a. Listed: do not reach for relaunch — and no claim about what the pane is doing.
 sessions "council-$SN-$FLOOR"
@@ -534,7 +693,7 @@ sessions_none
 out=$(COUNCIL_STALL_SECS=100 bash "$SCLI" status --alarms-only 2>/dev/null)
 ok "a gone seat is named as GONE"        1 "$(printf '%s' "$out" | grep -c 'terminal is GONE')"
 ok "...as a resemblance, not a verdict"  1 "$(printf '%s' "$out" | grep -c 'what a dead seat looks like')"
-ok "...with the read's provenance"       1 "$(printf '%s' "$out" | grep -c 'a file in the room')"
+ok "...with the read's provenance"       1 "$(printf '%s' "$out" | grep -c 'which a seat can write too')"
 ok "...and relaunch is not prescribed"   1 "$(printf '%s' "$out" | grep -c 'look at the terminal before')"
 ok "...and the discard is spelled out"   1 "$(printf '%s' "$out" | grep -c 'discards everything')"
 
@@ -545,23 +704,45 @@ out=$(COUNCIL_STALL_SECS=100 bash "$SCLI" status --alarms-only 2>/dev/null)
 ok "an unreachable backend claims nothing" 0 "$(printf '%s' "$out" | grep -c 'terminal is GONE')"
 ok "...but the STALL alarm is untouched"   1 "$(printf '%s' "$out" | grep -c '🛑 STALL')"
 
-# 10d. THE --me SEAT. `council up` gives the seat the human took no launcher and no terminal, and
-#      that seat still holds its turn — so without a launcher check the commonest healthy path in
-#      a human-in-the-room scenario (a person thinking) printed a confident GONE and prescribed a
-#      command `relaunch` refuses. The absence is still REPORTED; only the advice changes.
-sessions_none
-rm -f "$RS/state/launch-$FLOOR.sh"
+# 10c-bis. EVIDENCE THE RECORD CANNOT SETTLE claims nothing either: a same-named session where the
+#      launched terminal is gone (planted, or a relaunch the record never heard of), a pin that
+#      disagrees with the record, and no record at all. Each used to be read by NAME, so the first
+#      read as a live seat and the other two as whatever the pin's container happened to hold.
+printf 'h-planted\tfake-container\tcouncil-%s-%s\n' "$SN" "$FLOOR" > "$HANDLES"; printf '0\n' > "$SESSIONS_RC"
 out=$(COUNCIL_STALL_SECS=100 bash "$SCLI" status --alarms-only 2>/dev/null)
-ok "a launcher-less seat still reports GONE" 1 "$(printf '%s' "$out" | grep -c 'terminal is GONE')"
+ok "a planted name is not a live seat"      0 "$(printf '%s' "$out" | grep -c 'what a live seat looks like')"
+ok "...nor a dead one"                      0 "$(printf '%s' "$out" | grep -c 'terminal is GONE')"
+sessions "council-$SN-$FLOOR"
+printf 'no-such-container\n' > "$RS/state/container-tmux"
+out=$(COUNCIL_STALL_SECS=100 bash "$SCLI" status --alarms-only 2>/dev/null)
+ok "a retargeted pin claims neither"        0 "$(printf '%s' "$out" | grep -cE 'what a live seat looks like|terminal is GONE')"
+printf 'fake-container\n' > "$RS/state/container-tmux"
+record_forget "$RS"
+out=$(COUNCIL_STALL_SECS=100 bash "$SCLI" status --alarms-only 2>/dev/null)
+ok "no record claims neither"               0 "$(printf '%s' "$out" | grep -cE 'what a live seat looks like|terminal is GONE')"
+ok "...and the STALL alarm is untouched"    1 "$(printf '%s' "$out" | grep -c '🛑 STALL')"
+record_launch "$RS"
+
+# 10d. THE --me SEAT. `council up` launches nothing for the seat the human took, and records it
+#      as launched: false, and that seat still holds its turn — so without this branch the
+#      commonest healthy path in a human-in-the-room scenario (a person thinking) printed a
+#      confident GONE and prescribed a command `relaunch` refuses. The absence is still
+#      REPORTED; only the advice changes.
+sessions_none
+record_launch "$RS" --unlaunched "$FLOOR"
+out=$(COUNCIL_STALL_SECS=100 bash "$SCLI" status --alarms-only 2>/dev/null)
+ok "an unlaunched seat still reports GONE"   1 "$(printf '%s' "$out" | grep -c 'terminal is GONE')"
 ok "...points at the human"                  1 "$(printf '%s' "$out" | grep -c 'waiting on a person')"
 ok "...and prescribes no relaunch"           0 "$(printf '%s' "$out" | grep -c 'before running council.sh relaunch')"
-# THE BRANCH IS CHOSEN BY A FILE IN THE ROOM, so the sentence must name both readings rather than
-# leading with the benign one. A participant that deletes a launcher would otherwise get the
-# monitor to explain away a seat it had just killed — and `relaunch`'s own refusal corroborates
-# the story, so nothing contradicts it.
-ok "...names the removal reading too"        1 "$(printf '%s' "$out" | grep -c 'the launcher was removed')"
+# The branch is chosen by the record, which a seat can write, so the sentence must name both
+# readings rather than leading with the benign one: a launch that failed at `up` records the same.
+ok "...names the failed-launch reading too"  1 "$(printf '%s' "$out" | grep -c 'its last launch failed')"
 ok "...and tells the operator to settle it"  1 "$(printf '%s' "$out" | grep -c 'check how this room was started')"
-printf '#!/bin/sh\n' > "$RS/state/launch-$FLOOR.sh"
+# ...and a session with that seat's name, where nothing was launched, is not taken for it.
+sessions "council-$SN-$FLOOR"
+out=$(COUNCIL_STALL_SECS=100 bash "$SCLI" status --alarms-only 2>/dev/null)
+ok "a session named after an unlaunched seat claims neither" 0 "$(printf '%s' "$out" | grep -cE 'what a live seat looks like|terminal is GONE')"
+record_launch "$RS"
 
 # 10f. A FLOOR HOLDER WHOSE TERMINAL HOLDS NO AGENT (#235). The terminal is listed, so the
 #      liveness sentence used to say "what a live seat looks like" about a seat whose agent had
@@ -626,6 +807,7 @@ ok "a barrier label is never called a seat" 0 "$(printf '%s' "$out" | grep -c 'r
 ok "...and no terminal claim is made of it" 0 "$(printf '%s' "$out" | grep -c 'terminal is GONE')"
 mv "$RS/roster.bak" "$RS/roster.json"
 rm -f "$RS/state/container-tmux" "$RS/state/launch-$FLOOR.sh" "$RS/state/launch-— (barrier).sh"
+record_forget "$RS"
 
 printf '\n%s\n' "$([ "$fails" = 0 ] && echo 't27: all passed' || echo "t27: $fails FAILURES")"
 exit $([ "$fails" = 0 ] && echo 0 || echo 1)

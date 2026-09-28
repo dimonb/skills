@@ -8,7 +8,7 @@ input, and tears them down. They differ only in the flow they enforce.
 
 One API, two backends, behind these calls (council `lib/term.sh` ↔ shipyard `shipyard-backend.sh`):
 
-- **launch**: `ct_launch()` `term.sh:80-104` ↔ `shipyard_launch()` `shipyard-backend.sh:338-368`.
+- **launch**: `ct_launch_record()` `term.sh` (was `ct_launch()` until #247) ↔ `shipyard_launch()` `shipyard-backend.sh:338-368`.
   Both: agterm `agtermctl session new … --wait --command "zsh -lc 'exec <launcher>'"`
   (`term.sh:88-90` / `backend:346-349`); tmux `new-window`/`new-session` with AGTERM_* scrubbed.
 - **send**: `ct_type`/`ct_submit` `term.sh:111-120` ↔ `shipyard_type`/`shipyard_submit` `backend:302-322`.

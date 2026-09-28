@@ -73,10 +73,11 @@ ok "an unresolvable backend refuses (exit 1)" 1 "$rc"
 # `say` exits 3 "that seat is gone" and sends the operator to `relaunch` on a live agent), left
 # the whole council suite green. So the wiring is asserted here, against the real file, the way
 # this file already asserts ct_name and the container verbs. Note what that does NOT amount to:
-# for the OP verbs — ct_capture, ct_type, ct_submit, ct_kill, ct_focus, ct_launch, ct_target —
-# nothing in the council suite asserts the drv_* delegation at all. (Two tests do REACH one:
-# t13-relaunch drives the real ct_launch to prove regeneration happens before the launch, and
-# t16-keeper-canary drives _ct_launch_owned. Neither checks what the driver was handed.) So
+# for the OP verbs — ct_capture, ct_type, ct_submit, ct_kill, ct_focus, ct_launch_record,
+# ct_target — nothing in the council suite asserts what the drv_* call was handed. (Several tests
+# do REACH one: t13-relaunch drives the real ct_launch_record to prove regeneration happens before
+# the launch, t16-keeper-canary drives _ct_launch_owned, and the launch-record section below fakes
+# drv_launch_handle to assert what gets RECORDED. None checks the driver's arguments.) So
 # "t15 covers the ct_* delegations" would be too broad a claim to make anywhere.
 #
 # THE ONE PROPERTY EACH MUST HAVE is `_ct_pin_dir` FIRST. Without it the driver has no pin
@@ -114,6 +115,83 @@ ok "ct_absence_class passes all three arguments through" \
 probe=$( export COUNCIL_BACKEND=tmux ROOM="$ROOM"; . "$TERM_SH"; ct_pins_elsewhere )
 ok "ct_pins_elsewhere reads \$ROOM/state, so the remedy has a value" "agterm" "$probe"
 rm -f "$ROOM/state/container-agterm"
+
+# --- the launch record (#247): what `up` and `relaunch` write -------------------------------------
+# The readers of this record are exercised in t27, over a record written as `up` would write it.
+# THIS is the writer, driven through the real `ct_launch_record` with only `drv_launch_handle`
+# faked, so the handle recorded is the one the launch returned and not one looked up afterwards.
+MB="$ROOT/mailbox"; mkdir -p "$MB"
+printf '{"order":["a","b","me"],"created_ms":4242}\n' > "$ROOM/roster.json"
+LR="$MB/council-launch-demo-room"
+# The fake answers with the handle named in $ROOT/next-handle, or with the rc in $ROOT/next-rc.
+lr_run() { # <shell text using ct_*> — run it with the real term.sh and a faked launch
+  ( export COUNCIL_BACKEND=tmux ROOM="$ROOM" POLICY_MAILBOX_DIR="$MB"
+    . "$TERM_SH"
+    drv_launch_handle() {
+      local rc; rc=$(cat "$ROOT/next-rc" 2>/dev/null || printf 0)
+      [ "$rc" = 1 ] && return 1
+      printf 'fake-container\t%s' "$([ "$rc" = 2 ] || cat "$ROOT/next-handle")"
+      return "$rc"
+    }
+    eval "$1" )
+}
+lr_q() { jq -r "$1" "$LR" 2>/dev/null; }
+printf 'fake-container\n' > "$ROOM/state/container-tmux"
+
+printf '0' > "$ROOT/next-rc"; printf '@1' > "$ROOT/next-handle"
+lr_run 'ct_launch_record up-first a /tmp /dev/null'; rc=$?
+printf '@2' > "$ROOT/next-handle"
+lr_run 'ct_launch_record up b /tmp /dev/null'
+lr_run 'ct_record_launch up me fake-container "" false'
+ok "up: the launch reports success"                    0 "$rc"
+ok "up: the record is at generation 1"                 1 "$(lr_q .generation)"
+ok "up: each seat carries the handle its launch returned" "@1 @2" "$(lr_q '"\(.seats.a.handle) \(.seats.b.handle)"')"
+ok "up: ...with its backend, container and name"       "tmux fake-container council-demo-room-a" \
+   "$(lr_q '"\(.seats.a.backend) \(.seats.a.container) \(.seats.a.name)"')"
+ok "up: the --me seat is recorded as not launched"     "false null" "$(lr_q '"\(.seats.me.launched) \(.seats.me.handle)"')"
+ok "up: the record is bound to this room"              "4242 $(cd "$ROOM" && pwd -P)" "$(lr_q '"\(.created_ms) \(.room)"')"
+ok "up: the record is not a *.json mailbox entry"      0 "$(ls "$MB"/*.json 2>/dev/null | wc -l | tr -d ' ')"
+ok "up: lr_read accepts it"                            0 "$(lr_run 'lr_read >/dev/null'; echo $?)"
+
+# A RELAUNCH ADVANCES THE GENERATION, and rewrites only the seat it launched.
+printf '@7' > "$ROOT/next-handle"
+lr_run 'ct_launch_record relaunch a /tmp /dev/null'
+ok "relaunch: the generation advances"                 2 "$(lr_q .generation)"
+ok "relaunch: the seat carries the NEW handle"         "@7 2" "$(lr_q '"\(.seats.a.handle) \(.seats.a.generation)"')"
+ok "relaunch: the other seats are left as they were"   "@2 1" "$(lr_q '"\(.seats.b.handle) \(.seats.b.generation)"')"
+
+# A launch that went through without a handle is recorded as launched with none, which every read
+# then reports as unknown, and the launch itself still reports success because a terminal started.
+printf '2' > "$ROOT/next-rc"
+lr_run 'ct_launch_record relaunch b /tmp /dev/null'; rc=$?
+ok "no handle: the launch still reports success"       0 "$rc"
+ok "no handle: recorded as launched with no handle"    "true null 3" "$(lr_q '"\(.seats.b.launched) \(.seats.b.handle) \(.generation)"')"
+# A failed launch is recorded as not launched, and reports the failure.
+printf '1' > "$ROOT/next-rc"
+lr_run 'ct_launch_record relaunch b /tmp /dev/null'; rc=$?
+ok "failed launch: reported as a failure"              1 "$rc"
+ok "failed launch: recorded as not launched"           "false null" "$(lr_q '"\(.seats.b.launched) \(.seats.b.handle)"')"
+printf '0' > "$ROOT/next-rc"
+
+# A record for another room — an earlier room of the same name, purged and recreated — is not
+# written into. A relaunch starts a fresh one that knows only the seat it launched.
+jq '.created_ms = 1' "$LR" > "$LR.tmp" && mv "$LR.tmp" "$LR"
+ok "a foreign record: lr_read refuses it, rc 4"        4 "$(lr_run 'lr_read >/dev/null'; echo $?)"
+printf '@9' > "$ROOT/next-handle"
+lr_run 'ct_launch_record relaunch a /tmp /dev/null'
+ok "a foreign record is replaced, not extended"        "4242 1 a" "$(lr_q '"\(.created_ms) \(.generation) \(.seats | keys | join(","))"')"
+# No record at all: lr_read says so, in the words the operator will see.
+rm -f "$LR"
+ok "no record: lr_read is rc 1"                        1 "$(lr_run 'lr_read >/dev/null'; echo $?)"
+ok "...and says what that means"                       1 "$(lr_run 'lr_read' | grep -c 'predates launch records, or the record was removed')"
+# The write goes through policy_mailbox_write, so a FIFO planted at the path cannot block it.
+rm -f "$LR"; mkfifo "$LR"
+( lr_run 'ct_launch_record up-first a /tmp /dev/null' ) & wpid=$!
+for _ in 1 2 3 4 5 6 7 8 9 10; do kill -0 "$wpid" 2>/dev/null || break; sleep 0.2; done
+if kill -0 "$wpid" 2>/dev/null; then kill "$wpid" 2>/dev/null; r=blocked; else r=returned; fi
+ok "a FIFO at the record's path does not block the write" returned "$r"
+ok "...and the record replaced it"                     "@9" "$(lr_q .seats.a.handle)"
+rm -f "$LR" "$ROOM/state/container-tmux" "$ROOM/roster.json" "$ROOT/next-rc" "$ROOT/next-handle"
 
 printf '\n'
 if [ "$FAILURES" -eq 0 ]; then echo "t15 PASS ($CHECKS checks)"; else echo "t15 FAIL ($FAILURES/$CHECKS)"; exit 1; fi

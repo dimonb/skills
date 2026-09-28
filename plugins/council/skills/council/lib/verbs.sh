@@ -876,124 +876,125 @@ _stall_escalate() {
   policy_escalate notice "council-$room" "$text" "$ctx" >/dev/null 2>&1 || return 0
 }
 
-# _room_terminals — how many of this room's seats still hold a terminal.
+# _lr_ensure / _term_ensure — source the launch record helpers, or term.sh, on demand. term.sh
+# resolves a terminal backend when it is sourced (on agterm, a control-socket probe), so each reader
+# below asks for the record first and sources term.sh only once there is a record to check. A
+# caller that has already sourced either pays nothing.
+_lr_ensure() {
+  command -v lr_read >/dev/null 2>&1 && return 0
+  [ -n "${SKILL:-}" ] && [ -f "$SKILL/lib/launch-record.sh" ] || return 1
+  . "$SKILL/lib/launch-record.sh" || return 1
+  command -v lr_read >/dev/null 2>&1
+}
+_term_ensure() {
+  command -v ct_seat_verdicts >/dev/null 2>&1 && return 0
+  [ -n "${SKILL:-}" ] && [ -f "$SKILL/lib/term.sh" ] || return 1
+  . "$SKILL/lib/term.sh" || return 1
+  command -v ct_seat_verdicts >/dev/null 2>&1
+}
+
+# _room_terminals — how many of this room's seats still hold a terminal, checked against the
+# room's launch record (lib/launch-record.sh, #247) rather than against session names.
 #
-# Echoes "<live><TAB><total>" and returns 0 when the backend ANSWERED and the answer may be
-# believed. Returns 2 when the room WAS launched but the read could not be resolved — the backend
-# did not answer, the pin says these sessions were launched on the OTHER backend, or the pin has
-# gone while the launchers remain — the leading clause is the rule and the list is not closed;
-# every `return 2` in the body below is one of these, so read them there. Returns 1 only when the
-# room carries neither a pin NOR a launcher, i.e. was never given terminals and so has none to
-# count. (A room whose `up` failed to launch ANY seat has launchers and no pin, so it answers 2
-# rather than 1: wrong, and in the fail-open direction.)
-#
-# THAT IS NO LONGER `_floor_screen`'s GUARD, though it started as a copy of it: `_floor_screen`
-# still returns 1 on any missing pin, because a pane it cannot capture is simply a pane it cannot
-# capture, while a COUNT that silently reads zero is an operator-facing signal going quiet. The
-# two now differ on purpose; do not re-unify them without reading the paragraph below.
+# Echoes "<live><TAB><total>" and returns 0 when EVERY seat's verdict is `live` or `absent`
+# (`ct_seat_verdicts`, term.sh): the record names what was launched and the backend confirms each
+# one is there or gone. Returns 2 and echoes WHY when any seat's verdict is anything else, or when
+# the read itself could not be made. `ct_seat_verdicts` says which evidence settles a seat, and
+# its reasons are the list; the ones an operator will meet most are no record, a pin that
+# disagrees with the record, a stale handle and a backend that did not answer. That list is not
+# closed. Returns 1 when the room has no pin and no launcher and no record could be read for it
+# (none exists, or the mailbox cannot be resolved), so as far as this read can tell it was never
+# given terminals. A record that exists but cannot be used is rc 2, whatever else is missing, and
+# a room whose `up` launched nothing still has a record, so it gets verdicts, not rc 1.
 #
 # RC 2 EXISTS SO THAT AN UNANSWERABLE READ FAILS OPEN. Two consumers read it: the closed-room
-# alarm in `v_status`, which must still fire in a wording that says it could not tell, and
-# `v_terminals`, which renders it as `?` rather than `-` so `rooms` does not report "never
-# launched" for a room nothing is known about.
+# alarm in `v_status`, which must still fire, worded as "could not be determined" and carrying the
+# reason, and `v_terminals`, which renders it as `?` rather than `-` so `rooms` does not report
+# "never launched" for a room nothing is known about.
 #
 # WHAT THIS CANNOT DO, stated because the alarm above it is an operator-facing signal and this
-# repo's rule is that untrusted evidence may ANNOTATE one and never SUPPRESS one. Every input
-# here is room state a participant can write, and the list is longer than the pin:
-#   * the ROSTER. `c_peers` refuses a roster it cannot validate, and that refusal used to be
-#     swallowed by the heredoc below — an empty list, a confident `0/0` at rc 0, and the alarm
-#     gone while the terminals ran. It now returns 2. This one is not only adversarial:
-#     `up` writes `roster.json` with a plain `>`, so an interrupted run leaves a truncated file.
-#   * the PIN's VALUE. Retargeted at a container that does not exist, the backend answers
-#     honestly that it holds nothing, so this is a RESOLVED read reporting zero — indistinguishable
-#     here from a room that was correctly torn down, because `council_down` leaves the pin in
-#     place. Nothing in this function closes that, and no arrangement of its inputs can: they all
-#     live in the room. `v_status` therefore does not treat a zero as proof — it says so on the
-#     block instead of falling silent.
-#   * the PIN's EXISTENCE, and — since the split — the LAUNCHERS'. A pin deleted on its own is
-#     rc 2 and alarms, because `drv_launch` writes the pin BEFORE it starts anything on either
-#     backend — so a launcher beside a missing pin normally means the pin went missing rather than
-#     that nothing was started. Not always: with no backend resolving at all it returns before
-#     writing one, and `council_up` writes each launcher before trying to launch and continues past
-#     a failure, so a room whose `up` could not start a single seat has launchers and no pin. That
-#     room answers `?` rather than `-`, which is wrong but fails OPEN. Deleting the launchers as well
-#     gets back to rc 1 and a block line. That is a cost of N+1 writes instead of one, not a
-#     closed route, and it is why the paragraph above says self-revealing rather than prevented.
-# The durable fix for the last two is a launch record written OUTSIDE the room, the same move
-# `_status_sigfile` already makes for the signature and the same one `_floor_wait_state`'s header
-# names for its own inputs. That is a change to `up`, `relaunch` and `down`, so it is filed
-# rather than smuggled in here.
+# repo's rule is that untrusted evidence may ANNOTATE one and never SUPPRESS one. Every input is
+# writable by a seat: the record, the pin, the roster, the launchers. What the record changes is
+# which single writes still work:
+#   * retargeting or deleting the pin now reads unknown and alarms. It used to be a resolved zero.
+#   * planting a session with a seat's name, where the launched terminal is gone, reads unknown.
+#     It used to count as live.
+#   * editing the record alone reads unknown, and so does dropping a live seat from the roster.
+#     lib/launch-record.sh says which checks hold that together.
+#   * deleting the record reads unknown, saying there is no launch record, for as long as a pin or
+#     any launcher remains. With the pin, every launcher AND the record all gone, this is rc 1 and a
+#     block line. That is the residue: it takes three kinds of write, and each is a file a
+#     supervisor can see is missing.
+#   * the two-write routes launch-record.sh lists are not caught. TWO of them silence this alarm
+#     outright: dropping a live seat from the roster AND the record, and retargeting the pin at a
+#     container with no session of the seat's name AND rewriting the record to match. The others
+#     make a dead seat read live. What this function holds to unknown is the SINGLE write.
 #
-# IT SOURCES term.sh IN ITS OWN SUBSHELL, like `_floor_screen`, so a `status` that reaches
-# both pays the backend resolution twice. That is the cost `_floor_screen`'s header warns a
-# LOOPING caller about; this is one call per invocation, so it stays inside the same budget.
-# A caller that adds a third read should hoist the source into `v_status`, outside every
-# command substitution, where the `command -v` guard would actually bite.
+# The record is read before term.sh is sourced, so a room with nothing to count never resolves a
+# backend. Once there is a record to check, this sources term.sh in its own subshell, like
+# `_floor_screen`, so a `status` that reaches both pays the backend resolution twice. That is the
+# cost `_floor_screen`'s header warns a LOOPING caller about. This is one call per invocation, so
+# it stays inside the same budget. A caller that adds a third read should hoist the source into
+# `v_status`, outside every command substitution, where the `command -v` guard would actually bite.
 _room_terminals() {
-  local f pinned=0 launched=0 list erc=0 peers peer name s live=0 total=0
+  local f pinned=0 launched=0 rec rrc=0 hl hrc=0 peers verd v w p line live=0 total=0 why="" TAB
+  local -a seats=()
+  TAB=$(printf '\t')
   for f in "$ROOM"/state/container-*; do [ -f "$f" ] && pinned=1; done
-  if [ "$pinned" != 1 ]; then
-    # NO PIN IS TWO DIFFERENT ANSWERS, and conflating them cost the alarm. `drv_launch` always
-    # writes the pin, so a room that has LAUNCHERS but no pin was launched by this skill and has
-    # since lost the pin — damage, or a participant removing it — which is "cannot tell" (rc 2,
-    # the alarm), not "never had any" (rc 1, a block line). Before this split, `rm state/container-*`
-    # was a single write that took the closed-room alarm off the `--alarms-only` channel entirely.
-    #
-    # WHAT THIS BUYS, STATED HONESTLY: it raises the cost from one write to N+1, and it does not
-    # close the route — the launchers are in the room too, so removing them as well gets back to
-    # rc 1. That is the shape this repo's law asks for where suppression cannot be prevented:
-    # make it self-revealing rather than claim a guard that is not there. It is only PARTLY
-    # self-revealing even so, because rc 1 still prints a block line rather than an alarm.
-    # Closing it needs the out-of-room launch record (#186).
-    for f in "$ROOM"/state/launch-*.sh; do [ -f "$f" ] && launched=1; done
-    [ "$launched" = 1 ] && return 2
-    return 1
+  for f in "$ROOM"/state/launch-*.sh; do [ -f "$f" ] && launched=1; done
+  _lr_ensure || { printf 'the launch record helpers could not be loaded'; return 2; }
+  rec=$(lr_read) || rrc=$?
+  if [ "$rrc" != 0 ]; then
+    # No record AND nothing else says a terminal was ever started: a room never launched by this
+    # skill, which is every hand-built and test room. A record that EXISTS but cannot be used
+    # (rc 4) is never this, whatever else is missing: something was launched here once.
+    case "$rrc" in 1|3) [ "$pinned$launched" = 00 ] && return 1 ;; esac
+    printf '%s' "$rec"; return 2
   fi
-  if ! command -v ct_sessions >/dev/null 2>&1; then
-    [ -n "${SKILL:-}" ] && [ -f "$SKILL/lib/term.sh" ] || return 2
-    . "$SKILL/lib/term.sh" || return 2
-    command -v ct_sessions >/dev/null 2>&1 || return 2
-  fi
-  # ONE enumeration, and its STATUS is kept as well as its answer — the distinction
-  # `_council_say_absence` already turns on: an empty list from a backend that answered is an
-  # honest "nothing there", while an empty list from one that did not is no evidence at all.
-  list=$(ct_sessions 2>/dev/null) || erc=$?
-  # The global trust gate, asked with no session name so the per-session `listed` arm is
-  # skipped — that arm is redundant here because the loop below reads the same list directly.
-  # What is left is exactly the two refusals this caller must honour: `unreachable` and
-  # `elsewhere`.
-  ct_absence_class "$erc" >/dev/null 2>&1 || return 2
-  # CAPTURED, with its status, before the loop. Read inline as `done <<EOF $(c_peers) EOF` the
-  # command substitution threw `c_peers`' exit status away, so a roster it REFUSES became an empty
-  # list, zero iterations, and `0\t0` returned at rc 0 — the one answer this function must never
-  # give for a read it could not make. `c_peers` never returns 0 with an empty list, so rc 2 here
-  # is unambiguous.
-  peers=$(c_peers) || return 2
-  while IFS= read -r peer; do
-    [ -n "$peer" ] || continue
-    total=$((total + 1))
-    name=$(ct_name "$peer")
-    # Matched by READING the list rather than `grep -q`, for the reason `drv_absence_class`
-    # gives at the same comparison: `-q` exits on the first hit, the writer takes a SIGPIPE,
-    # and under `pipefail` a match then reports as a failure.
-    while IFS= read -r s; do
-      [ "$s" = "$name" ] || continue
-      live=$((live + 1)); break
-    done <<EOF
-$list
-EOF
-  done <<EOF
+  _term_ensure || { printf 'the terminal adapter could not be loaded'; return 2; }
+  # CAPTURED, with its status, before anything counts: `c_peers` never returns 0 with an empty
+  # list, so a roster it REFUSES cannot become zero seats and a confident `0/0`.
+  peers=$(c_peers) || { printf 'the roster cannot be read'; return 2; }
+  while IFS= read -r p; do [ -n "$p" ] && seats+=("$p"); done <<EOF
 $peers
 EOF
+  hl=$(ct_handles 2>/dev/null) || hrc=$?
+  # Captured too: a verdict pass that failed must not read as a room with no seats.
+  verd=$(ct_seat_verdicts "$rec" "$hrc" "$hl" "${seats[@]}") \
+    || { printf 'the launch record could not be checked against the backend'; return 2; }
+  while IFS= read -r line; do
+    [ -n "$line" ] || continue
+    total=$((total + 1))
+    p=${line%%"$TAB"*}; v=${line#*"$TAB"}; w=${v#*"$TAB"}; v=${v%%"$TAB"*}
+    case "$v" in
+      live)   live=$((live + 1)) ;;
+      absent) ;;
+      *)      [ -n "$why" ] || why="$p: $w" ;;
+    esac
+  done <<EOF
+$verd
+EOF
+  [ "$total" = "${#seats[@]}" ] || { printf 'the launch record check did not answer for every seat'; return 2; }
+  [ -z "$why" ] || { printf '%s' "$why"; return 2; }
+  # A SEAT THE RECORD HOLDS AND THE ROSTER DOES NOT. The count walks the roster, which is a file in
+  # the room, so dropping a live seat from `.order` would drop it from the count and could leave
+  # the rest reading 0 of N. `up` records every roster seat, so a recorded seat the roster no
+  # longer lists means the roster shrank, and it is unknown rather than uncounted. Counted, not
+  # named: the key is text a seat can write.
+  local dropped
+  dropped=$(printf '%s\n' "${seats[@]}" | jq -R . | jq -s --argjson rec "$rec" \
+              '($rec.seats | keys) - . | length' 2>/dev/null) || dropped="an unknown number of"
+  [ "$dropped" = 0 ] \
+    || { printf 'the launch record holds %s seat(s) the roster no longer lists' "$dropped"; return 2; }
   printf '%s\t%s' "$live" "$total"
 }
 
 # v_terminals — how many of this room's seats still hold a terminal, in one short token.
 #
-# `<live>/<total>` when the backend answered and the answer may be believed, `?` when the room was
-# launched but the read could not be resolved — which includes a container pin that has gone while
-# the launchers remain — and `-` only when the room carries neither a pin nor a launcher, i.e. was
-# never given terminals. The exit status repeats that: 0 for a believable answer, 1 for `?`.
+# `<live>/<total>` when the launch record and the backend settle every seat, `?` when any seat
+# cannot be settled (the reason goes to stderr: no record, a pin that disagrees with it, a backend
+# that did not answer), and `-` only when the room carries no pin, no launcher and no record, i.e.
+# was never given terminals. The exit status repeats that: 0 for a believable answer, 1 for `?`.
 # (`-` is rc 0: "nothing to count" is an answer, not a failure to read.)
 #
 # IT EXISTS SO `rooms` NEED NOT ASK THE QUESTION A SECOND WAY. That listing runs before a room
@@ -1008,7 +1009,7 @@ v_terminals() {
   out=$(_room_terminals); rc=$?
   case "$rc" in
     0) printf '%s/%s\n' "${out%%"$TAB"*}" "${out##*"$TAB"}"; return 0 ;;
-    2) printf '?\n'; return 1 ;;
+    2) printf '?\n'; [ -n "$out" ] && printf 'council terminals: %s\n' "$out" >&2; return 1 ;;
     *) printf -- '-\n'; return 0 ;;
   esac
 }
@@ -1020,8 +1021,8 @@ v_terminals() {
 # implying it answers both. A seat that is GONE and a seat that is ALIVE but idle at a prompt
 # present identically in the room — a floor held, nothing arriving — and they need opposite
 # moves: `relaunch` discards everything the seat has read, so using it on a live seat waiting
-# on a permission prompt destroys the argument that seat was holding. What a backend
-# enumeration settles is presence: whether a terminal WITH THAT NAME exists. What it cannot
+# on a permission prompt destroys the argument that seat was holding. What the launch record
+# settles is presence: whether the terminal launched for this seat is still there. What it cannot
 # settle is what a present terminal is DOING, so an alive seat is never told "it is at a prompt".
 # THIS ALARM READS TWO IN-PANE SHAPES, and neither answers "at a prompt": an announced capacity
 # wait (`_floor_wait_state`), which is a park rather than a prompt, and whether the client says a
@@ -1037,71 +1038,56 @@ v_terminals() {
 # repair the number again — if you add a third reader, say which reader answers which question and
 # leave the counting out, because that is the shape that keeps going stale here.
 #
-# EVIDENCE, NOT A VERDICT — and unlike the first draft, THE STRINGS NOW SAY SO. `_floor_wait_state`
-# prints "this is a quote from a pane, not a verdict" and this printed an unhedged verdict that
-# PRESCRIBED the destructive command, while its own header claimed to follow that convention. It
-# does not any more: every input below is room state a participant can write — the pin names the
-# container, and any process that can reach the backend can create a session with the expected
-# name — so what this returns is what a live seat and a dead seat LOOK LIKE, for an operator to
-# check, never authority to relaunch on. Matching a backend-assigned handle (a tmux `#{window_id}`,
-# an agterm session UUID) recorded outside the room at launch is what would make it a verdict;
-# that is filed with `_room_terminals`' launch record, since it is the same record.
+# MATCHED ON THE HANDLE, NOT THE NAME (#247). The verdict is `ct_seat_verdicts`' over the room's
+# launch record: `live` when the handle the backend assigned at launch is still listed with the
+# recorded container and name, `absent` when the backend answered without it and nothing carries
+# the seat's name. Everything else, including no record at all, prints nothing, because the
+# confident negative is the expensive one here: it is what sends a supervisor to `relaunch` on a
+# seat that is alive and mid-turn.
+#
+# EVIDENCE, NOT A VERDICT, and the strings say so. The record is in the mailbox, which a seat can
+# write as easily as the room, so what this returns is what a live seat and a dead seat LOOK
+# LIKE, for an operator to check, never authority to relaunch on. It is harder to forge than the
+# name it replaced, which took one `tmux new-window`: a record edit on its own now reads unknown.
+# The two-write routes that still get past it are listed in lib/launch-record.sh.
 _seat_liveness() { # <peer>
-  local peer="${1:-}" f pinned=0 list erc=0 name s
+  local peer="${1:-}" rec hl hrc=0 out v w TAB
   [ -n "$peer" ] || return 1
-  for f in "$ROOM"/state/container-*; do [ -f "$f" ] && pinned=1; done
-  [ "$pinned" = 1 ] || return 1
-  if ! command -v ct_sessions >/dev/null 2>&1; then
-    [ -n "${SKILL:-}" ] && [ -f "$SKILL/lib/term.sh" ] || return 1
-    . "$SKILL/lib/term.sh" || return 1
-    command -v ct_sessions >/dev/null 2>&1 || return 1
-  fi
-  list=$(ct_sessions 2>/dev/null) || erc=$?
-  name=$(ct_name "$peer")
-  while IFS= read -r s; do
-    [ "$s" = "$name" ] || continue
-    printf 'a session named `%s` is listed, which is what a live seat looks like — so do not reach for relaunch first; a name is not an identity, so look at the pane.' "$name"
-    return 0
-  done <<EOF
-$list
-EOF
-  # Not listed. That is only believable if the backend answered and these sessions were
-  # launched on the backend this run resolved — `ct_absence_class` is the one place that
-  # judgement lives, and it refuses on `unreachable` and `elsewhere`. An uncorroborated
-  # absence says nothing, because the confident negative is the expensive one here: it is
-  # what sends a supervisor to `relaunch` on a seat that is alive and mid-turn.
-  ct_absence_class "$erc" "$list" "$name" >/dev/null 2>&1 || return 1
-  # A SEAT WITH NO LAUNCHER MAY NEVER HAVE BEEN GIVEN A TERMINAL, so its absence can mean
-  # something else entirely. `council up` skips `_write_launcher` for the seat the human took with
-  # `--me`, which still sits in the roster and still takes its turn — so without this branch the
-  # commonest healthy path in a human-in-the-room scenario (a person thinking for longer than the
-  # threshold) printed a confident GONE and prescribed a command `relaunch` then refuses.
-  #
-  # THE LAUNCHER IS A FILE IN THE ROOM, so this branch is chosen by state a participant can write,
-  # and the wording must not pick a side. An earlier draft of this comment said "nothing ever
-  # deletes one" — false, and false in the direction that matters: nothing in this SKILL deletes
-  # one, and every participant holds the room as a writable root. So the sentence names both
-  # readings and tells the operator to settle it by looking at how the room was started, rather
-  # than leading with the benign one. `relaunch` refuses such a seat either way, so the advice is
-  # the same whichever it is; what would be wrong is implying which.
-  #
-  # BOTH BRANCHES KEEP THE "terminal is GONE" WORDS, and only the advice differs — that is the
-  # part this branch must not get wrong. Withholding the absence on a missing launcher would let
-  # one deletion silence a genuinely dead seat, trading a wrong remedy for no signal.
-  if [ ! -f "$ROOM/state/launch-$peer.sh" ]; then
-    printf 'its terminal is GONE — the %s backend answered and does not have it. This seat also has no launcher in the room: either it was never given a terminal (the seat taken with `--me`, and the room is waiting on a person), or the launcher was removed. council.sh relaunch refuses it either way, so check how this room was started.' \
-      "$(ct_backend)"
-    return 0
-  fi
-  printf 'its terminal is GONE — the %s backend answered and its session list does not contain `%s`, which is what a dead seat looks like. The list is matched by NAME, inside a container named by a file in the room, so look at the terminal before running council.sh relaunch %s (it discards everything that seat has read).' \
-    "$(ct_backend)" "$name" "$peer"
+  TAB=$(printf '\t')
+  _lr_ensure || return 1
+  rec=$(lr_read) || return 1
+  _term_ensure || return 1
+  hl=$(ct_handles 2>/dev/null) || hrc=$?
+  out=$(ct_seat_verdicts "$rec" "$hrc" "$hl" "$peer") || return 1
+  v=${out#*"$TAB"}; w=${v#*"$TAB"}; v=${v%%"$TAB"*}
+  case "$v" in
+    live)
+      printf 'the terminal launched for this seat (%s, per its launch record) is still up, which is what a live seat looks like — so do not reach for relaunch first; look at the pane.' "$w" ;;
+    absent)
+      # A SEAT NOTHING WAS LAUNCHED FOR may never have been meant to have a terminal. `council up`
+      # launches nothing for the seat the human took with `--me`, which still sits in the roster
+      # and still takes its turn, so the commonest healthy path in a human-in-the-room scenario (a
+      # person thinking for longer than the threshold) must not be told to relaunch. The other
+      # way here is a launch that failed, at `up` or at `relaunch`, both of which record it. Both
+      # keep the "terminal is GONE" words and only the advice differs: withholding the absence
+      # would let one record edit silence a dead seat.
+      if [ "$w" = never-launched ]; then
+        printf 'its terminal is GONE — nothing is up for this seat, and its launch record says nothing was launched for it: either it is the seat taken with `--me` and the room is waiting on a person, or its last launch failed. council.sh relaunch restarts a seat that has a launcher and refuses one that has none (the `--me` seat), so check how this room was started.'
+      else
+        printf 'its terminal is GONE — the %s backend answered, and the terminal its launch record names is not there, which is what a dead seat looks like. The record is in the mailbox, which a seat can write too, so look at the terminal before running council.sh relaunch %s (it discards everything that seat has read).' \
+          "$(ct_backend)" "$peer"
+      fi ;;
+    *) return 1 ;;
+  esac
 }
 
 # _floor_no_agent <peer> — prints the backend's name and succeeds when this seat's terminal is up
 # but the agent launched into it is not (#235): `c_seat_no_agent`'s two `none` reads. Fails, with
 # nothing printed, on every other answer — `agent`, no verdict, no pin, no term.sh — and a failure
 # is never evidence the seat is alive (lib.sh says why), so v_status removes nothing on a failure.
-# The same pin guard and on-demand source as `_seat_liveness`, for the same reasons.
+# A pin guard before the on-demand source, so a room with no terminals never resolves a backend.
+# The occupant read addresses the seat by NAME, which is outside #247's scope: `drv_occupant`
+# answers for whatever session carries the name, so a planted one is read in its place.
 _floor_no_agent() { # <peer>
   local peer="${1:-}" f pinned=0
   [ -n "$peer" ] || return 1
@@ -1379,15 +1365,16 @@ v_status() {
     # to count) from rc 2 (could not tell) — and those two are exactly what this branch is for.
     term_out=$(_room_terminals); term_rc=$?
     term_live=${term_out%%"$TAB"*}; term_total=${term_out##*"$TAB"}
-    # A ZERO IS NOT PROOF, AND THE TICK MUST NOT FALL SILENT ON ONE. The count is taken through
-    # `state/container-<backend>`, a file in the room: retargeted at a container that does not
-    # exist, the backend answers honestly that it holds nothing, so a live room reports 0 as a
-    # RESOLVED read and the alarm simply vanished — on the exact tick the documented monitor loop
-    # exits, which made it the supervisor's last word. It cannot be told apart from a room that
-    # was correctly torn down, because `council_down` leaves the pin in place, so raising the
-    # ALARM on a zero would cry wolf on every finished room for ever. The answer is neither: the
-    # zero goes on the BLOCK, with its provenance, where a closed room always prints it (a closed
-    # tick is never suppressed by --only-changed) and the fast alarm loop is not woken by it.
+    # A ZERO IS NOT PROOF, AND THE TICK MUST NOT FALL SILENT ON ONE. Before #247 the count was
+    # taken by name inside the container a pin in the room names. A pin retargeted at a container
+    # that did not exist made a live room report 0 as a RESOLVED read, and the alarm vanished on
+    # the exact tick the documented monitor loop exits. The count now comes from the launch
+    # record, so that retarget reads unknown (rc 2, the alarm below). A zero here means the record
+    # names what was launched and the backend confirms each one is gone. That is a real teardown
+    # unless the record itself was forged along with the pin, so the zero still goes on the
+    # BLOCK, with its provenance, and raises no ALARM: alarming on it would cry wolf on every
+    # finished room for ever. A closed tick is never suppressed by --only-changed, and the fast
+    # alarm loop is not woken by it.
     case "$term_rc" in
       0) if [ "${term_live:-0}" -gt 0 ]; then
            alarms="$alarms ⚠️ this room is closed but $term_live of $term_total terminals are still up — council.sh down releases them"
@@ -1400,18 +1387,21 @@ v_status() {
          # false for them. The wording this replaced was unconditional and right for both; what
          # was wrong was making it specific to one without branching on which.
          elif [ "$rec" = decided ]; then
-           term_line="terminals: none of $term_total seats is listed — which is what a decided room looks like once it has closed its own seats. The count came through a container pin inside the room, so a zero is not proof; reach for council.sh down if the close reported it could not reap (exit 5), or if you never saw it close."
+           term_line="terminals: none of $term_total seats is up — which is what a decided room looks like once it has closed its own seats. The launch record names what was launched and the backend confirms each is gone, but that record is in the mailbox, which a seat can write, so a zero is not proof; reach for council.sh down if the close reported it could not reap (exit 5), or if you never saw it close."
          else
-           term_line="terminals: none of $term_total seats is listed — but this room closed as $rec, and that close LEAVES the seats up on purpose, so a zero is not what it should look like: either something else released them, or the container pin no longer names them. The count came through a pin inside the room, so it is not proof either way — council.sh down is how to be sure."
+           term_line="terminals: none of $term_total seats is up — but this room closed as $rec, and that close LEAVES the seats up on purpose, so a zero is not what it should look like: something else released them. The launch record says so, and a seat can write that record, so it is not proof either way — council.sh down is how to be sure."
          fi ;;
-      2) alarms="$alarms ⚠️ this room is closed and whether its terminals are still up could not be determined — run council.sh down to be sure" ;;
-      # Neither a pin NOR a launcher. A room never launched by this skill has no terminals to
-      # release, which is every hand-built and test room — so this is a line on the block, not an
-      # alarm. A pin deleted on its own no longer lands here: with launchers still present that is
-      # rc 2 and alarms. What still reaches this arm is a room whose pin and launchers have BOTH
-      # gone, which is the residue of the suppression route `_room_terminals`' header names — so
-      # the line says what was read rather than nothing.
-      *) term_line="terminals: this room carries no container pin and no launchers, so it was never given any — or both are gone. council.sh down is harmless either way." ;;
+      # The REASON rides the alarm. For a room launched before launch records existed it says so,
+      # so that room's permanent "could not be determined" reads as expected rather than as a
+      # fault. A record that was deleted reads exactly the same way: self-revealing, not silent.
+      2) alarms="$alarms ⚠️ this room is closed and whether its terminals are still up could not be determined (${term_out:-no reason given}) — run council.sh down to be sure" ;;
+      # No pin, no launcher AND no launch record. A room never launched by this skill has no
+      # terminals to release, which is every hand-built and test room, so this is a line on the
+      # block and not an alarm. A pin deleted on its own does not land here, and neither does a
+      # pin plus every launcher: the record remains, so that is rc 2 and alarms. What still reaches
+      # this arm is a room whose pin, launchers AND record have all gone, the residue
+      # `_room_terminals`' header names, so the line says what was read rather than nothing.
+      *) term_line="terminals: this room carries no container pin, no launchers and no launch record, so it was never given any — or all three are gone. council.sh down is harmless either way." ;;
     esac
   fi
   # The held time comes from the last turn-consuming message's `sent_ms`, so it is only as good
@@ -1489,7 +1479,7 @@ v_status() {
   #
   # IT NEVER REMOVES OR SOFTENS AN ALARM: the stall arm, its tier and its push run exactly as
   # before. `$noagent` does gate two calm, non-alarm outputs that this evidence would contradict —
-  # `_seat_liveness`' "listed, which is what a live seat looks like" in the stall arm, and the
+  # `_seat_liveness`' live-seat sentence in the stall arm, and the
   # block's `quiet:` line ("not a thing that is wrong") — each at its own call site below. No
   # push of its own: the stall push still fires at the stall threshold, and a push for this
   # condition is left to #21. What gates it is the same state that gates the stall alarm — the
@@ -1605,7 +1595,7 @@ v_status() {
       # `_stall_escalate`'s notice for the same event degraded correctly, because that one had the
       # membership test and this did not.
       # Not when the NO AGENT alarm fired: its evidence is the stronger read of the same seat, and
-      # this sentence's "listed, which is what a live seat looks like" would contradict it.
+      # this sentence's live-seat reading would contradict it.
       if [ -z "$(c_recorded_status)" ] && _is_seat "$floor" && [ "$noagent" = 0 ]; then
         live_note=$(_seat_liveness "$floor") || live_note=""
         [ -n "$live_note" ] && alarms="$alarms $live_note"
@@ -1730,7 +1720,7 @@ v_status() {
     # a `$floor` that is not a seat.
     # SKIPPED ENTIRELY IN --alarms-only, because this branch's only output is a block line that
     # mode never prints — and `_seat_liveness` is not free: it sources term.sh (re-resolving the
-    # backend, which on agterm is a control-socket probe) and enumerates the container. Left
+    # backend, which on agterm is a control-socket probe) and lists every terminal on it. Left
     # ungated, the documented 60-second alarm loop paid one backend enumeration a minute, for the
     # whole time a seat was thinking, to compose a sentence it then discarded.
     # Nor when the NO AGENT alarm fired, which replaces this line rather than joining it: "a thing

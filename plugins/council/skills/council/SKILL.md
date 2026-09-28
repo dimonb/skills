@@ -353,8 +353,9 @@ Three consequences worth knowing:
   `_keeper_teardown`'s header names the routes found so far — and says itself to read them as
   that and never as the set. What the room's own bookkeeping cannot report, a backend read can —
   `status`'s closed-room alarm, `council.sh terminals` and `rooms`' `term` column all surface the
-  same `_room_terminals` read, and all inherit the container pin's forgeability, so they narrow
-  the question rather than closing it.
+  same `_room_terminals` read. That read checks the handles the backend assigned at launch against
+  a launch record in the shared mailbox (#247), which inherits the mailbox's forgeability (below),
+  so it narrows the question rather than closing it.
 * **`relaunch` cancels a teardown no keeper has taken yet.** Putting a seat back up says the room
   is in use again, and it outranks a close that asked for the seats to go — it has to, or the seat
   it launches is reaped within a poll of starting. That covers the keeper that died before taking
@@ -907,13 +908,21 @@ one room directly. `council.sh down --room <room>` is still the way to release t
 **A zero is reported, not trusted, and what it MEANS depends on how the room closed.** After a
 `decided` close a zero is the expected answer — the keeper `decide` asked has reaped them. After an
 `unresolved` one it is not: that close leaves the seats up on purpose, so a zero there says
-something else released them, or the pin no longer names them. Either way the count is taken
-through the container pin, a file inside the room, so a room whose pin has been retargeted reads
-as empty in exactly the same way. (A pin *removed* while the launchers remain is a different
-answer again: that one alarms.) The closing tick therefore always *says* what it read — `terminals: none
-of N seats is listed … a zero is not proof` — rather than falling silent, and when the read cannot
-be resolved at all it raises the alarm instead. Silence on that tick is the one outcome the block
-will not produce.
+something else released them. The count is checked against the room's **launch record**
+(`<mailbox>/council-launch-<room>`), written by `up` and `relaunch` and kept by `down`: each seat's
+backend, container and the handle the backend assigned at launch (a tmux window id, an agterm
+session id). A seat counts as up when that handle is still listed with its recorded container and
+name, and as gone when the backend answered without it and nothing carries the seat's name.
+Anything else is **unknown** and raises the alarm, worded *could not be determined* with the
+reason: a pin that is missing or names another container than the record, a stale handle, a
+same-named session where the launched one is gone, a backend that did not answer, or **no launch
+record** at all. A room launched before launch records existed therefore reads `?` from now on,
+and says so ("it predates launch records, or the record was removed"). A deleted record reads the
+same way. The record is as seat-writable as the mailbox, so a zero is still not proof: the closing
+tick always *says* what it read (`terminals: none of N seats is up … a zero is not proof`) rather
+than falling silent, and when the read cannot be settled it alarms instead. Silence on that tick
+is the one outcome the block will not produce. `council.sh terminals` prints `?` and gives the
+reason on stderr.
 
 ### What the alarms can tell you apart, and what they cannot
 
@@ -927,31 +936,34 @@ on the first throws away the argument that seat was holding.
 
 | | can it tell? | how |
 |---|---|---|
-| the seat's terminal is **gone** | **partly — evidence, not proof** | the backend is asked which sessions exist, and an absence is reported only when it answered and no pin says these seats were launched on a different backend. Neither check establishes *which* container was enumerated, and the pin (`<room>/state/container-<backend>`) is a file inside the room — so a participant can point the read at an empty container and make a live seat look gone |
-| the seat's terminal is **up** | **partly — same read, same limit** | a session named `council-<room>-<peer>` is listed. Anything that can reach the backend can create that name, so this is a reason not to reach for `relaunch` first, not proof of identity |
-| a terminal that is up **holds no agent** — the agent exited and left a shell or an exited pane | **yes, one way** | the backend is asked which process owns the pane (`drv_occupant`, shared driver) — process state, so nothing an agent prints can forge it. `none` on two reads raises `🛑 NO AGENT` (below). The converse is not available: an agent that dies leaving another process in the foreground reads as occupied, so the absence of the alarm is not proof of life |
+| the seat's terminal is **gone** | **partly — evidence, not proof** | the room's **launch record** (`<mailbox>/council-launch-<room>`, written by `up` and `relaunch`) names the handle the backend assigned when the seat was launched. A seat reads gone when the backend answered, the room pin agrees with the container the record names, and neither that handle nor any session with the seat's name is listed in the pinned container. (Only there: session names carry no repo, so another repo's room of the same name, in its own container, must not count. Two repos that share one container, the same repo basename on tmux or the same agterm workspace, do see each other, and a genuine teardown there reads unknown: loud, and no worse than before.) A pin that disagrees with the record, a same-named session where the launched one is gone, a backend that did not answer and no record at all each read as *unknown*, which produces no sentence. The record is in the mailbox, which a seat can write. No SINGLE write, to the record or the room, reads gone for a seat whose session is up. Two coordinated writes can: retargeting the pin at a container without the seat's session and rewriting the record to match, or dropping the seat from both the roster and the record. Both are listed as residual routes in `lib/launch-record.sh` |
+| the seat's terminal is **up** | **partly — same read, same limit** | the recorded handle is listed with the recorded container and the seat's name. A session that merely carries the name does not count, so creating `council-<room>-<peer>` is no longer enough to make a dead seat read up. It is still a reason not to reach for `relaunch` first, not proof of identity: a backend session planted with the recorded handle and name would pass |
+| a terminal that is up **holds no agent** — the agent exited and left a shell or an exited pane | **yes, one way** | the backend is asked which process owns the pane (`drv_occupant`, shared driver) — process state, so nothing an agent prints can forge it. `none` on two reads raises `🛑 NO AGENT` (below). The converse is not available: an agent that dies leaving another process in the foreground reads as occupied, so the absence of the alarm is not proof of life. This read still finds the pane by the seat's session NAME, outside the launch record |
 | a terminal that is up is **at a prompt** rather than working | **no — and the read it has runs the other way** | `adp_turn_state` (shared adapters) reads running/queued/idle off the pane, and `status` uses it for the `⏳ LONG TURN` tier below: a client that says it is *working* is quoted as such. The converse is not available — `idle` cannot tell a permission prompt from a finished turn, and no committed capture separates them — so the absence of that quote is not a claim that a seat is wedged |
 | a terminal that is up is in an announced **capacity wait** | **partly** | `status` quotes a `rate_limited`-style banner where the client's chrome makes it unforgeable by anything the agent prints — two of the three agent kinds have a committed pane capture, the third gets no annotation at all |
 
-So the alarm says what a live seat and a dead seat **look like** (*"a session named … is listed,
-which is what a live seat looks like — so do not reach for relaunch first"* / *"its terminal is
-GONE … which is what a dead seat looks like … look at the terminal before running
-`council.sh relaunch`"*), and when the read cannot be corroborated it says nothing rather than
-guessing. Two things that wording is doing deliberately:
+So the alarm says what a live seat and a dead seat **look like** (*"the terminal launched for this
+seat (…, per its launch record) is still up, which is what a live seat looks like — so do not
+reach for relaunch first"* / *"its terminal is GONE … which is what a dead seat looks like … look
+at the terminal before running `council.sh relaunch`"*), and when the evidence cannot settle it
+says nothing rather than guessing. Two things that wording is doing deliberately:
 
 * **it never issues the destructive command as an instruction.** A wrong confident *gone* is the
   expensive error — it is the one that sends a supervisor to `relaunch` on a live seat mid-turn,
   discarding everything that seat has read.
-* **the corroboration rules out the two accidental misreads** — a backend that did not answer,
-  and a run resolved to the other backend. It does not rule out a room file that has been
-  rewritten. The next step is the backend-assigned handle (a tmux window id, an agterm session
-  UUID) recorded outside the room at launch — filed as #247, not done here. Under the trust
-  contract that raises the bar to a second, consistent forgery rather than closing it: the record
-  is accident-grade evidence too.
+* **an absence is believed only when the record, the pin and the backend agree.** That rules out
+  the accidental misreads (a backend that did not answer, a run resolved to the other backend, a
+  pin that moved), and each single write to the room or to the record that review has tried now
+  reads unknown (the header of `lib/launch-record.sh` lists them).
+  It does not rule out a coordinated edit: the record is accident-grade evidence like everything
+  else in the mailbox, so it raises the bar to a second, consistent forgery rather than closing
+  it.
 
-A seat the room never gave a terminal — the one a human took with `--me` — is named as exactly
-that rather than as a dead seat, because `relaunch` refuses it and the room is simply waiting on
-a person.
+A seat the room never gave a terminal — the one a human took with `--me`, which `up` records as
+launched with nothing — is named as exactly that rather than as a dead seat, because `relaunch`
+refuses it and the room may simply be waiting on a person. A seat whose launch failed is recorded
+the same way, and the sentence names both readings.
+
 
 **What a held floor produces, tier by tier.** Read the table as *which line, on which channel,
 with which push*. Each row says what it asks of you in its own right; don't read the set as a
@@ -962,7 +974,7 @@ files, one of which was missed.
 | line | threshold | where it goes | pushes? |
 |---|---|---|---|
 | `quiet: …` | `COUNCIL_STALL_WARN_SECS`, 300s | the **block only** — never the alarms line, never `--alarms-only`. Entering or leaving the quiet state breaks `--only-changed`'s silence **once**; holding it does not | no |
-| `🛑 NO AGENT` | `COUNCIL_STALL_WARN_SECS`, 300s, **and** the floor holder's terminal holds no agent on two reads (above). Not on a closed room or an open barrier round. It **replaces** the `quiet:` line and the "is listed, which is what a live seat looks like" sentence, which would contradict it, and changes nothing else — the stall tiers below still fire as they would | the alarms line: both loops, and it bypasses every filter. Its remedy is `council.sh relaunch <peer>`, because there is no live agent to lose | no push of its own: the `🛑 STALL` push still fires at 900s. A push for this condition is part of what #21 settles |
+| `🛑 NO AGENT` | `COUNCIL_STALL_WARN_SECS`, 300s, **and** the floor holder's terminal holds no agent on two reads (above). Not on a closed room or an open barrier round. It **replaces** the `quiet:` line and the live-seat liveness sentence, which would contradict it, and changes nothing else — the stall tiers below still fire as they would | the alarms line: both loops, and it bypasses every filter. Its remedy is `council.sh relaunch <peer>`, because there is no live agent to lose | no push of its own: the `🛑 STALL` push still fires at 900s. A push for this condition is part of what #21 settles |
 | `⏳ LONG TURN` | `COUNCIL_STALL_SECS`, 900s, **and** the seat's own client reads as mid-turn — which needs an agent kind whose pane has been captured, so it is unreachable for `agy` (see below) | the alarms line: both loops, and it bypasses every filter, exactly as the row below does | yes, one `notice`, keyed `[longturn:<peer>:<turns>]` |
 | `🛑 STALL` | `COUNCIL_STALL_SECS`, 900s, otherwise — and `COUNCIL_STALL_HARD_SECS`, 5400s, **whatever the pane says**. Also **always** on a closed room, at any age | the alarms line: both loops, and it bypasses every filter — in full at an episode's first firing, then as its delta (below) | yes, one `notice`, keyed `[stall:<peer>:<turns>]` |
 | `🛑 STALL: the floor's held time cannot be read` | none: the instant the floor is timed from (the last turn's `sent_ms`, or `created_ms` before a token room's first turn) is stamped more than 60s **in the future**, so there is no held time to hold against a threshold. An unknown held time in a live room is the alarm | the alarms line: both loops, and it bypasses every filter — the whole line on every tick, with no episode delta | yes, one `notice`, keyed `[clock:<peer>:<turns>]` |
@@ -1175,8 +1187,10 @@ produced this issue. And `board/status` alone cannot tell you which ending it wa
 teardown could not happen. **`rooms` does tell you**, since the monitor
 work landed: its `term` column runs `council.sh terminals` per room, so a decided room with live
 seats reads `term 3/3` where a torn-down one reads `term 0/3`. Prefer that, or `council.sh
-terminals` for one room — both read the backend without touching the seats, and both inherit the
-container pin's forgeability (`_room_terminals`' header names the routes). The per-seat probe is
+terminals` for one room — both read the backend without touching the seats, checked against the
+room's launch record, and both inherit that record's forgeability (`_room_terminals`' header
+names the routes); a launched room with no record, or a pin that disagrees with it, reads
+`term ?`. The per-seat probe is
 [`say`](#what-say-establishes-and-what-each-answer-means), and its cost is in the next sentence,
 so reach for it when you need a single seat's answer rather than the room's: `council.sh say
 <peer> "…"` answers **exit 3** when that seat has no live terminal, and **exit 4** when the room was

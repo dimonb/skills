@@ -47,7 +47,8 @@ gives one place to fix lifetime, load, and escalation.
 Grounded in `.planning/codebase/`. These already exist and are **reused, not rebuilt**:
 
 - **Terminal-backend abstraction, twice.** `council` in `plugins/council/skills/council/lib/term.sh`
-  (`ct_launch` / `ct_type` / `ct_submit` / `ct_kill` / `ct_capture` / `ct_target`, agterm|tmux)
+  (`ct_launch_record` (was `ct_launch` until #247) / `ct_type` / `ct_submit` / `ct_kill` /
+  `ct_capture` / `ct_target`, agterm|tmux)
   and `shipyard` in `plugins/shipyard/skills/shipyard/shipyard-backend.sh` — the driver layer
   already exists in two divergent copies.
 - **Per-agent adapters.** `plugins/council/skills/council/adapters/<kind>.sh` — the seam for
