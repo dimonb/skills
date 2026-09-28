@@ -61,7 +61,7 @@ echo "an amend naming only the objection amends the proposal that objection was 
 # A direct proposal ref wins over the proposal an objection it names was raised against.
 raw_msg a 2 4 3 propose '[]' "position c"
 raw_msg a 3 5 4 object  '["a-2"]' "I object to c"
-raw_msg b 3 6 5 amend   '["a-1","a-3"]' "amended again, closing an objection on c"
+raw_msg b 3 6 5 amend   '["a-3","a-1"]' "amended again, closing an objection on c"
 g=$(COUNCIL_ME=a bash "$CLI" claims --raw)
 am1=$(printf '%s' "$g" | jq -r '.proposals[] | select(.id=="a-1") | .amends | join(",")')
 am2=$(printf '%s' "$g" | jq -r '.proposals[] | select(.id=="a-2") | .amends | join(",")')
