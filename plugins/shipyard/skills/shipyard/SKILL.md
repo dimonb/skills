@@ -317,7 +317,8 @@ so do not plan on driving it from here.
 ## Step 2. Monitor every 10 minutes
 
 `<SKILL>/shipyard-report.sh [<slot> ...]` builds the report:
-* running-vs-idle from a snapshot DIFF (two captures 3s apart), not spinner glyphs;
+* running-vs-idle from a snapshot DIFF (two captures `SHIPYARD_MOTION_INTERVAL` apart — its
+  default is set where `shipyard-report.sh` reads it), not spinner glyphs;
 * the MR/PR number of a slot is read from `.pipeline-state/*.json` inside the worktree, and
   when that file cannot answer — a child that has not written one — from the **forge**, by the
   slot worktree's own branch; only when neither can answer does the column say `no MR yet`. The
@@ -356,9 +357,15 @@ Arm the status monitor (`Monitor`, `persistent: true`), substituting the slots:
 SCRIPT=<SKILL>/shipyard-report.sh
 while true; do
   bash "$SCRIPT" --only-changed <slot> [<slot> ...] && { echo "__all changes shipped — exiting monitor__"; break; }
-  sleep 594   # 594 + ~6s for two 3-second captures ≈ 10 min
+  sleep 594
 done
 ```
+
+The tick is that `sleep` **plus however long the report takes**, and the report is not instant: it
+waits one `SHIPYARD_MOTION_INTERVAL` between its two captures for every live slot. So `594` gives
+about ten minutes only at that knob's default with a small fleet. Do not re-derive the figure from
+a number written here — if you set the knob, or run many slots, the tick grows by the knob's value
+per live slot, and you shorten the `sleep` yourself if the cadence matters.
 
 `--only-changed` is what makes this monitor liveable. Ship spends much of its life parked
 in `⏸ idle/wait` on a pipeline or a self-review round, so without it the loop emits the
@@ -482,7 +489,7 @@ mailbox, a child included, writing the predicted signature — the reason given 
   report the field, leaves the slot exactly where it was before this check existed — row, stall
   clock and all.
 * **`none` can be briefly wrong** for a launch caught between its shell and its `exec`, which is
-  why it takes both reads, `SHIPYARD_MOTION_INTERVAL` (3s) apart. Measured for a real launcher
+  why it takes both reads, `SHIPYARD_MOTION_INTERVAL` apart. Measured for a real launcher
   with a zsh login profile: under 0.3s of `none` on agterm and on tmux, then the launcher's own
   shell (agterm reads that as `agent`) or the agent. A login profile slow enough to span both reads
   would still read `none` twice; an exit 8 within seconds of a launch is worth one re-run before

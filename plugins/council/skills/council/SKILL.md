@@ -319,8 +319,11 @@ closing its own terminal. A reap written inline races the process that began it.
 already runs in its own process group, already holds the room's roster, and already closes every
 participant terminal and exits — that is what `up --hold` uses when its owner dies — so this is a
 fourth trigger on machinery that already existed rather than a second teardown path. It is a
-**request**: the keeper polls, so the terminals go within one poll (about five seconds) rather
-than at once. That is the right side to err on. The close announcement rings every seat first, so
+**request**: the keeper polls, so the terminals go within one poll rather than at once. The poll
+period is `COUNCIL_KEEPER_POLL_INTERVAL`; its default is set where `_keeper_ensure` in
+`lib/up.sh` reads it, and an unusable value falls back to that default and says so on stderr.
+That read happens when a keeper starts, so setting the knob changes the next keeper to start, not
+one already running. That is the right side to err on. The close announcement rings every seat first, so
 each learns now rather than at its own timeout, and closing the terminals ahead of it would leave
 it ringing nobody.
 
@@ -359,7 +362,7 @@ Three consequences worth knowing:
 * **`relaunch` cancels a teardown no keeper has taken yet.** Putting a seat back up says the room
   is in use again, and it outranks a close that asked for the seats to go — it has to, or the seat
   it launches is reaped within a poll of starting. That covers the keeper that died before taking
-  the request *and* the live keeper still inside its five-second poll window. What it cannot
+  the request *and* the live keeper still inside its poll window. What it cannot
   cancel is a reap already **in flight**: the keeper consumes the request before it starts
   closing, so from that moment there is nothing left to clear and `relaunch` cannot see it. That
   window is the length of one reap — measured at 84–383 ms for three seats on a live tmux backend
@@ -431,7 +434,7 @@ room down exactly as before; the canary is an added trigger, not a replacement.
 
 The keeper's loop has **four** ways to return, and it is worth keeping them straight because only
 three of them end the live room. Its directory going away — a backstop rather than the usual
-cause, since *both* forms of `down` signal the keeper first and a signal beats a five-second poll,
+cause, since *both* forms of `down` signal the keeper first and a signal beats a poll,
 and a plain `down` does not remove the directory at all; a `--hold` room's owner dying, seen as the EOF
 above, on which it reaps; **a decided `decide` asking it to reap**
 ([above](#a-decided-room-closes-its-own-terminals)), which applies to a detached room as much as
