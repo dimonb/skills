@@ -36,5 +36,24 @@ live=$(printf '%s' "$g" | jq -r '.live | length')
 [ "$dead" = true ] || { echo "FAIL conceding one own proposal did not drop it"; fail=1; }
 [ "$live" = 1 ] || { echo "FAIL $live proposals left on the table, expected 1"; fail=1; }
 echo "conceding your own proposal drops it: one is left on the table"
+
+# An amend that names ONLY the objection belongs to the proposal that objection was raised
+# against (#34). It closes the objection regardless, so without the attribution the room
+# ripened on it while the proposal carried no amendment at all, and the decision record
+# rendered the un-amended text.
+R2="$COUNCIL_TEST_ROOT/t8-objref"; rm -rf "$R2"
+mkroom "$R2" a b
+export COUNCIL_ROOM="$R2" ROOM="$R2"
+raw_msg a 1 1 0 propose '[]' "position a"
+raw_msg b 1 2 1 object  '["a-1"]' "I object to a"
+raw_msg b 2 3 2 amend   '["b-1"]' "amended position a"
+g=$(COUNCIL_ME=a bash "$CLI" claims --raw)
+am=$(printf '%s' "$g" | jq -r '.proposals[] | select(.id=="a-1") | .amends | join(",")')
+ct=$(printf '%s' "$g" | jq -r '.proposals[] | select(.id=="a-1") | .current_text')
+cb=$(printf '%s' "$g" | jq -r '.proposals[] | select(.id=="a-1") | .objections[0].closed_by')
+[ "$am" = "b-2" ] || { echo "FAIL an objection-only amend is not attributed to the proposal it closes an objection on: '$am'"; fail=1; }
+[ "$ct" = "amended position a" ] || { echo "FAIL current_text ignores the objection-only amend: '$ct'"; fail=1; }
+[ "$cb" = "b-2" ] || { echo "FAIL the objection-only amend no longer closes the objection: '$cb'"; fail=1; }
+echo "an amend naming only the objection amends the proposal that objection was raised against"
 [ "$fail" = 0 ] && echo "t8 PASS" || echo "t8 FAIL"
 exit $fail

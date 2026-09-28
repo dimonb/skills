@@ -153,7 +153,9 @@ gap somebody is on their way to filling.
 
 An `amend` belongs to **one** proposal — the first proposal-typed id it references; its
 other refs are the objections it closes. (Referencing two proposals used to apply the
-amendment to both, so a room displayed two participants proposing the same words.)
+amendment to both, so a room displayed two participants proposing the same words.) An
+`amend` that names only an objection belongs to the proposal that objection was raised
+against, so the decision record carries the amendment it closed the objection with.
 
 A barrier round puts **N proposals** on the table at once, one per participant, and
 `ready-to-decide` wants exactly one. That is the work of the lap after the barrier: yield
