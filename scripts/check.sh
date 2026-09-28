@@ -916,7 +916,7 @@ else
         n = split(s, t, /[ \t]+/)
         for (i = 1; i <= n; i++) {
           if (t[i] ~ /^#/) return
-          # Quotes and a leading backslash off the command word, so `sh -c "pgrep -P $x"` and the
+          # Quotes and backslashes off the command word, so `sh -c "pgrep -P $x"` and the
           # alias-bypassing `\pgrep` are read as the lookup they are.
           base = t[i]; gsub(/["\047\\]/, "", base); sub(/.*\//, "", base)
           if (base != "pgrep" && base != "pkill") continue
