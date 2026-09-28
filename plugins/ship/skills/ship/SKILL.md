@@ -535,6 +535,12 @@ pass on the archived head (§7.F).
   do not run git write commands, do not touch the forge CLI, do not install anything, do not
   check out another ref — return findings only.* Parallel writers in one worktree corrupt
   each other; ship applies every fix itself, sequentially.
+- **Every subagent, and every probe ship runs itself, reads and copies only from the worktree
+  and the session's scratch or temp directory** — never from the agent's own config, transcript
+  or tool-result directories. Reads there prompt for approval, and an unattended run stalls on
+  the prompt with nobody to answer it and nothing that reliably reports it. Content a subagent needs from
+  there goes into its prompt, never as a path. Measured: a skeptic that copied from its own
+  transcript directory held a slot idle on the prompt, unescalated.
 - **Run the axes concurrently** — dispatch the whole battery in ONE message so they run in
   parallel. They are read-only over the same tree and cannot conflict.
 - **Barrier before acting.** Do not start fixing until every axis of the round has returned.
@@ -624,6 +630,17 @@ against the concurrency it will actually run at, never against one agent in isol
 | `impl-spec-conformance` | Code against the spec artifacts, **both directions**: every requirement satisfied by the code; no shipped behaviour no requirement describes; no unchecked task whose work is genuinely absent. In a no-spec repo this axis becomes *code against the issue*: does the change do what was asked, no more and no less? |
 | `impl-conventions` | The repo's own conventions as discovered in §2.7 — style, structure, localization parity, formatting of user-facing text, dead or debug code, stray markers, commented-out blocks, and **no AI/assistant attribution anywhere in the diff**. |
 | `impl-gates-coverage` | What actually runs in CI versus what changed — is any part of this change unverified by construction? Does every component with a test entry point appear in the pipeline that should run it? Does the change need manual or browser verification? Are the discovered check commands sufficient evidence for *this* diff? The head's own run is supplied as context above — judge what it proves and name what it leaves unmeasured; do not re-run it, and do not run a suite or a mutation harness of your own. |
+
+**A signal-silencing check, in every charter that runs, for any diff that changes when an
+operator-facing output appears** — an alarm, a block, a glyph, an exit code, a push, a notice.
+The reviewer lists each such output and shows, **per output**, that no input or state which used
+to make it appear now makes it disappear. A path that is quieter by construction is **blocking**
+unless a louder output replaces it, and the input or state that used to raise the output and no
+longer does is the finding's failure scenario. The principle is argued in full in the `AGENTS.md`
+of this skill's own repository, *Untrusted evidence may annotate an operator-facing signal, never
+suppress one*; the target repo's own law still wins (§2.7). Measured: a change that turned an
+unreadable screen from a false stall into "no verdict" passed five axes and a skeptic, and a slot
+that stayed unreadable could then never alarm at all.
 
 Three defects that have actually reached a default branch, and are therefore named in the
 `impl-security` charter explicitly rather than left to the reviewer's imagination:
