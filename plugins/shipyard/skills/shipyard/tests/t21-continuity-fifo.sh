@@ -19,9 +19,12 @@
 #   * the residual shared/policy names for policy_mailbox_write: a random temp name swapped for a
 #     FIFO between `mktemp` and the shell's open of it. No fixture hits that on purpose.
 #   * the owner probe's `sh -c 'printf … >"$1"'`, onto a name `mktemp` just made: that same residual.
+#   * the owner-hold launch's log (`_SHIPYARD_CONTINUITY_OWNER_HOLD`): t10 drives that launch, but
+#     with no FIFO planted, so putting back `>>"$logfile"` there alone stays green everywhere.
 #
 # MUTATION CHECK, run by hand when this file changes: put back `>"$marker"` in stop_all or the
-# `<path>.<token>.tmp.$$` temp in write_record, and that site's case reports HUNG. Put back the old
+# `<path>.<token>.tmp.$$` temp in write_record, or the agterm starter's `: >"$logfile"`, and that
+# site's case reports HUNG. Put back the old
 # nohup launch (`>>"$logfile"`, no temp) or `>>"${12}"` in the watch-foreground dispatch, and case 3
 # or 4 reports a failed start instead: the WATCHER blocks on the log, and the starter gives up on it
 # after its publication polls rather than hanging with it. A mutation that keeps the new rename and
@@ -160,9 +163,11 @@ ok "...leaving no temp file behind"            0 "$(leftover)"
 
 # --- 4. the watcher log, agterm-session launch: the foreground watcher's own open ---------------
 printf '\n── watcher log (agterm session) ──\n'
+# Planted twice: once here, for the starter's own log open, and again by the fake after the
+# starter has renamed its log into place, for the foreground watcher's.
+plant "$LOG"
 o=$(FAKE_PLANT="$LOG" bounded "$SECS" shipyard_continuity_start agterm)
-FIFOS+=("$LOG")   # planted by the fake, so the bound's release must know it
-ok "a FIFO at the log after the starter made it: start returns" yes "$(returned "$o")"
+ok "a FIFO at the log, before and after the starter: start returns" yes "$(returned "$o")"
 ok "...with success, the watcher having started"                0 "$(rc_of "$o")"
 ok "...and the log is a regular file again"                     yes "$(regular "$LOG")"
 unplant

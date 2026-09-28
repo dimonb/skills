@@ -288,8 +288,10 @@ shipyard_continuity_session_exists() {
 }
 
 # Every file this script writes lives in the state dir, which defaults to the shared mailbox that
-# every child can write — so nothing here opens a mailbox path with `>` or `>>`: a FIFO planted at
-# that path would block the open until something read it (#256). A record is written into a temp
+# every child can write — so no writer here opens a name a child could predict or pre-plant with
+# `>` or `>>`: a FIFO planted there would block the open until something read it (#256). The opens
+# by name that remain are of names `mktemp` just created: these record temps, the log temps, and
+# the owner probe in shipyard_continuity_set_current_pid; the canary FIFO is our own. A record is written into a temp
 # file `mktemp` creates exclusively beside <path>, then renamed over <path>, which replaces a FIFO
 # without opening it. The temp is a DOTFILE, so no `continuity-*` glob below matches a half-written
 # or leaked one, and it carries <token> so remove_owned_state can sweep one a killed writer leaked.
