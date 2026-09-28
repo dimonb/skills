@@ -67,8 +67,7 @@ council.sh <verb> [options]
     send    --act <act> [--refs '["id"]'] [--hand] "<text>"
                                                        in an open round: exit 5 = you already
                                                        posted, wait; exit 7 = that act is not a
-                                                       position, re-send with --act propose
-    floor                                              who holds it, who is next, how long it
+                                                       position, re-send with --act propose    floor                                              who holds it, who is next, how long it
                                                        has been held and the room's turn
                                                        deadline (both in milliseconds)
     protocol                                           your own role and the channel rules
@@ -183,6 +182,41 @@ if [ "$VERB" = rooms ]; then . "$SKILL/lib/up.sh"; council_rooms; exit $?; fi
 COUNCIL_ROOM=$(resolve_room) || exit 1
 export COUNCIL_ROOM
 [ -d "$COUNCIL_ROOM" ] || { echo "council: no such room: $COUNCIL_ROOM" >&2; exit 1; }
+
+# --- where this room's supervision writes go (#178) -----------------------------
+# A room is SUPERVISED when it sits where `up` puts every room: directly inside `council/` in a git
+# dir (room_base). `up` has no way to place a room anywhere else, so that location is the signal
+# that the room was launched as a real one. The test reads the room's own physical path and
+# nothing else: not the caller's cwd, which a supervisor in another checkout would change, and not
+# a roster field, which any seat could delete to take its room's escalations off the supervisor's
+# screen.
+#
+# A supervised room resolves its mailbox EXACTLY as before this check existed, through
+# `policy_mailbox_dir`. So no real room stops pushing, whatever directory the command runs from.
+#
+# Every other room is ad hoc: one a probe or a review subagent built by hand under a scratchpad or
+# a temp dir and reached through COUNCIL_ROOM. Its writes to the mailbox land in the room itself,
+# `<room>/mailbox/`: the unresolved-close notice, the stall pushes, the launch record, `status`'s
+# signature and `say`'s record. Before this, all of them went into the real supervision mailbox of
+# whatever repo the caller stood in. That mailbox showed "closed unresolved, a human should look"
+# for rooms that were test fixtures, and a supervisor had to delete each entry by hand.
+#
+# An explicit POLICY_MAILBOX_DIR still wins in both cases. The suite sets it that way, and it is how
+# an operator who deliberately runs a real room outside `room_base` keeps its escalations reaching
+# a supervisor. It is exported so the processes this one starts (a keeper, a relaunched seat's
+# launcher) inherit the same answer.
+_room_is_supervised() {
+  local r parent gd
+  r=$(cd "$1" 2>/dev/null && pwd -P) || return 1
+  parent=$(dirname "$r")
+  [ "$(basename "$parent")" = council ] || return 1
+  gd=$(dirname "$parent")
+  [ "$(git -C "$gd" rev-parse --is-inside-git-dir 2>/dev/null)" = true ]
+}
+if [ -z "${POLICY_MAILBOX_DIR:-}" ] && ! _room_is_supervised "$COUNCIL_ROOM"; then
+  POLICY_MAILBOX_DIR="$(cd "$COUNCIL_ROOM" && pwd -P)/mailbox"
+  export POLICY_MAILBOX_DIR
+fi
 . "$SKILL/lib/lib.sh"
 
 need_me() { [ -n "${COUNCIL_ME:-}" ] || { echo "council: who are you? set COUNCIL_ME or --me <peer>" >&2; exit 2; }; }
