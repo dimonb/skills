@@ -183,3 +183,39 @@ In `ship` (next PR):
 
 For the supervisor: a slot at `⏸ idle/wait` whose last line is a menu (`Esc to cancel`, `Do you want
 to proceed?`) is a prompt — read its screen before assuming it is waiting on CI.
+
+Shipped in #288 (Closes #287).
+
+## Retro 5 — 2026-09-28, after #288 #289 #290 #291
+
+Batch: 4 PRs, 9 issues closed (#287 #171 #200 #120 #121 #154 #189 #196 #209), open count 48 → 40,
+no new issues filed by children. Open-to-merge 8-43 min.
+
+### Went well
+
+* **The retro-1 comment rule stopped a wrong close.** #291's close sweep found #67's body no longer
+  reproduces but left it open because its comments still hold live scenarios — exactly the case the
+  rule was written for.
+* **Design escalations kept choosing the fail-closed side** without being told to: two pins now
+  refuse rather than agree, a pin/record mismatch refuses, and auto-clearing a stale pin on
+  peer-writable evidence was flagged by the child itself as not its call.
+* **Anchors from captures, not from reasoning** (#290: eight new live pane captures committed as
+  fixtures before the predicates changed).
+
+### Went badly
+
+* **Review volume grew with the cluster, not with the risk.** #291 carried 31 optional findings
+  through three rounds (29 fixed in place); its context reached ~38% and the slot took 43 min for a
+  change a human would call medium. Retro 1 made unfixed findings go onto issues, and that is right,
+  but nothing bounds how many a battery generates — the breadth problem #206 already describes.
+* **Every re-opened axis re-reads the whole diff**, and a restarted session cannot tell which rounds
+  it already ran (#64) — both cost most on exactly these long rounds.
+
+### Change
+
+In `ship` (next PR): work the three open ship-review issues together, since they are this retro's
+findings — #206 (a re-opened axis reads only its delta; one verifier by default, extra lenses only
+when a finding names several ways to fail; a spend line in the hand-off record), #64 (write the
+round ledger to the state file after every round and read it back on re-entry), #226 (a sizing row
+for a config / manifest / lockfile-only diff). Close #206 with a stated close condition so it stops
+collecting scenarios.
