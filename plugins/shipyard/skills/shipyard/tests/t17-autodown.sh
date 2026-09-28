@@ -95,6 +95,7 @@
 #   B22 AWAITING REMOVAL is an episode keyed on the refusal's text: full, then the short entry that still
 #      carries the command, then full again for a new reason.
 #   B23 TORN DOWN fires once per act: a slot that was really removed is not reaped or reported again.
+#   B24 HELD's short entry for an UNREADABLE record points at the file, not at an answer (#197).
 # That list is maintained by hand and has gone stale twice already, each time when a fix round
 # added cases and left it ending where it was. The file below is the authority.
 #
@@ -608,11 +609,13 @@ b13a=$(b_tick -- 72)
 b13b=$(b_tick -- 72)
 ok "B13: an unreadable record holds the teardown"    0 "$(grep -c . "$DOWN_CALLS")"
 ok "B13: ...and says so"                             1 "$(printf '%s' "$b13b" | grep -c 'HELD — finished and merged')"
-# The esc column genuinely reads 0 here — that is the defect being guarded against, and the block
-# explains the discrepancy rather than hiding it. Asserting it keeps the two counts from being
-# quietly unified later, which would reopen the hole.
-ok "B13: ...while the esc column still reads none"   1 "$(printf '%s' "$b13b" | grep -c '^| 72 .*| — | — |')"
-ok "B13: ...and the block explains the difference"   1 "$(printf '%s' "$b13b" | grep -c 'cannot parse does NOT appear')"
+# The esc column's PENDING count genuinely reads 0 here, and it shows the record as its own `❓`
+# mark instead (#197) — not as a pending question, and not as nothing. Asserting the exact cell
+# keeps the two counts from being quietly unified later, which would reopen the hole, and keeps the
+# mark from being dropped, which would put back the invisible question.
+ok "B13: ...while the esc column marks it unreadable" 1 "$(printf '%s' "$b13b" | grep -c '^| 72 .*| ❓ 1 | — |')"
+ok "B13: ...and the block explains the difference"   1 "$(printf '%s' "$b13b" | grep -c 'cannot parse is listed as unreadable')"
+ok "B13: ...and the escalation block names it"       1 "$(printf '%s' "$b13b" | grep -c 'unreadable record\] `72-1.json`')"
 # The remedy must be one that WORKS for this record. The escalation block cannot show it (its
 # allow-list skips an unparseable kind) and shipyard-answer.sh cannot write it (jq fails on the
 # same bytes), so the only real remedy is the file itself — naming it is what turns an
@@ -841,6 +844,25 @@ DOWN_REMOVE=0; export DOWN_REMOVE
 ok "B23: the removing tick reports the teardown"       1 "$(printf '%s' "$b23a" | grep -c 'TORN DOWN — merged, finished')"
 ok "B23: ...and later ticks do not report it again"    0 "$(printf '%s%s%s' "$b23live" "$b23b" "$b23c" | grep -c 'TORN DOWN')"
 ok "B23: ...nor call the teardown again"               1 "$(grep -c '^82$' "$DOWN_CALLS")"
+
+# --- B24: HELD's SHORT entry for an unreadable record (#197) ---------------------------------
+# B21 drives the short entry only for a readable question, so its other arm — the counts differ,
+# the record cannot be answered — ran in no case (a review finding on #249, homed on #197). On
+# that arm the "answer it" remedy is false, so the short entry must point at the file instead.
+b_reset; rm -f "$B_GIT/ship-escalations/report-episodes"
+b_slot 83 883 ready-to-merge
+printf '1 ship-83\n' >"$B_WINS"; printf 'ship-83\n' >"$B_ENUM"
+printf '883\tMERGED\n' >"$B_STATES"
+printf 'not json at all\n' >"$B_GIT/ship-escalations/83-1.json"
+b_tick -- --only-changed 83 >/dev/null
+b24a=$(b_tick -- --only-changed 83)
+b24b=$(b_tick -- --only-changed 83)
+ok "B24: the first held tick prints the full block"    1 "$(printf '%s' "$b24a" | grep -c 'Tearing it down by hand first')"
+ok "B24: the next is the short entry"                  1 "$(printf '%s' "$b24b" | grep -c '^- `83` — STILL held by the same 1 unsettled record(s), .* tick 2')"
+ok "B24: ...pointing at the file, not at an answer"    1 "$(printf '%s' "$b24b" | grep -c '0 of those are readable escalations; repair or remove the rest by hand')"
+ok "B24: ...and not promising the answer command"      0 "$(printf '%s' "$b24b" | grep -c 'the escalation block below carries the command')"
+ok "B24: ...while the escalation block still names it" 1 "$(printf '%s' "$b24b" | grep -c 'unreadable record\] `83-1.json`')"
+ok "B24: ...and nothing was torn down"                 0 "$(grep -c . "$DOWN_CALLS")"
 
 printf '\n%s: %d checks, %d failures\n' "$(basename "$0")" "$CHECKS" "$FAILURES"
 [ "$FAILURES" -eq 0 ]

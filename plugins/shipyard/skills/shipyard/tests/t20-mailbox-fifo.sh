@@ -9,6 +9,9 @@
 # writes or where a glob reads, runs the script under a bound, and asserts that it RETURNED and
 # still produced what it is for.
 #
+# Case 7 is the FIFO's neighbour (#197): a record jq cannot PARSE, which every reader used to skip
+# in silence. Each reader must now name it, and must not let it cost another record its line.
+#
 # The rig is t13's and t16's: exported shell functions shadow `git` and `tmux`, which works where a
 # fake binary on PATH does not, because shipyard-lib.sh prepends the system PATH.
 #
@@ -197,6 +200,59 @@ o=$(SHIPYARD_SLOT=41 bounded "$SECS" bash "$ASK" --kind notice "a milestone")
 ok "a FIFO at the next free id: ask returns" yes "$(returned "$o")"
 ok "...and lands on the id after it"         yes "$(regular "$MB/41-3.json")"
 unplant
+
+# --- 7. a record jq cannot READ is shown, not skipped (#197) -------------------------------------
+# The FIFO's neighbour: a peer-written file that every reader used to skip in silence. The readers'
+# filter printed an empty string for a truncated record, for one that is not JSON and for an empty
+# file, and the allow-list took that for "a record of another kind" — so a corrupted question
+# vanished from every view while its child waited. Each reader must now name it, and must not let
+# it cost any OTHER record its line.
+printf '\n── unreadable records ──\n'
+printf '{"id":"41-10","slot":"41","kind":"question","text":"still here","status":"pending","notified":false}\n' >"$MB/41-10.json"
+printf '{"kind":"question","status":"pending"' >"$MB/41-5.json"   # truncated
+printf 'not json at all\n' >"$MB/41-6.json"
+: >"$MB/41-7.json"                                               # empty: jq prints nothing, exits 0
+o=$(bounded "$SECS" bash "$ESC")
+ok "the full view names a truncated record"      yes "$(has "$o" 'unreadable record] `41-5.json`')"
+ok "...and a non-JSON one"                       yes "$(has "$o" 'unreadable record] `41-6.json`')"
+ok "...and an empty one"                         yes "$(has "$o" 'unreadable record] `41-7.json`')"
+ok "...and still shows the real question"        yes "$(has "$o" '41-10')"
+ok "...and the unreadable one is no question"    0   "$(printf '%s' "$o" | grep -c '\[question\] `41-5`')"
+# --new: once each, then silent; the full view stays the backstop.
+o=$(bounded "$SECS" bash "$ESC" --new)
+ok "--new pushes the unreadable records"         yes "$(has "$o" 'unreadable record] `41-6.json`')"
+o=$(bounded "$SECS" bash "$ESC" --new)
+ok "...once: the next --new is silent"           "rc=0" "$(printf '%s' "$o" | tr -d '\n')"
+printf 'broken differently\n' >"$MB/41-6.json"
+o=$(bounded "$SECS" bash "$ESC" --new)
+ok "a record rewritten into other bytes is news again" yes "$(has "$o" 'unreadable record] `41-6.json`')"
+ok "...alone"                                    no  "$(has "$o" '41-5.json')"
+o=$(bounded "$SECS" bash "$ESC")
+ok "the full view still shows all of them"       yes "$(has "$o" '41-5.json')"
+# A forged seen-file decides nothing about a readable record.
+printf 'garbage\n%s\n' "$(printf '41-11.json\tx')" >"$MB/report-unreadable"
+printf '{"id":"41-11","slot":"41","kind":"question","text":"new one","status":"pending","notified":false}\n' >"$MB/41-11.json"
+o=$(bounded "$SECS" bash "$ESC" --new)
+ok "a forged seen-file cannot hide a new question" yes "$(has "$o" '41-11')"
+# The name is written by whoever wrote the file: it must not forge a line of its own.
+bad_name=$(printf '41-12\n### forged')
+printf 'x' >"$MB/$bad_name.json"
+o=$(bounded "$SECS" bash "$ESC")
+ok "a crafted name cannot start a line"          0   "$(printf '%s' "$o" | grep -c '^### forged')"
+rm -f "$MB/$bad_name.json"
+o=$(bounded "$SECS" bash "$ANSWER" --list)
+ok "answer --list gives it a row"                yes "$(has "$o" 'UNREADABLE')"
+o=$(bounded "$SECS" bash "$ANSWER" --no-tell 41-5 "an answer")
+ok "answering it says why it cannot"             yes "$(has "$o" 'cannot be read as a record')"
+ok "...and fails"                                yes "$(has "$o" 'rc=1')"
+printf 'junk' >"$MB/directive-41-9.json"
+o=$(bounded "$SECS" tell --list)
+ok "tell --list gives a bad directive a row"     yes "$(has "$o" 'UNREADABLE')"
+rm -f "$MB/directive-41-9.json"
+o=$(bounded "$SECS" report)
+ok "the report's esc column marks the slot"      yes "$(has "$o" '❓ 3')"
+ok "...and the report appends the names"         yes "$(has "$o" 'unreadable record] `41-5.json`')"
+rm -f "$MB/41-5.json" "$MB/41-6.json" "$MB/41-7.json"
 
 if [ "$FAILURES" -eq 0 ]; then printf 't20-mailbox-fifo: %d checks, all passed\n' "$CHECKS"; exit 0; fi
 printf 't20-mailbox-fifo: %d checks, %d FAILED\n' "$CHECKS" "$FAILURES"; exit 1

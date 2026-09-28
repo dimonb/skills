@@ -363,7 +363,11 @@ so do not plan on driving it from here.
   what makes it do so;
 * `MR state / stage` — forge state plus ship's own pipeline stage;
 * `esc` — open escalations for that slot, and the full escalation block is appended
-  under the table;
+  under the table. `❓ N` beside or instead of the count is N of the slot's mailbox records that
+  cannot be read at all — a truncated or non-JSON file. It is not a pending question (nothing can be
+  said about its kind), and the escalation block names each such file as `❓ unreadable record`:
+  a child may be waiting on it, and no answer can be written into it, so look at the file and repair
+  or remove it (#197);
 * on agterm, it also repaints each child's sidebar glyph (its completed/active verdict comes
   from the declared slot graph — see below);
 * **and it TEARS DOWN a slot that is finished** — merged on consecutive ticks, ship's stage

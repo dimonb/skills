@@ -68,9 +68,14 @@ if [ "${1:-}" = "--list" ]; then
   if [ ${#files[@]} -eq 0 ]; then echo "_no directives sent_"; exit 0; fi
   printf '%-24s %-10s %-11s %s\n' ID SLOT DELIVERY TEXT
   for f in "${files[@]}"; do
-    # Only a regular file reaches jq: a FIFO matching the glob would block the listing (#253). The
-    # window between this check and jq's open is the read residual #246 deferred.
-    [ -f "$f" ] || continue
+    # Only a readable record reaches jq: a FIFO matching the glob would block the listing (#253),
+    # and one jq cannot parse gets a row saying so rather than no row (#197). The window between
+    # the check and jq's open is the read residual #246 deferred.
+    if ! shipyard_record_readable "$f"; then
+      printf '%-24s %-10s %-11s %s\n' "$(printf '%q' "${f##*/}")" '?' UNREADABLE \
+        'jq cannot read this record (#197)'
+      continue
+    fi
     jq -r '[.id, .slot, (.delivery // "?"), (.text|gsub("\n";" ")|.[0:60])] | @tsv' "$f" 2>/dev/null \
       | awk -F'\t' '{printf "%-24s %-10s %-11s %s\n", $1,$2,$3,$4}'
   done

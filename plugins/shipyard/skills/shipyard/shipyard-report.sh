@@ -820,6 +820,25 @@ slot_pending() {
   printf '%s' "$n"
 }
 
+# slot_unreadable <slot> — how many of this slot's mailbox records cannot be read at all (#197).
+#
+# The esc column's other half. `slot_pending` counts only what it can parse, and it is right not to
+# count an unreadable record as a pending question — nothing can be said about its kind — but before
+# this the column then read `—` for a slot whose question was corrupted, which is the child waiting
+# on an invisible question the issue is about. So the column shows this count beside the other, as
+# its own mark, and the escalation block appended under the table names each such file.
+# `shipyard_record_readable` is the classification, so a FIFO is counted without being opened (#253).
+slot_unreadable() {
+  local slot="$1" mb n=0 f
+  mb=$(shipyard_mailbox 2>/dev/null) || { printf 0; return; }
+  [ -d "$mb" ] || { printf 0; return; }
+  shopt -s nullglob
+  for f in "$mb/$slot-"*.json; do
+    shipyard_record_readable "$f" || n=$((n+1))
+  done
+  printf '%s' "$n"
+}
+
 # slot_unsettled <slot> — how many mailbox records for this slot are NOT provably closed.
 #
 # THIS IS A DIFFERENT QUESTION FROM slot_pending, and the difference is the whole point.
@@ -853,10 +872,9 @@ slot_pending() {
 #     acted on is a separate change, not this one.
 #   * a child that writes no record at all is indistinguishable from one with nothing to ask —
 #     there is no evidence to fail closed on.
-#   * the record stays INVISIBLE in the escalation view and in the esc column, which read it
-#     through filters that skip what they cannot parse (#197). This function makes such a slot
-#     survive and say so; it does not make the question answerable, and for a child that is not
-#     merged and finished it changes nothing at all.
+#   * the record cannot be ANSWERED: `shipyard-answer.sh` fails on the same bytes. The escalation
+#     view and the esc column now name it as unreadable (#197), so it is visible for a child
+#     mid-work too, but the remedy is still a human repairing or removing the file.
 #   * the other locks also rest on child-written evidence (the pipeline stage, the PR number, the
 #     screen). Those AUTHORISE a teardown rather than suppress a signal, which is the other half of
 #     the rule; the content gate inside shipyard-down.sh is what stands behind them.
@@ -1033,10 +1051,14 @@ for slot in "${SLOTS[@]}"; do
   pend=$(slot_pending "$slot")
   # The esc COLUMN's count and the teardown's HOLD are different questions and are read from
   # different functions on purpose — see slot_unsettled. A record this report cannot parse raises
-  # the second and not the first, so `esc —` beside a held slot is correct rather than a
-  # contradiction; the HELD block says so in words.
+  # the hold and not the pending count; the column shows it as its own `❓` mark instead (#197),
+  # which is not a pending question and not nothing.
   unsettled=$(slot_unsettled "$slot")
+  badrec=$(slot_unreadable "$slot")
   esc="—"; [ "$pend" != 0 ] && esc="⚠️ $pend"
+  if [ "$badrec" != 0 ]; then
+    if [ "$pend" != 0 ]; then esc="$esc ❓ $badrec"; else esc="❓ $badrec"; fi
+  fi
   total_pend=$((total_pend+pend))
   total_unsettled=$((total_unsettled+unsettled))
 
@@ -1056,7 +1078,7 @@ for slot in "${SLOTS[@]}"; do
         [ -n "$iid" ] && gone_state=$(mr_state "$iid")
         if autodown_consider "$slot" "$iid" "$gone_state" "$gone_stage" "" "$unsettled"; then
           ROWS+=("| $slot | $mr_label | — | 🧹 torn down | $gone_state / $gone_stage | $esc | — | terminal and worktree removed |")
-          SIG+=("$slot|$mr_label|term=0|$gone_state|$gone_stage|$pend|reaped")
+          SIG+=("$slot|$mr_label|term=0|$gone_state|$gone_stage|$pend/$badrec|reaped")
           continue
         fi
         # THE REFUSAL MUST REACH THE SIGNATURE ON THIS ARM TOO. It did not, and the live arm's
@@ -1071,7 +1093,7 @@ for slot in "${SLOTS[@]}"; do
         [ "${#REAP_HELD[@]}" -gt "$gone_held" ] && gone_note="reap-held" ;;
     esac
     ROWS+=("| $slot | $mr_label | — | ⛔ no terminal | — | $esc | — | — |")
-    SIG+=("$slot|$mr_label|term=0|—|—|$pend|$gone_note")
+    SIG+=("$slot|$mr_label|term=0|—|—|$pend/$badrec|$gone_note")
     # Remember WHICH slots this tick concluded were gone. The tail re-asks the backend before it
     # may stop the loop, and the only honest reading of "still enumerated, but I rendered it gone"
     # is that the lookup failed, not that the child ended.
@@ -1143,7 +1165,7 @@ for slot in "${SLOTS[@]}"; do
     # teardown is never silent, and the SIG carries `term=0` — a teardown is news, and it is
     # the one thing --only-changed must not swallow.
     ROWS+=("| $slot | $mr_label | $addr | 🧹 torn down | $state / $stage | $esc | — | terminal and worktree removed |")
-    SIG+=("$slot|$mr_label|term=0|$state|$stage|$pend|reaped")
+    SIG+=("$slot|$mr_label|term=0|$state|$stage|$pend/$badrec|reaped")
     continue
   fi
   # Refused: the gate said no, or the absence could not be corroborated. The count is kept so
@@ -1450,7 +1472,7 @@ for slot in "${SLOTS[@]}"; do
   # bypasses the filter while it holds, so only the signature can make its ending news. `fna=` is
   # there for a FINISHED slot whose agent exited: it gets no 💀 block and no bypass, so without it
   # that death would change nothing the filter sees and the monitor would never print it.
-  SIG+=("$slot|$mr_label|term=1|$state|$stage|$pend|$sig_band|$wait_class|$reap_note|noagent=$noagent|fna=$finished_noagent|unread=$unread")
+  SIG+=("$slot|$mr_label|term=1|$state|$stage|$pend/$badrec|$sig_band|$wait_class|$reap_note|noagent=$noagent|fna=$finished_noagent|unread=$unread")
   :
 done
 
@@ -1976,11 +1998,12 @@ EOF
       fi
       echo "- \`$sl\` — merged, finished and otherwise ready; its teardown is HELD by $n unsettled record(s) in $MAILBOX_DIR:"
       # NAME THE FILES. Without this the block's only remedy was "answer it", which is false for
-      # exactly the records the hold was widened to catch: `shipyard-escalations.sh` skips a
-      # record whose kind it cannot parse, so for an unparseable one the escalation block below
-      # is EMPTY, `shipyard-answer.sh` cannot write it (jq fails on the same bytes), and nothing
-      # named the file. That combination is an unclearable hold announced by two instructions
-      # that cannot be followed — measured — and naming the path is what makes it clearable.
+      # exactly the records the hold was widened to catch: `shipyard-answer.sh` cannot write an
+      # unparseable one (jq fails on the same bytes), and the escalation block below used to skip
+      # it outright. That combination was an unclearable hold announced by two instructions that
+      # cannot be followed — measured — and naming the path is what makes it clearable. The
+      # escalation block now lists such a record as unreadable (#197), but still cannot offer a
+      # reply for it, so the remedy here stays the file.
       # `while read`, not `for … in $( )`: the lines carry spaces (the path plus a parenthesised
       # reason), and word-splitting turned each one into a column of fragments.
       slot_unsettled_files "$sl" | while IFS= read -r hf; do echo "    $hf"; done
@@ -1991,7 +2014,7 @@ EOF
         # The counts differ, so at least one record is unreadable. Say that, rather than the
         # blanket sentence an earlier version printed even when the two agreed.
         echo "  $shown of those are readable escalations; the rest are not."
-        echo "  A record this report cannot parse does NOT appear in the escalation block below"
+        echo "  A record this report cannot parse is listed as unreadable in the escalation block below"
         echo "  and cannot be answered — look at the file named above and repair or remove it (#197)."
       fi
       echo "  Nothing was removed. Tearing it down by hand first destroys the session that asked, and"

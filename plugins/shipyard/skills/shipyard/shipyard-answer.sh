@@ -33,9 +33,16 @@ if [ "${1:-}" = "--list" ]; then
   if [ ${#files[@]} -eq 0 ]; then echo "_no escalations_"; exit 0; fi
   printf '%-22s %-10s %-9s %-9s %s\n' ID SLOT KIND STATUS TEXT
   for f in "${files[@]}"; do
-    # Only a regular file reaches jq: a FIFO matching the glob would block the listing (#253). The
-    # window between this check and jq's open is the read residual #246 deferred.
-    [ -f "$f" ] || continue
+    # Only a readable record reaches jq: a FIFO matching the glob would block the listing (#253),
+    # and a record jq cannot parse used to print no row at all (#197), so a corrupted question was
+    # missing from the one listing that exists to show every escalation. It gets a row saying so,
+    # name `%q`-quoted because the name is written by whoever wrote the file. The window between
+    # the check and jq's open is the read residual #246 deferred.
+    if ! shipyard_record_readable "$f"; then
+      printf '%-22s %-10s %-9s %-9s %s\n' "$(printf '%q' "${f##*/}")" '?' '?' UNREADABLE \
+        'jq cannot read this record — look at the file, then repair or remove it (#197)'
+      continue
+    fi
     jq -r '[.id, .slot, .kind, .status, (.text|gsub("\n";" ")|.[0:60])] | @tsv' "$f" 2>/dev/null \
       | awk -F'\t' '{printf "%-22s %-10s %-9s %-9s %s\n", $1,$2,$3,$4,$5}'
   done
@@ -61,6 +68,15 @@ ANS=$(shipyard_payload "$ANS_RAW") || exit 1
 
 F="$MB/$ID.json"
 [ -f "$F" ] || { echo "error: no such escalation: $ID" >&2; exit 2; }
+# A record jq cannot parse cannot take an answer (the write below needs the same bytes), and read
+# through the filters below it would default to a pending question and end on a bare `write
+# failed`. Say what is actually wrong, and what the remedy is (#197).
+shipyard_record_readable "$F" || {
+  echo "error: $ID cannot be read as a record — jq cannot parse it, so no answer can be written into" >&2
+  echo "       it. If the child is waiting on it, it is waiting on a question nobody can see: look at" >&2
+  echo "       the file, repair or remove it, and reach the child with shipyard-tell.sh instead." >&2
+  exit 1
+}
 
 KIND=$(jq -r '.kind // "question"' "$F" 2>/dev/null)
 ST=$(jq -r '.status // "pending"' "$F" 2>/dev/null)
