@@ -48,6 +48,41 @@ reap_job() {
   return 124
 }
 
+# HANDSHAKES FOR THE ORDERED RACE CASES (#240). Three cases below need a start and a stop to
+# interleave at one exact point, and the lifecycle code already has a delay knob at each point
+# (`sleep "${_SHIPYARD_CONTINUITY_..._DELAY:-0}"`). They used to set the knob to 0.4s and race it
+# with a 0.02s poll or a bare `sleep 0.1`, which orders nothing on a loaded runner: one red CI run
+# came from exactly that. Now the knob is set to `t7-hold:<name>` and this `sleep` turns that one
+# value into a handshake — the job marks that it has REACHED the point and waits there until the
+# case RELEASES it, so the interleaving is established rather than timed. Every other value passes
+# through to the real sleep, and nothing here changes a production code path: the knob is read
+# where it always was, only its value differs. The hold's own ceiling only lets a failing case
+# finish rather than hang; the case's check on `await_hold` is what reds it.
+HOLD_SECS=120
+sleep() {
+  case "${1:-}" in
+    t7-hold:*)
+      local name="${1#t7-hold:}" i
+      : >"$TMP/hold-$name.reached"
+      for ((i = 0; i < HOLD_SECS * 20; i++)); do
+        [ -e "$TMP/hold-$name.release" ] && return 0
+        command sleep 0.05
+      done
+      return 0 ;;
+    *) command sleep "$@" ;;
+  esac
+}
+# await_hold <name> — yes once a job has reached the hold, no if it never does (generous ceiling).
+await_hold() {
+  local i
+  for ((i = 0; i < HOLD_SECS * 20; i++)); do
+    [ -e "$TMP/hold-$1.reached" ] && { echo yes; return; }
+    command sleep 0.05
+  done
+  echo no
+}
+release_hold() { : >"$TMP/hold-$1.release"; }
+
 runtime_state_paths() {
   find "$_SHIPYARD_CONTINUITY_DIR" -mindepth 1 ! -name continuity-generation -print 2>/dev/null
 }
@@ -488,7 +523,7 @@ _SHIPYARD_CONTINUITY_PUBLISH_DELAY=2
 export _SHIPYARD_CONTINUITY_PUBLISH_DELAY
 shipyard_continuity_start agterm >/dev/null 2>&1 & interrupted_starter=$!
 n=0
-while ! find "$_SHIPYARD_CONTINUITY_DIR" -name 'continuity-*.log' -print -quit | grep -q . \
+while [ -z "$(find "$_SHIPYARD_CONTINUITY_DIR" -name 'continuity-*.log' -print -quit)" ] \
   && [ "$n" -lt 20 ]; do
   sleep 0.05
   n=$((n + 1))
@@ -576,15 +611,11 @@ orphan_reaper_paths=$(runtime_state_paths)
 check "" "$orphan_reaper_paths" "lifecycle entry cleans an interrupted legacy reaper"
 
 reset_fake
-_SHIPYARD_CONTINUITY_ADMISSION_DELAY=0.4
+_SHIPYARD_CONTINUITY_ADMISSION_DELAY=t7-hold:admission
 export _SHIPYARD_CONTINUITY_ADMISSION_DELAY
 shipyard_continuity_start agterm >"$TMP/admission-start" 2>&1 & admission_start=$!
-n=0
-while ! find "$_SHIPYARD_CONTINUITY_DIR" -name 'continuity-start-*.intent' -print -quit | grep -q . \
-  && [ "$n" -lt 20 ]; do
-  sleep 0.02
-  n=$((n + 1))
-done
+# The hold sits after the intent is written and before the lock is taken: the admitted window.
+check yes "$(await_hold admission)" "admitted start reached its pre-lock window"
 admission_intent=$(find "$_SHIPYARD_CONTINUITY_DIR" -name 'continuity-start-*.intent' -print -quit)
 admission_owner=${admission_intent##*/continuity-start-}
 admission_owner=${admission_owner%%-*}
@@ -596,6 +627,7 @@ fi
 check yes "$admission_owner_alive" "start intent names the live starter process"
 admission_stop_rc=0
 shipyard_continuity_stop_all || admission_stop_rc=$?
+release_hold admission
 admission_start_rc=0; reap_job "$admission_start" || admission_start_rc=$?
 check 0 "$admission_stop_rc" "stop cancels a start admitted before lock acquisition"
 check 0 "$admission_start_rc" "cancelled admitted start exits cleanly"
@@ -604,18 +636,16 @@ check "" "$admission_files" "stop-first admission race cannot publish late watch
 unset _SHIPYARD_CONTINUITY_ADMISSION_DELAY
 
 reset_fake
-_SHIPYARD_CONTINUITY_STOP_AFTER_SWEEP_DELAY=0.4
+_SHIPYARD_CONTINUITY_STOP_AFTER_SWEEP_DELAY=t7-hold:sweep
 export _SHIPYARD_CONTINUITY_STOP_AFTER_SWEEP_DELAY
 shipyard_continuity_stop_all >"$TMP/sweeping-stop" 2>&1 & sweeping_stop=$!
-n=0
-while [ ! -f "$_SHIPYARD_CONTINUITY_DIR/continuity-stopping" ] && [ "$n" -lt 20 ]; do
-  sleep 0.02
-  n=$((n + 1))
-done
+# The hold sits after the stop's first sweep, with its marker live and its lock held.
+check yes "$(await_hold sweep)" "stop reached its post-sweep window"
 if [ -f "$_SHIPYARD_CONTINUITY_DIR/continuity-stopping" ]; then sweep_seen=yes; else sweep_seen=no; fi
 check yes "$sweep_seen" "stop sweep synchronization point is observed"
 sweep_start_rc=0
 shipyard_continuity_start agterm >"$TMP/during-sweep-start" 2>&1 || sweep_start_rc=$?
+release_hold sweep
 sweeping_stop_rc=0; reap_job "$sweeping_stop" || sweeping_stop_rc=$?
 check 0 "$sweeping_stop_rc" "stop with active admission marker succeeds"
 check 0 "$sweep_start_rc" "start during stop sweep is cancelled cleanly"
@@ -624,12 +654,15 @@ check "" "$sweep_files" "intent created during stop sweep cannot publish late st
 unset _SHIPYARD_CONTINUITY_STOP_AFTER_SWEEP_DELAY
 
 reset_fake
-_SHIPYARD_CONTINUITY_BEFORE_INTENT_DELAY=0.4
+_SHIPYARD_CONTINUITY_BEFORE_INTENT_DELAY=t7-hold:pre-intent
 export _SHIPYARD_CONTINUITY_BEFORE_INTENT_DELAY
 shipyard_continuity_start agterm >"$TMP/pre-intent-start" 2>&1 & pre_intent_start=$!
-sleep 0.1
+# The hold sits after the start has read the generation and before it records its intent, so the
+# whole stop below runs inside that window — which is the race this case is about.
+check yes "$(await_hold pre-intent)" "pre-intent start reached its window"
 pre_intent_stop_rc=0
 shipyard_continuity_stop_all || pre_intent_stop_rc=$?
+release_hold pre-intent
 pre_intent_start_rc=0; reap_job "$pre_intent_start" || pre_intent_start_rc=$?
 check 0 "$pre_intent_stop_rc" "stop advances admission generation during pre-intent start"
 check 0 "$pre_intent_start_rc" "old-generation start is cancelled cleanly"
