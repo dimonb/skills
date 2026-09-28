@@ -28,7 +28,8 @@ check() {
 # finished, which still returns its real status. `jobs -pr` rather than `kill -0`: it reads this
 # shell's own job table, so a pid the kernel has reused for another process cannot read as the
 # job. A job still running at the ceiling is a named, counted failure, is SIGKILLed and reaped, and
-# returns 124 so the caller's own rc check reds too. The pid is always the caller's own `$!`, never a list read from elsewhere.
+# returns 124 so the caller's own rc check reds too. The pid is always the caller's own `$!`,
+# never a list read from elsewhere.
 # The ceiling is only ever paid by a failing case, so it is sized for a loaded box, not for speed.
 REAP_SECS=120
 reap_job() {
