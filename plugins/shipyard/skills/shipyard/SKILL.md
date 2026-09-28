@@ -198,14 +198,24 @@ and prints `SLOT:<slot>` as its last line — **record the slots, the report nee
 
 Exit codes: `0` started, `3` a terminal for that numeric slot already exists (do not
 start a duplicate — look inside with the command the error prints), `1`/`2`
-environment/argument error — `2` includes a slot name `shipyard_slot_check` refuses (only
-letters, digits, `-` and `_`, at most 59 characters, so the worktree name stays within the
-agent's limit), `4` the admission gate refused on the concurrency cap, `5` the admission
+environment/argument error — `2` includes a slot name `shipyard_slot_check` refuses (the
+rule and its length limit are stated at that function in `shipyard-backend.sh`: letters,
+digits, `-` and `_`, starting with a letter or a digit, and short enough that the worktree
+name stays within the agent's limit), `4` the admission gate refused on the concurrency cap, `5` the admission
 gate refused on memory pressure, `6` the admission gate could not count the live slots,
 `7` the backend could not say whether the slot is already taken (it did not answer, or this
 process resolved a different backend from the one the fleet was launched on). `6` and `7`
 are "cannot tell", not "full": fix what the message names and re-run — never
 `SHIPYARD_FORCE=1` past a `7`, which that knob does not override.
+
+**One mailbox runs one backend at a time.** A launch that resolves a backend other than the one
+the fleet's container pin names is refused (`7`, or `6` from the admission gate), whether it got
+there through `SHIPYARD_BACKEND=auto` or by asking for the other backend explicitly: the pins cannot
+tell two live fleets from one fleet and a failed probe, and a second pin disarms the check that
+would catch the second case. The refusal prints what to do, including the only safe order for
+clearing a pin whose fleet has ended — confirm with `shipyard-down.sh --list` under the pinned
+backend that nothing is live, tear down under it, and remove the pin file by hand only if it
+survives that. Never remove a pin while its fleet may be live. A dry run writes no pin.
 
 **The admission gate — refuse a launch this machine cannot take.** Before it creates any
 worktree or terminal, `shipyard-launch.sh` runs two cheap checks, because an uncapped fleet

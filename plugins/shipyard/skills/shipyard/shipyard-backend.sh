@@ -463,6 +463,33 @@ shipyard_signal_class() {
   return "$crc"
 }
 
+# shipyard_elsewhere_remedy — the operator's next move after an `elsewhere` refusal of a LAUNCH, on
+# stdout, one indented line each. The launch dedup and the admission gate both refuse on it, so the
+# words live here once.
+#
+# ONE MAILBOX RUNS ONE BACKEND AT A TIME. Its pins cannot tell two live fleets from one fleet and a
+# failed probe (#132), and a second backend's pin beside the first disarms the `elsewhere`
+# corroboration every reader relies on — so a launch is refused whether the other backend came from
+# `auto` or was asked for explicitly, and the wording says which of the two this was. A stale pin is
+# cleared only in the order below: a pin removed while its fleet is live is #61 again.
+shipyard_elsewhere_remedy() {
+  local pin now d mb
+  pin=$(shipyard_backend_pinned_elsewhere) || pin=""
+  now=$(shipyard_backend)
+  d=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
+  mb=${DRV_CONTAINER_PIN_DIR:-<mailbox>}
+  case "${SHIPYARD_BACKEND:-auto}" in
+    auto) echo "  SHIPYARD_BACKEND=auto decides per process, so one failed probe sent this launch to $now." ;;
+    *)    echo "  This run asked for $now explicitly, but a mailbox runs one backend at a time and this one's fleet is on ${pin:-the other backend}." ;;
+  esac
+  [ -n "$pin" ] || return 0
+  echo "  Launch on the fleet's backend: SHIPYARD_BACKEND=$pin."
+  echo "  If that fleet has really ended, its pin is stale. Clear it in this order, never while that fleet may be live:"
+  echo "    1. SHIPYARD_BACKEND=$pin bash $d/shipyard-down.sh --list   — confirm no ship-* terminal is live on $pin;"
+  echo "    2. SHIPYARD_BACKEND=$pin bash $d/shipyard-down.sh <slot> ...  — tear down what is left; the last one clears the pin;"
+  echo "    3. only if the pin is still there after that: remove $mb/container-$pin by hand."
+}
+
 # shipyard_absence_report <slot> — say, on stderr, why that slot has no terminal.
 #
 # Returns 0 when the absence is CORROBORATED (the backend answered and does not have it — the

@@ -155,10 +155,8 @@ done
 # unless enumeration PROVED the fleet empty (`shipyard_continuity_cleanup_last_slot` returns 2 for
 # "could not prove"), so the report is the second consumer to ask, not the first.
 #
-# It is not the last, either: `shipyard_admission_slot_count` still pipes `shipyard_slots` into
-# `wc -l` and drops the status, so the concurrency cap reads an unanswerable question as "nothing
-# running". That is the same defect at a different gate, out of scope here and filed on its own —
-# recorded so a later reader does not take this block as the end of the sweep.
+# It is not the last, either: the launcher's admission count and dedup ask it too, and refuse the
+# launch on an unanswered or misdirected enumeration (see the contract note at `shipyard_slots`).
 #
 # It is also the same distinction the stall classifier draws one level down. `shipyard_wait_state`
 # asks why a SLOT yields no signal and refuses to call "not moving" death; this asks why the FLEET

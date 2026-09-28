@@ -116,9 +116,7 @@ shipyard_admission_report() {
   if ! count=$(shipyard_admission_slot_count); then
     printf 'admission: REFUSED (slot count unavailable) — %s.\n' "${count#*"$TAB"}"
     case "${count%%"$TAB"*}" in
-      elsewhere)
-        printf '  SHIPYARD_BACKEND=auto decides per process; pin the fleet'"'"'s backend for this launch: SHIPYARD_BACKEND=%s.\n' \
-          "$(shipyard_backend_pinned_elsewhere)" ;;
+      elsewhere) shipyard_elsewhere_remedy ;;
       *)
         printf '  Start the terminal backend (agterm: `agtermctl version` answers; tmux: `tmux ls`) and re-run.\n' ;;
     esac

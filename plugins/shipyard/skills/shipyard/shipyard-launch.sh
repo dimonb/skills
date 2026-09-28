@@ -144,9 +144,7 @@ refuse_unresolved() {  # <slot>
   echo "       Launching anyway could start a second agent in .claude/worktrees/ship-$1 while the" >&2
   echo "       first is still working there." >&2
   case "${UNRESOLVED%%"$TAB"*}" in
-    elsewhere)
-      echo "       SHIPYARD_BACKEND=auto decides per process; pin the fleet's backend and re-run:" >&2
-      echo "       SHIPYARD_BACKEND=$(shipyard_backend_pinned_elsewhere)" >&2 ;;
+    elsewhere) shipyard_elsewhere_remedy | sed 's/^  /       /' >&2 ;;
     *)
       echo "       Start the terminal backend (agterm: \`agtermctl version\` answers; tmux: \`tmux ls\`)" >&2
       echo "       and re-run." >&2 ;;
@@ -185,8 +183,8 @@ WORKTREE="$ROOT/.claude/worktrees/$NAME"
 # Refuse a launch this machine cannot take, BEFORE creating any worktree or terminal. Two
 # gates, each with a distinct exit code and an actionable message: a concurrency cap
 # (SHIPYARD_MAX_SLOTS, counting live ship-* slots; a count that cannot be taken refuses too)
-# and, on macOS, a memory-pressure floor
-# (SHIPYARD_MEM_MIN_FREE_PCT via `memory_pressure`; a no-op where that detector is absent).
+# and, on macOS, a memory-pressure floor (SHIPYARD_MEM_MIN_FREE_PCT via `memory_pressure`; a
+# no-op where that detector is absent).
 # See shipyard-admission.sh. Evaluate once here; SHIPYARD_DRY reports the decision below
 # without enforcing it, so a dry run always shows what the gate would do.
 ADMISSION=$(shipyard_admission_report); ADMISSION_RC=$?
@@ -205,8 +203,15 @@ fi
 # Pinned first, a launch that resolved the other backend wrote its own pin beside the fleet's, the
 # two then agreed with either resolution, and the gates admitted exactly the launch they exist to
 # refuse. Until here the gates resolve the container the same way without writing it down.
+#
+# A dry run resolves it the same way and writes nothing: a pin it left behind would name a fleet
+# that was never launched, and the gates above would then refuse every launch on the other backend.
 shipyard_mailbox_ensure >/dev/null 2>&1
-CONTAINER=$(shipyard_container_pin) || { echo "error: cannot resolve the container name" >&2; exit 1; }
+if [ "${SHIPYARD_DRY:-}" = 1 ]; then
+  CONTAINER=$(shipyard_container) || { echo "error: cannot resolve the container name" >&2; exit 1; }
+else
+  CONTAINER=$(shipyard_container_pin) || { echo "error: cannot resolve the container name" >&2; exit 1; }
+fi
 _SHIPYARD_CONTAINER="$CONTAINER"
 
 # --- first prompt --------------------------------------------------------------

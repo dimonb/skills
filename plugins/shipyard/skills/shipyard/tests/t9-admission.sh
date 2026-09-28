@@ -7,9 +7,9 @@
 # WHAT IS NOT COVERED, so a green run is never read as more than it is: t5 drives
 # shipyard-launch.sh as a dry run for its dedup and slot-name refusals, but no test drives the
 # gate's runtime effect in the launcher (that it really exits 4/5/6 on a refusal, that SHIPYARD_DRY
-# really prints the decision and still exits 0) end to end. Section 7 guards the WIRE statically instead — the report is evaluated, the enforcing exit
-# exists, and it precedes worktree/terminal creation — mirroring how t7 guards its own wire in the
-# same file. That catches the silent-removal mutation; it does not replace an integration test.
+# really prints the decision and still exits 0) end to end. Section 7 guards the WIRE statically
+# instead — the report is evaluated, the enforcing exit exists, and it precedes worktree/terminal
+# creation — mirroring how t7 guards its own wire in the same file. That catches the silent-removal mutation; it does not replace an integration test.
 #
 # Everything is a PURE read over environment variables and three faked CLIs (git, agtermctl,
 # memory_pressure) FIRST on PATH — NO live terminal, no real repo, no network, and crucially no
@@ -168,6 +168,11 @@ PINS="$TMP/pins"; mkdir -p "$PINS"; : >"$PINS/container-tmux"
 out=$( export SHIPYARD_BACKEND=agterm FAKE_AT_TREE="$TREE0" DRV_CONTAINER_PIN_DIR="$PINS"; . "$BACKEND"; . "$ADMISSION"; shipyard_admission_report ); rc=$?
 ok "a count from another backend's container -> refuse (rc 6)" 6 "$rc"
 names "...naming the backend to pin" "SHIPYARD_BACKEND=tmux" "$out"
+names "...in the words for an explicit backend" "asked for agterm explicitly" "$out"
+# The same refusal when `auto` resolved agterm (the fake socket answers `version`) says so instead.
+out=$( unset SHIPYARD_BACKEND; export FAKE_AT_TREE="$TREE0" DRV_CONTAINER_PIN_DIR="$PINS"; . "$BACKEND"; . "$ADMISSION"; shipyard_admission_report ); rc=$?
+ok "auto resolving the other backend -> refuse (rc 6)" 6 "$rc"
+names "...in auto's words" "SHIPYARD_BACKEND=auto decides per process" "$out"
 # Control: the same pins with this backend's own beside them disagree with nothing, and admit.
 : >"$PINS/container-agterm"
 rc=0; ( export SHIPYARD_BACKEND=agterm FAKE_AT_TREE="$TREE0" DRV_CONTAINER_PIN_DIR="$PINS"; . "$BACKEND"; . "$ADMISSION"; shipyard_admission_report ) >/dev/null 2>&1 || rc=$?

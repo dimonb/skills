@@ -98,7 +98,8 @@ check 1 "$(shipyard_agent_prepare_worktree codex "$TMP/repo" "$TMP/not-a-worktre
 # Three knobs for the dedup and slot-name cases further down, each defaulting to the plain launch:
 #   T5_ARG   the launch argument (default `#42`);
 #   T5_TMUX  `answer` (default): tmux says no server is running, which is an ANSWERED, empty
-#            backend; `down`: it fails saying nothing, which is an unanswered one;
+#            backend; `down`: it fails saying nothing, which is an unanswered one; `listed`: the
+#            enumeration (`-F '#{window_name}'`) lists ship-42 while the per-slot lookup fails;
 #   T5_PIN   a backend whose container pin to plant first, as a fleet launched there would leave.
 dry_launch() { # <skill-dir> <repo> [mailbox-name-to-plant-a-directory-at] -> output, then "rc=<n>"
   local rc=0 out
@@ -111,7 +112,13 @@ dry_launch() { # <skill-dir> <repo> [mailbox-name-to-plant-a-directory-at] -> ou
          # fake must ANSWER: the launch dedup refuses a backend that does not (#140), so a fake that
          # fails silently would be refused before any check below reached what it is about.
          export T5_TMUX="${T5_TMUX:-answer}"
-         tmux() { [ "$T5_TMUX" = down ] || echo 'no server running on /tmp/t5-fake' >&2; return 1; }
+         tmux() {
+           case "$T5_TMUX" in
+             down)   return 1 ;;
+             listed) [ "${!#}" = '#{window_name}' ] && { echo ship-42; return 0; }; return 1 ;;
+           esac
+           echo 'no server running on /tmp/t5-fake' >&2; return 1
+         }
          claude() { :; }; export -f tmux claude
          # The two env knobs replace the per-kind defaults these checks are about.
          unset CLAUDECODE CLAUDE_CODE_SESSION_ID CODEX_SESSION_ID CODEX_THREAD_ID \
@@ -161,13 +168,25 @@ check no "$(has "$TMP/launch-down/.git/ship-escalations/container-tmux")" "...no
 # evidence, and the launch used to write its own tmux pin beside it before asking anything.
 out=$(T5_PIN=agterm dry_launch "$TMP/skill-ok" "$TMP/launch-elsewhere")
 check 7 "$(rc_of "$out")" "a fleet pinned on the other backend refuses the launch (rc 7)"
-check 1 "$(printf '%s' "$out" | grep -c 'SHIPYARD_BACKEND=agterm')" "...naming the backend to pin"
+check 1 "$(printf '%s' "$out" | grep -c 'Launch on the fleet.s backend: SHIPYARD_BACKEND=agterm')" "...naming the backend to pin"
+check 1 "$(printf '%s' "$out" | grep -c 'asked for tmux explicitly')" "...in the words for an explicit backend, not auto's"
+check 1 "$(printf '%s' "$out" | grep -c 'SHIPYARD_BACKEND=agterm bash .*/shipyard-down.sh --list')" \
+  "...and the safe order for clearing a stale pin starts with the listing under the pinned backend"
 check no "$(has "$TMP/launch-elsewhere/.git/ship-escalations/container-tmux")" "...without writing a second pin first"
 out=$(T5_PIN=agterm T5_TMUX=down SHIPYARD_FORCE=1 dry_launch "$TMP/skill-ok" "$TMP/launch-forced")
 check 7 "$(rc_of "$out")" "SHIPYARD_FORCE does not override not knowing"
 # Control: the fleet's own backend pinned, answered and empty, launches.
 out=$(T5_PIN=tmux dry_launch "$TMP/skill-ok" "$TMP/launch-samepin")
 check 0 "$(rc_of "$out")" "control: pinned on this backend, answered and empty -> launches"
+# The narrowest blip: the backend answers the enumeration and still lists the slot, and only the
+# per-slot lookup fails. That slot is taken, not free.
+out=$(T5_TMUX=listed dry_launch "$TMP/skill-ok" "$TMP/launch-listed")
+check 3 "$(rc_of "$out")" "a slot the backend still lists is taken even when its lookup fails (rc 3)"
+check 1 "$(printf '%s' "$out" | grep -c 'lists ship-42, though its terminal lookup failed')" "...saying so"
+check no "$(has "$TMP/launch-listed/.git/ship-escalations/launch-42.sh")" "...and writes no launcher"
+# A dry run writes no container pin: one left behind would name a fleet that never launched, and
+# the dedup would then refuse every launch on the other backend.
+check no "$(has "$TMP/launch-ok/.git/ship-escalations/container-tmux")" "a dry run writes no container pin"
 
 # --- a slot name is validated before anything is made from it (#198) --------------------------
 # Multi-line free text. The old sed slug ran per line, so the newline reached the launcher's
