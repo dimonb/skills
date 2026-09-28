@@ -87,6 +87,16 @@ ok "B: ...so its notice went to the resolved mailbox"  yes "$(present "$REAL_MB/
 OTHER="$ROOT/other"; mkdir -p "$OTHER"; ( cd "$OTHER" && git init -q . )
 ( export GIT_DIR="$OTHER/.git"; close_unresolved "$GD/council/inherited" "$REPO" )
 ok "B: an inherited GIT_DIR does not make it ad hoc"   no "$(present "$GD/council/inherited/mailbox")"
+# Which shared mailbox is policy_mailbox_dir's call, unchanged by #178: it follows the caller's git
+# context, and an exported GIT_DIR is part of that context.
+ok "B: ...and its notice still reached a shared mailbox" yes "$(present "$OTHER/.git/ship-escalations/council-inherited-1.json")"
+# A per-worktree git dir is not a common dir. `up` never puts a room there (room_base uses the
+# common dir), so a room there was built by hand and is ad hoc.
+( git -C "$REPO" -c user.name=t -c user.email=t@t commit -q --allow-empty -m init \
+  && git -C "$REPO" worktree add -q "$ROOT/wt" ) || { echo "t32: worktree setup failed" >&2; exit 1; }
+WGD="$GD/worktrees/wt"; mkdir -p "$WGD/council"
+close_unresolved "$WGD/council/perwt" "$REPO"
+ok "A: a room under a per-worktree git dir is ad hoc"  yes "$(present "$WGD/council/perwt/mailbox/council-perwt-1.json")"
 
 # --- C. the explicit override wins ------------------------------------------------------------------
 RC="$ROOT/scratch/explicit"; MC="$ROOT/explicit-mb"

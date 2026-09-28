@@ -214,9 +214,11 @@ export COUNCIL_ROOM
 # under `safe.bareRepository=explicit` (the common dir of a bare-repo-with-worktrees layout), an
 # inherited GIT_DIR answers about some other repository, and a `.git` file planted inside the git
 # dir redirects discovery. Each of those made a room `up` had created read as ad hoc, so its
-# escalations stopped reaching the supervisor. What remains: a seat that replaces `council/` with
-# a symlink to somewhere else moves every room's physical path, and those rooms then read ad hoc.
-# That takes a write inside the git dir itself, the same reach that could delete the mailbox.
+# escalations stopped reaching the supervisor. What remains is any write INSIDE the git dir, the
+# same reach that could delete the mailbox outright. Measured examples: replacing `council/` or a
+# room directory with a symlink (the physical path moves, so the room reads ad hoc); a `commondir`
+# file naming another repository (git then reports that as the common dir, and it is not $gd);
+# and breaking the repo's config or HEAD, which also breaks git for everyone and so shows itself.
 _room_is_supervised() {
   local r parent gd common
   r=$(cd "$1" 2>/dev/null && pwd -P) || return 1
@@ -248,8 +250,9 @@ case "$VERB" in
   claims) . "$SKILL/lib/verbs.sh"; v_claims "$@" ;;
   verdict) . "$SKILL/lib/verbs.sh"; v_verdict "$@" ;;
   # `status` is a reading verb that also WRITES on one path: a floor held past the stall threshold
-  # pushes a de-duplicated notice into the shared escalation mailbox, under the key of whichever
-  # tier it reached (see _stall_escalate). It asks such a seat's terminal what it is doing, through
+  # pushes a de-duplicated notice into the room's escalation mailbox (the shared one for a
+  # supervised room, see #178 above), under the key of whichever tier it reached (see
+  # _stall_escalate). It asks such a seat's terminal what it is doing, through
   # the two shared modules that already answer that for shipyard — lib/policy.sh for the
   # disposition, the operator sentence and the mailbox, lib/agent-adapters.sh for what a client
   # renders, which kinds that read is evidenced for, and whether a turn is in flight.

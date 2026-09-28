@@ -74,7 +74,7 @@ ok "3: an emptied snapshot still prints the proposal" yes "$(has "$c" "⊘ a-1 (
 ok "3: ...and every late objection"                   yes "$(has "$c" "⊘ b-3 (b) object:")"
 # The status block is the output an operator watches, so late claims are shown there too.
 s=$(bash "$CLI" status 2>/dev/null)
-ok "3: status shows the late claims too"              yes "$(has "$s" "⊘ after the close b-3 (b) object:")"
+ok "3: status shows the late claims too"              yes "$(has "$s" "⊘ not in the record: b-3 (b) object:")"
 printf 'not json' > "$ROOM/board/closed-over"
 c=$(bash "$CLI" claims)
 ok "3: an unreadable snapshot falls back to the whole log" 2 "$(open_n)"
@@ -104,7 +104,7 @@ ok "4: ...and the late objection is not OPEN"        1 "$(open_n)"
 COUNCIL_ME=a bash "$CLI" decide --force >/dev/null 2>&1
 ok "4: a re-force records the late claims"           yes "$(has "$(cat "$ROOM/board/decision.md")" "No, by hand.")"
 ok "4: ...and then counts them, as the record does"  '["b-3"]' "$(bash "$CLI" claims --raw | jq -c '[.open[].id]')"
-# The record's own Objections section, not only its transcript: the re-force builds its graph
+# The record's Objections and Left-open sections, not only its transcript: the re-force builds its graph
 # over the whole log, so the late withdraw closes b-1 there and b-3 is left open.
 rec=$(cat "$ROOM/board/decision.md")
 ok "4: the rewritten record closes b-1 by the withdraw"  yes "$(has "$rec" 'closed by `b-2` — withdraw from b')"
@@ -122,6 +122,30 @@ c=$(bash "$CLI" claims)
 ok "4b: the dropped proposal is late"                yes "$(has "$c" "⊘ a-1 (a) propose: P.")"
 ok "4b: ...and so is the objection it orphaned"      yes "$(has "$c" "⊘ b-1 (b) object: Objection kept in the snapshot.")"
 ok "4b: ...and the amend that orphaned in turn"      yes "$(has "$c" "⊘ c-1 (c) amend: Amend of it.")"
+# `.id` is the message's own claim, so the set is worked in positions. A later copy of a dropped
+# proposal's id, kept in the snapshot, must not stand in for it.
+ROOM="$COUNCIL_TEST_ROOT/t33q"; mkroom "$ROOM" a b c; export COUNCIL_ROOM="$ROOM"
+raw_msg a 1 1 0 propose '[]'       "P."
+raw_msg b 1 2 1 object  '["a-1"]'  "Objection."
+jq -n '{id:"a-1",from:"c",lamport:3,deps:{},act:"msg",refs:[],to:["*"],hand:true,turn:null,round:null,text:"a copy of the id",created_at:"t",sent_ms:0}' > "$ROOM/lane/c/000001.json"
+printf 'unresolved' > "$ROOM/board/status"; printf '# record\n' > "$ROOM/board/decision.md"
+printf '[{"from":"b","id":"b-1"},{"from":"c","id":"a-1"}]\n' > "$ROOM/board/closed-over"
+ok "4b: a copied id does not hide the orphaned objection" yes "$(has "$(bash "$CLI" claims)" "⊘ b-1 (b) object: Objection.")"
+# A LATER message cannot be what an earlier one attached to. A ref to an id that did not exist at
+# the close, filled afterwards by a legal --hand send, leaves an unedited record's claim in place.
+ROOM="$COUNCIL_TEST_ROOT/t33r"; mkroom "$ROOM" a b; export COUNCIL_ROOM="$ROOM"
+say_floor propose '[]' "P." >/dev/null
+COUNCIL_ME=b bash "$CLI" send --hand --act object --refs '["a-1","b-2","zz-9"]' "Refs a future id and a dangling one." >/dev/null
+COUNCIL_ME=a bash "$CLI" decide --force >/dev/null 2>&1
+ok "4b: setup — the record left b-1 open"            '["b-1"]' "$(bash "$CLI" claims --raw | jq -c '[.open[].id]')"
+COUNCIL_ME=b bash "$CLI" send --hand --act notice "This takes the id b-2." >/dev/null
+ok "4b: a later message with that id changes nothing" '["b-1"]' "$(bash "$CLI" claims --raw | jq -c '[.open[].id]')"
+ok "4b: ...and moves nothing to late"                 '[]' "$(bash "$CLI" claims --raw | jq -c '[.late[].id]')"
+# A post-close message that REUSES a kept (from, id) is not part of the record: only the first
+# message carrying a snapshot pair is. Here it would otherwise overrule the open objection.
+jq -n '{id:"a-1",from:"a",lamport:99,deps:{},act:"overrule",refs:["b-1"],to:["*"],hand:true,turn:null,round:null,text:"reused id",created_at:"t",sent_ms:0}' > "$ROOM/lane/a/000009.json"
+ok "4b: a reused kept id does not close b-1"          '["b-1"]' "$(bash "$CLI" claims --raw | jq -c '[.open[].id]')"
+ok "4b: ...it is listed late instead"                 yes "$(has "$(bash "$CLI" claims)" "⊘ a-1 (a) overrule: reused id")"
 
 # --- 5. an amend closes objections only on the proposal it amends (re-homed from #295) -------------
 ROOM="$COUNCIL_TEST_ROOT/t33a"; mkroom "$ROOM" a b c; export COUNCIL_ROOM="$ROOM"

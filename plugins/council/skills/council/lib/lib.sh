@@ -1624,7 +1624,8 @@ c_conflicts() {
 # "sent". `relaunch` and `down` also leave traces in the room, and they are not counted here:
 # neither sends anything to a seat.
 #
-# In the room's mailbox (the shared one for a supervised room; council.sh, #178), beside the status signature `_status_sigfile` keeps there, for the same
+# In the room's mailbox (the shared one for a supervised room; council.sh, #178), beside the
+# status signature `_status_sigfile` keeps there, for the same
 # reason that file lives there — and with the same caveat, because nothing confines a participant
 # (SKILL.md, "The room is not a trust boundary"): a seat can write these files too, and any caller
 # can run `say`. What either buys is stated at the reader, `_stall_sent_note` in verbs.sh. Fails

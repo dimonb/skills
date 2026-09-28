@@ -1914,12 +1914,12 @@ v_status() {
     [ -n "$quiet_line" ] && printf '%s\n' "$quiet_line"
     [ -n "$round_line" ] && printf '%s\n' "$round_line"
     printf '%s' "$g" | jq -r '
-      if (.live|length) == 0 then "on the table: nothing" else (.live[] | "on the table: \(.id) from \(.from) — \(.current_text[0:90])") end,
-      (if (.open|length) > 0 then (.open[] | "  ✗ OPEN \(.id) (\(.from)): \(.text[0:90])") else "  no open objections" end),
+      if (.live|length) == 0 then "on the table: nothing" else (.live[] | "on the table: \(.id) from \(.from) — \((.current_text | tostring)[0:90])") end,
+      (if (.open|length) > 0 then (.open[] | "  ✗ OPEN \(.id) (\(.from)): \((.text | tostring)[0:90])") else "  no open objections" end),
       # A closed room lists what is outside the snapshot of its record (#176). The watched output
       # is this block, not `claims`, so a claim the snapshot leaves out is shown here too, rather
       # than quietly dropping out of the OPEN lines it would have occupied before.
-      (.late[]? | "  ⊘ after the close \(.id) (\(.from)) \(.act): \(.text[0:90]) (council.sh claims)")'
+      (.late[]? | "  ⊘ not in the record: \(.id) (\(.from)) \(.act): \((.text | tostring)[0:90]) (council.sh claims)")'
     printf 'alarms:%s\n' "${alarms:- —}"
     printf 'last messages:\n'
     v_transcript | tail -3 | sed 's/^/  /'
@@ -2297,8 +2297,9 @@ v_decide() {
     return 1
   }
   # ESC-04: an unresolved close is council's needs-human signal — the room could not converge, so
-  # a person has to look. Route it to the shared escalation mailbox (the one shipyard's reporter
-  # already reads) as a fire-and-forget notice, so a council escalation surfaces alongside ship's
+  # a person has to look. Route it to the room's escalation mailbox as a fire-and-forget notice.
+  # For a supervised room that is the shared one shipyard's reporter already reads; an ad hoc room
+  # keeps its own (council.sh, #178). So a supervised room's escalation surfaces alongside ship's
   # from any worktree. This is the ONLY push channel council has ever had; the decision record and
   # board/status remain exactly as before, so a supervisor that polls the room still works.
   # Fire only on the FIRST close that lands unresolved (prev_status != unresolved), so re-forcing

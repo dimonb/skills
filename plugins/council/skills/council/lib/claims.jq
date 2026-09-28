@@ -49,22 +49,38 @@
 #
 # THE KEPT SET IS CLOSED UNDER ITS REFERENCES, and that is what makes the sentence above true for a
 # PARTIAL snapshot and not only for an empty one. An objection is printed under its proposal and an
-# amend under its owner, so a snapshot that kept `b-1` and dropped the `a-1` it objects to used to
+# amend under its owner. So a snapshot that kept `b-1` and dropped the `a-1` it objects to used to
 # print `b-1` nowhere and count it nowhere: one edit of the file hid an objection the record left
-# open. So a kept message that references a message of the log which is NOT kept is late too, and
-# that is repeated until nothing moves, because moving one can orphan the next (an amend of that
-# objection). A reference to an id no message in the log carries changes nothing: it was dangling
-# before the close as well.
+# open. Now a kept message is late too when one of its refs names a message that is NOT kept and
+# comes EARLIER in the canonical order (the order this graph is fed in). That is repeated until
+# nothing moves, because moving one can orphan the next (an amend of that objection).
+#
+# The set is worked in POSITIONS, never in ids, because `.id` is the message's own claim and
+# nothing makes it unique. Two things follow, each of which an id-keyed version got wrong:
+#   * a snapshot pair keeps only its FIRST message in that order, so a later message that reuses a
+#     kept (from, id) is late rather than silently part of the record;
+#   * a ref orphans only through an EARLIER dropped message. A copy of a dropped proposal's id in
+#     another lane therefore still orphans the objection. A ref to an id that first appears LATER
+#     (a typo, or a guess at a seat's next id, then filled by a legal `--hand` send after the
+#     close) cannot: a message cannot have attached to one sent after it. Without this, one such
+#     send moved a claim of an unedited record to `late`.
 ($closed // null) as $co
-| def _in_snapshot: . as $x | any($co[]; .from == $x.from and .id == $x.id);
-  def _closed_under($ids): ([ .[].id ]) as $kept
-    | ( map(select(all((.refs // [])[]; (IN($ids[]) | not) or IN($kept[])))) ) as $next
-    | if ($next | length) == length then . else ($next | _closed_under($ids)) end;
+| def _pair_in_snapshot: . as $x | any($co[]; .from == $x.from and .id == $x.id);
 . as $all
-| (if $co == null then $all
-   else [ $all[] | select(_in_snapshot) ] | _closed_under([ $all[].id ]) end) as $m
-| (if $co == null then []
-   else [ $all[] | select(. as $x | any($m[]; .from == $x.from and .id == $x.id) | not) ] end) as $late
+| ($all | length) as $n
+| def _closed_under: . as $kept
+    | ( [ range(0; $n) ] - $kept ) as $drop
+    | ( $kept | map(select(. as $p
+          | all(($all[$p].refs // [])[]; . as $r
+                | any($drop[]; . < $p and $all[.].id == $r) | not)))) as $next
+    | if ($next | length) == ($kept | length) then $kept else ($next | _closed_under) end;
+( if $co == null then [ range(0; $n) ]
+  else [ range(0; $n) as $p | $all[$p] as $x
+         | select($x | _pair_in_snapshot)
+         | select(any(range(0; $p); $all[.].from == $x.from and $all[.].id == $x.id) | not)
+         | $p ] | _closed_under end ) as $keep
+| [ $keep[] | $all[.] ] as $m
+| [ ([ range(0; $n) ] - $keep)[] | $all[.] ] as $late
 | [ $m[] | select(.act == "propose") ] as $props
 | [ $m[] | select(.act == "object")  ] as $objs
 # The first `decide` message, if any. Named for what it IS -- a message somebody sent -- and

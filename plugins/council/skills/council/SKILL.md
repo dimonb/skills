@@ -156,8 +156,8 @@ has not been decided — read this as a description of what the code does today,
 gap somebody is on their way to filling.
 
 An `amend` belongs to **one** proposal — the first proposal-typed id it references; its
-other refs are objections, and it closes those raised against that proposal. (Referencing two proposals used to apply the
-amendment to both, so a room displayed two participants proposing the same words.) An
+other refs are objections, and it closes those raised against that proposal. (Referencing two
+proposals used to apply the amendment to both, so a room displayed two participants proposing the same words.) An
 `amend` that names only an objection belongs to the proposal that objection was raised
 against, so the decision record carries the amendment it closed the objection with. An `amend`
 closes objections **only on the proposal it belongs to** (#176). Before that rule, an amend
@@ -199,10 +199,15 @@ lands, and so does a send that passed the check a moment before the record did (
 objection 11 s after the close). So `decide` also writes `board/closed-over`: the messages the
 record was written from, taken from the same read of the log. For a closed room, `claims`,
 `verdict`, `status` and `rooms` build their graph from those messages. Every later claim is listed
-in its own "after the close" section of `claims`. It is neither open nor closed, and it is never
-counted OPEN, because the record does not contain it. The snapshot is room state like any other,
-so a seat can edit it. That can move a claim between the record's section and the late one; it
-cannot remove a claim from what `claims` prints. A room with no snapshot is read over the whole
+apart, in its own section of `claims` and as a `⊘ not in the record` line of `status`. It is
+neither open nor closed, and it is never counted OPEN, because the record does not contain it.
+The snapshot is room state like any other, so a seat can edit it. That can move a claim between
+the record's section and the late one; it cannot remove a claim from what `claims` and `status`
+print. The kept set is closed under its references: a kept claim whose earlier referent was left
+out (an objection whose proposal was dropped) is listed apart as well, rather than printed nowhere.
+It is worked in log positions, not ids, because a message chooses its own id: only the first
+message carrying a snapshot pair is in the record, and a reference to an id that first appears
+after the claim cannot orphan it. A room with no snapshot is read over the whole
 log, as before. That is a room older than this change, or one whose snapshot write failed, which
 `decide` reports on stderr. `decide --force` on a room already recorded `unresolved` rewrites the
 record over the whole log and takes a new snapshot, so the late claims are then in the record.
@@ -392,8 +397,8 @@ Three consequences worth knowing:
   that and never as the set. What the room's own bookkeeping cannot report, a backend read can —
   `status`'s closed-room alarm, `council.sh terminals` and `rooms`' `term` column all surface the
   same `_room_terminals` read. That read checks the handles the backend assigned at launch against
-  a launch record in the room's mailbox (#247; the shared one for a supervised room), which inherits the mailbox's forgeability (below),
-  so it narrows the question rather than closing it.
+  a launch record in the room's mailbox (#247; the shared one for a supervised room), which
+  inherits the mailbox's forgeability (below), so it narrows the question rather than closing it.
 * **`relaunch` cancels a teardown no keeper has taken yet.** Putting a seat back up says the room
   is in use again, and it outranks a close that asked for the seats to go — it has to, or the seat
   it launches is reaped within a poll of starting. That covers the keeper that died before taking
@@ -643,10 +648,11 @@ decided (#204), and this is what was decided:
   caller's cwd or a roster field, so no edit to room state takes a real room off the supervisor's
   mailbox. It names the git dir to git explicitly rather than letting git discover it, so a bare
   common dir under `safe.bareRepository=explicit` and an inherited `GIT_DIR` do not change the
-  answer. What does change it is a write inside the git dir itself: replacing `council/` with a
-  symlink moves every room's physical path, and those rooms then read ad hoc. That is the same
-  reach that could delete the mailbox outright. An explicit `POLICY_MAILBOX_DIR` wins either way. Set it to run a real room outside
-  `up`'s directory and keep it supervised.
+  answer. What does change it is a write inside the git dir itself, the same reach that could
+  delete the mailbox outright. For example, a symlink in place of `council/` or of a room moves the
+  room's physical path, and a `commondir` file naming another repository changes what git reports
+  as the common dir; either makes the room read ad hoc. An explicit `POLICY_MAILBOX_DIR` wins either
+  way. Set it to run a real room outside `up`'s directory and keep it supervised.
 * **The shared mailbox is exactly as seat-writable as the room.** `.git/ship-escalations/` sits in
   the same git directory any participant can reach, so evidence kept "outside the room" there — a
   firing record, a de-duplication key, a launch record — only means a forger needs a **second,
@@ -1073,7 +1079,8 @@ fired on the same stall, and a plain `status` has no memory and always prints it
 
 This changes only how the line **reads**. It prints on every tick the stall holds, under
 `--only-changed` and `--alarms-only` alike, and the push is unchanged. Both new records live in the
-room's mailbox (the shared one for a supervised room) — `council-stall-<alarms|block>-<room>` for the count, one
+room's mailbox (the shared one for a supervised room) — `council-stall-<alarms|block>-<room>`
+for the count, one
 `council-said-<room>.<8 random characters>` file per `say` for what it sent — and, like everything
 else there, a seat can write them: a forged count moves the wording, a forged `say` withholds the
 UNANSWERED form but is **printed** as a message sent, so check that you sent what it says you sent. `STALL_ESCALATE_AT` in `lib/verbs.sh` carries the reasoning.
