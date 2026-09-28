@@ -126,6 +126,14 @@ if [ "$KIND" = "notice" ] || [ "$ST" = "done" ]; then
       echo "         question and run the same command again; it re-delivers from here." >&2
       exit 7
     fi
+    # EXIT 9 is tell's REPEAT refusal (#211): the same text went to this slot moments ago, so
+    # nothing was sent this time and tell named the earlier copy. Not "could not reach the child",
+    # and not a write to make: the record is left as it is, like 7, and the operator decides.
+    if [ "$TELL_RC" = 9 ]; then
+      echo "warning: nothing was sent and $ID was left untouched — this exact text already went to" >&2
+      echo "         the child (see above). To deliver it again on purpose, use shipyard-tell.sh --again." >&2
+      exit 9
+    fi
     if [ "$TELL_RC" = 6 ]; then
       WINDOW=unconfirmed
       echo "warning: the directive was sent but NOT confirmed (see above) — also recording the answer on $ID" >&2

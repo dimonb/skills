@@ -18,8 +18,14 @@
 #
 # Usage (parent side, from anywhere in the repo):
 #   shipyard-tell.sh <slot|escalation-id> "<the directive>"
+#   shipyard-tell.sh --again <slot|escalation-id> "<the directive>"   send a repeat on purpose
 #   shipyard-tell.sh <slot|escalation-id> --submit   submit the draft ALREADY in the box
 #   shipyard-tell.sh --list                 every directive sent so far
+#
+# A directive whose text is identical to one already recorded for that slot within
+# SHIPYARD_TELL_DEDUPE_SECS (default 600; 0 turns the check off) is REFUSED with exit 9, naming the
+# earlier record — nothing typed, nothing recorded (#211). It is what re-sending after an
+# `unconfirmed` verdict produces, and a child may act on both copies. `--again` sends it anyway.
 #
 # `--submit` types nothing: it presses Return on whatever the input box already holds and then
 # takes the same delivery reading as a directive, with the same exit codes. It is the recovery for
@@ -40,7 +46,8 @@
 #       backend reports a shell prompt or an exited pane where the agent was launched, so nothing
 #       was typed or recorded (3 is "no terminal at all"; 8 is "a terminal, and nobody in it" —
 #       recover the child either way, and on 8 the terminal itself is still there to look at),
-#       2 usage error, 1 mailbox/backend failure — which is also where a dead agterm
+#       9 REPEAT — the same text was sent to this slot inside the window, so nothing was typed or
+#       recorded (see above; `--again` to send it anyway), 2 usage error, 1 mailbox/backend failure — which is also where a dead agterm
 #       control socket lands, since the backend precheck refuses before any of this runs.
 #       6 rather than 0 on purpose: an `unconfirmed` that exits 0 is a note nobody has to
 #       notice, which is the same defect class as the false `delivered` it replaced. 7 rather
@@ -84,6 +91,9 @@ fi
 
 case "${1:-}" in -h|--help) usage; exit 0 ;; esac
 
+AGAIN=""
+[ "${1:-}" = "--again" ] && { AGAIN=1; shift; }
+
 TARGET="${1:-}"; MSG_RAW="${2:-}"
 SUBMIT_ONLY=""
 if [ "$MSG_RAW" = "--submit" ]; then
@@ -94,7 +104,7 @@ else
   MSG=$(shipyard_payload "$MSG_RAW") || exit 1
 fi
 if [ -z "$TARGET" ] || { [ -z "$MSG" ] && [ -z "$SUBMIT_ONLY" ]; }; then
-  echo 'usage: shipyard-tell.sh <slot|escalation-id> "<directive>" | <slot> --submit | --list' >&2
+  echo 'usage: shipyard-tell.sh [--again] <slot|escalation-id> "<directive>" | <slot> --submit | --list' >&2
   exit 2
 fi
 
@@ -142,6 +152,89 @@ if [ -n "$SUBMIT_ONLY" ]; then
   # Nothing to record and nothing to type; ID only names what was sent, in the lines below.
   ID="the draft in its box"
 else
+  # --- the same text, sent again inside the window: REFUSED (#211) ----------------
+  # An `unconfirmed` verdict is honest about what it cannot rule out, and what a supervisor does
+  # with it is re-send — measured: two byte-identical copies of one long directive queued a minute
+  # apart, and the child had to be told by hand which one to ignore. A child may act on each copy,
+  # and "file this", "run one round" are not idempotent. So a directive whose text is IDENTICAL to
+  # one recorded for this slot within $DEDUPE_SECS is refused before anything is typed or recorded,
+  # with its own exit code (9), naming the earlier record and its verdict and printing both ways
+  # on: `--submit` when the first copy is still in the box, `--again` to send a second copy on
+  # purpose. Refused rather than collapsed into a silent no-op: a collapse would exit 0 having
+  # sent nothing this time, the quiet kind of success this script exists not to report.
+  #
+  # The window is age, not verdict: an `unconfirmed` first copy may be in the box, and a
+  # `delivered` or `queued` one has already been read — a second copy of either is the duplicate.
+  #
+  # WHAT THIS LETS A CHILD SUPPRESS, per output, since it removes a directive that used to go out
+  # (AGENTS.md, "untrusted evidence may annotate an operator-facing signal, never suppress one").
+  # The directive records live in the mailbox every child can write, so a child that writes a
+  # record carrying the exact text of the supervisor's next directive makes that directive refuse.
+  # NOT PREVENTED, and made SELF-REVEALING: the refusal is exit 9 on stderr naming the record, which
+  # is one the supervisor knows whether they sent, and `--again` bypasses the check outright. It
+  # needs the exact text in advance, too. `shipyard-compact.sh` always passes `--again`: its resume
+  # follows an Escape that cleared the box and a compaction that cleared the child's context, so it
+  # is never a duplicate of anything the child still holds, and a refused resume would leave a
+  # compacted child with nothing to do.
+  #
+  # Also NOT closed: two tells of one text started together both scan before either records, so
+  # both go out. The check is a scan, not a lock. A record jq cannot read is not compared, which is
+  # the sending side.
+  DEDUPE_SECS=$(knob_uint "${SHIPYARD_TELL_DEDUPE_SECS:-}" 600) \
+    || echo "warning: SHIPYARD_TELL_DEDUPE_SECS is not a usable whole number — using 600" >&2
+  if [ -z "$AGAIN" ] && [ "$DEDUPE_SECS" -gt 0 ]; then
+    now_iso=$(shipyard_now)
+    since_epoch=$(( $(date +%s) - DEDUPE_SECS ))
+    # BSD `date -r <epoch>`, else GNU `date -d @<epoch>` (on GNU, `-r` takes a FILE and fails here).
+    since_iso=$(date -u -r "$since_epoch" +%Y-%m-%dT%H:%M:%SZ 2>/dev/null \
+      || date -u -d "@$since_epoch" +%Y-%m-%dT%H:%M:%SZ 2>/dev/null)
+    DUP=""; DUP_AT=""; DUP_D=""
+    case "$since_iso" in
+      [0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]T[0-9][0-9]:[0-9][0-9]:[0-9][0-9]Z) ;;
+      *) since_iso=""
+         echo "warning: could not compute the duplicate window on this system's date — not checking for a repeat" >&2 ;;
+    esac
+    for f in "$MB/directive-$SLOT-"*.json; do
+      [ -n "$since_iso" ] || break
+      # `directive-<slot>-*` also matches slot `<slot>-2`'s records (the launcher's name for a second
+      # slot from one idea): what follows the prefix must be the number alone, and the record must
+      # name this slot. The same two tests as last_directive_since in the report.
+      rn=${f##*/directive-$SLOT-}; rn=${rn%.json}
+      case "$rn" in ''|*[!0-9]*) continue ;; esac
+      shipyard_record_readable "$f" || continue
+      row=$(jq -r --arg s "$SLOT" --arg t "$MSG" \
+        'select(.slot == $s and .text == $t) | [(.created_at // ""), (.delivery // "unknown"), (.id // "")] | @tsv' \
+        "$f" 2>/dev/null) || continue
+      [ -n "$row" ] || continue
+      c=$(printf '%s' "$row" | cut -f1); d=$(printf '%s' "$row" | cut -f2)
+      # Held to the shape its writer produces, and to [window start, now]: a record dated in the
+      # future would otherwise refuse this text for as long as it stood.
+      case "$c" in [0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]T[0-9][0-9]:[0-9][0-9]:[0-9][0-9]Z) ;; *) continue ;; esac
+      [[ "$c" < "$since_iso" ]] && continue
+      [[ "$c" > "$now_iso" ]] && continue
+      case "$d" in ''|*[!a-z_-]*) d=unknown ;; esac
+      if [ -z "$DUP_AT" ] || [[ "$c" > "$DUP_AT" ]]; then DUP="${f##*/}"; DUP_AT="$c"; DUP_D="$d"; fi
+    done
+    if [ -n "$DUP" ]; then
+      DUP=${DUP%.json}
+      echo "refused: ship-$SLOT was sent this exact directive at $DUP_AT UTC — $(printf '%q' "$DUP")," >&2
+      echo "         delivery: $DUP_D. Nothing was typed and nothing was recorded: a second copy is what" >&2
+      echo "         a retry after an unconfirmed verdict produces, and a child may act on each copy." >&2
+      case "$DUP_D" in
+        delivered|queued)
+          echo "         The child took the first copy." >&2 ;;
+        *)
+          echo "         The first copy may still be in the input box — look before anything else:" >&2
+          echo "           $(shipyard_peek_hint "$SLOT")" >&2
+          echo "         if it is there, submit what is already in the box:" >&2
+          echo "           bash $DIR/shipyard-tell.sh $SLOT --submit" >&2 ;;
+      esac
+      echo "         To send it again on purpose:" >&2
+      echo "           bash $DIR/shipyard-tell.sh --again $SLOT \"<the same directive>\"" >&2
+      exit 9
+    fi
+  fi
+
   # --- record it first, so the full text survives regardless of delivery ----------
   # Both files are written by rename (policy_mailbox_write), never opened: every child can write
   # this directory, and a FIFO at either name — the `.txt` is not even probed — blocked a plain `>`
@@ -283,7 +376,8 @@ case "$DELIVERY" in
                  echo "         was seen to start within ${CONFIRM_SECS}s and the child never said it had" >&2
                  echo "         queued it. Sampled: $SAMPLED." >&2
                  echo "         THE TEXT MAY BE SITTING UNSENT IN THE INPUT BOX. Look before re-sending —" >&2
-                 echo "         a second send types another copy onto the first:" >&2
+                 echo "         the same text is refused for ${DEDUPE_SECS}s (exit 9), and --again types" >&2
+                 echo "         another copy onto the first:" >&2
                  echo "           $(shipyard_peek_hint "$SLOT")" >&2
                  echo "         if your directive is in the box, submit what is already there:" >&2
                  echo "           bash $DIR/shipyard-tell.sh $SLOT --submit" >&2

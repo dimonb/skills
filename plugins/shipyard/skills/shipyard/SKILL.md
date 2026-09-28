@@ -862,8 +862,17 @@ guess from this list:
 
 **Look before re-sending** — a second send types another copy onto the first. The bias is
 deliberate: re-sending on a false `unconfirmed` is cheap and visible, believing a false
-`delivered` is neither. The warning prints the peek command and the command that submits what is
-already there:
+`delivered` is neither. So a repeat is **refused**, not queued (#211): a directive whose text is
+identical to one recorded for the same slot within `SHIPYARD_TELL_DEDUPE_SECS` (600 by default, `0`
+turns it off) exits **9** with nothing typed and nothing recorded, naming the earlier record and its
+verdict. A child may act on each copy it reads, and "file this" or "run one round" is not
+idempotent. `shipyard-tell.sh --again <slot> "<directive>"` sends it anyway, for the supervisor who
+really means to repeat it; `shipyard-compact.sh` always passes `--again`, since its resume follows a
+cleared box and a cleared context. The directive records are child-writable, so a record forged with
+the exact text of your next directive makes it refuse — loudly, naming a record you know whether you
+sent, and `--again` bypasses it. Two tells of one text started at the same moment both go out: the
+check is a scan, not a lock. The warning prints the peek command and the command that submits what
+is already there:
 
 ```bash
 bash <SKILL>/shipyard-tell.sh <slot> --submit
