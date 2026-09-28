@@ -67,7 +67,7 @@ done
 SESSIONS="$ROOT/sessions"                    # what ct_sessions prints
 SESSIONS_RC="$ROOT/sessions-rc"              # ...and the status it exits with
 KILLED="$ROOT/killed"                        # every ct_kill call, one peer per line
-LAUNCHED="$ROOT/launched"                    # every ct_launch call, likewise
+LAUNCHED="$ROOT/launched"                    # every launch, likewise (relaunch goes through ct_launch_record)
 cat >"$SHADOW/lib/term.sh" <<SHADOWEOF
 # The shipped terminal, with only the verbs that would touch a live backend replaced. Pinned to
 # tmux because \`auto\` would resolve against whatever is running on the developer's machine and
@@ -78,7 +78,7 @@ ct_sessions()  { cat "$SESSIONS" 2>/dev/null; return "\$(cat "$SESSIONS_RC" 2>/d
 # rc 1 by default: "closed nothing", which is what a dead seat looks like on tmux — and, before
 # this change, also what the wrong backend looked like.
 ct_kill()      { printf '%s\n' "\$1" >>"$KILLED"; return "\${FAKE_KILL_RC:-1}"; }
-ct_launch()    { printf '%s\n' "\$1" >>"$LAUNCHED"; return 0; }
+ct_launch_record() { printf '%s\n' "\$2" >>"$LAUNCHED"; return 0; }
 ct_container() { printf 'fake-container'; }
 SHADOWEOF
 

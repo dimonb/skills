@@ -546,7 +546,7 @@ _keeper_ensure() { # <room-dir> <peer>...
   printf '%s\n' "$rec" > "$keep"
 }
 
-# ct_launch for a participant, with the owner canary write end (if any) closed for the launched
+# ct_launch_record for a participant, with the owner canary write end (if any) closed for the launched
 # process. A backend that cold-starts a DAEMON — the tmux server does this on first use — has that
 # daemon inherit every fd open in this shell; a daemon that then holds the canary write end keeps
 # the pipe's write side open forever, so the keeper never sees the owner's death and never reaps.
@@ -554,11 +554,15 @@ _keeper_ensure() { # <room-dir> <peer>...
 # Outside `--hold` (_KEEPER_CANARY_WFD unset) this is a plain ct_launch. The subshell is safe:
 # ct_launch's only durable output is the pinned container FILE and the backend session, neither of
 # which is shell state the caller reads back.
-_ct_launch_owned() { # <peer> <cwd> <launcher>
+#
+# It also writes the seat into the launch record (`ct_launch_record`, term.sh), so the record's
+# handle is the one this launch returned. <mode> is that function's: `up-first` for the first seat
+# `up` records, `up` for the rest.
+_ct_launch_owned() { # <mode> <peer> <cwd> <launcher>
   if [ -n "${_KEEPER_CANARY_WFD:-}" ]; then
-    ( exec {_KEEPER_CANARY_WFD}>&-; ct_launch "$1" "$2" "$3" )
+    ( exec {_KEEPER_CANARY_WFD}>&-; ct_launch_record "$1" "$2" "$3" "$4" )
   else
-    ct_launch "$1" "$2" "$3"
+    ct_launch_record "$1" "$2" "$3" "$4"
   fi
 }
 
@@ -724,18 +728,27 @@ council_up() {
   done
 
   # term.sh is already sourced above (before _mkroom), so the launch loop just uses ct_*.
-  local started=0
+  # Every seat goes into the launch record, including the ones nothing is launched for: the record
+  # says what was launched for EACH seat, so a seat it leaves out reads as unknown.
+  local started=0 recmode=up-first
   for i in "${!peers[@]}"; do
     # Separate statements on purpose: a `local a=… b=$a` reads $a before it is assigned
     # under `set -u`, which fails with an unbound-variable error naming a variable you can
     # see being set on the same line.
     local p kind
     p="${peers[$i]}"; kind="${kinds[$i]}"
-    if [ "$p" = "$me" ]; then continue; fi
-    _write_launcher "$room" "$p" "$kind" "$cwd" \
-      || { echo "council up: could not write the launcher for $p" >&2; continue; }
-    if _ct_launch_owned "$p" "$cwd" "$room/state/launch-$p.sh"; then started=$((started+1))
+    if [ "$p" = "$me" ]; then
+      ct_record_launch "$recmode" "$p" "$(ct_container)" "" false 2>/dev/null || true
+      recmode=up; continue
+    fi
+    if ! _write_launcher "$room" "$p" "$kind" "$cwd"; then
+      echo "council up: could not write the launcher for $p" >&2
+      ct_record_launch "$recmode" "$p" "$(ct_container)" "" false 2>/dev/null || true
+      recmode=up; continue
+    fi
+    if _ct_launch_owned "$recmode" "$p" "$cwd" "$room/state/launch-$p.sh"; then started=$((started+1))
     else echo "council up: could not launch participant $p" >&2; fi
+    recmode=up
   done
 
   printf 'ROOM: %s\n' "$room"
@@ -1363,7 +1376,9 @@ council_relaunch() {
     || { echo "council relaunch: could not write the launcher for '$peer'" >&2; return 1; }
   _write_protocol "$ROOM" "$peer" "$role" "$sf" "${roster[@]}" \
     || { echo "council relaunch: could not write the protocol for '$peer'" >&2; return 1; }
-  ct_launch "$peer" "$cwd" "$ROOM/state/launch-$peer.sh" \
+  # Through the launch record, which this advances by one generation: the handle it records is
+  # the one this launch returned, so a read after it matches the new terminal, not the old one.
+  ct_launch_record relaunch "$peer" "$cwd" "$ROOM/state/launch-$peer.sh" \
     || { echo "council relaunch: could not start a terminal for '$peer'" >&2; return 1; }
   printf 'relaunched: %s (%s/%s) in container %s, cwd %s\n' "$peer" "$kind" "$role" "$(ct_container)" "$cwd"
   printf 'launcher and protocol regenerated; it reads the transcript and rejoins where the log stands.\n'
@@ -1391,6 +1406,9 @@ council_down() {
   if [ "$purge" = 1 ]; then
     # The room IS the record — the ADR and the transcript live in it. Deleting it throws
     # away the only durable output the room produced, so it takes an explicit flag.
+    # The launch record goes with it: a plain `down` keeps it as the evidence the next read checks
+    # the teardown against, and once the room is gone nothing reads it.
+    lr_forget 2>/dev/null || true
     rm -rf "$ROOM"; echo "room deleted: $ROOM"
   else
     echo "room kept: $ROOM  (decision: $ROOM/board/decision.md)"

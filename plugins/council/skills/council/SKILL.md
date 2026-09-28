@@ -353,8 +353,9 @@ Three consequences worth knowing:
   `_keeper_teardown`'s header names the routes found so far — and says itself to read them as
   that and never as the set. What the room's own bookkeeping cannot report, a backend read can —
   `status`'s closed-room alarm, `council.sh terminals` and `rooms`' `term` column all surface the
-  same `_room_terminals` read, and all inherit the container pin's forgeability, so they narrow
-  the question rather than closing it.
+  same `_room_terminals` read. That read checks the handles the backend assigned at launch against
+  a launch record in the shared mailbox (#247), which inherits the mailbox's forgeability (below),
+  so it narrows the question rather than closing it.
 * **`relaunch` cancels a teardown no keeper has taken yet.** Putting a seat back up says the room
   is in use again, and it outranks a close that asked for the seats to go — it has to, or the seat
   it launches is reaped within a poll of starting. That covers the keeper that died before taking
@@ -907,13 +908,21 @@ one room directly. `council.sh down --room <room>` is still the way to release t
 **A zero is reported, not trusted, and what it MEANS depends on how the room closed.** After a
 `decided` close a zero is the expected answer — the keeper `decide` asked has reaped them. After an
 `unresolved` one it is not: that close leaves the seats up on purpose, so a zero there says
-something else released them, or the pin no longer names them. Either way the count is taken
-through the container pin, a file inside the room, so a room whose pin has been retargeted reads
-as empty in exactly the same way. (A pin *removed* while the launchers remain is a different
-answer again: that one alarms.) The closing tick therefore always *says* what it read — `terminals: none
-of N seats is listed … a zero is not proof` — rather than falling silent, and when the read cannot
-be resolved at all it raises the alarm instead. Silence on that tick is the one outcome the block
-will not produce.
+something else released them. The count is checked against the room's **launch record**
+(`<mailbox>/council-launch-<room>`), written by `up` and `relaunch` and kept by `down`: each seat's
+backend, container and the handle the backend assigned at launch (a tmux window id, an agterm
+session id). A seat counts as up when that handle is still listed with its recorded container and
+name, and as gone when the backend answered without it and nothing carries the seat's name.
+Anything else is **unknown** and raises the alarm, worded *could not be determined* with the
+reason: a pin that is missing or names another container than the record, a stale handle, a
+same-named session where the launched one is gone, a backend that did not answer, or **no launch
+record** at all. A room launched before launch records existed therefore reads `?` from now on,
+and says so ("it predates launch records, or the record was removed"). A deleted record reads the
+same way. The record is as seat-writable as the mailbox, so a zero is still not proof: the closing
+tick always *says* what it read (`terminals: none of N seats is up … a zero is not proof`) rather
+than falling silent, and when the read cannot be settled it alarms instead. Silence on that tick
+is the one outcome the block will not produce. `council.sh terminals` prints `?` and gives the
+reason on stderr.
 
 ### What the alarms can tell you apart, and what they cannot
 

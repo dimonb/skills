@@ -201,9 +201,9 @@ canary_probe() { # <expose-wfd:1|0> <pidfile> -> prints eof|timeout|data
   # the two calls were 60 of this file's 63 seconds. Nothing was being established in that time:
   # the `read -t 3` above had already answered. (Measured: 63s before, ~3s after, same verdicts.)
   # t20 backgrounds its killer with the same three redirections, for the same reason.
-  ct_launch() { sleep 30 </dev/null >/dev/null 2>&1 & echo "$!" >> "$pidfile"; return 0; }
+  ct_launch_record() { sleep 30 </dev/null >/dev/null 2>&1 & echo "$!" >> "$pidfile"; return 0; }
   if [ "$expose" = 1 ]; then _KEEPER_CANARY_WFD="$cw"; else unset _KEEPER_CANARY_WFD; fi
-  _ct_launch_owned peerA /tmp /dev/null
+  _ct_launch_owned up peerA /tmp /dev/null
   exec {cw}>&-                       # owner death: drop the only intended writer
   if read -t 3 -u "$cr" _ 2>/dev/null; then r=data; else rc=$?; if [ "$rc" -le 128 ]; then r=eof; else r=timeout; fi; fi
   exec {cr}<&-
