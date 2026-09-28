@@ -99,5 +99,24 @@ fi
 want 0 "--me <peer> with a value" bash "$CLI" --me alice help
 want 0 "--room <name> --me <peer> together" bash "$CLI" --room pinned-room --me alice help
 
+# --- the verbs' own value-taking options say what they need, too (#147) -----------
+# These used to read a bare `"$2"`, which aborts under `set -u` but names a line number rather
+# than the option. `up`'s are in t13, which builds real rooms. A room of our own here,
+# because `send` and `recv` resolve one before they parse their arguments.
+RM="$R/room"; mkroom "$RM" a b
+for o in --act --refs --to; do
+  if want 2 "send $o with no value" env COUNCIL_ROOM="$RM" COUNCIL_ME=a bash "$CLI" send hello "$o"; then
+    says "$o needs a value" "send's refusal does not name $o"
+  fi
+done
+if want 2 "recv --timeout with no value" env COUNCIL_ROOM="$RM" COUNCIL_ME=a bash "$CLI" recv --timeout; then
+  says 'timeout needs' "recv's refusal does not name --timeout"
+fi
+# c_send is reached by v_send and by nothing else from the CLI, so its own guard is asked directly.
+if want 2 "c_send --text with no value" env COUNCIL_ROOM="$RM" COUNCIL_ME=a \
+     bash -c '. "$1/lib/lib.sh"; c_send --text' _ "$SKILL"; then
+  says 'text needs a value' "c_send's refusal does not name --text"
+fi
+
 [ "$fail" = 0 ] && echo "t20 PASS" || echo "t20 FAIL"
 exit $fail

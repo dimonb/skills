@@ -17,6 +17,11 @@ export LC_ALL=C
 ROOM="$COUNCIL_ROOM"
 ME="${COUNCIL_ME:-}"
 C_IDLE="${COUNCIL_IDLE:-2}"        # bell-loss fallback, seconds
+# The fallback for each roster number `up` writes with a default, from the file `up` writes it
+# from, so the two sides cannot disagree about it (#151). `created_ms` and `round_quorum` have no
+# such default; their callers pass a sentinel instead.
+# shellcheck source=roster-defaults.sh
+. "$(dirname "${BASH_SOURCE[0]}")/roster-defaults.sh"
 
 # The roster never changes while a room lives, so the read is memoised. The memo lives in a
 # shell variable, so it only covers repeat calls WITHIN one shell: every use site below sits in
@@ -397,10 +402,17 @@ c_mode()   { jq -r '.mode // "token"' "$ROOM/roster.json"; }
 # identically, so a digits test alone accepts the string. The digits test is the only thing
 # that can tell 30 from 1.5 or 1e400 -- all three are `type == "number"`. Anything that fails
 # either test is treated as ABSENT and takes the default.
+#
+# A THIRD test bounds the width (#157). jq keeps an integer literal's digits, so an all-digit
+# value at or above 2^63 passes both tests above, and `$((10#$v))` then WRAPS at status 0:
+# `9223372036854775808` reads back negative, which makes every `turn_deadline_ms` "already past"
+# to an honest seat and prints a nonsense age for `created_ms`. JSON forbids leading zeros, so
+# the digit count is the magnitude: 18 digits is the widest run that is always below 2^63.
 c_int_field() { # <field> <default>  -- a roster integer, or the default if it is not one
   local v; v=$(jq -r --arg k "$1" 'if (.[$k]|type) == "number" then .[$k] else empty end' \
                   "$ROOM/roster.json" 2>/dev/null)
-  case "$v" in ''|*[!0-9]*) printf '%s' "$2" ;; *) printf '%s' $((10#$v)) ;; esac
+  case "$v" in ''|*[!0-9]*) v= ;; esac
+  if [ -n "$v" ] && [ "${#v}" -le 18 ]; then printf '%s' $((10#$v)); else printf '%s' "$2"; fi
 }
 c_quorum() { c_int_field round_quorum ''; }
 
@@ -596,7 +608,7 @@ c_barrier() {
   quorum=$(c_quorum); [ -n "$quorum" ] || quorum=$(( n - 1 )); [ "$quorum" -lt 2 ] && quorum=2
   first=$(c_round0_positions | jq -s 'if length == 0 then 0 else (min_by(.sent_ms).sent_ms) end')
   case "$first" in ''|*[!0-9]*) first=0 ;; esac
-  deadline=$(c_int_field round_deadline_ms 600000)
+  deadline=$(c_int_field round_deadline_ms "$C_DEF_ROUND_DEADLINE_MS")
   [ "$first" = 0 ] && { printf 'open'; return; }
   local age=$(( $(c_ms) - first ))
   if [ "$age" -gt "$deadline" ] && [ "$posted" -ge "$quorum" ]; then
@@ -637,6 +649,9 @@ c_posted_round0() { c_round0_positions | jq -r --arg me "$ME" 'select(.from == $
 c_send() {
   local act=msg refs='[]' to='["*"]' hand=false text=""
   while [ $# -gt 0 ]; do
+    case "$1" in  # operand first (#147; the rule is above council.sh's option loop)
+      --act|--refs|--to|--text) [ $# -ge 2 ] || { echo "c_send: $1 needs a value" >&2; return 2; } ;;
+    esac
     case "$1" in
       --act)  act="$2";  shift 2 ;;
       --refs) refs="$2"; shift 2 ;;

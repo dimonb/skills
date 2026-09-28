@@ -12,6 +12,9 @@
 # the same two answers wrong the same way — so it is one module, vendored like the rest.
 # shellcheck source=knobs.sh
 . "$(dirname "${BASH_SOURCE[0]}")/knobs.sh"
+# The default of each number written into roster.json, read from the same file its readers use.
+# shellcheck source=roster-defaults.sh
+. "$(dirname "${BASH_SOURCE[0]}")/roster-defaults.sh"
 
 # A participant name, an adapter kind, a scenario, a role. Bare word only.
 #
@@ -592,9 +595,9 @@ roles = get("roles", "[]").strip("[]")
 roles = [r.strip().strip("'\"") for r in roles.split(",") if r.strip()]
 print("SC_MODE=%s" % (get("mode", "token") or "token"))
 print("SC_DECIDE=%s" % (get("decide_by", "unanimous") or "unanimous"))
-print("SC_TURNS=%s" % (get("turns", "30") or "30"))
+print("SC_TURNS=%s" % get("turns"))
 print("SC_ROLES='%s'" % " ".join(roles))
-print("SC_RDEADLINE=%s" % (get("round_deadline_ms", "600000") or "600000"))
+print("SC_RDEADLINE=%s" % get("round_deadline_ms"))
 print("SC_TITLE='%s'" % get("title", "").replace("'", ""))
 PY
 }
@@ -613,6 +616,13 @@ PY
 council_up() {
   local scenario="" agents="" turns="" cwd="" agenda="" me="${COUNCIL_ME:-}" hold=0
   while [ $# -gt 0 ]; do
+    # Checked for their operand before the arm reads it, as `relaunch --cwd` and council.sh's
+    # `--room`/`--me` are (#147): a missing value names the option rather than a line number. The
+    # rule for the next value-taking arm is in council.sh, above its global option loop.
+    case "$1" in
+      --scenario|--agents|--turns|--cwd)
+        [ $# -ge 2 ] || { echo "council up: $1 needs a value" >&2; return 2; } ;;
+    esac
     case "$1" in
       --scenario) scenario="$2"; shift 2 ;;
       --agents)   agents="$2"; shift 2 ;;
@@ -631,14 +641,17 @@ council_up() {
   local sf="$SKILL/scenarios/$scenario.md"
   [ -f "$sf" ] || { echo "council up: no such scenario '$scenario'" >&2; return 2; }
   eval "$(_scenario_meta "$sf")"
+  # A scenario that sets neither takes the default its readers fall back to (lib/roster-defaults.sh).
+  SC_TURNS=${SC_TURNS:-$C_DEF_TURNS_BUDGET}
+  SC_RDEADLINE=${SC_RDEADLINE:-$C_DEF_ROUND_DEADLINE_MS}
   # Checked where the user typed it (#169): the value goes into the roster by `--argjson`, which
   # refuses anything that is not JSON, and that refusal used to leave roster.json at zero bytes
-  # under a room that went on to launch every participant.
+  # under a room that went on to launch every participant. knob_uint rather than a digits test
+  # of its own, because it also caps the length: a long run of digits otherwise wraps through
+  # `$(( ))` into a wrong budget at status 0 (#157).
   if [ -n "$turns" ]; then
-    case "$turns" in *[!0-9]*) turns=x ;; esac
-    [ "$turns" != x ] && [ $((10#$turns)) -ge 1 ] \
+    SC_TURNS=$(knob_uint "$turns" 0) && [ "$SC_TURNS" -ge 1 ] \
       || { echo "council up: --turns needs a positive integer" >&2; return 2; }
-    SC_TURNS=$((10#$turns))
   fi
   # Resolve it here, once. The value is recorded in the roster and later baked into a
   # regenerated launcher's `cd` line by `relaunch`, so a RELATIVE one would be re-resolved
@@ -722,8 +735,9 @@ council_up() {
         --argjson peers "$peers_json" --arg mode "$SC_MODE" --arg dec "$SC_DECIDE" \
         --argjson turns "$SC_TURNS" --arg sc "$scenario" --arg at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
         --argjson rdl "$SC_RDEADLINE" --arg cwd "$cwd" --argjson cms "$created_ms" \
+        --argjson tdl "$C_DEF_TURN_DEADLINE_MS" \
     '{order:$order, peers:$peers, scenario:$sc, mode:$mode, decide_by:$dec,
-      order_rotate:true, turn_deadline_ms:180000, turns_budget:$turns,
+      order_rotate:true, turn_deadline_ms:$tdl, turns_budget:$turns,
       round_deadline_ms:$rdl, cwd:$cwd, created_at:$at, created_ms:$cms}' \
     > "$room/roster.json" || {
     # Before anything is launched (#169): the verbs that read the peer list refuse a room without
