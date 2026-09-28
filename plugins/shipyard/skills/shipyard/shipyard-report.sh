@@ -498,7 +498,7 @@ STALL_ROWS=()
 # `last_fired` (the epoch of the latest firing). The record rides with the stall clock's `since`,
 # plus ONE exception, the carry in the slot loop, which exists because a nudge types into the very
 # screen whose hash is the signature: whenever `since` is not carried (the screen part of the
-# signature moved, or a stored `since` was refused) while the state, stage and escalation part did
+# signature moved, or a stored `since` was refused) while the stage and escalation part did
 # not move, within one stall threshold of the last firing, and once a directive has been recorded
 # since the episode's first firing. That is
 # a condition on timing, not proof that the directive CAUSED the change — a child that moves by
@@ -1073,6 +1073,13 @@ for slot in "${SLOTS[@]}"; do
   occ_b=$(shipyard_occupant "$slot" 2>/dev/null) || occ_b=""
   b=$(shipyard_capture "$slot")
   [ "$a" = "$b" ] && run="⏸ idle/wait" || run="▶️ running"
+  # AN EMPTY CAPTURE IS NO OBSERVATION (#155). drv_read yields "" for every backend failure as well
+  # as for a blank screen, and a live agent's pane is never blank — it draws its own chrome — so two
+  # failed reads used to compare equal, render idle, and feed the stall clock below. `unknown` IS NOT
+  # `idle`, as adp_turn_state already says for the same capture: either read empty means no motion
+  # verdict this tick, and the stall clock neither fires nor rebases on it (see stall detection).
+  unread=0
+  if [ -z "$a" ] || [ -z "$b" ]; then unread=1; run="❔ unreadable"; fi
   noagent=0
   if [ "$occ_a" = none ] && [ "$occ_b" = none ]; then noagent=1; run="💀 no agent"; fi
 
@@ -1270,9 +1277,16 @@ for slot in "${SLOTS[@]}"; do
   # ⏸ idle with esc — and NOTHING changes, so the monitor says nothing. One ran that
   # way for 8.5 hours. So track how long each slot has been motionless and shout
   # when it crosses the threshold, bypassing --only-changed entirely.
-  slot_sig="$state|$stage|$pend|$(printf '%s' "$b" | md5 -q 2>/dev/null || printf '%s' "$b" | md5sum | cut -d" " -f1)"
+  #
+  # THE CLOCK'S KEY CARRIES NO FORGE STATE (#142). It is the stall clock's alone — --only-changed
+  # reads SIG, which keeps `$state` — and `since` carries only on an exact match. `$state` is two
+  # chained network reads that turn a failure into a different string (`?`, or `no MR yet` when the
+  # iid lookup fails), so an INTERMITTENT forge rebased the clock of a child that had not moved and
+  # the alarm could need eight consecutive good reads to fire. A sustained outage was harmless; a
+  # flaky one disarmed it. The clock measures the child: its stage, its open escalations, its screen.
+  slot_sig="$stage|$pend|$(printf '%s' "$b" | md5 -q 2>/dev/null || printf '%s' "$b" | md5sum | cut -d" " -f1)"
   now_epoch=$(date +%s)
-  since=""; fired_epoch=""; fired_at=""; firings=0; last_fired=""
+  since=""; fired_epoch=""; fired_at=""; firings=0; last_fired=""; prev=""
   if [ -n "$STALLFILE" ] && [ -f "$STALLFILE" ]; then
     # The slot is matched as an exact FIELD: a substring match on "<slot><TAB>" also hits the row of
     # a slot whose name ends in this one, which the launcher's `<slot>-N` naming makes ordinary.
@@ -1304,7 +1318,7 @@ for slot in "${SLOTS[@]}"; do
       # the firing record rode with `since` alone, would end the episode it was sent about: the
       # child stays stuck, and half an hour later the operator is told of a brand-new stall with
       # "nothing sent to it", about a slot they nudged. So the record survives a signature change
-      # when all three hold: state, stage and open escalations did not move (only the SCREEN part
+      # when all three hold: stage and open escalations did not move (only the SCREEN part
       # did — or a stored `since` was refused, which reaches here the same way), a directive was recorded for this slot since the episode's first
       # firing, and the last firing was within one stall threshold — so a child that goes on to
       # work for longer than that sheds the record and its next stall is a new one. The clock
@@ -1346,7 +1360,20 @@ for slot in "${SLOTS[@]}"; do
   fi
   # Written for every visited slot, stalled or not, as the three-field row was: a slot that does not
   # fire on this tick carries its clock and its firing record forward unchanged.
-  STALL_ROWS+=("$slot	$slot_sig	$since	$fired_epoch	$fired_at	$firings	$last_fired")
+  #
+  # An UNREADABLE tick (#155) writes back the row it read, verbatim: its screen hash is not an
+  # observation, so storing it would rebase the next readable tick's clock — the #142 disarm again,
+  # through the capture instead of the forge. It cannot fire either (its `run` is not idle, so the
+  # branch above is not taken). A supervision gap still restarts the clock, so a gap tick writes
+  # its fresh row as any other tick does — dropping the row instead would leave the stale one in
+  # place whenever this is the only slot, since an empty table is not written. What this does NOT
+  # do: a screen that stays unreadable never alarms — it is visible only as its ❔ row, and the
+  # SIG's `unread=` breaks --only-changed on the tick it starts and the tick it ends.
+  if [ "$unread" = 1 ] && [ "$GAP" = 0 ]; then
+    [ -n "$prev" ] && STALL_ROWS+=("$prev")
+  else
+    STALL_ROWS+=("$slot	$slot_sig	$since	$fired_epoch	$fired_at	$firings	$last_fired")
+  fi
 
   # Paint the same verdict on the sidebar glyph (agterm only; a no-op on tmux), so the
   # board is readable without reading the table: blocked = it is waiting on YOU. The
@@ -1373,7 +1400,7 @@ for slot in "${SLOTS[@]}"; do
   # bypasses the filter while it holds, so only the signature can make its ending news. `fna=` is
   # there for a FINISHED slot whose agent exited: it gets no 💀 block and no bypass, so without it
   # that death would change nothing the filter sees and the monitor would never print it.
-  SIG+=("$slot|$mr_label|term=1|$state|$stage|$pend|$sig_band|$wait_class|$reap_note|noagent=$noagent|fna=$finished_noagent")
+  SIG+=("$slot|$mr_label|term=1|$state|$stage|$pend|$sig_band|$wait_class|$reap_note|noagent=$noagent|fna=$finished_noagent|unread=$unread")
   :
 done
 
