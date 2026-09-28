@@ -173,8 +173,9 @@ ok "second tick: still printed, bypassing the filter"  "41 46" "$(block "$out" '
 ok "...as the short entry"                          yes "$(has "$(noagent "$out")" '^- `41` — STILL no agent, first raised [0-9]* min ago (at [0-9][0-9]:[0-9][0-9] UTC), tick 2')"
 ok "...without the full steps"                         no  "$(has "$(noagent "$out")" 'on both reads of this tick')"
 ok "...and still no nudge or compaction command"       no  "$(has "$(noagent "$out")" 'bash .*shipyard-\(tell\|compact\)\.sh ')"
-# THE SAME TWO TICKS UNDER /bin/bash (#232). episode() and the short-entry render are reached only
-# through a no-agent (or held, or refused) slot on a second tick, and the report runs on stock macOS
+# THE SAME TWO TICKS UNDER /bin/bash (#232). episode() is reached through a no-agent (or held, or
+# refused) slot, and its previous-row branch and the NO AGENT short entry only on a second tick —
+# the held and refused short entries are not driven here. The report runs on stock macOS
 # /bin/bash 3.2 — so this is where that floor is executed. Vacuous where /bin/bash is 5.x, as t13's
 # floor section says of its own checks.
 rm -f "$MB/report-sig" "$MB/report-stall" "$MB/report-episodes"
