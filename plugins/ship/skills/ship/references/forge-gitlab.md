@@ -98,6 +98,26 @@ glab api "projects/$PROJECT/issues/N" | jq -r '.title, .description'
 # rung 2 — add the scenario to an issue that is already open (body through a file)
 glab api --method POST "projects/$PROJECT/issues/N/notes" -f "body=$(cat "$BODY")"
 
+# labels — read WITH their descriptions before choosing or inventing one (core §2.7): the
+# description is what says which paths an area label covers. Paginated, like the issue list.
+glab api --paginate --output ndjson "projects/$PROJECT/labels?per_page=100" \
+  | jq -r '[.name, (.description // "")] | @tsv'
+glab api --method POST "projects/$PROJECT/labels" \
+  -f name="<name>" -f color="#RRGGBB" -f description="<what it covers>"
+glab api --method PUT "projects/$PROJECT/labels/<url-encoded name>" \
+  -f description="<what it covers>"
+
+# the close sweep (core §7.G) — every open issue in one area, in full. A scoped label
+# (`area::x`) and a plain one (`area:x`) are both passed verbatim, URL-encoded.
+glab api --paginate --output ndjson \
+  "projects/$PROJECT/issues?state=opened&labels=<url-encoded area>&per_page=100" \
+  | jq -r '[.iid, ([.labels[]] | join(",")), .title] | @tsv'
+
+# close with the evidence — only where the merge did not close it (core §7.G). The note
+# first, so an issue is never closed without the reason beside it.
+glab api --method POST "projects/$PROJECT/issues/N/notes" -f "body=$(cat "$BODY")"
+glab api --method PUT "projects/$PROJECT/issues/N" -f state_event=close
+
 glab issue create --title "<title>" --assignee "$ME" --label "<kind>" \
   -d "$(cat "$BODY")" --yes
 glab api --method PUT "projects/$PROJECT/issues/N" -f assignee_ids="<id>"
@@ -208,6 +228,10 @@ unverified head gets merged.
   will quietly break a downstream parse.
 - **`glab mr create` has no `--description-file` on 1.90** (§3).
 - **A `null` pipeline status is not a pass** (§8).
+- **A closing pattern in an MR description closes only on a merge into the default branch, and
+  only while the project's auto-close setting is on** — `autoclose_referenced_issues` in
+  `glab api "projects/$PROJECT"`. Read it before relying on `Closes #N`; where it is off, the
+  close sweep's issues are closed with the evidence query of §5 after the merge (core §7.G).
 - **`grep -qv` on a piped path list can misreport** because of a SIGPIPE race — capture the
   non-matching lines and test for emptiness instead (core §3.3 shows the shape).
 - **A dead mirror remote is a trap.** Some GitLab projects keep a `github` remote as a

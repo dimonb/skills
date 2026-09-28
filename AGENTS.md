@@ -401,7 +401,9 @@ it. Say in the change which parts you verified by running and which you reasoned
 * **One logical change per commit**, Conventional Commits.
 * **Every issue and pull request carries labels** — one kind (`bug`, `enhancement`,
   `documentation`, `security`) and one `area:`. Reuse an existing label; report anything you
-  create.
+  create. Each `area:` label's description on the forge lists the paths it covers — pick the
+  area by that list, and update it when a path moves. The gate cannot see the forge's labels,
+  so that list is kept by judgement alone.
 * **Do not self-merge without the user's go-ahead.** A clean self-review is a better first
   pair of eyes, not a second one.
 * **No attribution footers of any kind** in commits, pull requests, issues, comments or
