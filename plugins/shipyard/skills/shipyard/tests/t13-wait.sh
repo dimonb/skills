@@ -430,8 +430,8 @@ ok "E3: an escalated stall still breaks --only-changed"  1 "$(unans_43 "$outE3q"
 # `shipyard-tell.sh` types into the pane whose hash is part of the stall signature. The first version
 # of this run wrote only the record against a fixed screen, which is the one sequence a real nudge
 # never produces — and it passed while a real nudge restarted the episode and was never reported.
-# The threshold is raised to 100s here so that "within one stall threshold of the last firing" is a
-# statement about the fixture rather than about how fast this machine runs a report.
+# The threshold is 100s here (not the 600s above) so that "within one stall threshold of the last
+# firing" is a statement about the fixture rather than about how fast this machine runs a report.
 jq -n --arg now "$(shipyard_now)" \
   '{id:"directive-43-1", slot:"43", kind:"directive", text:"resume", created_at:$now,
     status:"sent", delivery:"delivered"}' >"$FAKE_GIT/ship-escalations/directive-43-1.json"
@@ -577,6 +577,29 @@ ok "D: crossing the crit threshold inside \`unknown\` still breaks silence" yes 
    "$([ -n "$outD5" ] && echo yes || echo no)"
 unset T13_CTX_TOKENS
 
+# THE INTERPRETER FLOOR FOR THE REPORT ITSELF (#232), EXECUTED, and it lives HERE, inside the rig,
+# on purpose: with the faked `git` gone the report resolves the REAL common dir, and from any
+# worktree of a repo with a live fleet it would rewrite that fleet's stall table and tick. So it
+# runs while the fakes are exported, and the last check proves it wrote the fixture's mailbox.
+# A bash-4 construct on the path a tick takes shows up as a changed exit, missing rows or stderr;
+# it guards the path THIS fixture drives, not every branch of the file. The exit code is compared
+# with the same run under this suite's bash rather than with 0: this rig has work open, and exit 1
+# is the report's documented answer to that. Section 7 below holds the rest of the floor.
+floor_run() { # <interpreter>
+  SHIPYARD_MOTION_INTERVAL=0.01 SHIPYARD_STALL_SECS=100000 SHIPYARD_BACKEND=tmux \
+    SHIPYARD_SESSION=t13ex "$1" "$REPORT" 41 42 43
+}
+floor_run bash >/dev/null 2>&1; floor_want=$?
+printf '%s\n' 1000000000 >"$FAKE_GIT/ship-escalations/report-tick"
+floor_out=$(floor_run /bin/bash 2>"$T13TMP/floor-report.err"); floor_rc=$?
+ok "shipyard-report.sh RUNS under /bin/bash, exiting as it does here" "$floor_want" "$floor_rc"
+ok "...and renders every slot's row"                 3 "$(grep -c '^| 4[123] ' <<<"$floor_out")"
+# A row only the faked pane can produce, so a run that has drifted off the rig reds here.
+ok "...from the rig's panes, not a missing terminal" 1 "$(grep -c '^| 41 .*⏳ rate-limited' <<<"$floor_out")"
+ok "...and writes nothing to stderr"                 "" "$(cat "$T13TMP/floor-report.err")"
+ok "...into the fixture's mailbox, not a real one"   yes \
+   "$([ "$(cat "$FAKE_GIT/ship-escalations/report-tick" 2>/dev/null)" != 1000000000 ] && echo yes || echo no)"
+
 unset -f git tmux gh
 fi
 
@@ -631,10 +654,13 @@ ok "shipyard-report.sh at least parses under /bin/bash" 0 \
 # A construct on the transcript-reading branches is still reached only by the ctx suite.
 floor_ctx() {
   /bin/bash -c ". '$SKILL_DIR/shipyard-lib.sh' >/dev/null 2>&1; . '$SKILL_DIR/shipyard-ctx.sh' >/dev/null 2>&1
-    ROOT='$T13TMP/floor-empty' CLAUDE_CONFIG_DIR='$T13TMP/floor-empty' CODEX_HOME='$T13TMP/floor-empty'
+    ROOT='$FLOOR_EMPTY' CLAUDE_CONFIG_DIR='$FLOOR_EMPTY' CODEX_HOME='$FLOOR_EMPTY'
     unset SHIPYARD_CTX_WINDOW; $1" 2>/dev/null
 }
-mkdir -p "$T13TMP/floor-empty"
+# Its own scratch directory: section 6 builds $T13TMP only when it runs, and this section runs
+# under SHIPYARD_T13_SKIP_EXEC=1 too.
+FLOOR_EMPTY=$(mktemp -d "${TMPDIR:-/tmp}/t13-floor.XXXXXXXX") || exit 1
+trap 'rm -rf "${T13TMP:-}" "$FLOOR_EMPTY"' EXIT
 ok "the ctx chain runs under /bin/bash: a crit band" "crit"    "$(floor_ctx 'ctx_band 99')"
 ok "...a warn band"                                  "warn"    "$(floor_ctx 'ctx_band 70')"
 ok "...an unknown band"                              "unknown" "$(floor_ctx "ctx_band '?'")"
@@ -646,21 +672,6 @@ ok "...an unproven window says so"                   "0 1" \
 ok "...ctx_probe reads a footer percentage"          "40 40%"  "$(floor_ctx "ctx_probe 77 'x 40% context used'")"
 ok "...ctx_probe bounds an unpinned token count"     "? <=92% · 185k" "$(floor_ctx "ctx_probe 77 '185000 tokens'")"
 ok "...ctx_probe says nothing it cannot measure"     "- —"     "$(floor_ctx "ctx_probe 77 'nothing'")"
-
-# AND THE REPORT ITSELF, EXECUTED, on section 6's rig: the same slots, the same faked backend. A
-# bash-4 construct anywhere on the path a tick takes shows up here as a non-zero exit or as missing
-# rows. It guards the path THIS fixture drives, not every branch of the file. The exit code is
-# compared with the same run under this suite's bash rather than with 0: this rig has work open,
-# and exit 1 is the report's documented answer to that.
-floor_run() { # <interpreter>
-  SHIPYARD_MOTION_INTERVAL=0.01 SHIPYARD_STALL_SECS=100000 SHIPYARD_BACKEND=tmux \
-    SHIPYARD_SESSION=t13ex "$1" "$REPORT" 41 42 43
-}
-floor_run bash >/dev/null 2>&1; floor_want=$?
-floor_out=$(floor_run /bin/bash 2>"$T13TMP/floor-report.err"); floor_rc=$?
-ok "shipyard-report.sh RUNS under /bin/bash, exiting as it does here" "$floor_want" "$floor_rc"
-ok "...and renders every slot's row"                 3 "$(grep -c '^| 4[123] ' <<<"$floor_out")"
-ok "...and writes nothing to stderr"                 "" "$(cat "$T13TMP/floor-report.err")"
 
 printf '\n'
 if [ "$FAILURES" -eq 0 ]; then

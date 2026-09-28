@@ -98,10 +98,10 @@ tmux() {
 gh() { printf 'OPEN\n'; return 0; }
 export -f git tmux gh
 
-run_report() { # [args...] -> the report
+run_report() { # [args...] -> the report; T19_BASH picks the interpreter, T19_ERR keeps stderr
   : > "$C44"
   SHIPYARD_MOTION_INTERVAL=0.01 SHIPYARD_STALL_SECS=1800 SHIPYARD_BACKEND=tmux SHIPYARD_SESSION=t19ex \
-    bash "$REPORT" "$@" 41 42 43 44 45 46 2>/dev/null
+    "${T19_BASH:-bash}" "$REPORT" "$@" 41 42 43 44 45 46 2>"${T19_ERR:-/dev/null}"
 }
 row() { printf '%s\n' "$1" | grep "^| $2 " | cut -d'|' -f5 | sed 's/^ *//; s/ *$//'; }
 # The hyphen goes LAST in tr's set: `'`- '` is a range to GNU tr (backtick to space, reversed —
@@ -173,6 +173,15 @@ ok "second tick: still printed, bypassing the filter"  "41 46" "$(block "$out" '
 ok "...as the short entry"                          yes "$(has "$(noagent "$out")" '^- `41` — STILL no agent, first raised [0-9]* min ago (at [0-9][0-9]:[0-9][0-9] UTC), tick 2')"
 ok "...without the full steps"                         no  "$(has "$(noagent "$out")" 'on both reads of this tick')"
 ok "...and still no nudge or compaction command"       no  "$(has "$(noagent "$out")" 'bash .*shipyard-\(tell\|compact\)\.sh ')"
+# THE SAME TWO TICKS UNDER /bin/bash (#232). episode() and the short-entry render are reached only
+# through a no-agent (or held, or refused) slot on a second tick, and the report runs on stock macOS
+# /bin/bash 3.2 — so this is where that floor is executed. Vacuous where /bin/bash is 5.x, as t13's
+# floor section says of its own checks.
+rm -f "$MB/report-sig" "$MB/report-stall" "$MB/report-episodes"
+T19_BASH=/bin/bash T19_ERR="$TMP/floor-1.err" run_report --only-changed >/dev/null
+out=$(T19_BASH=/bin/bash T19_ERR="$TMP/floor-2.err" run_report --only-changed)
+ok "under /bin/bash: the second tick is the short entry" yes "$(has "$(noagent "$out")" '^- `41` — STILL no agent, first raised [0-9]* min ago (at [0-9][0-9]:[0-9][0-9] UTC), tick 2')"
+ok "...and neither tick wrote to stderr"               ""  "$(cat "$TMP/floor-1.err" "$TMP/floor-2.err")"
 # The episode ends on the tick its condition does not fire; the next death is a new one.
 FAKE_OCC=alive run_report --only-changed >/dev/null
 out=$(run_report --only-changed)
