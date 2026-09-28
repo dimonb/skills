@@ -409,7 +409,7 @@ clean round, never by anything external:
 | implementation diff, clean impl round, but the recorded sizing is smaller than what `flags.effort` now gives it — an axis, a folded axis split out, or an engine (an upward raise, §5.3) | `impl-review` |
 | implementation diff, clean impl round, archive due and not in the diff | `archive` |
 | implementation diff, clean impl round, archive in the diff or not applicable | `ready-to-merge` |
-| any stage, blockers or a failed axis survived `max-rounds` and the prose round is not available to them (§5.7: not eligible, or already taken) | `needs-human` |
+| any stage, blockers survived `max-rounds` and the prose round is not available to them (§5.7: not eligible, or already taken) | `needs-human` |
 
 **What invalidates a round is unreviewed CODE landing after it, not the head moving.** The
 archive commit (§7.F) moves the head by design and is exempt; so is a pure fix push, which
@@ -503,7 +503,7 @@ passes it — the absent file does not fail safe, it fails open.)
         { "round": 2, "head": "a1b2c3d4...", "axes": ["impl-spec-conformance"],
           "candidates": 1, "deduped": 1, "confirmed": 1, "refuted": [], "fixed_in": "b7c8d9e",
           "agents": 1, "verifiers": 1, "tokens": "not reported",
-          "void_attempts": 1, "failed_axes": [], "reverted": null, "prose_round": false }
+          "void_attempts": 1, "reverted": null, "prose_round": false }
       ],
       "open": [
         { "id": "impl-2", "fp": "sha256(...)", "file": "lib/foo.ts", "line": 42,
@@ -544,7 +544,7 @@ written back.
 `reviewed_at` is the head at which each axis last reviewed, which is the base of its next delta
 read. `round_log` holds one entry per round: what ran, the counts, each refuted finding with its
 reason, the fix sha, and the round's spend, which §5.9's record and `Spend:` line are built from —
-plus the void attempts, failed axes, the sha of any revert its fix made, and whether it was the
+plus the void attempts, the sha of any revert its fix made, and whether it was the
 prose round (§5.7).
 `open` carries every confirmed finding, raised or carried, each with its `status`. Its `deferred`
 array is the written record §5.11 requires — one entry per finding the ladder placed, carrying the
@@ -946,13 +946,7 @@ round 3: …
   overloaded API, an empty report, "cannot start") reviewed nothing: do not clear the axis,
   never record `clean` from it, and do not immediately re-fire it — back off, or run the axis's
   own charter and record that instead, still inside the same round. A round does not end while an
-  axis it dispatched has reviewed nothing — up to one back-off and one charter fallback for that
-  axis, where some other axis of the round returned a body; still without a body after both, the
-  axis is logged in `failed_axes` and the round ends unclean, and a failed axis at the budget is a
-  stop (Non-convergence, below). An axis in `failed_axes` has cleared nothing, so every later round
-  dispatches it until it returns a body, whether or not its files moved, reading from its
-  `reviewed_at` or, where it has none, the whole branch diff. A round in which **every** axis
-  failed is void: it is
+  axis it dispatched has reviewed nothing. A round in which **every** axis failed is void: it is
   re-fired as a re-run of the round `round_in_progress` names (below), so it counts once, and each
   void attempt is counted as `void_attempts` on the entry the round finally writes. Six
   consecutive overload errors minutes apart were once all counted as rounds: half an hour,
@@ -1069,21 +1063,19 @@ round 3: …
   Everything else leaves the change down the ladder of §5.11. On one change, 55 of 85 rounds
   reviewed code that was already live.
 - **Non-convergence** — a round at or past `max-rounds` ends with a confirmed blocker that the
-  revert default (above) did not remove (a blocker a revert re-opened counts), or with an axis in
-  `failed_axes`. Then do **not** hand
-  off as ready, and do **not** loosen the bar. Do **not** take another fix round unless the prose
-  round below applies, and never reclassify a finding to get past the gate — `kind` is the
+  revert default (above) did not remove (a blocker a revert re-opened counts). Then do **not**
+  hand off as ready, and do **not** loosen the bar. Do **not** take another fix round unless the
+  prose round below applies, and never reclassify a finding to get past the gate — `kind` is the
   verifier's (§5.5), and ship does not change it. Write the blockers to the ledger as open,
   `record state=needs-human`, and post ONE record listing them (file:line, failure scenario, why
-  unfixed), with each failed axis named as not reviewed. **Leave the enforced blocker of §5.9**,
+  unfixed). **Leave the enforced blocker of §5.9**,
   stop scheduling re-wakes, and report. Nothing external will change this state, so polling is
   pointless — a human re-runs `ship` after deciding.
 - **The prose round, bounded by the kind of finding.** The stage may take ONE more scoped round
   instead of escalating when all of the following hold:
   - at least one blocker survives a round at or past `max-rounds`, judged after the revert
     default, so a blocker a revert re-opens is a surviving one;
-  - every surviving blocker is `origin: fix` (§5.6) and `kind: prose` (§5.5);
-  - no axis failed.
+  - every surviving blocker is `origin: fix` (§5.6) and `kind: prose` (§5.5).
 
   Its fix is held to the lines those blockers name, with no same-line cleanups, and the round
   reads that fix delta plus any sweep §5.8 owes. It is logged with `prose_round: true` and stated
