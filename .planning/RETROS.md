@@ -90,3 +90,49 @@ In `ship` (next PR):
 
 For the supervisor (no skill change): cap a cluster at about three issues or five independent
 instances, and split the rest into the queue.
+
+Shipped in #278 (Closes #276; #272 partly fixed in place, its two remaining quoting cases carry a
+tested fix on the issue).
+
+## Retro 3 — 2026-09-28, after #277 #278 #281 #280
+
+Batch: 4 PRs, 8 issues closed (#114 #240 #232 #276 #275 #131 #140 #198), open count 61 → 54.
+Open-to-merge 20-60 min; the flake cluster (the one retro 2 called oversized) was the long one.
+
+### Went well
+
+* **Retro 2's rules took effect in the same batch.** The flake slot found its own new check writing
+  the live mailbox and fixed it in the PR rather than filing it; the retro-2 slot ran the new scope
+  check and correctly declined to split.
+* **Root cause instead of a retry.** #275 went from "t10 flakes 1 in 6" to a measured platform edge —
+  `select()` loses FIFO EOF readiness when the last writer closes as the timeout fires, while a
+  blocking `read()` still sees it — and a fix measured before and after (4/1670 → 0/1600).
+* **Decisions were cheap to make** because each escalation carried the measurements and a
+  recommendation; all three were answered within minutes.
+
+### Went badly
+
+* **A finding was homed on an issue that closed thirty seconds later.** The #280 slot commented a
+  t7 race onto #275 while the #281 slot was handing off with `Closes #275`; #281 had read #275's
+  comments at intake, not at hand-off. Only the supervisor noticing kept it (re-homed to #270).
+* **The supervisor touched a live slot's worktree.** A file that looked like a leftover check-test
+  probe was a probe of a check-test run still in progress in the slot's background shell; reverting
+  it corrupted that run. No harm reached `main` (the PR had merged), but the rule is plain: never
+  edit a slot's tree without first checking for its running processes. From outside a live probe
+  and a stale one are identical — noted on #136, which could give check-test a run-in-progress marker.
+* **A slot sat idle ~30 min** waiting for the retro-2 PR to merge before the next batch launched.
+  That is the rule's cost and it was worth paying once per retro, but it argues for keeping a retro
+  change small.
+
+### Change
+
+In `ship` (next PR):
+
+1. **Re-read the comments of every issue you close at hand-off, not only at intake** — a parallel
+   change can add a scenario after you started. A comment newer than your intake read is in scope
+   or re-homed before `Closes #N`.
+2. **When re-homing a finding, pick an open issue that no in-flight change is about to close** —
+   check the open PRs for `Closes #N` on your candidate; if one does, put the finding on another
+   issue or say in your notice that the closer must carry it.
+
+For the supervisor: `ps` for processes whose cwd is a slot's worktree before touching any file in it.
