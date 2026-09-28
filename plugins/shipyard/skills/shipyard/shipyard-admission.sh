@@ -117,6 +117,7 @@ shipyard_admission_report() {
     printf 'admission: REFUSED (slot count unavailable) — %s.\n' "${count#*"$TAB"}"
     case "${count%%"$TAB"*}" in
       elsewhere) shipyard_elsewhere_remedy ;;
+      container) shipyard_container_remedy ;;
       *)
         printf '  Start the terminal backend (agterm: `agtermctl version` answers; tmux: `tmux ls`) and re-run.\n' ;;
     esac

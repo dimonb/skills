@@ -137,6 +137,7 @@ ct_occupant() {
 ct_sessions() { cat "$SESSIONS" 2>/dev/null; return "\$(cat "$SESSIONS_RC" 2>/dev/null || printf 0)"; }
 ct_absence_class()  { _ct_pin_dir; drv_absence_class "\$1" "\${2:-}" "\${3:-}"; }
 ct_pins_elsewhere() { _ct_pin_dir; drv_pins_elsewhere; }
+ct_both_pinned()    { _ct_pin_dir; drv_both_pinned; }
 SHADOWEOF
 
 # --- the real code under test -----------------------------------------------------------------
@@ -237,6 +238,14 @@ ok "2b: ...and warns off the relaunch"         yes "$(has "$out" 'do NOT')"
 # to work at all, because the class is read through a command substitution.
 ok "2b: ...with the pin to set"                yes "$(has "$out" 'COUNCIL_BACKEND=agterm')"
 ok "2b: ...and not the OTHER class's remedy"   no  "$(has "$out" 'agtermctl version')"
+# 2b2. Both pinned (#132): still refused, but "pin the other" would only move the refusal there, so
+#      the remedy says one pin is stale and names the file to remove instead.
+reset; : >"$PINS/container-agterm"; : >"$PINS/container-tmux"; : >"$SESSIONS"; printf '0\n' >"$SESSIONS_RC"
+out=$( FAKE_TYPE_RC=1 run_say codex 'hello' )
+ok "2b2: both pinned -> still exit 4"             4   "$(rc_of "$out")"
+ok "2b2: ...saying one pin is stale"              yes "$(has "$out" 'so one pin is stale')"
+ok "2b2: ...naming the stale file to remove"      yes "$(has "$out" 'container-<that backend>')"
+ok "2b2: ...and not the looping pin-the-other"    no  "$(has "$out" 'COUNCIL_BACKEND=agterm')"
 
 # 2c. The other half: the backend did not answer at all. No pin disagreement here, so this case
 #     fails if reachability is ever dropped in favour of the pin check alone.

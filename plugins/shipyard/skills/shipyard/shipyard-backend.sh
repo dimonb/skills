@@ -143,8 +143,10 @@ shipyard_backend_check() {
 }
 
 # shipyard_container_unpin — forget the pinned name, so the next launch derives a fresh one. Only
-# correct once nothing is left in the old container, which is why shipyard-down.sh calls it solely
-# after `shipyard_continuity_cleanup_last_slot` has PROVEN the fleet empty.
+# correct once nothing is left in the old container, which is why it is called only from
+# `shipyard_continuity_cleanup_last_slot`, once that has PROVEN the resolved backend's container
+# empty: the whole fleet on the ordinary path, or only this backend's stale pin when both backends
+# are pinned (its status 4).
 #
 # IT CLEARS ONLY THE RESOLVED BACKEND'S PIN, which is the rule that was already here, and the
 # reuse of `_drv_pin_file` that goes with it: unpin removes exactly what `drv_container_pin` wrote.
@@ -159,6 +161,8 @@ shipyard_backend_check() {
 #     not fire here (tmux IS pinned). The justification written for it was circular: the agterm pin
 #     is invisible to the disagreement check only BECAUSE the tmux pin sits beside it, and this very
 #     call is about to delete that one. Afterwards the leftover is exactly what the check reads.
+#     (Since #132 the agterm pin is no longer invisible there — both pins disagree from either side
+#     — and `shipyard_continuity_cleanup_last_slot` calls this in that state for the resolved pin.)
 #
 # The rule that covers all three configurations without a guard is the original one: the caller
 # proved that the backend it RESOLVED holds no slots and learned nothing about the other, so clear
@@ -351,12 +355,13 @@ shipyard_slot_check() {
   return 1
 }
 
-# shipyard_backend_pinned_elsewhere — echoes the backend(s) this fleet was actually launched on,
-# and returns 0 ONLY when a pin exists and NONE of them is the backend this process resolved.
+# shipyard_backend_pinned_elsewhere — echoes the pinned backend(s) other than the one this process
+# resolved, and returns 0 whenever there is one — including when the resolved backend is pinned
+# too, because a mailbox runs one backend at a time and two pins mean one is stale (#132).
 #
 # There is no separate backend pin file to maintain. The driver's container pin is already named
-# `container-<backend>`, so the set of pin files present IS the record of which backends this
-# mailbox has launched a fleet on. Reading that name keeps one fact in one place.
+# `container-<backend>`, so the set of pin files present is the record of which backend this
+# mailbox's fleet is on. Reading that name keeps one fact in one place.
 #
 # THE SEAM THIS USED TO NAME IS NOW CLOSED. This function spelled `container-<b>` itself, which
 # duplicated a template the driver owns — so a rename there would have made it read nothing and
@@ -376,6 +381,9 @@ shipyard_slot_check() {
 # what was wrong was reading "I looked somewhere else and found nothing" as "there is nothing".
 shipyard_backend_pinned_elsewhere() { drv_pins_elsewhere; }
 
+# shipyard_both_pinned — shipyard's name for `drv_both_pinned` (#132).
+shipyard_both_pinned() { drv_both_pinned; }
+
 # shipyard_signal_class [<enum-rc> [<enum-output> <slot-session-name>]] — MAY AN ABSENCE BE
 # BELIEVED?
 #
@@ -387,6 +395,10 @@ shipyard_backend_pinned_elsewhere() { drv_pins_elsewhere; }
 #   listed       it answered AND still lists this very slot, so it is the per-slot lookup that
 #                failed, not the child that ended. Needs the last two arguments; a caller that
 #                passes only a status can never get this class.
+#   container    shipyard's own, asked only when the driver would believe the absence: a slot
+#                still in its worktree was launched on this backend into ANOTHER container, and
+#                that container still lists it or cannot say (#132's third case; see
+#                `shipyard_launched_into_other_container`).
 #
 # THE LAST TWO ARGUMENTS SHARE A NAMESPACE AND NOTHING CHECKS IT. `<enum-output>` and
 # `<slot-session-name>` are compared for exact equality, so they must be spelled the same way.
@@ -430,8 +442,10 @@ shipyard_backend_pinned_elsewhere() { drv_pins_elsewhere; }
 # NOT USED AS EVIDENCE: the slot's worktree. A worktree outlives its terminal by design — that is
 # the state of every child whose terminal was killed but not torn down — so reading its presence as
 # "the child may still be alive" would raise the alarm on the commonest healthy case, which
-# AGENTS.md names as costing more than the bug it guards. The per-slot launch record that WOULD
-# carry that evidence belongs with the pin-staleness work, filed separately.
+# AGENTS.md names as costing more than the bug it guards. The `container` class below uses a
+# worktree only to choose which launch records to look at; what it refuses on is the backend
+# itself still listing the slot in the container that record names (see
+# `shipyard_launched_into_other_container`).
 #
 # AND WHY IT RE-SPELLS TWO OF THE SENTENCES. The CLASS is decided once, in the driver; the WHY is
 # operator-facing prose in this skill's own vocabulary — a fleet, a slot, a child — which the
@@ -452,31 +466,130 @@ shipyard_signal_class() {
     elsewhere) sig="elsewhere${TAB}this run resolved $(shipyard_backend), but this fleet was launched on $(shipyard_backend_pinned_elsewhere)" ;;
     listed)    sig="listed${TAB}the $(shipyard_backend) backend answered and still lists $name, so it is the per-slot lookup that failed, not the child that ended" ;;
   esac
+  # Asked only once the driver would believe the absence: it can add a refusal, never remove one.
+  local other
+  if [ "$crc" = 0 ] && other=$(shipyard_launched_into_other_container); then
+    sig="container${TAB}this run resolved $(shipyard_container_kind) $(printf '%q' "$(shipyard_container)"), but $other"
+    crc=1
+  fi
   printf '%s' "$sig"
   return "$crc"
 }
 
-# shipyard_elsewhere_remedy — the operator's next move after an `elsewhere` refusal of a LAUNCH, on
-# stdout, one indented line each. The launch dedup and the admission gate both refuse on it, so the
-# words live here once.
+# shipyard_launched_into_other_container — #132's third case: the RIGHT backend, the WRONG
+# container. The pin records a backend, and `drv_container` resolves override -> pin -> derive, so a
+# pin deleted by hand, or a report run under SHIPYARD_WORKSPACE / SHIPYARD_SESSION naming another
+# container, asks an honestly empty container and is believed. The launch record
+# (`launch-<slot>.json`, written by shipyard-launch.sh) says which container each slot went into.
+#
+# Echoes one clause per disagreeing slot and returns 0 when some slot whose git worktree is still
+# registered was launched on THIS backend into a container other than the resolved one, AND the
+# backend either still lists `ship-<slot>` there or cannot say. Returns 1 otherwise. The worktree
+# only bounds which records are read — records of torn-down slots stay in the mailbox for good —
+# and the slot name comes from git's worktree list, never from a record. What refuses is the
+# backend's own answer about the recorded container, so a child whose terminal was closed and whose
+# worktree was kept reads as not listed there, and raises nothing.
+#
+# PEER-WRITABLE, AND WHY THAT IS ACCEPTABLE HERE. The records live in the mailbox, which the
+# children can write. It has two consumers. In `shipyard_signal_class` it is consulted only after
+# the driver has already decided the absence may be believed, and it can only turn that into a
+# refusal: a forged or edited record makes the operator's signal LOUDER (a `container` refusal
+# naming the forged container, which is itself the evidence) and never silences one, and deleting
+# a record removes only this extra refusal. In `shipyard_continuity_cleanup_last_slot` it is a
+# guard on the both-pinned pin clear: a record here blocks the clear, so a deleted record can let a
+# teardown under an overridden container clear the pin it resolved. That grants a child nothing
+# new — it can delete that pin in the same mailbox directly.
+shipyard_launched_into_other_container() {
+  local mb now be wt slot f rec c cl lrc out="" TAB
+  TAB=$(printf '\t')
+  mb=${DRV_CONTAINER_PIN_DIR:-}
+  [ -n "$mb" ] && [ -d "$mb" ] || return 1
+  now=$(shipyard_container 2>/dev/null) || return 1
+  be=$(shipyard_backend)
+  while IFS= read -r wt; do
+    case "$wt" in */.claude/worktrees/ship-*) ;; *) continue ;; esac
+    slot=${wt##*/.claude/worktrees/ship-}
+    shipyard_slot_check "$slot" 2>/dev/null || continue
+    f="$mb/launch-$slot.json"
+    [ -f "$f" ] || continue
+    rec=$(jq -r 'if .kind == "launch" then [(.backend // "" | tostring), (.container // "" | tostring)] | @tsv else empty end' \
+            "$f" 2>/dev/null) || continue
+    [ "${rec%%"$TAB"*}" = "$be" ] || continue
+    c=${rec#*"$TAB"}
+    [ -n "$c" ] && [ "$c" != "$now" ] || continue
+    lrc=0; cl=$(drv_sessions "$c" 2>/dev/null) || lrc=$?
+    if [ "$lrc" != 0 ]; then
+      out="${out:+$out; }ship-$slot was launched into $(printf '%q' "$c"), which did not answer"
+      continue
+    fi
+    while IFS= read -r rec; do
+      [ "$rec" = "ship-$slot" ] || continue
+      out="${out:+$out; }ship-$slot was launched into $(printf '%q' "$c") and is still listed there"
+      break
+    done <<EOF
+$cl
+EOF
+  done <<EOF
+$(git worktree list --porcelain 2>/dev/null | sed -n 's/^worktree //p')
+EOF
+  [ -n "$out" ] || return 1
+  printf '%s' "$out"
+}
+
+# shipyard_container_remedy — the operator's next move after a `container` refusal, on stdout, one
+# indented line each, shared by every caller that prints a remedy per class.
+shipyard_container_remedy() {
+  local var
+  case "$(shipyard_backend)" in agterm) var=SHIPYARD_WORKSPACE ;; *) var=SHIPYARD_SESSION ;; esac
+  echo "  This run resolved a different container from the one those slots were launched into (the pin is missing,"
+  echo "  overridden, or was re-pinned since). The name above comes from a launch record in the mailbox, which the"
+  echo "  children can write: confirm it against the launch output before trusting it. Then name it for this shell"
+  echo "  and re-run: $var=<that name>. If those slots are finished, check that the terminal listed there is really"
+  echo "  that slot's (another repo launched from the same place can hold one of the same name), then tear them down"
+  echo "  with the same variable set; that removes the worktrees this check reads."
+}
+
+# shipyard_elsewhere_remedy — the operator's next move after an `elsewhere` refusal, on stdout, one
+# indented line each, so the words live here once. Every launch refusal prints it; the report and
+# the per-slot refusal print only its both-pinned branch, having single-pin words of their own.
 #
 # ONE MAILBOX RUNS ONE BACKEND AT A TIME. Its pins cannot tell two live fleets from one fleet and a
-# failed probe (#132), and a second backend's pin beside the first disarms the `elsewhere`
-# corroboration every reader relies on — so a launch is refused whether the other backend came from
-# `auto` or was asked for explicitly, and the wording says which of the two this was. A stale pin is
-# cleared only in the order below: a pin removed while its fleet is live is #61 again.
+# failed probe, so a launch is refused whether the other backend came from `auto` or was asked for
+# explicitly, and the wording says which of the two this was. Both pins present is refused too
+# (#132): one of them is stale and nothing on disk says which, so that branch prints its own order
+# — down under the backend believed stale clears that backend's pin alone — and returns before the
+# single-pin order. Either way a stale pin is cleared only in the order printed: a pin removed
+# while its fleet is live is #61 again. What this still cannot offer is a way out when the pinned
+# backend can no longer answer at all — step 1 needs it to — which #132 keeps open.
 shipyard_elsewhere_remedy() {
   local pin now d mb
   pin=$(shipyard_backend_pinned_elsewhere) || pin=""
   now=$(shipyard_backend)
   d=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
   mb=${DRV_CONTAINER_PIN_DIR:-<mailbox>}
-  case "${SHIPYARD_BACKEND:-auto}" in
-    auto) echo "  SHIPYARD_BACKEND=auto decides per process, and this process resolved $now while the fleet is on ${pin:-the other backend}." ;;
-    *)    echo "  This run asked for $now explicitly, but a mailbox runs one backend at a time and this one's fleet is on ${pin:-the other backend}." ;;
-  esac
-  [ -n "$pin" ] || return 0
-  echo "  Launch on the fleet's backend: SHIPYARD_BACKEND=$pin."
+  if shipyard_both_pinned; then
+    # Both pinned (#132). One is stale and nothing on disk says which, so neither is believed. The
+    # report under either backend prints the `elsewhere` NO SIGNAL naming the other for as long as
+    # both exist, so the single-pin steps below (which require no NO SIGNAL) cannot apply; the
+    # exit is down's last-slot cleanup, which clears the resolved backend's pin when that backend
+    # answered with no slot (`shipyard_continuity_cleanup_last_slot`, status 4).
+    echo "  Both backends are pinned in this mailbox ($now and $pin), and it runs one at a time, so one pin is stale"
+    echo "  and nothing on disk says which. Clear the stale one from the backend it names, never the other:"
+    echo "    1. SHIPYARD_BACKEND=<b> bash $d/shipyard-report.sh for the backend <b> you believe stale — it must list no"
+    echo "       ship-* terminal. Its only NO SIGNAL block may be the one naming the OTHER backend, which both pins cause;"
+    echo "    2. SHIPYARD_BACKEND=<b> bash $d/shipyard-down.sh <slot> ... (any one slot name if no worktree is left) —"
+    echo "       it clears <b>'s pin alone, keeps the other pin and every watcher, and says so;"
+    echo "    3. then launch, report and tear down on the other backend as usual. A pin that survives step 2 was KEPT:"
+    echo "       <b> listed a slot or could not answer. Do not remove it by hand — go back to step 1."
+    return 0
+  else
+    case "${SHIPYARD_BACKEND:-auto}" in
+      auto) echo "  SHIPYARD_BACKEND=auto decides per process, and this process resolved $now while the fleet is on ${pin:-the other backend}." ;;
+      *)    echo "  This run asked for $now explicitly, but a mailbox runs one backend at a time and this one's fleet is on ${pin:-the other backend}." ;;
+    esac
+    [ -n "$pin" ] || return 0
+    echo "  Launch on the fleet's backend: SHIPYARD_BACKEND=$pin."
+  fi
   echo "  If that fleet has really ended, its pin is stale. Clear it in this order, never while that fleet may be live:"
   echo "    1. SHIPYARD_BACKEND=$pin bash $d/shipyard-report.sh — it must list no ship-* terminal and print no NO SIGNAL"
   echo "       block (\`shipyard-down.sh --list\` shows worktrees, not terminals, so it cannot confirm this);"
@@ -540,10 +653,16 @@ shipyard_absence_report() {
       # Asked a second time rather than parsed back out of the message above: re-reading two file names costs
       # nothing, and recovering a value from prose couples this arm to that sentence's wording.
       pin=$(shipyard_backend_pinned_elsewhere) || pin=""
+      if shipyard_both_pinned; then
+        shipyard_elsewhere_remedy | sed 's/^  /       /' >&2
+        return 1
+      fi
       echo "       \`SHIPYARD_BACKEND=auto\` decides per PROCESS, so one failed socket probe sends this" >&2
       echo "       run to the other backend, where this repo's container is empty for entirely" >&2
       echo "       correct reasons." >&2
       [ -n "$pin" ] && echo "       Pin it for this shell and re-run: SHIPYARD_BACKEND=$pin" >&2 ;;
+    container)
+      shipyard_container_remedy | sed 's/^  /       /' >&2 ;;
     listed)
       # No peek hint here: shipyard_peek_hint resolves through the very lookup that just failed, so
       # it would print its own "no live terminal" refusal instead of a command to paste.

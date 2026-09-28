@@ -184,13 +184,21 @@ drv_pin() {
 # driver sources nothing: keep the two in step. The same named residual applies: between `mktemp`
 # and the shell re-opening the temp for the write, a watcher could swap that random name.
 drv_container_pin() {
-  local v f tmp
+  local v
   v=$(drv_container) || return 1
+  _drv_pin_write "$v"
+  printf '%s' "$v"
+}
+
+# Write <name> as the resolved backend's pin, by rename (above). Silent; a write that cannot happen
+# leaves no pin, which the next launch retries.
+_drv_pin_write() {
+  local v="$1" f tmp
   if f=$(_drv_pin_file 2>/dev/null) && [ ! -d "$f" ] \
     && tmp=$(mktemp "${f%/*}/.drv-pin.XXXXXXXX" 2>/dev/null); then
     { printf '%s\n' "$v" >"$tmp" && mv -f "$tmp" "$f"; } 2>/dev/null || rm -f "$tmp" 2>/dev/null
   fi
-  printf '%s' "$v"
+  return 0
 }
 
 # --- the API every caller uses -------------------------------------------------
@@ -222,8 +230,8 @@ drv_target() {
 
 # drv_launch <session-name> <cwd> <launcher> — start an agent console in its own session running
 # the launcher (an executable file the caller writes, so neither backend carries a long quoted
-# command line). Echoes the session name on success. The container is pinned here, so the first
-# launch fixes the name for every later call.
+# command line). Echoes the session name on success. The container is pinned here once the launch
+# succeeds, so the first successful launch fixes the name for every later call.
 drv_launch() {
   _drv_launch "$@" >/dev/null || return 1
   printf '%s' "$1"
@@ -259,7 +267,7 @@ _drv_launch() {
   local name="$1" cwd="$2" launcher="$3" container inner cmd out h
   case "$(drv_backend)" in
     agterm)
-      container=$(drv_container_pin) || return 1
+      container=$(drv_container) || return 1
       # `zsh -lc` gives the child a LOGIN shell: agterm spawns it from the app, so it inherits
       # the GUI environment and would otherwise miss the user's PATH entirely. --wait holds the
       # session open after the agent exits, so a crash stays readable.
@@ -272,7 +280,7 @@ _drv_launch() {
       h=$(printf '%s' "$out" | jq -r 'if .ok == true and (.result.id | type) == "string"
                                       then .result.id else empty end' 2>/dev/null) || h="" ;;
     tmux)
-      container=$(drv_container_pin) || return 1
+      container=$(drv_container) || return 1
       cmd=$(drv_shq "$launcher")
       # Scrub AGTERM_* before the tmux SERVER is born: a server started from inside an agterm
       # session captures them and hands them to everything it ever spawns, so a child's
@@ -291,6 +299,11 @@ _drv_launch() {
       fi ;;
     *) _drv_no_backend; return 1 ;;
   esac
+  # PINNED ONLY ONCE THE LAUNCH WENT THROUGH, and with the very name it used. Pinned before it, a
+  # launch on a backend that then failed — a relaunch aimed at a backend that was down — left a pin
+  # for a backend that holds nothing beside the real one, and since both pins disagree from either
+  # side (#132) every later verb refused on it.
+  _drv_pin_write "$container"
   printf '%s\t%s' "$container" "$h"
 }
 
@@ -487,16 +500,34 @@ drv_sessions() {
       # expects yields an empty selection, which is indistinguishable from an empty container and
       # is exactly the "answered" side of the fact above. `error()` makes jq exit non-zero so the
       # malformed case reads as unanswered.
+      #
+      # IT IS IN TWO SCOPES, and the split is the point (#133). The WORKSPACE level — every
+      # workspace an object with a string name and a sessions array — is agterm's own structure,
+      # so it is asserted over the whole tree: a schema change there is what would make the
+      # `select` below match nothing and pass for an empty container. The SESSION level is
+      # asserted only inside the workspace being enumerated. The other workspaces are the human's
+      # own tabs; a malformed session there cannot change this answer, and asserting over it made
+      # one of them raise a permanent `unreachable` alarm the operator could not act on, against a
+      # socket that was answering. Nothing that could change THIS container's answer stopped being
+      # checked: an empty or absent workspace is empty whatever its sessions' schema would be.
+      # `drv_handles` keeps the whole-tree assertion, because every workspace IS its answer.
+      #
+      # The shape was checked against a real agterm 0.25 tree of nine workspaces, reduced into
+      # tests/fixtures/agterm-workspaces.json: every session there carried a string `id` and `name`,
+      # so the nameless session in the tests is a hand-made case, not an observed one.
       printf '%s' "$tree" | jq -r --arg ws "$container" '
         if .ok != true or (.result.tree.workspaces | type) != "array"
           or (all(.result.tree.workspaces[];
             type == "object" and (.name | type) == "string"
-            and (.sessions | type) == "array"
-            and all(.sessions[];
-              type == "object" and (.id | type) == "string" and (.id | length) > 0
-              and (.name | type) == "string")) | not)
+            and (.sessions | type) == "array") | not)
         then error("invalid agterm tree")
-        else .result.tree.workspaces[] | select(.name == $ws) | .sessions[]? | .name
+        else [.result.tree.workspaces[] | select(.name == $ws)] as $ours
+          | if (all($ours[]; all(.sessions[];
+                  type == "object" and (.id | type) == "string" and (.id | length) > 0
+                  and (.name | type) == "string")) | not)
+            then error("invalid agterm tree")
+            else $ours[] | .sessions[] | .name
+            end
         end
       ' 2>/dev/null || return 1
       return 0 ;;
@@ -539,8 +570,12 @@ drv_handles() {
   case "$(drv_backend)" in
     agterm)
       tree=$(agtermctl tree --json 2>/dev/null) || return 1
-      # The same shape assertion as `drv_sessions`, for the same reason: a tree that parses but is
-      # not this shape would otherwise read as an answered, empty backend.
+      # The shape assertion `drv_sessions` makes, for the same reason: a tree that parses but is
+      # not this shape would otherwise read as an answered, empty backend. Unlike `drv_sessions`
+      # it is NOT scoped to one workspace (#133), and must not be: this listing is whole-backend by
+      # design, so every workspace's sessions are part of its answer, and a nameless session
+      # anywhere would be a line a caller matches against its record. Refusing the whole tree
+      # reads as unanswered, which every caller already treats as "cannot tell".
       printf '%s' "$tree" | jq -r '
         if .ok != true or (.result.tree.workspaces | type) != "array"
           or (all(.result.tree.workspaces[];
@@ -573,34 +608,49 @@ drv_handles() {
   esac
 }
 
-# drv_pins_elsewhere — echoes the backend(s) this caller's pin directory records, and returns 0
-# ONLY when a pin exists and NONE of them is the backend this process resolved.
+# drv_pins_elsewhere — echoes the backend(s) OTHER than the resolved one that this caller's pin
+# directory records, and returns 0 whenever there is at least one.
 #
 # There is no separate backend pin file to maintain. The container pin is already named
-# `container-<backend>`, so the SET of pin files present IS the record of which backends this
-# caller has launched on. That is why this belongs beside `_drv_pin_file` rather than in either
+# `container-<backend>`, so the SET of pin files present is the record of which backend this
+# caller's terminals are on. That is why this belongs beside `_drv_pin_file` rather than in either
 # skill: `_drv_pin_file` names only the CURRENT backend and so cannot answer "which pins exist",
 # and a caller that spells `container-<b>` for itself duplicates a template this file owns — a
 # rename here would then make that caller read nothing and fail OPEN, silently, which is the
 # incident this whole section exists to prevent.
 #
-# Both pins present is NOT a disagreement: this caller has launched on each, so neither choice is
-# looking in the wrong place. Reporting one there would alarm on a legitimate history and teach
-# the operator to ignore the block.
+# A PIN FOR ANOTHER BACKEND IS A DISAGREEMENT EVEN WHEN THE RESOLVED BACKEND IS PINNED TOO (#132).
+# This used to read both pins as a legitimate history ("this caller has launched on each") and
+# report nothing, which switched the check off for good on any pin directory that had ever held
+# both: a blip that resolved the idle backend then found an honestly empty container and was
+# believed over live children. A caller runs one backend at a time (shipyard refuses a launch on
+# the other one, #280), so two pins mean one of them is stale and nothing here can say which. The
+# answer is the refusal, naming the other backend. The way out is each caller's: shipyard's
+# last-slot teardown clears the resolved backend's own pin once that backend answered with no slot
+# (`shipyard_continuity_cleanup_last_slot`); in council no verb clears a pin while this verdict
+# stands (`down --purge` is refused on it), and its remedy names the stale file to remove by hand.
+# `_drv_launch` pins only after a launch succeeds, so a launch that failed on a backend that was
+# down does not create the second pin.
 drv_pins_elsewhere() {
-  local d b f now any="" found=""
+  local d b now other=""
   d="${DRV_CONTAINER_PIN_DIR:-}"
   [ -n "$d" ] && [ -d "$d" ] || return 1
   now=$(drv_backend)
   for b in agterm tmux; do
-    f="$d/container-$b"
-    [ -f "$f" ] || continue
-    any="${any:+$any and }$b"
-    [ "$b" = "$now" ] && found=1
+    [ "$b" = "$now" ] && continue
+    [ -f "$d/container-$b" ] || continue
+    other="${other:+$other and }$b"
   done
-  [ -n "$any" ] || return 1        # nothing was ever launched from here — no disagreement
-  [ -n "$found" ] && return 1      # the resolved backend is one of them — no disagreement
-  printf '%s' "$any"
+  [ -n "$other" ] || return 1      # no pin, or only the resolved backend's — no disagreement
+  printf '%s' "$other"
+}
+
+# drv_both_pinned — 0 when the pin directory holds the resolved backend's pin AND another one: the
+# state in which each caller's `elsewhere` remedy must say "one pin is stale" rather than "pin the
+# other". "Pinned" is the pin FILE existing, the test `drv_pins_elsewhere` applies to the other.
+drv_both_pinned() {
+  local f
+  drv_pins_elsewhere >/dev/null && f=$(_drv_pin_file 2>/dev/null) && [ -f "$f" ]
 }
 
 # drv_absence_class <enum-rc> [<enum-output> <session-name>] — the verdict.

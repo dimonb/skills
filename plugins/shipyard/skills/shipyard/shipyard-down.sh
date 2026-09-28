@@ -129,7 +129,8 @@ if [ "$LIST" = 1 ]; then
     echo
     echo "?<class>: no terminal on the $(shipyard_backend) backend, and that absence could not be corroborated"
     echo "  (unreachable: the backend did not answer; elsewhere: the fleet was launched on another backend;"
-    echo "  listed: the backend lists the slot but its lookup failed; any other class: see shipyard_signal_class)."
+    echo "  listed: the backend lists the slot but its lookup failed; container: a slot is still listed in, or"
+    echo "  could not be asked about, the container its launch record names; any other class: see shipyard_signal_class)."
     echo "  Do NOT tear such a slot down on this listing — \`shipyard-down.sh\` refuses it without --force,"
     echo "  and the STATE column does not change that."
   fi
@@ -273,6 +274,14 @@ if [ "$cleanup_status" -eq 2 ]; then
   rc=1
 elif [ "$cleanup_status" -eq 3 ]; then
   echo "warning: could not stop every parent continuity watcher; lifecycle state was preserved" >&2
+  rc=1
+elif [ "$cleanup_status" -eq 4 ]; then
+  # Both backends were pinned (#132). This backend proved its own container empty, so its pin was
+  # stale and is gone; the other backend's pin, the watchers and the container were left alone.
+  other=$(shipyard_backend_pinned_elsewhere) || other=""
+  echo "notice: both backends were pinned; the $(shipyard_backend) pin was stale and is cleared." >&2
+  echo "        The ${other:-other} pin was kept, and no watcher was stopped: the fleet, if any, is there." >&2
+  echo "        Once that fleet ends, tear it down under SHIPYARD_BACKEND=${other:-<that backend>} as usual." >&2
   rc=1
 fi
 exit "$rc"

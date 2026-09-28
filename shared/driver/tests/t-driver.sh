@@ -97,7 +97,8 @@ case "$1" in
        new-session|new-window)
          env | sed -n 's/^\(AGTERM_[A-Za-z_]*\)=.*/leak:\1/p' >>"${FAKE_TMUX_LOG:-/dev/null}"
          # `-P -F '#{window_id}'` prints the new window's id; FAKE_TMUX_NEW_ID is what it prints.
-         [ -n "${FAKE_TMUX_NEW_ID:-}" ] && printf '%s\n' "$FAKE_TMUX_NEW_ID" ;;
+         [ -n "${FAKE_TMUX_NEW_ID:-}" ] && printf '%s\n' "$FAKE_TMUX_NEW_ID"
+         exit "${FAKE_TMUX_NEW_RC:-0}" ;;
      esac
      exit 0 ;;
 esac
@@ -491,6 +492,37 @@ EOF
 ok "agterm: only THIS container's sessions are listed" "|0" \
    "$(sessions_of _DRV_BE=agterm DRV_CONTAINER_OVERRIDE=proj "FAKE_AT_TREE=$TMP/tree-other.json")"
 
+# #133: the session-level shape check is scoped to the workspace being enumerated. The base is a
+# real tree (fixtures/agterm-workspaces.json, see its README); the malformations are derived from it
+# with jq here, never hand-built, and the capture itself holds no nameless session.
+WS_FIX="$FIX/agterm-workspaces.json"
+ok "agterm (captured): our workspace among others, rc 0" "proj-1|0" \
+   "$(sessions_of _DRV_BE=agterm DRV_CONTAINER_OVERRIDE=proj "FAKE_AT_TREE=$WS_FIX")"
+jq '(.result.tree.workspaces[] | select(.name == "other-ws") | .sessions[0]) |= del(.name)' \
+  "$WS_FIX" >"$TMP/tree-other-nameless.json"
+ok "agterm: a nameless session in ANOTHER workspace does not reject ours" "proj-1|0" \
+   "$(sessions_of _DRV_BE=agterm DRV_CONTAINER_OVERRIDE=proj "FAKE_AT_TREE=$TMP/tree-other-nameless.json")"
+jq '(.result.tree.workspaces[] | select(.name == "proj") | .sessions[0]) |= del(.name)' \
+  "$WS_FIX" >"$TMP/tree-ours-nameless.json"
+ok "agterm: a nameless session in OUR workspace still rejects the tree" "|1" \
+   "$(sessions_of _DRV_BE=agterm DRV_CONTAINER_OVERRIDE=proj "FAKE_AT_TREE=$TMP/tree-ours-nameless.json")"
+jq '(.result.tree.workspaces[] | select(.name == "proj") | .sessions[0]) |= del(.id)' \
+  "$WS_FIX" >"$TMP/tree-ours-idless.json"
+ok "agterm: an id-less session in OUR workspace still rejects the tree" "|1" \
+   "$(sessions_of _DRV_BE=agterm DRV_CONTAINER_OVERRIDE=proj "FAKE_AT_TREE=$TMP/tree-ours-idless.json")"
+# The workspace level stays whole-tree: it is agterm's own structure, and a change to it is what
+# would make the `select` match nothing and pass for an empty container.
+jq '(.result.tree.workspaces[] | select(.name == "other-ws")) |= del(.name)' \
+  "$WS_FIX" >"$TMP/tree-ws-nameless.json"
+ok "agterm: a workspace with no name anywhere still rejects the tree" "|1" \
+   "$(sessions_of _DRV_BE=agterm DRV_CONTAINER_OVERRIDE=proj "FAKE_AT_TREE=$TMP/tree-ws-nameless.json")"
+jq '(.result.tree.workspaces[] | select(.name == "other-ws")) |= del(.sessions)' \
+  "$WS_FIX" >"$TMP/tree-ws-nosessions.json"
+ok "agterm: a workspace with no sessions array anywhere still rejects the tree" "|1" \
+   "$(sessions_of _DRV_BE=agterm DRV_CONTAINER_OVERRIDE=proj "FAKE_AT_TREE=$TMP/tree-ws-nosessions.json")"
+ok "agterm: a nameless session elsewhere, and our workspace absent, is an honest empty" "|0" \
+   "$(sessions_of _DRV_BE=agterm DRV_CONTAINER_OVERRIDE=not-there "FAKE_AT_TREE=$TMP/tree-other-nameless.json")"
+
 printf '\n── drv_launch_handle / drv_handles ──\n'
 # The handle is the one the BACKEND returned from the launch call, never a lookup by name after it.
 TAB=$(printf '\t')
@@ -529,6 +561,29 @@ ok "agterm: a response without an id -> rc 2" 2 "$rc"
 rc=0; ( export FAKE_AT_NEW_RC=1 FAKE_AT_NEW_OUT='{"ok":true,"result":{"id":"U-1"}}' _DRV_BE=agterm DRV_CONTAINER_OVERRIDE=cont
         drv_launch_handle sess /work/dir /path/to/launcher >/dev/null ) || rc=$?
 ok "agterm: a failed launch -> rc 1" 1 "$rc"
+# A launch pins only once it went through (#132): pinned first, a launch aimed at a backend that was
+# down left a second pin beside the room's real one, and both pins disagree from either side.
+LPIN="$TMP/launch-pin"; mkdir -p "$LPIN"
+( export FAKE_AT_NEW_RC=1 _DRV_BE=agterm DRV_CONTAINER_PIN_DIR="$LPIN" DRV_REPO_KEY=lp
+  drv_launch_handle sess /work/dir /path/to/launcher >/dev/null 2>&1 )
+ok "agterm: a failed launch writes no pin" no "$([ -e "$LPIN/container-agterm" ] && echo yes || echo no)"
+( export FAKE_TMUX_HASSESSION_RC=0 FAKE_TMUX_NEW_ID=@9 _DRV_BE=tmux DRV_CONTAINER_PIN_DIR="$LPIN" DRV_REPO_KEY=lp
+  drv_launch_handle sess /work/dir /path/to/launcher >/dev/null 2>&1 )
+ok "tmux: a launch that went through pins the name it used" lp "$(cat "$LPIN/container-tmux" 2>/dev/null)"
+rm -f "$LPIN"/container-*
+( export FAKE_TMUX_HASSESSION_RC=0 FAKE_TMUX_NEW_RC=1 _DRV_BE=tmux DRV_CONTAINER_PIN_DIR="$LPIN" DRV_REPO_KEY=lp
+  drv_launch_handle sess /work/dir /path/to/launcher >/dev/null 2>&1 )
+ok "tmux: a failed launch writes no pin" no "$([ -e "$LPIN/container-tmux" ] && echo yes || echo no)"
+( export FAKE_AT_NEW_OUT='{"ok":true,"result":{"id":"U-2"}}' _DRV_BE=agterm DRV_CONTAINER_PIN_DIR="$LPIN" DRV_REPO_KEY=lp
+  drv_launch_handle sess /work/dir /path/to/launcher >/dev/null 2>&1 )
+ok "agterm: a launch that went through pins the name it used" lp "$(cat "$LPIN/container-agterm" 2>/dev/null)"
+# drv_both_pinned: the resolved backend's pin AND another one.
+rm -f "$LPIN"/container-*; : >"$LPIN/container-agterm"
+ok "drv_both_pinned: only the other pinned -> no" no \
+   "$( _DRV_BE=tmux DRV_CONTAINER_PIN_DIR="$LPIN" drv_both_pinned && echo yes || echo no )"
+: >"$LPIN/container-tmux"
+ok "drv_both_pinned: both pinned -> yes" yes \
+   "$( _DRV_BE=tmux DRV_CONTAINER_PIN_DIR="$LPIN" drv_both_pinned && echo yes || echo no )"
 # ...while drv_launch keeps echoing the NAME, which shipyard relies on, handle or not.
 ok "drv_launch still echoes the name" sess \
    "$( export FAKE_TMUX_HASSESSION_RC=0 FAKE_TMUX_NEW_ID=@7 _DRV_BE=tmux DRV_CONTAINER_OVERRIDE=cont
@@ -551,6 +606,10 @@ ok "agterm: every workspace's sessions, with their container" \
 ok "agterm: a dead tree call is unanswered" "|rc=1" "$(handles_of _DRV_BE=agterm FAKE_AT_TREE_RC=1)"
 ok "agterm: a malformed tree is unanswered" "|rc=1" "$(handles_of _DRV_BE=agterm "FAKE_AT_TREE=$TMP/tree-bad.json")"
 ok "agterm: an empty tree is an answer"     "|rc=0" "$(handles_of _DRV_BE=agterm "FAKE_AT_TREE=$TMP/tree-empty.json")"
+# Deliberately NOT scoped the way drv_sessions now is (#133): every workspace is this listing's
+# answer, so a nameless session in any of them is a malformed answer, not someone else's business.
+ok "agterm: a nameless session in any workspace is unanswered" "|rc=1" \
+   "$(handles_of _DRV_BE=agterm "FAKE_AT_TREE=$TMP/tree-other-nameless.json")"
 printf '@1\tcont\tsess\n@4\tother\tx\n' >"$TMP/win-h.txt"
 ok "tmux: every window, verbatim" "@1 cont sess|@4 other x|rc=0" \
    "$(handles_of _DRV_BE=tmux "FAKE_TMUX_WINDOWS=$TMP/win-h.txt")"
@@ -587,12 +646,14 @@ ok "the pin names the backend we resolved"     "|1" "$(pins_of tmux)"
 rm -f "$PINS"/container-*; : > "$PINS/container-agterm"
 ok "pinned on agterm, resolved tmux"     "agterm|0" "$(pins_of tmux)"
 ok "...and the reverse is not a disagreement"  "|1" "$(pins_of agterm)"
-# Both present: this caller has launched on each, so neither choice is looking in the wrong place.
-# Reporting a disagreement here would alarm on a legitimate history and teach the operator to
-# ignore the block — which AGENTS.md names as costing more than the bug it guards.
+# Both present (#132): this used to be "no disagreement", which switched the check off for good on a
+# directory that had ever held both. One backend runs at a time, so one of the two is stale and
+# nothing here can say which: each resolution is told about the OTHER one, never about itself.
 : >"$PINS/container-tmux"
-ok "both pinned -> no disagreement (tmux)"     "|1" "$(pins_of tmux)"
-ok "both pinned -> no disagreement (agterm)"   "|1" "$(pins_of agterm)"
+ok "both pinned, resolved tmux -> the agterm pin disagrees"   "agterm|0" "$(pins_of tmux)"
+ok "both pinned, resolved agterm -> the tmux pin disagrees"   "tmux|0" "$(pins_of agterm)"
+rm -f "$PINS/container-agterm"
+ok "...and removing the other one ends it"     "|1" "$(pins_of tmux)"
 ok "a missing pin dir is not a disagreement"   "|1" \
    "$( out=$( _DRV_BE=tmux DRV_CONTAINER_PIN_DIR="$TMP/no-such-dir" drv_pins_elsewhere ) || rc=$?
        printf '%s|%s' "$out" "${rc:-0}" )"

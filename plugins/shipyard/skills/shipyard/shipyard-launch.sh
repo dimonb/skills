@@ -145,6 +145,7 @@ refuse_unresolved() {  # <slot>
   echo "       first is still working there." >&2
   case "${UNRESOLVED%%"$TAB"*}" in
     elsewhere) shipyard_elsewhere_remedy | sed 's/^  /       /' >&2 ;;
+    container) shipyard_container_remedy | sed 's/^  /       /' >&2 ;;
     *)
       echo "       Start the terminal backend (agterm: \`agtermctl version\` answers; tmux: \`tmux ls\`)" >&2
       echo "       and re-run." >&2 ;;

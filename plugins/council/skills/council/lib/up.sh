@@ -978,10 +978,21 @@ council_rooms() {
 # is guarded on a non-empty answer — silently omits the one sentence that names the way out.
 _council_elsewhere_remedy() { # <pad>
   local pad="$1" pin
+  pin=$(ct_pins_elsewhere) || pin=""
+  # Both pinned (#132): the other backend's pin disagrees from either side, so "pin the other" only
+  # moves the refusal there. No council verb clears a pin — `down --purge` is refused on this same
+  # verdict, on purpose (#171) — so the way out is the one stale file, removed by hand once the
+  # backend it names shows none of this room's seats.
+  if [ -n "$pin" ] && ct_both_pinned; then
+    echo "${pad}Both backends are pinned in this room ($(ct_backend) and $pin), and a room runs one" >&2
+    echo "${pad}at a time, so one pin is stale. Find the seats: \`tmux ls\` and \`agtermctl tree\`." >&2
+    echo "${pad}Then remove the pin of the backend that holds none of this room's seats —" >&2
+    echo "${pad}$ROOM/state/container-<that backend> — and re-run. Never remove the other one." >&2
+    return 0
+  fi
   echo "$pad\`COUNCIL_BACKEND=auto\` decides per PROCESS, so one failed socket probe" >&2
   echo "${pad}sends this run to the other backend, where this room's container is" >&2
   echo "${pad}empty for entirely correct reasons." >&2
-  pin=$(ct_pins_elsewhere) || pin=""
   [ -n "$pin" ] && echo "${pad}Pin it for this shell and re-run: COUNCIL_BACKEND=$pin" >&2
   return 0
 }
@@ -1452,8 +1463,11 @@ council_relaunch() {
         echo "                  one of them still holding the argument so far, and no verb can" >&2
         echo "                  tell them apart." >&2
         _council_elsewhere_remedy "                  "
-        echo "                  If pinning it fails because that backend is really gone, then so is" >&2
-        echo "                  this room's live side: the other seats were in the same container." >&2
+        # Only after "pin the other": the both-pinned remedy gives no such advice (#132).
+        if ! ct_both_pinned; then
+          echo "                  If pinning it fails because that backend is really gone, then so is" >&2
+          echo "                  this room's live side: the other seats were in the same container." >&2
+        fi
         return 4 ;;
       listed)
         echo "council relaunch: note — the $(ct_backend) backend still lists \`$sname\`, so '$peer' is" >&2
