@@ -1,5 +1,69 @@
 # STATE — session memory
 
+## ✅ SHIPPED (2026-09-27/28) — the repeating-alarm follow-ups, and the #204 security sequence
+
+One slot, strictly sequential, unattended for the second half on the owner's instruction to decide
+alone and to take any non-obvious call to a council room. Eleven PRs and a release; the fleet is
+empty, every worktree torn down through the content gate, no branch left on origin.
+
+| PR | what | release |
+|---|---|---|
+| **#243** | council: a STALL prints in full once per episode, then as its delta (#238) | council 0.7.0 |
+| **#244** | council: `say` refuses a seat whose agent exited (exit 8); `status` raises NO AGENT (#235) | " |
+| **#249** | shipyard: NO AGENT / HELD / AWAITING REMOVAL print in full once, then as a delta (#239) | shipyard 0.8.0 |
+| **#250** | council: SKILL.md states the trust contract (#245) | council 0.7.0 |
+| **#251** | council: the barrier counts seats, not documents (#179) | " |
+| **#252** | council: a future-stamped floor anchor raises the clock STALL and its push (#165, Refs) | " |
+| **#254** | shared `policy_mailbox_write`; council's mailbox writers FIFO-safe (#246) | " |
+| **#255** | shipyard's own mailbox writers FIFO-safe (#253) | shipyard 0.8.0 |
+| **#257** | council: keeper pid carries process start time (#30, #107) | council 0.7.0 |
+| **#258** | council: seat liveness from launch records keyed to backend handles (#247) | " |
+| **#259** | shipyard: continuity and the container pin FIFO-safe (#256) | shipyard 0.8.0 |
+| **#260** | release: council 0.7.0, shipyard 0.8.0 | — |
+
+`plugin update` verified by running it: council 0.5.0 → 0.7.0, shipyard 0.6.0 → 0.8.0 on the
+owner's install.
+
+### #204 was decided by a council room, not by the supervisor
+
+The owner judged the security trio to have "no particularly good solution" and asked for a room.
+Three agents (claude, codex, agy), `debate`, converged unanimously in 16 of 24 turns, roughly ten
+minutes. **No confinement, by decision**; every supervisor signal is accident-grade, because the
+mailbox is as seat-writable as the room, so out-of-room evidence only means a second consistent
+forgery is needed. Six ordered changes, all landed; control-set/log digests and HMAC deliberately
+not done (a same-user edit rewrites checker and baseline). The decision is on #204, which is closed
+with the residuals named. Two objections the critic raised were real and changed the design: the
+room's own `c_atomic` writes a predictable temp path a FIFO can block, and waiting inside `decide`
+for the reap would let the keeper kill `decide`'s own caller.
+
+### Decisions taken without the owner, and the grounds
+
+* **#165 Option A** — keep `c_floor_held_ms`'s 0 contract, add an anchor-ahead accessor that raises
+  the STALL and its push; a fixed 60s skew constant, **no env knob** (tests forge leads far beyond
+  it). Matches the room's "unknown drives both outputs" without rewriting every consumer.
+* **#246 Option A** — helper in `shared/policy`, council plus `policy_escalate` in one PR, shipyard's
+  writers as a follow-up (#253, shipped the same night), and its residue as another (#256, shipped).
+* **#247** — approved the child's concrete design, amended so a room with no launch record says so
+  in its unknown rather than showing a bare `?`.
+* **One `max-rounds` waiver** on #258, scoped to one fix, with "stop at needs-human, do not ask for a
+  fifth". Round 4 stopped on a documentation-only blocker; the supervisor directed the doc fix and
+  read the diff before merging. **Round 3's blocker was introduced by round 2's fix, and round 4's by
+  round 3's** — the pattern #206 carries, filed there as another scenario.
+
+### One instrument lesson
+
+**A transport fault mid-turn looks exactly like a stall and nothing else says so.** Slot 253's
+client printed "computer went to sleep mid-response" and sat idle with uncommitted work; the report
+classified it correctly as STALLED only because the classifier deliberately does not name transport
+faults. The pane said it in one line; git said the rest. One nudge resumed it.
+
+### Queue
+
+Council security trio done. Next candidates: the test-reliability set (**#114** with **#240**,
+**#109**, **#108**, **#149**); **#206** now has a third measured instance of a fix round introducing
+the next round's blocker; **#248** was filed by the #235 slot; **#165** stays open for the
+barrier's backdated-anchor note.
+
 ## ✅ SHIPPED overnight (2026-09-23) — the supervision quartet is closed
 
 Run unattended while the owner slept, one slot at a time, on the owner's instruction to choose the
