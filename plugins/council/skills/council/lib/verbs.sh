@@ -1189,6 +1189,10 @@ _status_sigfile() {
 #     half is SELF-REVELATION, not prevention: the delta prints what was sent, to whom and how long
 #     ago, so a forged record reads as a message the operator knows they never sent. An entry dated
 #     before the first firing or in the future is ignored rather than printed as a plausible one.
+#   * the roster's `created_ms` floors the record's first firing (#200), so a record older than the
+#     room is another room's. Moved forward, into the future included, it rejects every record:
+#     each firing prints the full line and the UNANSWERED form never arrives. That is wording only,
+#     the line and its push are unchanged, and a forged firing record already did the same.
 # A FIFO put in place of one of these files used to remove the line outright, as a HANG rather
 # than a wording: the record write blocked in open(2), and so did `_stall_escalate`'s jq read over
 # the mailbox glob and the status signature write. #246 closed the WRITES — each goes through
