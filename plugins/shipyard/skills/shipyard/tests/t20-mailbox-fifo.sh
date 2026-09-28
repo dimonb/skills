@@ -250,9 +250,22 @@ o=$(bounded "$SECS" tell --list)
 ok "tell --list gives a bad directive a row"     yes "$(has "$o" 'UNREADABLE')"
 rm -f "$MB/directive-41-9.json"
 o=$(bounded "$SECS" report)
-ok "the report's esc column marks the slot"      yes "$(has "$o" '❓ 3')"
+# The whole cell: the mark is added beside the pending count, never in its place.
+ok "the report's esc column marks the slot"      yes "$(has "$o" '| ⚠️ 2 ❓ 3 |')"
 ok "...and the report appends the names"         yes "$(has "$o" 'unreadable record] `41-5.json`')"
-rm -f "$MB/41-5.json" "$MB/41-6.json" "$MB/41-7.json"
+# A record whose valid JSON is followed by garbage: jq prints the prefix before failing, and that
+# prefix must not count it as pending as well as unreadable.
+printf '{"id":"41-8","slot":"41","kind":"question","status":"pending"} x' >"$MB/41-8.json"
+o=$(bounded "$SECS" report)
+ok "trailing garbage counts once, as unreadable" yes "$(has "$o" '| ⚠️ 2 ❓ 4 |')"
+rm -f "$MB/41-5.json" "$MB/41-6.json" "$MB/41-7.json" "$MB/41-8.json"
+# Once every unreadable record is gone the seen-file forgets them, so the same bytes coming back —
+# an empty file, whose checksum never changes — are pushed again.
+bounded "$SECS" bash "$ESC" --new >/dev/null
+: >"$MB/41-7.json"
+o=$(bounded "$SECS" bash "$ESC" --new)
+ok "a record repaired then broken again is pushed again" yes "$(has "$o" 'unreadable record] `41-7.json`')"
+rm -f "$MB/41-7.json"
 
 if [ "$FAILURES" -eq 0 ]; then printf 't20-mailbox-fifo: %d checks, all passed\n' "$CHECKS"; exit 0; fi
 printf 't20-mailbox-fifo: %d checks, %d FAILED\n' "$CHECKS" "$FAILURES"; exit 1

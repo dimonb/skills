@@ -22,8 +22,8 @@
 #   shipyard-tell.sh <slot|escalation-id> --submit   submit the draft ALREADY in the box
 #   shipyard-tell.sh --list                 every directive sent so far
 #
-# A directive whose text is identical to one already recorded for that slot within
-# SHIPYARD_TELL_DEDUPE_SECS (default 600; 0 turns the check off) is REFUSED with exit 9, naming the
+# A directive whose text AND reply target (the escalation id, if one was given) are identical to one
+# already recorded for that slot within SHIPYARD_TELL_DEDUPE_SECS (default 600; 0 turns the check off) is REFUSED with exit 9, naming the
 # earlier record — nothing typed, nothing recorded (#211). It is what re-sending after an
 # `unconfirmed` verdict produces, and a child may act on both copies. `--again` sends it anyway.
 #
@@ -46,9 +46,9 @@
 #       backend reports a shell prompt or an exited pane where the agent was launched, so nothing
 #       was typed or recorded (3 is "no terminal at all"; 8 is "a terminal, and nobody in it" —
 #       recover the child either way, and on 8 the terminal itself is still there to look at),
-#       9 REPEAT — the same text was sent to this slot inside the window, so nothing was typed or
-#       recorded (see above; `--again` to send it anyway), 2 usage error, 1 mailbox/backend failure — which is also where a dead agterm
-#       control socket lands, since the backend precheck refuses before any of this runs.
+#       9 REPEAT — the same text was sent to this slot inside the window, so nothing was typed
+#       or recorded (see above; `--again` to send it anyway), 2 usage error, 1 mailbox/backend
+#       failure — which is also where a dead agterm control socket lands, since the backend precheck refuses before any of this runs.
 #       6 rather than 0 on purpose: an `unconfirmed` that exits 0 is a note nobody has to
 #       notice, which is the same defect class as the false `delivered` it replaced. 7 rather
 #       than 3 for the same reason one level along: 3 tells a supervisor the child died, and the
@@ -96,6 +96,12 @@ AGAIN=""
 
 TARGET="${1:-}"; MSG_RAW="${2:-}"
 SUBMIT_ONLY=""
+# `--again` goes FIRST. In the second position, where `--submit` goes, it would otherwise be taken
+# as the directive's text and typed into the child as `[supervisor directive] --again`.
+if [ "$MSG_RAW" = "--again" ]; then
+  echo 'usage: --again goes before the slot: shipyard-tell.sh --again <slot|escalation-id> "<directive>"' >&2
+  exit 2
+fi
 if [ "$MSG_RAW" = "--submit" ]; then
   SUBMIT_ONLY=1; MSG=""
 else
@@ -202,8 +208,11 @@ else
       rn=${f##*/directive-$SLOT-}; rn=${rn%.json}
       case "$rn" in ''|*[!0-9]*) continue ;; esac
       shipyard_record_readable "$f" || continue
-      row=$(jq -r --arg s "$SLOT" --arg t "$MSG" \
-        'select(.slot == $s and .text == $t) | [(.created_at // ""), (.delivery // "unknown"), (.id // "")] | @tsv' \
+      # The reply target is part of the key: an answer to escalation s-4 is typed as
+      # `[supervisor directive, re s-4] …`, so the same short text sent earlier in reply to s-3 is a
+      # different line to the child, not a copy of it.
+      row=$(jq -r --arg s "$SLOT" --arg t "$MSG" --arg r "$SRC" \
+        'select(.slot == $s and .text == $t and ((.in_reply_to // "") == $r)) | [(.created_at // ""), (.delivery // "unknown"), (.id // "")] | @tsv' \
         "$f" 2>/dev/null) || continue
       [ -n "$row" ] || continue
       c=$(printf '%s' "$row" | cut -f1); d=$(printf '%s' "$row" | cut -f2)
@@ -376,8 +385,12 @@ case "$DELIVERY" in
                  echo "         was seen to start within ${CONFIRM_SECS}s and the child never said it had" >&2
                  echo "         queued it. Sampled: $SAMPLED." >&2
                  echo "         THE TEXT MAY BE SITTING UNSENT IN THE INPUT BOX. Look before re-sending —" >&2
-                 echo "         the same text is refused for ${DEDUPE_SECS}s (exit 9), and --again types" >&2
-                 echo "         another copy onto the first:" >&2
+                 if [ "$DEDUPE_SECS" -gt 0 ]; then
+                   echo "         the same text is refused for ${DEDUPE_SECS}s (exit 9), and --again types" >&2
+                   echo "         another copy onto the first:" >&2
+                 else
+                   echo "         a second send types another copy onto the first:" >&2
+                 fi
                  echo "           $(shipyard_peek_hint "$SLOT")" >&2
                  echo "         if your directive is in the box, submit what is already there:" >&2
                  echo "           bash $DIR/shipyard-tell.sh $SLOT --submit" >&2

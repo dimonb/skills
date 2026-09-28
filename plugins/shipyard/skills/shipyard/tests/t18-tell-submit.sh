@@ -157,6 +157,42 @@ printf '{"id":"directive-41-2-1","slot":"41-2","kind":"directive","text":"a sibl
   "$(date -u +%Y-%m-%dT%H:%M:%SZ)" >"$MB/directive-41-2-1.json"
 out=$(run_tell never 41 "a sibling one")
 ok "a sibling slot's record is not a repeat" 1  "$(grep -c -- ' -l ' "$KEYS")"
+# The reply target is part of the key: the same short answer to two different escalations is two
+# different lines to the child (`re 41-3` / `re 41-4`), so the second is not refused.
+for n in 3 4; do
+  printf '{"id":"41-%s","slot":"41","kind":"notice","text":"n","status":"pending"}\n' "$n" >"$MB/41-$n.json"
+done
+out=$(run_tell never 41-3 "ok, continue")
+out=$(run_tell never 41-4 "ok, continue")
+ok "the same text in reply to another escalation is sent" 1 "$(grep -c -- ' -l ' "$KEYS")"
+out=$(run_tell never 41-4 "ok, continue")
+ok "...but a second reply to the same one is refused" 9 "$(rc_of "$out")"
+# answer.sh hands a notice to tell; on tell's 9 it sends nothing and leaves the record as it is.
+printf '{"id":"41-5","slot":"41","kind":"notice","text":"n","status":"pending"}\n' >"$MB/41-5.json"
+run_answer() { # <args...> -> output, then "rc=<n>"
+  local out rc=0
+  : > "$KEYS"
+  out=$( env FAKE_TURN=never SHIPYARD_TELL_SETTLE_DELAY=0.01 \
+             SHIPYARD_TELL_CONFIRM_SECS=1 SHIPYARD_TELL_CONFIRM_INTERVAL=0.2 \
+             SHIPYARD_BACKEND=tmux SHIPYARD_SESSION=t18ex \
+         bash "$SKILL_DIR/shipyard-answer.sh" "$@" 2>&1 ) || rc=$?
+  printf '%s\nrc=%s\n' "$out" "$rc"
+}
+out=$(run_answer 41-5 "take the first")
+before_at=$(jq -r '.answered_at // ""' "$MB/41-5.json")
+out=$(run_answer 41-5 "take the first")
+ok "answer.sh passes a repeat's exit 9 through" 9  "$(rc_of "$out")"
+ok "...saying it left the record untouched"   yes "$(has "$out" 'left untouched')"
+ok "...and did not rewrite it"                "$before_at" "$(jq -r '.answered_at // ""' "$MB/41-5.json")"
+ok "...and typed nothing"                     0   "$(grep -c -- ' -l ' "$KEYS")"
+# `--again` belongs before the slot; in the second position it must not be typed as the text.
+out=$(run_tell never 41 --again "retry it")
+ok "--again after the slot is a usage error"  2   "$(rc_of "$out")"
+ok "...and types nothing"                     0   "$(wc -l < "$KEYS" | tr -d ' ')"
+# compact's resume is the same text on every compaction, after a cleared box and context, so every
+# arm must pass --again or a second compaction inside the window leaves an idle child.
+ok "compact passes --again on every resume arm" 3 \
+   "$(grep -Fc 'exec bash "$DIR/shipyard-tell.sh" --again "$SLOT"' "$SKILL_DIR/shipyard-compact.sh")"
 
 printf '\n'
 if [ "$FAILURES" -eq 0 ]; then

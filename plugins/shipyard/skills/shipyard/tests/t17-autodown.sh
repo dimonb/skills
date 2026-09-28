@@ -616,9 +616,9 @@ ok "B13: ...and says so"                             1 "$(printf '%s' "$b13b" | 
 ok "B13: ...while the esc column marks it unreadable" 1 "$(printf '%s' "$b13b" | grep -c '^| 72 .*| ❓ 1 | — |')"
 ok "B13: ...and the block explains the difference"   1 "$(printf '%s' "$b13b" | grep -c 'cannot parse is listed as unreadable')"
 ok "B13: ...and the escalation block names it"       1 "$(printf '%s' "$b13b" | grep -c 'unreadable record\] `72-1.json`')"
-# The remedy must be one that WORKS for this record. The escalation block cannot show it (its
-# allow-list skips an unparseable kind) and shipyard-answer.sh cannot write it (jq fails on the
-# same bytes), so the only real remedy is the file itself — naming it is what turns an
+# The remedy must be one that WORKS for this record. The escalation block lists it as unreadable
+# but can offer no reply for it, and shipyard-answer.sh cannot write it (jq fails on the same
+# bytes), so the only real remedy is the file itself — naming it is what turns an
 # unclearable hold into a clearable one, and the block must not promise the two that cannot work.
 ok "B13: ...and names the unreadable file"           1 "$(printf '%s' "$b13b" | grep -c '72-1.json (unreadable')"
 ok "B13: ...and does not promise the escalation block" 0 \

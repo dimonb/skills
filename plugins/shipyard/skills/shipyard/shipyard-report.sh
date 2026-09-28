@@ -811,7 +811,10 @@ slot_pending() {
     # (#253). Skipping it is what this column already does with a record it cannot read; the
     # teardown hold (slot_unsettled) counts it instead. The window between this check and jq's
     # open is the read residual #246 deferred.
-    [ -f "$f" ] || continue
+    # Not only a regular file: a READABLE one, so a record slot_unreadable counts beside this is
+    # never counted here as well. jq prints a valid prefix before failing on trailing garbage, and
+    # that prefix alone used to read as a pending question (#197).
+    shipyard_record_readable "$f" || continue
     # Same allow-list as shipyard-escalations.sh: only a real escalation kind counts, so a
     # `directive` (parent->child) or any future record type can never inflate this.
     [ "$(jq -r 'if (.kind|IN("question","decision","notice")) then (.status // "pending") else "" end' \

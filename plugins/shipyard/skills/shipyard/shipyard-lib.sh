@@ -226,10 +226,10 @@ shipyard_json_set() {
 # that is not JSON, and for an empty file (jq given no input prints nothing and exits 0) — so
 # "I could not read this" took the same branch as "this is a record of another kind", and a
 # corrupted question was skipped by every view while its child waited on it. A reader that asks
-# this first can give an unreadable record its own visible outcome instead. The escalation view,
-# the report's `esc` column and both `--list` views ask it; `slot_unsettled` in the report makes
-# the same split on its own (it fails closed on anything it cannot parse). A reader added later
-# that does not ask it inherits the old fail-open — nothing enforces the list.
+# this first can give an unreadable record its own visible outcome instead. Every mailbox reader in
+# this skill is meant to ask it (grep for the callers rather than trusting a list here);
+# `slot_unsettled` in the report makes the same split on its own and fails closed. A reader added
+# later that does not ask it inherits the old fail-open — nothing enforces that.
 #
 # Not a regular file counts as unreadable and is never opened: a FIFO at a mailbox name blocked jq
 # (#253). The window between the `-f` test and jq's open is the read residual #246 deferred.

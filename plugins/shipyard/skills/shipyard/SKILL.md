@@ -860,7 +860,8 @@ guess from this list:
   **healthy** child, and the commonest of the three;
 * a turn began and ended between two samples, or the screen could not be read at all.
 
-**Look before re-sending** — a second send types another copy onto the first. The bias is
+**Look before re-sending** — a second send, with `--again` or after the window below, types another
+copy onto the first. The bias is
 deliberate: re-sending on a false `unconfirmed` is cheap and visible, believing a false
 `delivered` is neither. So a repeat is **refused**, not queued (#211): a directive whose text is
 identical to one recorded for the same slot within `SHIPYARD_TELL_DEDUPE_SECS` (600 by default, `0`
@@ -1296,8 +1297,8 @@ idle *because it is waiting for you*, and tearing it down destroys the session t
 after which `shipyard-answer.sh` still exits 0 and claims the child will pick the answer up.
 Held slots get their own `✋ HELD` block naming the records that hold them; answer the question
 and the slot tears itself down on the next tick. A record the report cannot PARSE holds it too and
-cannot be answered — the block names the file to look at, because the escalation view skips it
-(#197).
+cannot be answered — the block names the file to look at, and the escalation view lists it as an
+unreadable record but can offer no reply for it, so the remedy is the file (#197).
 
 This applies to `/shipyard` with no arguments too — discovery mode reaches the same code.
 
