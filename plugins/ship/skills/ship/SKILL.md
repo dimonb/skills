@@ -404,6 +404,7 @@ clean round, never by anything external:
 | spec diff, no clean spec round recorded | `spec-review` |
 | spec diff, clean spec round recorded and the artifacts unchanged since | `apply` |
 | implementation diff, code landed after the last clean impl round | `impl-review` |
+| implementation diff, clean impl round, but `flags.effort` now calls for an axis the recorded sizing lacks (an upward raise, §5.3) | `impl-review` |
 | implementation diff, clean impl round, archive due and not in the diff | `archive` |
 | implementation diff, clean impl round, archive in the diff or not applicable | `ready-to-merge` |
 | any stage, blockers survived `max-rounds` | `needs-human` |
@@ -478,7 +479,8 @@ passes it — the absent file does not fail safe, it fails open.)
       "head": "819f7d74...", "rounds": 1, "clean": true, "mode": "delta",
       "axes": ["spec-completeness", "spec-architecture", "spec-security", "spec-scope-fit"],
       "agents": 4, "axes_rationale": "effort high: an agent per axis", "skipped": [],
-      "candidates": 7, "confirmed": 3, "fixed": 3, "optional": 4,
+      "round_in_progress": null, "reviewed_at": { "spec-completeness": "819f7d74...", "…": "…" },
+      "round_log": [ { "round": 1, "head": "819f7d74...", "…": "the same fields as impl below" } ],
       "open": []
     },
     "impl": {
@@ -538,10 +540,11 @@ voided as failed, and `round_in_progress` names one that started and has not bee
 `reviewed_at` is the head at which each axis last reviewed, which is the base of its next delta
 read. `round_log` holds one entry per round: what ran, the counts, each refuted finding with its
 reason, the fix sha, and the round's spend, which §5.9's record and `Spend:` line are built from.
-`open` carries every finding raised or carried, each with its `status`. Its `deferred` array is
-the written record §5.11 requires — one entry per finding the ladder placed, carrying the rung it
-landed on, why each rung above it was ruled out, and at rung 1 that it was taken. `close_sweep` is §7.G's record of which open issues were examined on
-which head, and what each verdict was. `iteration` / `deadline` are enforced FIRST on every wake
+`open` carries every confirmed finding, raised or carried, each with its `status`. Its `deferred`
+array is the written record §5.11 requires — one entry per finding the ladder placed, carrying the
+rung it landed on, why each rung above it was ruled out, and at rung 1 that it was taken.
+`close_sweep` is §7.G's record of which open issues were examined on which head, and what each
+verdict was. `iteration` / `deadline` are enforced FIRST on every wake
 (§6).
 
 ---
@@ -757,20 +760,23 @@ Substance narrows first and these apply to what is left: a docs-only diff at `hi
 prose axes plus `impl-security` (rule 2), and a CI change at `low` still gets its security agent.
 
 **Scoped rounds inherit the sizing** (§5.7): a round after the first re-opens only the axes whose
-files moved, from the set round 1 chose. One re-arm: a fix that newly touches a security surface
-re-arms `impl-security` for that round even where round 1 skipped it — a fix diff is a diff, and
-the substance rule reads it too. A re-arm moves the axis from `skipped` to `axes` and appends the
-round and its reason to `axes_rationale`, so the record reports the round it ran in and never
+files moved, from the set round 1 chose. One re-arm: a fix diff is a diff, and the substance rule
+reads it too. So a fix that newly touches a kind of file the sizing did not admit re-arms, for
+that round, every axis the table calls for there even where round 1 skipped it: `impl-security`
+for a security surface, `impl-correctness` for code in a battery sized for prose. A re-arm moves
+the axis from `skipped` to `axes` and appends the round and its reason to `axes_rationale`, so the record reports the round it ran in and never
 lists one axis as both skipped and run. **A re-entered stage inherits it too**: where the ledger
 already records `axes`, `agents` and `skipped` for the stage, that is the sizing. It is read back
 (§5.10), not re-derived, and it only ever grows, recorded like the re-arm above, in three cases:
 - the re-arm above;
-- **an upward effort revision** (§2.9) re-sizes from the next round to what the new level gives
-  the recorded axes — `impl-security` at `high`, folded axes split out, the engines — and
-  removes nothing;
+- **an upward effort revision** (§2.9) re-sizes to what the new level gives the recorded axes —
+  `impl-security` at `high`, folded axes split out, the engines — and removes nothing. It takes
+  effect from the next round, and on a stage that has already cleared it **re-opens the stage**:
+  a clearance earned by a smaller battery than the recorded level calls for is not a clearance
+  at that level (§3.3), so the added axes run and the stage clears again only when they return;
 - **code that is not this stage's own review fix lands after the recorded head** (§3.3). Classify
   that code's substance by the table above and add every axis it calls for that the sizing
-  lacks.
+  lacks, and read it against §2.9's table too, raising the level where it fits a higher row.
 
 An axis added this way has reviewed nothing yet, so its first round reads the whole branch diff,
 not a delta.
@@ -894,8 +900,9 @@ round 3: …
 - **A failed round is not a round.** An axis that returns an error instead of findings (an
   overloaded API, an empty report, "cannot start") reviewed nothing: do not clear the axis,
   never record `clean` from it, and do not immediately re-fire it — back off, or run the axis's
-  own charter and record that instead. A round in which **every** axis failed is void: take back
-  its start-of-round increment (below) at once, and re-fire it under the same number. Six
+  own charter and record that instead, still inside the same round. A round does not end while an
+  axis it dispatched has reviewed nothing. A round in which **every** axis failed is void: take
+  back its start-of-round increment (below) at once, and re-fire it under the same number. Six
   consecutive overload errors minutes apart were once all counted as rounds: half an hour,
   zero diff read. **Judge the body, not the duration** — a fast "no findings" over a
   one-commit range is a legitimate result.
@@ -916,9 +923,13 @@ round 3: …
 
   **What this gives up** is an interaction between the fix and code it did not touch — the seam
   class a diff cannot show. It is covered only when a **§5.8 sweep** fires. Trigger 3 is the one
-  aimed at it, and it needs a round that *confirms* a fix-origin finding. So a delta read that
-  misses a seam and confirms nothing is backed by no sweep at all. That is an accepted, named gap,
-  and the `Spend:` line (§5.9) is how its price is measured against what it saves.
+  aimed at it, and it needs a round whose confirmed findings are all `origin: fix`, at least one.
+  So a delta read that misses a seam and confirms nothing gets no trigger-3 sweep; only a trigger
+  1, 2 or 4 event, which is about the change rather than the miss, would sweep it. It also gives
+  up **a second look at bytes round 1 already read** — the same engine over the same bytes
+  disagrees with itself (round 63 and 64, below) — and after round 1 those bytes are re-read only
+  by a sweep. Both are accepted, named gaps, and the `Spend:` line (§5.9) is how their price is
+  measured against what the narrowing saves.
 - **Persist the round, every round — never only at hand-off.**
   - **When a round starts**, before any agent is dispatched:
     - increment `reviews.<stage>.rounds`;
@@ -928,17 +939,19 @@ round 3: …
     A re-run of a round already named in `round_in_progress` keeps its number and does not
     increment.
   - **When the round ends**, write it back: after its fixes are pushed, or at once when it pushed
-    nothing (a clean round, a failed one). The write-back sets:
+    nothing. The write-back sets:
     - `head` to the head the round reviewed, never the post-fix head;
     - the round's `round_log` entry;
-    - every finding raised or carried, with its `status`;
-    - each axis's `reviewed_at`, again the head it reviewed;
+    - every confirmed finding, raised this round or carried, with its `status`;
+    - `reviewed_at` for each axis that returned a body, again the head it reviewed. An axis
+      that failed keeps its previous value, or none;
     - any deferral placed;
-    - `clean: true` only when the round confirmed no blocker;
+    - `clean: true` only when every axis the round dispatched returned a body and the round
+      confirmed no blocker;
     - `round_in_progress: null`.
 
-    A failed round (above) is written back as void, with the counter taken back down and nothing
-    cleared.
+    A void round (every axis failed, above) is written back with the counter taken back down
+    and nothing cleared.
   - **`max-rounds` is compared against `rounds`.** A round a crash interrupted is still visible as
     `round_in_progress`, and it is re-run under its own number on re-entry. So it neither
     vanishes nor counts twice, and a restarted or compacted session reads what it already
@@ -1124,8 +1137,8 @@ A verdict is bound to a **head sha**.
   `flags.effort` (§2.9) and the stage's `axes`, `agents` and `skipped` (§5.3) are the run's, not
   re-derived, and grow only as §5.3 allows. The `open` findings are carried into the next round's
   brief with their status, the `reviewed_at` shas are the bases of the next delta reads, and
-  `round_log` is what the stage record (§5.9) is built from. Then **say what it found**, in the first
-  report of the pass: *rounds 1–2 recorded, resuming at round 3*, or *round 2 in progress with no
+  `round_log` is what the stage record (§5.9) is built from. Then **say what it found**, in the
+  first report of the pass: *rounds 1–2 recorded, resuming at round 3*, or *round 2 in progress with no
   result written back, re-running it*. With no ledger for a stage that plainly ran — commits
   after the PR/MR opened and no entry — say that, re-run the round rather than assume it
   happened (§3.3), and record it from then on.
@@ -1482,12 +1495,10 @@ mis-read the state.
 1. Ensure the worktree is at the head; fetch the base branch — **a stale base produces
    phantom findings.**
 2. Read the ledger back (§5.10). Where it already sizes this stage, that is the sizing, grown
-   only as §5.3 allows (an effort raise, or code that is not a review fix landed since the
-   recorded head); where it does not, size the battery from the substance of the diff (§5.3,
-   *Sizing the battery*). Record `axes`, `agents`, `axes_rationale` and `skipped` before anything
-   is dispatched. Then evaluate
-   the §5.8 triggers (trigger 1 can be true on this very first pass) and consult `swept` so a
-   latched trigger does not re-fire.
+   only in the cases §5.3 lists; where it does not, size the battery from the substance of the
+   diff (§5.3, *Sizing the battery*). Record `axes`, `agents`, `axes_rationale` and `skipped`
+   before anything is dispatched. Then evaluate the §5.8 triggers (trigger 1 can be true on this
+   very first pass) and consult `swept` so a latched trigger does not re-fire.
 3. Dispatch the sized impl battery plus any sweep axes in one message → barrier → dedupe →
    verify → classify origin (§5.6).
 4. Fix every confirmed blocker sequentially in ship's own context. Re-run the check commands
@@ -1743,9 +1754,9 @@ change whose run was still in progress. Poll until nothing is pending or running
   Findings carry forward by id, and only a reviewer withdraws one. A re-opened axis reads its
   own delta, with §5.8's sweep as the counterpart, and a finding gets one verifier unless it
   names several ways to fail.
-- **Write the round ledger to the state file after every round, and read it back on every
-  re-entry** (§5.7, §5.10) — the recorded effort, sizing and findings are the run's, never
-  re-derived.
+- **Write the round ledger to the state file at the start and end of every round, and read it
+  back on every re-entry** (§5.7, §5.10) — the recorded effort, sizing and findings are the run's,
+  read back rather than re-derived, and the sizing grows only as §5.3 allows.
 - **A stop leaves an enforced blocker** (§5.9): convert to draft. A stopped run that looks
   identical to a finished one is the failure this pipeline exists to prevent.
 - **A pass that did not run is never reported as one that did** (§5.3, §5.9).
