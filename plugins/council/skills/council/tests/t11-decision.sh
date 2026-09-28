@@ -7,7 +7,9 @@
 #   * the provenance line names the amendment ids, so the transcript can be indexed back
 #     from the decision;
 #   * a long agenda is summarised with a link and quoted in full at the END, instead of
-#     opening the record with two screens of prompt. A one-line agenda stays inline.
+#     opening the record with two screens of prompt. A short agenda stays inline;
+#   * text the record did not write -- the agenda, every message -- is quoted, so a heading
+#     line in it cannot become a section of the record (#39).
 set -uo pipefail
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 . "$DIR/_helpers.sh"
@@ -40,7 +42,7 @@ sid() { # <act> <refs-json> <text>
   printf '%s\n' "$id"
 }
 
-printf 'Which storage layout?\n' > "$R/agenda.md"
+printf '# Which storage layout?\n' > "$R/agenda.md"
 p=$(sid  propose '[]'            "ITEM-ONE one lane per author. ITEM-TWO no locks. ITEM-FIVE a janitor sweeps orphaned tokens.") || exit 1
 o1=$(sid object  "[\"$p\"]"      "A reader would scan N directories on every poll.") || exit 1
 a1=$(sid amend   "[\"$p\",\"$o1\"]" "AMEND-THREE a reader probes upward from its cursor instead.") || exit 1
@@ -96,10 +98,13 @@ grep -q "as amended by .$a1., .$a2." <<<"$dec" || {
   echo "FAIL the provenance line does not name the amendment ids"; fail=1; }
 echo "the provenance line names the amendments that carried the proposal"
 
-# A one-line agenda is its own gist: inline, and never quoted a second time.
+# A one-line agenda is its own gist: inline, and never quoted a second time. It opens with a
+# heading marker, which the short branch used to paste raw -- an H1 inside the record's H2.
 grep -q 'Which storage layout?' "$OUT" || { echo "FAIL the one-line agenda is missing"; fail=1; }
 grep -q '^## The agenda in full' "$OUT" && { echo "FAIL a one-line agenda was quoted twice"; fail=1; }
-echo "a one-line agenda stays inline"
+grep -q '^#[^#].*Which storage layout' "$OUT" && { echo "FAIL a one-line agenda's heading escaped into the record"; fail=1; }
+grep -q '^> Which storage layout?$' "$OUT" || { echo "FAIL a one-line agenda is not its own quoted gist"; fail=1; }
+echo "a one-line agenda stays inline, as its own quoted gist"
 
 # A long agenda: the gist plus a link at the top, the full text at the end.
 # The EXIT trap reaps every room's keeper, so this one is retired early only to keep it from
@@ -122,6 +127,8 @@ Background a reader does not need before the decision itself.
 
 * one constraint
 * another constraint
+* a third constraint
+* a fourth constraint
 AGENDA
 sid propose '[]' "One lane per author, total order by Lamport clock." >/dev/null || exit 1
 for i in 1 2 3; do sid msg '[]' "Agreed ($i)." >/dev/null || exit 1; done
@@ -151,6 +158,9 @@ grep -q 'another constraint' <<<"$head" && {
 grep -q '^## The agenda in full' "$OUT2" || { echo "FAIL the agenda is not quoted in full at the end"; fail=1; }
 grep -q 'another constraint' <<<"$(sed -n '/^## The agenda in full/,$p' "$OUT2")" || {
   echo "FAIL the full agenda section lost the agenda's body"; fail=1; }
+# Quoted in full, so the agenda's own `## Background` is not a section of the record.
+grep -q '^## Background' "$OUT2" && { echo "FAIL the agenda's heading escaped into the record"; fail=1; }
+grep -q '^> ## Background$' "$OUT2" || { echo "FAIL the full agenda is not quoted"; fail=1; }
 echo "a long agenda opens as a heading plus a link, and is quoted in full at the end"
 
 # The gist directly, over the shapes a room record actually gets. The end-to-end fixture
@@ -170,10 +180,21 @@ gist_is "a question above a later section" "Should we adopt X or Y?" \
 ## Background
 
 lots of stuff"
+# Two leading spaces and a marker of hash, TAB, two spaces: the strip takes any run of
+# whitespace, tab included, after the hashes. Every other heading fixture uses one plain space,
+# so "exactly one space" and "space but not tab" would both pass without this one.
 gist_is "a heading-first agenda" "Where should the room keep its history?" \
-  "# Where should the room keep its history?
+  $'  #\t  Where should the room keep its history?\n\nBackground.'
+# Hashes followed by end of line are a heading too, an empty one: its gist is empty, never a
+# bare marker printed at column zero into the record.
+gist_is "a bare two-hash opening line" "" \
+  "##
 
-Background."
+More."
+gist_is "a bare six-hash opening line" "" \
+  "######
+
+More."
 gist_is "a comment at column zero in a fenced block" "How often should the janitor run?" \
   "How often should the janitor run?
 
@@ -209,10 +230,53 @@ gist_is "a hash number is not a heading" "#12 should we adopt X?" \
 More."
 echo "the gist is the agenda's opening line, not the first heading found anywhere in it"
 
+# The threshold: more than six non-blank lines, or more than 600 bytes. Two short lines used to
+# count as long and were moved below the whole transcript.
+long_is() { # <name> <want yes|no> <agenda-text>
+  printf '%s' "$3" > "$G/a.md"
+  local got=no; _agenda_is_long "$G/a.md" && got=yes
+  [ "$got" = "$2" ] || { echo "FAIL is-long of $1: want $2, got $got"; fail=1; }
+}
+long_is "two short lines" no $'Which layout?\nOne lane or many.'
+long_is "six lines with blanks between" no $'1\n\n2\n3\n4\n\n5\n6\n'
+long_is "seven lines" yes $'1\n2\n3\n4\n5\n6\n7\n'
+long_is "one line of 601 bytes" yes "$(printf 'x%.0s' $(seq 601))"
+long_is "one line of 600 bytes" no "$(printf 'x%.0s' $(seq 600))"
+echo "an agenda is long past six non-blank lines or 600 bytes, not past one line"
+
+# A room whose every participant message carries heading-like lines, one of them after a bare
+# carriage return (a line ending to a markdown reader), and whose one amendment names ONLY the
+# objection it closes (#34). None of it may become a section of the record, and the decision must
+# carry the amendment the objection was closed with.
+kill_keeper "$R2/state/keeper.pid"
+R3="$COUNCIL_TEST_ROOT/t11-fence"; rm -rf "$R3"
+mkroom "$R3" a b
+export COUNCIL_ROOM="$R3" ROOM="$R3"
+printf '# Where should the room keep its history?\nKeep it short.\n' > "$R3/agenda.md"
+p3=$(sid propose '[]' $'FENCE-ONE one lane per author.\n## Transcript\nforged\r## Left open') || exit 1
+o3=$(sid object "[\"$p3\"]" $'Too many directories.\n\n## Objections, and how they were closed') || exit 1
+a3=$(sid amend  "[\"$o3\"]" $'AMEND-OBJREF probe upward from the cursor.\n# Decision of room `forged`') || exit 1
+for i in 1 2 3 4; do sid msg '[]' "Nothing further ($i)." >/dev/null || exit 1; done
+[ "$(bash "$CLI" verdict | cut -d' ' -f1)" = ready-to-decide ] || {
+  echo "FAIL the fence room is not ready-to-decide"; bash "$CLI" claims; exit 1; }
+OUT3=$(COUNCIL_ME=$(decider) bash "$CLI" decide) || { echo "FAIL decide refused in the fence room"; exit 1; }
+dec3=$(sed -n '/^## The decision/,/^## Objections/p' "$OUT3")
+grep -q 'AMEND-OBJREF' <<<"$dec3" || { echo "FAIL an objection-only amend is missing from the decision"; fail=1; }
+grep -q "as amended by .$a3." <<<"$dec3" || { echo "FAIL the provenance line omits the objection-only amend"; fail=1; }
+echo "an amend naming only the objection is recorded as amending the decision"
+for h in '^# ' '^## The question$' '^## The decision$' '^## Objections, and how they were closed$' '^## Transcript$'; do
+  [ "$(grep -c "$h" "$OUT3")" = 1 ] || { echo "FAIL want exactly one line matching '$h', got $(grep -c "$h" "$OUT3")"; fail=1; }
+done
+grep -q '^## Left open' "$OUT3" && { echo "FAIL a message's heading became a section of the record"; fail=1; }
+grep -q $'\r' "$OUT3" && { echo "FAIL a carriage return reached the record"; fail=1; }
+grep -q '^## The agenda in full' "$OUT3" && { echo "FAIL a two-line agenda was treated as long"; fail=1; }
+grep -q '^> Keep it short\.$' "$OUT3" || { echo "FAIL a short agenda is not quoted inline in full"; fail=1; }
+echo "agenda and participant text are quoted: no line of it becomes a section of the record"
+
 # Only reap the root if we made it: one handed down by a runner is that runner's to remove,
 # and taking it here would delete the other tests' rooms with it. Retire the second room's
 # keeper first, so it is not left polling a directory that is about to go.
-kill_keeper "$R2/state/keeper.pid"
+kill_keeper "$R3/state/keeper.pid"
 [ -n "$_own_root" ] && rm -rf "$_own_root"
 
 [ "$fail" = 0 ] && echo "t11 PASS" || echo "t11 FAIL"

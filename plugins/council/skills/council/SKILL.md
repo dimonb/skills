@@ -1283,7 +1283,10 @@ produced one false test result during development. Do not pipe status through a 
   amendment's own voice: every accepted item it did not restate appeared nowhere, and the
   decision could only be reconstructed from the transcript.
 * **A long agenda is summarised at the top of the record and quoted in full at the end**, so
-  the decision is not pushed below two screens of prompt. A one-line agenda stays inline.
+  the decision is not pushed below two screens of prompt. Long is more than six non-blank lines
+  or more than 600 bytes; a shorter agenda stays inline.
+* **Text the record did not write is quoted in it** — the agenda and every participant's
+  message — so a line of it that looks like a heading cannot become a section of the record.
 
 ## Files
 

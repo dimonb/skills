@@ -1899,7 +1899,7 @@ v_status() {
 # The agenda's gist: its opening (first non-blank) line, with a heading marker stripped from
 # that line. A detailed agenda used to be embedded whole at the top, so the record opened
 # with two screens of prompt before the decision; a long one is summarised here and quoted in
-# full at the end. A one-line agenda is its own gist and stays inline, unquoted twice.
+# full at the end. A short one stays inline, quoted once: a one-line agenda as its own gist.
 #
 # Take the opening line, never "the file's first heading" — that picks up a later section.
 # An agenda stating the question on line 1 and continuing `## Background` recorded
@@ -1911,19 +1911,51 @@ v_status() {
 # a heading. Accepting none of it both mangled lines that are not headings (`#!/usr/bin/env
 # bash`, `#12 ...`) and MANUFACTURED one: `#\{1,6\}` stops at six, so eight hashes came out as
 # `## ...`, an exact section marker of this record, sitting above the real sections.
+#
+# Hashes followed by END OF LINE are a heading too (`##` alone is an empty <h2>), so a bare
+# marker is stripped as well, and the gist of such an opening line is empty. That is a second
+# `-e` and not an alternation: `\|` is a GNU extension, and on BSD sed it silently breaks
+# even `# Question`.
 _agenda_gist() { # <file>
   sed -e '/^[[:space:]]*$/d' -e 'q' "$1" \
-    | sed -e 's/^[[:space:]]*//' -e 's/^#\{1,6\}[[:space:]]\{1,\}//' -e 's/[[:space:]]*$//'
+    | sed -e 's/^[[:space:]]*//' -e 's/^#\{1,6\}[[:space:]]\{1,\}//' -e 's/^#\{1,6\}$//' \
+          -e 's/[[:space:]]*$//'
 }
-_agenda_is_long() { # <file> — more than one non-blank line
-  [ "$(grep -c -v '^[[:space:]]*$' "$1")" -gt 1 ]
+# LONG means it would push the decision down the page: more than six non-blank lines, or more
+# than 600 bytes, whichever trips first. Bytes as well as lines because one paragraph on a single
+# line is just as much prompt. The threshold used to be "more than one non-blank line", so a
+# two-line agenda of 27 characters was replaced at the top by a longer link sentence and moved
+# below the whole transcript -- less self-contained than pasting it, which is the opposite of
+# why the summary exists (a DETAILED agenda opening the record with two screens of prompt).
+_agenda_is_long() { # <file>
+  [ "$(grep -c -v '^[[:space:]]*$' "$1")" -gt 6 ] || [ "$(wc -c < "$1")" -gt 600 ]
 }
+
+# Text the record did not write -- the agenda, and every message a participant sent -- goes into
+# `board/decision.md` QUOTED, so a line in it that looks like markdown structure cannot become a
+# section of the record: an agenda containing `## Background`, or a proposal containing
+# `## Transcript`, used to land as a sibling of the record's own sections. Not a security
+# boundary (participants are trusted); it keeps the record's outline the record's.
+#
+# A carriage return is a line ending to a markdown reader, so it is one here too: a bare `\r`
+# left inside a quoted line would end the quote and start a column-zero line after it.
+# `_md_quote` is the shell side, for files; `C_MD` is the same rule for jq programs, plus
+# `_md_item` for text that continues a list item (indented under it rather than quoted) and
+# `_md_line` for a value that must stay on one line (an id or a lane name in a heading).
+_md_quote() { # stdin -> stdout, every line quoted
+  awk '{ sub(/\r$/, ""); n = split($0, a, "\r"); if (n == 0) { print ">"; next }
+         for (i = 1; i <= n; i++) print (a[i] ~ /^[[:space:]]*$/ ? ">" : "> " a[i]) }'
+}
+C_MD='def _md_nl: tostring | gsub("\r\n?"; "\n");
+def _md_quote: _md_nl | split("\n") | map(if test("^\\s*$") then ">" else "> " + . end) | join("\n");
+def _md_item: _md_nl | gsub("\n"; "\n  ");
+def _md_line: tostring | gsub("[\r\n]+"; " "); '
 
 # The ADR is the room's OUTPUT. A room that did not converge writes an `unresolved` record
 # listing what is still open — a valid outcome, never something to paper over.
 v_decide() {
   local force=0; [ "${1:-}" = "--force" ] && force=1
-  local j verd g out status
+  local j verd g out status gist
   j=$(v_verdict --json); verd=$(printf '%s' "$j" | jq -r '.verdict // empty' 2>/dev/null)
   # A record is never written from a ROSTER or a GRAPH this verb could not read. That is
   # narrower than it once said here, and the narrowing is the point: an unreadable LANE FILE
@@ -2091,11 +2123,19 @@ v_decide() {
     printf '* written by: %s, %s\n\n' "$ME" "$(c_now)"
     if [ -f "$ROOM/agenda.md" ]; then
       printf '## The question\n\n'
+      # Quoted in all three shapes, so a heading in the agenda is the agenda's and never the
+      # record's. A one-line agenda IS its own gist, so it goes through `_agenda_gist` like the
+      # long one's opening line and the two cannot disagree about a heading marker; a short
+      # agenda of several lines is quoted whole, here, and not a second time at the end.
       if _agenda_is_long "$ROOM/agenda.md"; then
-        printf '%s\n\n' "$(_agenda_gist "$ROOM/agenda.md")"
+        gist=$(_agenda_gist "$ROOM/agenda.md")
+        [ -z "$gist" ] || printf '%s\n\n' "$(printf '%s\n' "$gist" | _md_quote)"
         printf 'The agenda is [`agenda.md`](../agenda.md), quoted in full at the end of this record.\n\n'
+      elif [ "$(grep -c -v '^[[:space:]]*$' "$ROOM/agenda.md")" -le 1 ]; then
+        gist=$(_agenda_gist "$ROOM/agenda.md")
+        [ -z "$gist" ] || printf '%s\n\n' "$(printf '%s\n' "$gist" | _md_quote)"
       else
-        cat "$ROOM/agenda.md"; printf '\n'
+        printf '%s\n\n' "$(_md_quote < "$ROOM/agenda.md")"
       fi
     fi
     printf '## The decision\n\n'
@@ -2104,38 +2144,39 @@ v_decide() {
       # which. Rendering `current_text` here recorded only the final amendment, in the
       # amendment's own voice, so accepted items the amendment did not restate appeared
       # nowhere and the decision could only be reconstructed from the transcript.
-      printf '%s\n\n' "$(printf '%s' "$g" | jq -r '.live[0]
-        | if (.amends|length) == 0 then .text
+      printf '%s\n\n' "$(printf '%s' "$g" | jq -r "$C_MD"'.live[0]
+        | if (.amends|length) == 0 then (.text | _md_quote)
           else ( [ .revisions[]
                    | if .act == "propose"
-                     then "### As proposed (`\(.id)`, from \(.from))\n\n\(.text)"
-                     else "### Amendment `\(.id)`, from \(.from)\n\n\(.text)" end ]
+                     then "### As proposed (`\(.id|_md_line)`, from \(.from|_md_line))\n\n\(.text|_md_quote)"
+                     else "### Amendment `\(.id|_md_line)`, from \(.from|_md_line)\n\n\(.text|_md_quote)" end ]
                  | join("\n\n") )
           end')"
       # Name the amendments as well as the proposal: the ids are what lets a reader index
       # this decision back into the transcript, and the amendments are usually where the
       # decision actually got its final shape.
-      printf '%s\n\n' "$(printf '%s' "$g" | jq -r '.live[0]
-        | "_(proposal `\(.id)` from \(.from)"
+      printf '%s\n\n' "$(printf '%s' "$g" | jq -r "$C_MD"'.live[0]
+        | "_(proposal `\(.id|_md_line)` from \(.from|_md_line)"
           + (if (.amends|length) > 0
-             then ", as amended by " + ([.amends[] | "`\(.)`"] | join(", "))
+             then ", as amended by " + ([.amends[] | "`\(_md_line)`"] | join(", "))
              else "" end)
           + ")_"')"
     else
       printf 'Not accepted: the room did not converge.\n\n'
     fi
     printf '## Objections, and how they were closed\n\n'
-    printf '%s' "$g" | jq -r '
+    printf '%s' "$g" | jq -r "$C_MD"'
       if ([.proposals[].objections[]] | length) == 0 then "* (there were no objections)" else
       (.proposals[] | . as $p | .objections[]
-       | if .closed_by != null
-         then "* ✓ **\(.from)** on `\(.id)`: \(.text)\n  * closed by `\(.closed_by)` — \(.closed_act) from \(.closed_by_who)"
-         elif $p.dead then "* · **\(.from)** on `\(.id)`: \(.text)\n  * fell with proposal `\($p.id)`"
-         else "* ✗ **\(.from)** on `\(.id)`: \(.text)\n  * **left open**" end) end'
+       | "* \(if .closed_by != null then "✓" elif $p.dead then "·" else "✗" end) **\(.from|_md_line)** on `\(.id|_md_line)`: \(.text|_md_item)\n  * "
+         + if .closed_by != null
+           then "closed by `\(.closed_by|_md_line)` — \(.closed_act|_md_line) from \(.closed_by_who|_md_line)"
+           elif $p.dead then "fell with proposal `\($p.id|_md_line)`"
+           else "**left open**" end) end'
     printf '\n'
     if [ "$status" != decided ]; then
       printf '## Left open\n\n'
-      printf '%s' "$g" | jq -r 'if (.open|length) == 0 then "* (no open objections — the room ran out of turns)" else (.open[] | "* `\(.id)` from \(.from): \(.text)") end'
+      printf '%s' "$g" | jq -r "$C_MD"'if (.open|length) == 0 then "* (no open objections — the room ran out of turns)" else (.open[] | "* `\(.id|_md_line)` from \(.from|_md_line): \(.text|_md_item)") end'
       printf '\n'
     fi
     printf '## Transcript\n\n'
@@ -2147,10 +2188,15 @@ v_decide() {
     # damaged after the round has closed, the seat's view is its own lane and the record
     # rendered from it would be missing every other position, written at rc 0 and impossible to
     # tell from a complete one afterwards.
-    c_canon | _render_transcript | sed 's/^/* /'
+    #
+    # Every line of it is a list item, which already keeps a heading-like line inside the list;
+    # the carriage returns are made line breaks first, so none of them can end an item early and
+    # start a column-zero line after it.
+    c_canon | jq -c "$C_MD"'if (.text | type) == "string" then .text |= _md_nl else . end' \
+      | _render_transcript | sed 's/^/* /'
     if [ -f "$ROOM/agenda.md" ] && _agenda_is_long "$ROOM/agenda.md"; then
       printf '\n## The agenda in full\n\n'
-      cat "$ROOM/agenda.md"
+      _md_quote < "$ROOM/agenda.md"
     fi
   } > "$out"
   # THE RECORD IS THE CLOSE, so nothing downstream may assume it landed. This block used to be a
