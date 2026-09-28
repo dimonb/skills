@@ -1587,8 +1587,8 @@ change whose run was still in progress. Poll until nothing is pending or running
 - **Read every issue with its comments** (§3.2); `Closes #N` only when each comment scenario is
   addressed or re-homed onto another open issue, and the move is stated.
 - **No finding lives only on a PR/MR** (§5.9, §5.11): every unfixed one, optional included, is
-  placed on an open issue — or, where rung 3 is barred, held unfiled in the ledger (§5.11) — and
-  the record says which.
+  placed on an open issue, or held in the ledger with the reason its rung was not reached (§5.11:
+  rung 3 barred, or the stage escalated), and the record says which.
 - **Read the kill, signal and `rm -rf` paths of code you did not write before it runs** (§7.D),
   and on resume after a crash check whether the interrupted command caused it before re-running
   it (§6).
