@@ -129,6 +129,9 @@ kill -9 "$opid_a" 2>/dev/null
 ok "keeper exited after owner SIGKILL" gone "$(wait_gone "$kpid_a" "$REAP_WAIT")"
 ok "reaped alice" yes "$(wait_file "$MARK_A/reaped-alice" "$REAP_WAIT")"
 ok "reaped bob"   yes "$(wait_file "$MARK_A/reaped-bob" "$REAP_WAIT")"
+# The owner-death reap says it is in flight as the teardown one does (#189), so a `relaunch`
+# arriving during it waits instead of trusting the reaping keeper — `_keeper_await_reap`.
+ok "...having marked the reap in flight, as an owner death" owner-gone "$(cat "$ROOM_A/state/reaping" 2>/dev/null)"
 
 # ---------------------------------------------------------------------------------------------
 echo "── case B: a signal to the OWNER's process group does not reach the keeper ──"

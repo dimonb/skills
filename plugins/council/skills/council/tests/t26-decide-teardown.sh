@@ -89,6 +89,9 @@ ok "the keeper exits after reaping" gone "$(wait_gone "$KA" "$PATIENCE")"
 # One-shot: a marker left in place is taken again by whatever keeper the room is given next, and
 # `relaunch` forks one — so a seat put back up would die within a poll of starting.
 ok "...and the marker is consumed, not left for the next keeper" gone "$(wait_gone_file "$RA/state/teardown" "$PATIENCE")"
+# Consumed by RENAME onto `state/reaping` (#189), which is the observable `relaunch` waits on. The
+# file outlives the reap on purpose — see `_keeper_reaping_file` — so it is still there now.
+ok "...by renaming it onto state/reaping, which says a reap was taken" teardown "$(cat "$RA/state/reaping" 2>/dev/null)"
 ok "the record directory is untouched by a teardown" yes "$([ -d "$RA/lane" ] && [ -d "$RA/board" ] && echo yes || echo no)"
 
 # ================================================================================================
@@ -228,41 +231,14 @@ KF=$(kpid_of "$RF/state/keeper.pid")
 kill_keeper "$RF/state/keeper.pid"
 ok "the keeper is gone before the close" gone "$(wait_gone "$KF" "$PATIENCE")"
 errf="$COUNCIL_TEST_ROOT/t26f.err"
-# HOLD THE ROOM'S BELLS OPEN ACROSS THE CLOSE. This case has deliberately killed the keeper, which
-# is what holds EVERY bell open for the life of a room. It is not the only reader a bell can have —
-# a participant sitting in `recv` holds its OWN, through `c_bell_open` — and that is visible right
-# here: `decide` runs as `--me a` and arms a's bell, so of the three rings below only b's and c's
-# ever blocked. This room has no live participants, so with the keeper gone those two have nobody.
-# And `decide` still rings every peer (`c_send`'s trailing `c_ring` loop). A
-# ring is a DETACHED writer — `( printf '.' > "$f" & )` — so with no reader it blocks in open(2)
-# for ever; and because it is forked inside the verb's `>/dev/null` scope, it inherits the copy of
-# the caller's ORIGINAL stdout that bash saved on fd 10, which is this line's command-substitution
-# pipe. `$( )` returns when the last writer to that pipe closes, not when the command exits — so
-# the verb finished, wrote its record and its stderr, and this test still hung for ever, with two
-# blocked orphans per run.
-#
-# WHAT WAS ACTUALLY HOLDING THIS CASE UP BEFORE, because it was not the absence of the problem: at
-# the production five-second period the keeper's `sleep 5` is a CHILD that inherited its bell fds,
-# so killing the keeper left that orphan holding every bell open for up to five more seconds —
-# long enough for these rings to complete. The case passed on a leaked file descriptor. Shorten
-# the period and the orphan goes in 50 ms, the rings block, and the hang is permanent. So this is
-# not a symptom of the faster poll; it is a dependency the faster poll exposed, and the fix is to
-# say out loud what the fixture needs rather than to slow the suite back down until luck returns.
-#
-# The premise is untouched: a fifo held open by this shell is not a keeper. `_keeper_teardown`
-# still asks `_keeper_live`, still gets nothing, and still returns 1 — which is the
-# exit-5 arm every assertion below is about.
-#
-# (The blocking `c_ring` itself is a production hazard, not a test one — a `decide` against a
-# genuinely keeperless room leaks a stuck writer per peer — and it is #209 rather than something
-# fixed here, where the change is about how long the suite takes. The hang this line-block avoids
-# is the fourth instance on #109.)
-f_bells=()
-for _p in a b c; do
-  exec {_bf}<>"$RF/bell/$_p.fifo" && f_bells+=("$_bf")
-done
+# NO BELLS ARE HELD OPEN ACROSS THIS CLOSE, and that is now a claim this case tests rather than a
+# fixture it needs. `decide` rings every peer, and with the keeper gone b's and c's bells have no
+# reader. The ring used to open them WRITE-ONLY, which blocked in open(2) for ever and — having
+# inherited this capture's pipe through the fd bash saves the caller's stdout on — kept the `$( )`
+# below from ever returning. So this case used to hold every bell open itself. `c_ring` now opens
+# read-write, which does not block (#209, and t31 pins the leak directly), so the capture below is
+# the shipped path against a genuinely keeperless room.
 outf=$(COUNCIL_ME=a bash "$CLI" decide 2>"$errf"); rc=$?
-for _bf in ${f_bells[@]+"${f_bells[@]}"}; do exec {_bf}>&-; done
 ok "the close exits 5, not 0 and not 4" 5 "$rc"
 ok "...still printing the record path, because the record is the output" "$RF/board/decision.md" "$outf"
 ok "...saying the terminals could NOT be closed" yes "$(has "$(cat "$errf")" 'could NOT be closed')"
@@ -328,9 +304,9 @@ echo "--- H. a --hold room takes the marker too, while its owner is still holdin
 #
 # THE CONSUMED MARKER IS WHAT NAMES THE TRIGGER. Both of the keeper's reaping paths leave the same
 # `reaped-*` files, so those alone cannot tell a teardown from an owner death; of the two, only
-# the teardown path `rm`s the marker. "Seats reaped AND marker gone" is therefore the one
-# combination the canary path cannot produce. (`relaunch` clears the marker too — no case here
-# relaunches, but a case that did could not use this discriminator.)
+# the teardown path renames the marker away, onto `state/reaping` with its word `teardown` intact —
+# the owner-death path writes `owner-gone` there instead. "Seats reaped, marker gone, and
+# `reaping` saying teardown" is therefore the one combination the canary path cannot produce.
 RH="$COUNCIL_TEST_ROOT/t26h"; rm -rf "$RH"
 T26H_MARK="$COUNCIL_TEST_ROOT/t26-marks/h"; mkdir -p "$T26H_MARK" || exit 1
 ( SKILL="$SKILL"; . "$SKILL/lib/up.sh"
@@ -365,6 +341,7 @@ ok "the second seat is closed too" yes "$(wait_file "$T26H_MARK/reaped-b" "$PATI
 ok "the keeper exits after reaping" gone "$(wait_gone "$KH" "$PATIENCE")"
 ok "...having consumed the marker, which is what names the trigger" gone \
    "$(wait_gone_file "$RH/state/teardown" "$PATIENCE")"
+ok "...onto state/reaping, as a teardown and not an owner death" teardown "$(cat "$RH/state/reaping" 2>/dev/null)"
 ok "the record directory is untouched" yes "$([ -d "$RH/lane" ] && [ -d "$RH/board" ] && echo yes || echo no)"
 kill -9 "$HOWNER" 2>/dev/null; wait "$HOWNER" 2>/dev/null
 
@@ -582,6 +559,123 @@ for shape in dir symlink-to-dir; do
      "$([ -n "$KD" ] && kill -0 "$KD" 2>/dev/null && echo yes || echo no)"
   ok "...and nothing was reaped" no "$([ -e "$MARK/m-$shape/reaped-a" ] && echo yes || echo no)"
 done
+
+# ================================================================================================
+echo "--- N. relaunch during a reap already IN FLIGHT waits it out, and leaves a keeper (#189) ---"
+# Case G covers a request no keeper has taken. This is the other half, which `relaunch` could not
+# see at all while the keeper consumed the request with `rm`: `_keeper_live` vouched for the
+# reaping keeper, `_keeper_ensure` returned early, and the room was left with no keeper once the
+# reap ended. The window is built here rather than hunted for: the room's keeper is replaced by
+# one whose ct_kill takes a second per seat, so the reap is still running when `relaunch` starts.
+#
+# The real verb over a room built by the real `up`, as in G. `relaunch` fails at its launch on the
+# unresolvable backend, which is not what is asserted — the wait and the keeper both come first.
+RN_REPO="$COUNCIL_TEST_ROOT/t26n-repo"; rm -rf "$RN_REPO"; mkdir -p "$RN_REPO" || exit 1
+( cd "$RN_REPO" && git init -q . \
+  && COUNCIL_BACKEND=none-for-tests bash "$CLI" --room t26n --me codex up \
+       --scenario debate --agents claude,codex --cwd . "does relaunch wait out a reap?" ) >"$COUNCIL_TEST_ROOT/t26n-up.log" 2>&1
+RN="$RN_REPO/.git/council/t26n"
+T26N_MARK="$COUNCIL_TEST_ROOT/t26-marks/n"; mkdir -p "$T26N_MARK" || exit 1
+if [ ! -f "$RN/roster.json" ]; then
+  echo "  FAIL N: up did not build a room"; sed -n '1,20p' "$COUNCIL_TEST_ROOT/t26n-up.log"; FAILURES=$((FAILURES + 1))
+else
+  ROOM_KEEPERS+=("$RN/state/keeper.pid")
+  KN0=$(kpid_of "$RN/state/keeper.pid")
+  kill_keeper "$RN/state/keeper.pid"
+  wait_gone "$KN0" "$PATIENCE" >/dev/null
+  ( SKILL="$SKILL"; . "$SKILL/lib/up.sh"
+    ct_kill() { sleep 1; : > "$T26N_MARK/reaped-$1"; }
+    _keeper_ensure "$RN" claude codex )
+  KN=$(kpid_of "$RN/state/keeper.pid")
+  printf 'teardown\n' > "$RN/state/teardown"
+  ok "the slow keeper takes the request, so a reap is in flight" yes "$(wait_file "$RN/state/reaping" "$PATIENCE")"
+  ok "...and is still alive, reaping, as relaunch starts" yes "$(kill -0 "$KN" 2>/dev/null && echo yes || echo no)"
+  ( cd "$RN_REPO" && COUNCIL_BACKEND=none-for-tests bash "$CLI" --room t26n relaunch claude ) \
+    >"$COUNCIL_TEST_ROOT/t26n-relaunch.log" 2>&1
+  # The discriminator: before the fix relaunch returned while the reap was still running, so the
+  # second seat's mark was not there yet when it did.
+  ok "relaunch returned only after the reap had finished" yes \
+     "$([ -e "$T26N_MARK/reaped-claude" ] && [ -e "$T26N_MARK/reaped-codex" ] && echo yes || echo no)"
+  ok "...and the reaping keeper is gone" gone "$(wait_gone "$KN" 5)"
+  KN2=$(kpid_of "$RN/state/keeper.pid")
+  ok "relaunch left a keeper that is NOT the one that was reaping" yes \
+     "$([ -n "$KN2" ] && [ "$KN2" != "$KN" ] && echo yes || echo no)"
+  ok "...and it is alive" alive "$(wait_gone "$KN2" 20)"
+  ok "...with no reap left marked in flight" no "$([ -e "$RN/state/reaping" ] && echo yes || echo no)"
+fi
+
+# ================================================================================================
+echo "--- O. a request the keeper consumed in the write's own instant is still reported asked (#196) ---"
+# `_keeper_teardown` used to confirm with `[ -f "$f" ]`, and the keeper's FIRST act on the marker is
+# to take it away — so a poll landing between the rename and that check returned 2, and `decide`
+# reported that the request could not be written while the seats were closing. The window is ~2 ms
+# and cannot be hit by chance in a test, so it is built: `mv` is shadowed, in the caller's subshell
+# only, by a function that does the real rename and then, when the destination is the marker, does
+# exactly what the keeper does — renames it onto `state/reaping`. The code under test is untouched.
+RO="$COUNCIL_TEST_ROOT/t26o"
+mkroom_faked "$RO" o a b
+( . "$SKILL/lib/up.sh"
+  mv() { command mv "$@" || return; local dst="${!#}"
+         [ "$dst" = "$RO/state/teardown" ] && command mv -f "$dst" "$RO/state/reaping"; return 0; }
+  _keeper_teardown "$RO" ); rc=$?
+ok "a request the keeper took before the check is reported asked, not unwritten" 0 "$rc"
+ok "...the premise: it really was taken" teardown "$(cat "$RO/state/reaping" 2>/dev/null)"
+# The same instant with the OTHER outcome — a directory planted there, so the rename moves the temp
+# inside it at rc 0. That one never landed, and must still be refused.
+RO2="$COUNCIL_TEST_ROOT/t26o2"
+mkroom_faked "$RO2" o2 a b
+( . "$SKILL/lib/up.sh"
+  mv() { local dst="${!#}"; [ "$dst" = "$RO2/state/teardown" ] && mkdir "$dst"; command mv "$@"; }
+  _keeper_teardown "$RO2" ) 2>/dev/null; rc=$?
+ok "a directory planted in the same instant is still refused" 2 "$rc"
+ok "...and no temp is left inside it" no "$(ls "$RO2"/state/teardown/.teardown.* >/dev/null 2>&1 && echo yes || echo no)"
+
+# ================================================================================================
+echo "--- P. the wait on a reap in flight is bounded by the keeper, not by the file ---"
+# `down` kills a keeper with a plain `kill`, so a reap it interrupts never removes `state/reaping`.
+# A wait keyed on the file alone would then hang every later `relaunch`; this one asks whether the
+# keeper is alive.
+RP="$COUNCIL_TEST_ROOT/t26p"; rm -rf "$RP"; mkdir -p "$RP/state" || exit 1
+( . "$SKILL/lib/up.sh"; _keeper_await_reap "$RP" 3 ); rc=$?
+ok "nothing in flight: returns at once" 0 "$rc"
+printf 'teardown\n' > "$RP/state/reaping"
+printf '%s' "$DEADPID" > "$RP/state/keeper.pid"
+( . "$SKILL/lib/up.sh"; _keeper_await_reap "$RP" 3 ); rc=$?
+ok "a reap whose keeper is dead: not waited on" 0 "$rc"
+ok "...and its leftover file is cleared" no "$([ -e "$RP/state/reaping" ] && echo yes || echo no)"
+RP2="$COUNCIL_TEST_ROOT/t26p2"
+mkroom_faked "$RP2" p2 a b
+printf 'teardown\n' > "$RP2/state/reaping"
+( . "$SKILL/lib/up.sh"; _keeper_await_reap "$RP2" 3 ); rc=$?
+ok "a live keeper that never finishes: the ceiling ends the wait, and says so" 1 "$rc"
+ok "...leaving the file, since the keeper is still there" yes "$([ -e "$RP2/state/reaping" ] && echo yes || echo no)"
+# And the keeper that `_keeper_ensure` forks next must not inherit a leftover as a reap of its own.
+kill_keeper "$RP2/state/keeper.pid"; wait_gone "$(kpid_of "$RP2/state/keeper.pid")" "$PATIENCE" >/dev/null
+( SKILL="$SKILL"; . "$SKILL/lib/up.sh"; ct_kill() { :; }; _keeper_ensure "$RP2" a b )
+ok "a new keeper clears a leftover reaping file as it starts" no "$([ -e "$RP2/state/reaping" ] && echo yes || echo no)"
+
+# ================================================================================================
+echo "--- Q. a request cancelled between the keeper's check and its rename is not reaped ---"
+# With `[ -f ]` then `rm -f`, a `relaunch` cancelling in between went unnoticed and the keeper
+# reaped a teardown nobody wanted any more. The rename's own status now decides. Built, not hunted:
+# `mv` is shadowed inside the KEEPER's fork so that, when it is about to take the marker, it first
+# does what `relaunch` does — removes it — and then the real rename runs and fails.
+RQ="$COUNCIL_TEST_ROOT/t26q"; rm -rf "$RQ"
+T26Q_MARK="$COUNCIL_TEST_ROOT/t26-marks/q"; mkdir -p "$T26Q_MARK" || exit 1
+( SKILL="$SKILL"; . "$SKILL/lib/up.sh"
+  ct_kill() { : > "$T26Q_MARK/reaped-$1"; }
+  mv() { local dst="${!#}"
+         [ "$dst" = "$RQ/state/reaping" ] && { rm -f "$RQ/state/teardown"; : > "$T26Q_MARK/cancelled"; }
+         command mv "$@"; }
+  _mkroom "$RQ" a b )
+ROOM_KEEPERS+=("$RQ/state/keeper.pid")
+KQ=$(kpid_of "$RQ/state/keeper.pid")
+printf 'teardown\n' > "$RQ/state/teardown"
+ok "the keeper saw the request, and it was cancelled under it" yes "$(wait_file "$T26Q_MARK/cancelled" "$PATIENCE")"
+hold 2 "$KQ"
+ok "...so the keeper is still there" yes "$(kill -0 "$KQ" 2>/dev/null && echo yes || echo no)"
+ok "...having reaped nothing" no "$([ -e "$T26Q_MARK/reaped-a" ] || [ -e "$T26Q_MARK/reaped-b" ] && echo yes || echo no)"
+ok "...and marked no reap in flight" no "$([ -e "$RQ/state/reaping" ] && echo yes || echo no)"
 
 # ================================================================================================
 printf '\nt26-decide-teardown: %s checks, %s failed\n' "$CHECKS" "$FAILURES"
