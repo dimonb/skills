@@ -1158,6 +1158,25 @@ expect_fail "check 14: a lookup later in a quoted sh -c string" \
 # pattern after it is reached and the line stays green.
 printf '#!/usr/bin/env bash\nexit 0\nkids=$(%s -P "$x" <(true) sleep)\n' "$PG" > "$SH_PROBE"
 expect_pass "check 14: a process substitution before the pattern stays green"
+# 34e6 — what reading quotes must NOT lose, each one caught before it and missed by its first
+# draft: a quoted command word, the same through single quotes after a quoted `sh -c`, a lookup
+# inside a process substitution, and one inside a `$(...)` within double quotes...
+printf '#!/usr/bin/env bash\nexit 0\nkids=$("%s" -P "$x")\n' "$PG" > "$SH_PROBE"
+expect_fail "check 14: a quoted command word" \
+  "pgrep/pkill with -P/--parent and no pattern"
+printf '#!/usr/bin/env bash\nexit 0\nkids=$(sh -c \047%s -P $x\047 arg)\n' "$PG" > "$SH_PROBE"
+expect_fail "check 14: a word after a single-quoted sh -c string" \
+  "pgrep/pkill with -P/--parent and no pattern"
+printf '#!/usr/bin/env bash\nexit 0\nwhile read -r p; do :; done < <(%s -P "$x")\n' "$PG" > "$SH_PROBE"
+expect_fail "check 14: a lookup inside a process substitution" \
+  "pgrep/pkill with -P/--parent and no pattern"
+printf '#!/usr/bin/env bash\nexit 0\nkids="$(sh -c "%s -P $x")"\n' "$PG" > "$SH_PROBE"
+expect_fail "check 14: a quoted sh -c inside a double-quoted \$(...)" \
+  "pgrep/pkill with -P/--parent and no pattern"
+# 34e7 — ...and the mirror: the quotes of a `$(...)` within double quotes do not close the outer
+# span, so a lookup there WITH a pattern stays green.
+printf '#!/usr/bin/env bash\nexit 0\nkids="$(%s -P "$x" sleep)"\n' "$PG" > "$SH_PROBE"
+expect_pass "check 14: a double-quoted \$(...) lookup WITH a pattern stays green"
 rm -f "$SH_PROBE"
 
 # 34f — check 14's fail-closed arms, in the shapes 14a and 14b use. The listing errors with its
