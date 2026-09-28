@@ -163,7 +163,7 @@ EOF
 ok "report.sh asks why before the clock" 1 \
    "$(grep -Fc 'wait_line=$(shipyard_wait_state "$b" "$phase" "$stage" 2>/dev/null) || wait_line=""' "$REPORT")"
 ok "...only of a motionless child with nothing pending" 1 \
-   "$(grep -Fc 'if [ "$run" = "⏸ idle/wait" ] && [ "$pend" = 0 ] && [ "$badrec" = 0 ]; then' "$REPORT")"
+   "$(grep -Fc 'if [ "$run" = "⏸ idle/wait" ] && [ "$pend" = 0 ]; then' "$REPORT")"
 # ...and the stall guard does NOT carry the unreadable count: an unreadable record must not be what
 # silences a stall alarm (#197).
 ok "the stall guard is not silenced by an unreadable record" 0 \

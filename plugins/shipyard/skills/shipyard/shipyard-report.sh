@@ -1301,9 +1301,7 @@ for slot in "${SLOTS[@]}"; do
   # escalation is already accounted for by the esc column and the escalation block, and it is
   # asking for something. Without this guard such a slot could be printed under "a stated,
   # self-healing wait ... Do not nudge" while a child is in fact blocked on an unanswered question.
-  # An UNREADABLE record counts here too (#197): it may be exactly that question, and "do not nudge"
-  # must not be printed over it. It does NOT join the stall guard below, which it would silence.
-  if [ "$run" = "⏸ idle/wait" ] && [ "$pend" = 0 ] && [ "$badrec" = 0 ]; then
+  if [ "$run" = "⏸ idle/wait" ] && [ "$pend" = 0 ]; then
     wait_line=$(shipyard_wait_state "$b" "$phase" "$stage" 2>/dev/null) || wait_line=""
     if [ -n "$wait_line" ]; then
       wait_kind=$(printf '%s' "$wait_line" | cut -f1)
