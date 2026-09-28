@@ -20,11 +20,12 @@
 #     FIFO between `mktemp` and the shell's open of it. No fixture hits that on purpose.
 #   * the owner probe's `sh -c 'printf … >"$1"'`, onto a name `mktemp` just made: that same residual.
 #
-# MUTATION CHECK, run by hand when this file changes: put back `>"$marker"` in stop_all, the
-# `<path>.<token>.tmp.$$` temp in write_record, or `>>"$logfile"` in the nohup launch, and that
-# site's case reports HUNG. Put back `>>"${12}"` in the watch-foreground dispatch and case 4 reports
-# a failed start instead: the watcher blocks, and the starter gives up on it after its publication
-# polls rather than hanging with it.
+# MUTATION CHECK, run by hand when this file changes: put back `>"$marker"` in stop_all or the
+# `<path>.<token>.tmp.$$` temp in write_record, and that site's case reports HUNG. Put back the old
+# nohup launch (`>>"$logfile"`, no temp) or `>>"${12}"` in the watch-foreground dispatch, and case 3
+# or 4 reports a failed start instead: the WATCHER blocks on the log, and the starter gives up on it
+# after its publication polls rather than hanging with it. A mutation that keeps the new rename and
+# only restores the append stays green, because the rename has already replaced the FIFO.
 set -uo pipefail
 export LC_ALL=C
 
