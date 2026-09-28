@@ -24,13 +24,11 @@ FULL=0; [ "${1:-}" = "--full" ] && FULL=1
 # reading each other's writes. Run serially this changes nothing.
 mkdir -p "${TMPDIR:-/tmp}/council-test" || exit 1
 RUN_ROOT=$(mktemp -d "${TMPDIR:-/tmp}/council-test/run.XXXXXXXX") || exit 1
-# Remove the root on every exit path except SIGKILL, which nothing can catch. Bash runs an EXIT
-# trap when the shell dies on an untrapped fatal signal too, so this covers a killed run; INT and
-# TERM are deliberately NOT trapped, because a trapped signal is deferred until the current
-# foreground command returns and would make a kill wait for the test in progress. Room keepers
-# poll `while [ -d "$room" ]`, so this is what reaps the ones a killed test could not stop
-# itself, and nothing else ever will: no later run reuses this root's name. It removes the whole
-# run root, so every per-test subdirectory below goes with it.
+# One EXIT trap and no INT/TERM trap, for the reasons given above the trap in _helpers.sh, which
+# also states the exit paths an EXIT trap does not cover. Room keepers poll `while [ -d "$room" ]`,
+# so this is what reaps the ones a killed test could not stop itself, and nothing else ever will:
+# no later run reuses this root's name. It removes the whole run root, so every per-test
+# subdirectory below goes with it.
 trap 'rm -rf "$RUN_ROOT"' EXIT
 
 # A ceiling, not a deadline. A slow test under load finishes far inside it; a wedged one is
@@ -66,7 +64,7 @@ fi
 # while the current test keeps going — but only until this same ceiling group-kills it. Turning it
 # on means processes that outlive everyone, which is the failure the ceiling exists to prevent.
 
-tests=(t4-conflict.sh t7-roundtable.sh t8-graph.sh t11-decision.sh t14-verbs.sh t5-converge.sh t6-stuck.sh t9-lap.sh t9b-untrusted.sh t9c-room-inputs.sh t9d-lane-provenance.sh t9e-author-identity.sh t9f-decided-needs-record.sh t9g-degrades-loudly.sh t9h-roster-order.sh t3-token.sh t13-relaunch.sh t15-term-adapter.sh t16-keeper-canary.sh t17-esc-mailbox.sh t18-flow-admission.sh t19-keeper-rebuild.sh t20-global-options.sh t21-say.sh t22-blocked.sh t23-decide-announces.sh t24-relaunch-absence.sh t25-opening-position.sh t26-decide-teardown.sh t27-monitor.sh t28-stall-episode.sh t29-mailbox-fifo.sh)
+tests=(t4-conflict.sh t7-roundtable.sh t8-graph.sh t11-decision.sh t14-verbs.sh t5-converge.sh t6-stuck.sh t9-lap.sh t9b-untrusted.sh t9c-room-inputs.sh t9d-lane-provenance.sh t9e-author-identity.sh t9f-decided-needs-record.sh t9g-degrades-loudly.sh t9h-roster-order.sh t3-token.sh t13-relaunch.sh t15-term-adapter.sh t16-keeper-canary.sh t17-esc-mailbox.sh t18-flow-admission.sh t19-keeper-rebuild.sh t20-global-options.sh t21-say.sh t22-blocked.sh t23-decide-announces.sh t24-relaunch-absence.sh t25-opening-position.sh t26-decide-teardown.sh t27-monitor.sh t28-stall-episode.sh t29-mailbox-fifo.sh t12-cleanup.sh)
 [ "$FULL" = 1 ] && tests+=(t1-order.sh t2-latency.sh t2b-wake.sh t2c-bell.sh)
 # --- the files run CONCURRENTLY -----------------------------------------------------------------
 # What makes this safe is the per-test root above plus the fact that each file builds its own
