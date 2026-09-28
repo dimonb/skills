@@ -925,9 +925,10 @@ _term_ensure() {
 #     any launcher remains. With the pin, every launcher AND the record all gone, this is rc 1 and a
 #     block line. That is the residue: it takes three kinds of write, and each is a file a
 #     supervisor can see is missing.
-#   * the two-write routes launch-record.sh lists are not caught. One of them silences this alarm
-#     outright: dropping a live seat from the roster AND the record. The others make a dead seat
-#     read live.
+#   * the two-write routes launch-record.sh lists are not caught. TWO of them silence this alarm
+#     outright: dropping a live seat from the roster AND the record, and retargeting the pin at a
+#     container with no session of the seat's name AND rewriting the record to match. The others
+#     make a dead seat read live. What this function holds to unknown is the SINGLE write.
 #
 # The record is read before term.sh is sourced, so a room with nothing to count never resolves a
 # backend. Once there is a record to check, this sources term.sh in its own subshell, like

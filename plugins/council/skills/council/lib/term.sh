@@ -174,9 +174,13 @@ ct_seat_verdicts() {
         # not checked against the pin, so scoping this search to it let one record write
         # (`launched: false` plus any other container) make a live seat read absent. Nor across the
         # whole backend: session names carry no repo, so another repo running a room of the same
-        # name made a genuine teardown here read unknown. Only with no pin at all is the whole
-        # backend searched. A launched seat with a retargeted pin never reaches this search: the
-        # pin and recorded container disagree first, and that alone reads unknown.
+        # name in ITS OWN container made a genuine teardown here read unknown. Two repos that share
+        # one container (the same repo basename on tmux, the same workspace on agterm) still do:
+        # that teardown reads unknown, which is loud and no worse than before. Only with no pin at
+        # all is the whole backend searched. For a SINGLE write, a retargeted pin never reaches this
+        # search for a launched seat: the pin and recorded container disagree first, and that alone
+        # reads unknown. Retargeting the pin AND rewriting the record to match does reach it, finds
+        # nothing, and reads live seats gone: a two-write route, listed in lib/launch-record.sh.
         ([$hs[] | select(.n == $want and ($pin == "" or .c == $pin))]) as $byname
         | if $s.launched != true then
             (if ($byname | length) > 0

@@ -39,9 +39,15 @@
 # still do is make a seat read unknown, which alarms. Checked one field at a time.
 #
 # THE TWO-WRITE ROUTES THAT REMAIN, named because a guard whose limits are undocumented gets trusted
-# past them:
+# past them. TWO of them silence the closed-room alarm:
 #   * dropping a live seat from the roster AND from the record: it is then neither counted nor
 #     missed, and a closed room whose other seats are gone reads 0 of N and does not alarm;
+#   * retargeting the pin at a container that holds no session with the seat's name AND rewriting
+#     the record to match (the live seats marked `launched: false`, or recorded in that container
+#     with a handle nobody holds): the same-name search runs in the pinned container, finds
+#     nothing, and live seats read gone, so the count is 0 of N, the alarm is quiet, and
+#     `_seat_liveness` can call a live seat gone.
+# The others can make a dead seat read live:
 #   * retargeting the pin AND the record's container at another container holding a session with
 #     the seat's name (another repo's room of the same name, say): a dead seat can then read live;
 #   * a backend session created with a recycled handle (tmux ids restart with the server) in the
