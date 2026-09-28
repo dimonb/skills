@@ -10,12 +10,14 @@ percentages, and issue numbers. Nothing else was touched: the leading codepoints
 positions and where each marker sits are as captured, and those are the only properties the anchor
 reads.
 
-One substitution is worth naming because the first pass MISSED it and the gate could not help. A
-scratch path can carry the home directory HYPHEN-ENCODED rather than as a path, and the gate's
-structural scan looks for a literal "/Users/" or "/home/", which that form does not contain. Rule
-zero already covers it ("not hashed or split up to hide it"), so judgement is the only thing that
-catches it — the builder now substitutes the mangled form first and re-scans every fixture before
-writing. If you add a capture, check for that shape by hand.
+One substitution is worth naming because the first pass MISSED it and, at the time, the gate
+could not help. A scratch path can carry the home directory HYPHEN-ENCODED rather than as a path,
+which a scan for a literal "/Users/" or "/home/" does not see. The leak gate has since grown an
+arm for that encoded form, so it now reds a committed instance too — but that arm is bounded, and
+its bounds are stated beside it in scripts/check.sh ("Two limits taken deliberately"). Rule zero
+covers every shape regardless ("not hashed or split up to hide it"). The builder still substitutes
+the mangled form first and re-scans every fixture before writing; if you add a capture, check by
+hand for the encodings those bounds leave out.
 
 Why the anchor needs fixtures at all: a too-loose anchor restores the false `delivered` this
 change exists to remove; a too-tight one makes a healthy running turn read as not-running, so the
