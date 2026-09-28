@@ -189,8 +189,18 @@ nothing on another proposal) · `object --refs '["<id>"]'` — an objection
 (it must reference a concrete id, or there is nothing to close it against) · `support` ·
 `concede --refs '["<id>"]'` — "I yield" (from the author of an objection it drops the
 objection; from the author of a proposal it drops the proposal) · `withdraw` · `msg` ·
-`notice` · `skip` — consume the turn of a holder who is past the deadline, and only if `floor`
-says `next=` is you (above).
+`notice` · `clarify` — a question about something said, one of the three acts you may raise
+with `--hand` (above) · `skip` — consume the turn of a holder who is past the deadline, and only if
+`floor` says `next=` is you (above).
+
+`overrule --refs '["<objection>"]'` closes an objection **without its author agreeing**, and
+nothing gates it: any participant may send it, against any objection, and the room has no
+chair to reserve it for. It is the one act that closes an objection without its author
+yielding and without the proposal changing, so
+treat it as a repair, not a move in the argument — for an objection that has been answered on
+the substance while its author has stopped engaging, never for one you simply cannot answer. It
+costs what it looks like: the record shows that objection as closed by an overrule, from you,
+rather than conceded, and a room that reaches for it has decided with one voice fewer.
 
 The room becomes **ready to decide** once no objection is open and a full lap has passed in
 which nobody added a proposal, an amendment or an objection. It does not close itself: closing
