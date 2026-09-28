@@ -235,8 +235,8 @@ Poll until nothing is `PENDING`, `QUEUED` or `IN_PROGRESS`.
   argument publishes as the literal two characters.
 - **A label description is capped at 100 characters.** An area label's path list has to fit, so
   name directory prefixes rather than files; `gh label edit` rejects a longer one.
-- **A closing keyword closes only on a merge into the default branch**, and needs its own line per
-  issue — `Closes #1, #2` closes only the first. One `Closes #N` line each.
+- **A closing keyword closes only on a merge into the default branch**, and needs its own keyword
+  per issue — `Closes #1, #2` closes only the first. One `Closes #N` line each is the simplest form.
 - **`gh pr view --json files` is paginated by the API**; for a very large change confirm you
   saw every path before concluding a diff is spec-only.
 - **`/code-review` and `/security-review` must never be passed `--comment` or `--fix` here
