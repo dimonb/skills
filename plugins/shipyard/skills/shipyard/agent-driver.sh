@@ -159,6 +159,18 @@ drv_container() {
   _drv_container_derive
 }
 
+# drv_pin — the container name pinned for the resolved backend, and nothing else: no override and
+# no fresh derivation, which is what `drv_container` falls back to. Exit 1, printing nothing, when
+# there is no pin directory, no pin file, or an empty one. A caller that checks a recorded container
+# against the pin needs the pin itself, because a derived name agrees with a pin nobody wrote.
+drv_pin() {
+  local f v
+  f=$(_drv_pin_file 2>/dev/null) && [ -f "$f" ] || return 1
+  read -r v < "$f" 2>/dev/null
+  [ -n "$v" ] || return 1
+  printf '%s' "$v"
+}
+
 # Resolve the container and write it down (a launcher calls this before creating anything).
 # Idempotent: an already-pinned name is returned unchanged, so a second child of a run joins the
 # first one's container even if the caller has since moved to another workspace. With no pin
@@ -202,7 +214,37 @@ drv_target() {
 # command line). Echoes the session name on success. The container is pinned here, so the first
 # launch fixes the name for every later call.
 drv_launch() {
-  local name="$1" cwd="$2" launcher="$3" container inner cmd
+  _drv_launch "$@" >/dev/null || return 1
+  printf '%s' "$1"
+}
+
+# drv_launch_handle <session-name> <cwd> <launcher> — the same launch, echoing
+# "<container><TAB><handle>" instead of the name. The handle is what the BACKEND assigned: the
+# agterm session UUID, or the tmux `#{window_id}`. A name is chosen by the caller and anybody can
+# create a session with the same one; a handle is not chosen by anybody, so a caller that records
+# it can later ask whether THAT terminal is still there (`drv_handles`), not merely whether
+# something answers to the name.
+#
+# THE HANDLE COMES FROM THE LAUNCH CALL ITSELF, never from a lookup by name afterwards: a lookup
+# would pick whichever same-named session the backend listed first, which is the confusion this
+# primitive exists to avoid. Exit 1, printing nothing, when the launch failed. Exit 2 when the
+# launch went through but the backend returned no handle: a terminal may be running that nothing
+# can vouch for, so the caller must not treat the result as either a failure or a record. It still
+# prints "<container><TAB>" with the handle empty.
+#
+# tmux window ids are unique only for the lifetime of one server: a restarted server numbers from
+# `@0` again. A caller matching a recorded handle must therefore also match the container and name
+# it recorded beside it, which `drv_handles` prints for exactly that reason.
+drv_launch_handle() {
+  local out
+  out=$(_drv_launch "$@") || return 1
+  printf '%s' "$out"
+  case "$out" in *"$(printf '\t')"?*) return 0 ;; *) return 2 ;; esac
+}
+
+# The launch both verbs share. Echoes "<container><TAB><handle>", and the handle may be empty.
+_drv_launch() {
+  local name="$1" cwd="$2" launcher="$3" container inner cmd out h
   case "$(drv_backend)" in
     agterm)
       container=$(drv_container_pin) || return 1
@@ -211,8 +253,12 @@ drv_launch() {
       # session open after the agent exits, so a crash stays readable.
       inner="exec $(drv_shq "$launcher")"
       cmd="zsh -lc $(drv_shq "$inner")"
-      agtermctl session new --cwd "$cwd" --workspace-name "$container" --create-workspace \
-        --name "$name" --no-select --wait --command "$cmd" >/dev/null || return 1 ;;
+      # --json so the response carries the new session's id: `{"ok":true,"result":{"id":…}}`,
+      # captured from a real agtermctl.
+      out=$(agtermctl session new --cwd "$cwd" --workspace-name "$container" --create-workspace \
+        --name "$name" --no-select --wait --command "$cmd" --json) || return 1
+      h=$(printf '%s' "$out" | jq -r 'if .ok == true and (.result.id | type) == "string"
+                                      then .result.id else empty end' 2>/dev/null) || h="" ;;
     tmux)
       container=$(drv_container_pin) || return 1
       cmd=$(drv_shq "$launcher")
@@ -222,14 +268,18 @@ drv_launch() {
       local -a scrub=(env -u AGTERM_ENABLED -u AGTERM_PANE -u AGTERM_PANE_ID
                       -u AGTERM_SESSION_ID -u AGTERM_SOCKET -u AGTERM_WINDOW_ID
                       -u AGTERM_WORKSPACE_ID)
+      # `-P -F` prints the new window's id. Capturing it does not hang on a cold start: the server
+      # that call forks detaches from the client's stdout (measured on a private socket).
       if tmux has-session -t "$container" 2>/dev/null; then
-        "${scrub[@]}" tmux new-window -t "$container" -n "$name" -c "$cwd" "$cmd" || return 1
+        h=$("${scrub[@]}" tmux new-window -t "$container" -n "$name" -c "$cwd" \
+              -P -F '#{window_id}' "$cmd") || return 1
       else
-        "${scrub[@]}" tmux new-session -d -s "$container" -n "$name" -c "$cwd" "$cmd" || return 1
+        h=$("${scrub[@]}" tmux new-session -d -s "$container" -n "$name" -c "$cwd" \
+              -P -F '#{window_id}' "$cmd") || return 1
       fi ;;
     *) _drv_no_backend; return 1 ;;
   esac
-  printf '%s' "$name"
+  printf '%s\t%s' "$container" "$h"
 }
 
 # drv_read <session-name> — the session's visible screen as plain text.
@@ -456,6 +506,51 @@ drv_sessions() {
       fi
       case "$out" in
         *'no server running'*|*"can't find session"*|*'session not found'*|*'no such session'*) return 0 ;;
+        *) return 1 ;;
+      esac ;;
+    *) _drv_no_backend; return 1 ;;
+  esac
+}
+
+# drv_handles — every terminal on the resolved backend, one "<handle><TAB><container><TAB><name>"
+# line each, across ALL containers.
+#
+# The exit status follows `drv_sessions`: 0 means the backend answered, and an empty list is then a
+# real answer; 1 means it did not. The listing is whole-backend on purpose. A caller checking a
+# handle recorded by `drv_launch_handle` must not depend on a container name it reads from
+# somewhere else. Scoped to that name, a pin that has been retargeted would hide the live
+# terminal it no longer names. The container and name are printed next to each handle so the
+# caller can check them against its record. On tmux they are needed: window ids restart at `@0`
+# with the server.
+drv_handles() {
+  local tree out
+  case "$(drv_backend)" in
+    agterm)
+      tree=$(agtermctl tree --json 2>/dev/null) || return 1
+      # The same shape assertion as `drv_sessions`, for the same reason: a tree that parses but is
+      # not this shape would otherwise read as an answered, empty backend.
+      printf '%s' "$tree" | jq -r '
+        if .ok != true or (.result.tree.workspaces | type) != "array"
+          or (all(.result.tree.workspaces[];
+            type == "object" and (.name | type) == "string"
+            and (.sessions | type) == "array"
+            and all(.sessions[];
+              type == "object" and (.id | type) == "string" and (.id | length) > 0
+              and (.name | type) == "string")) | not)
+        then error("invalid agterm tree")
+        else .result.tree.workspaces[] | .name as $ws | .sessions[]? | "\(.id)\t\($ws)\t\(.name)"
+        end
+      ' 2>/dev/null || return 1
+      return 0 ;;
+    tmux)
+      # A server that is not running holds no windows, which is an answer. Any other failure is
+      # not. The same split `drv_sessions` makes, on the same captured stderr.
+      if out=$(tmux list-windows -a -F '#{window_id}	#{session_name}	#{window_name}' 2>&1); then
+        [ -n "$out" ] && printf '%s\n' "$out"
+        return 0
+      fi
+      case "$out" in
+        *'no server running'*|*'error connecting to'*'No such file or directory'*) return 0 ;;
         *) return 1 ;;
       esac ;;
     *) _drv_no_backend; return 1 ;;

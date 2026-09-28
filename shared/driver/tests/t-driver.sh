@@ -69,7 +69,10 @@ case "$1" in
       jq -n --rawfile t "${FAKE_AT_TEXT:-/dev/null}" '{result:{text:($t | rtrimstr("\n"))}}'
       exit 0
     fi
-    printf 'session %s\n' "$*" >>"${FAKE_AT_LOG:-/dev/null}"; exit 0 ;;
+    printf 'session %s\n' "$*" >>"${FAKE_AT_LOG:-/dev/null}"
+    # `session new --json` answers with the new id; FAKE_AT_NEW_OUT is that response verbatim.
+    [ -n "${FAKE_AT_NEW_OUT:-}" ] && printf '%s\n' "$FAKE_AT_NEW_OUT"
+    exit "${FAKE_AT_NEW_RC:-0}" ;;
   *) printf '%s\n' "$*" >>"${FAKE_AT_LOG:-/dev/null}"; exit 0 ;;
 esac
 EOF
@@ -91,7 +94,9 @@ case "$1" in
      # process's environment, so the launch scrub can be asserted: a scrubbed var leaves no line.
      case "$1" in
        new-session|new-window)
-         env | sed -n 's/^\(AGTERM_[A-Za-z_]*\)=.*/leak:\1/p' >>"${FAKE_TMUX_LOG:-/dev/null}" ;;
+         env | sed -n 's/^\(AGTERM_[A-Za-z_]*\)=.*/leak:\1/p' >>"${FAKE_TMUX_LOG:-/dev/null}"
+         # `-P -F '#{window_id}'` prints the new window's id; FAKE_TMUX_NEW_ID is what it prints.
+         [ -n "${FAKE_TMUX_NEW_ID:-}" ] && printf '%s\n' "$FAKE_TMUX_NEW_ID" ;;
      esac
      exit 0 ;;
 esac
@@ -187,6 +192,12 @@ ok "an override still beats the pin" over \
   "$(_DRV_BE=tmux DRV_CONTAINER_PIN_DIR="$PIN" DRV_CONTAINER_OVERRIDE=over DRV_REPO_KEY=changed drv_container)"
 ok "no pin dir means no write and the derived name" solo \
   "$(_DRV_BE=tmux DRV_REPO_KEY=solo drv_container_pin)"
+# drv_pin is the pin ALONE: never the override, never a derivation.
+ok "drv_pin reads the pin" myrepo "$(_DRV_BE=tmux DRV_CONTAINER_PIN_DIR="$PIN" DRV_CONTAINER_OVERRIDE=over drv_pin)"
+rc=0; ( _DRV_BE=agterm DRV_CONTAINER_PIN_DIR="$PIN" DRV_REPO_KEY=myrepo drv_pin >/dev/null ) || rc=$?
+ok "drv_pin with no pin for this backend -> rc 1, no derivation" 1 "$rc"
+rc=0; ( _DRV_BE=tmux DRV_REPO_KEY=myrepo drv_pin >/dev/null ) || rc=$?
+ok "drv_pin with no pin dir -> rc 1" 1 "$rc"
 
 # --- 4. drv_target: handle construction ------------------------------------------------------
 printf '\n── drv_target ──\n'
@@ -460,6 +471,66 @@ cat >"$TMP/tree-other.json" <<'EOF'
 EOF
 ok "agterm: only THIS container's sessions are listed" "|0" \
    "$(sessions_of _DRV_BE=agterm DRV_CONTAINER_OVERRIDE=proj "FAKE_AT_TREE=$TMP/tree-other.json")"
+
+printf '\n── drv_launch_handle / drv_handles ──\n'
+# The handle is the one the BACKEND returned from the launch call, never a lookup by name after it.
+TAB=$(printf '\t')
+ok "tmux: the handle is the new window's id" "cont${TAB}@7" \
+   "$( export FAKE_TMUX_HASSESSION_RC=0 FAKE_TMUX_NEW_ID=@7 _DRV_BE=tmux DRV_CONTAINER_OVERRIDE=cont
+       drv_launch_handle sess /work/dir /path/to/launcher )"
+hlog="$TMP/launch-handle.log"
+( export FAKE_TMUX_LOG="$hlog" FAKE_TMUX_HASSESSION_RC=1 FAKE_TMUX_NEW_ID=@0 _DRV_BE=tmux DRV_CONTAINER_OVERRIDE=cont
+  drv_launch_handle sess /work/dir /path/to/launcher >/dev/null )
+grep -q "new-session -d -s cont -n sess -c /work/dir -P -F #{window_id}" "$hlog" && r=yes || r=no
+ok "tmux: a cold launch asks new-session for the id" yes "$r"
+ok "agterm: the handle is the response's id" "cont${TAB}U-1" \
+   "$( export FAKE_AT_NEW_OUT='{"ok":true,"result":{"id":"U-1"}}' _DRV_BE=agterm DRV_CONTAINER_OVERRIDE=cont
+       drv_launch_handle sess /work/dir /path/to/launcher )"
+# A launch that went through without a handle is rc 2, not 0 and not 1: a terminal may be running
+# that nothing can vouch for, so a caller must neither record it nor report a failed launch.
+rc=0; out=$( export FAKE_TMUX_HASSESSION_RC=0 _DRV_BE=tmux DRV_CONTAINER_OVERRIDE=cont
+             drv_launch_handle sess /work/dir /path/to/launcher ) || rc=$?
+ok "tmux: no id printed -> rc 2" 2 "$rc"
+ok "...still naming the container, with no handle" "cont${TAB}" "$out"
+rc=0; ( export FAKE_AT_NEW_OUT='{"ok":false}' _DRV_BE=agterm DRV_CONTAINER_OVERRIDE=cont
+        drv_launch_handle sess /work/dir /path/to/launcher >/dev/null ) || rc=$?
+ok "agterm: a response without an id -> rc 2" 2 "$rc"
+rc=0; ( export FAKE_AT_NEW_RC=1 FAKE_AT_NEW_OUT='{"ok":true,"result":{"id":"U-1"}}' _DRV_BE=agterm DRV_CONTAINER_OVERRIDE=cont
+        drv_launch_handle sess /work/dir /path/to/launcher >/dev/null ) || rc=$?
+ok "agterm: a failed launch -> rc 1" 1 "$rc"
+# ...while drv_launch keeps echoing the NAME, which shipyard relies on, handle or not.
+ok "drv_launch still echoes the name" sess \
+   "$( export FAKE_TMUX_HASSESSION_RC=0 FAKE_TMUX_NEW_ID=@7 _DRV_BE=tmux DRV_CONTAINER_OVERRIDE=cont
+       drv_launch sess /work/dir /path/to/launcher )"
+
+handles_of() { # <VAR=VAL>... -> "<lines joined by |, tabs as spaces>|rc=<rc>"
+  local out rc=0
+  out=$( set +o pipefail
+         export PATH="$FAKEBIN:$PATH"
+         export "$@"
+         drv_handles 2>/dev/null ) || rc=$?
+  printf '%s|rc=%s' "$(printf '%s' "$out" | tr '\n\t' '| ')" "$rc"
+}
+# WHOLE-BACKEND, with each handle's container and name beside it.
+jq '.result.tree.workspaces += [{"name":"somewhere-else","sessions":[{"id":"x","name":"y"}]}]' \
+   "$TMP/tree-two.json" >"$TMP/tree-h.json"
+ok "agterm: every workspace's sessions, with their container" \
+   "a proj council-demo-claude|b proj council-demo-codex|x somewhere-else y|rc=0" \
+   "$(handles_of _DRV_BE=agterm "FAKE_AT_TREE=$TMP/tree-h.json")"
+ok "agterm: a dead tree call is unanswered" "|rc=1" "$(handles_of _DRV_BE=agterm FAKE_AT_TREE_RC=1)"
+ok "agterm: a malformed tree is unanswered" "|rc=1" "$(handles_of _DRV_BE=agterm "FAKE_AT_TREE=$TMP/tree-bad.json")"
+ok "agterm: an empty tree is an answer"     "|rc=0" "$(handles_of _DRV_BE=agterm "FAKE_AT_TREE=$TMP/tree-empty.json")"
+printf '@1\tcont\tsess\n@4\tother\tx\n' >"$TMP/win-h.txt"
+ok "tmux: every window, verbatim" "@1 cont sess|@4 other x|rc=0" \
+   "$(handles_of _DRV_BE=tmux "FAKE_TMUX_WINDOWS=$TMP/win-h.txt")"
+# The server exits with its last session, so after a genuine teardown there is nothing to connect
+# to. That is an answer (no windows), and it is the case "verified absent" rests on.
+ok "tmux: no server is an empty answer" "|rc=0" \
+   "$(handles_of _DRV_BE=tmux "FAKE_TMUX_LIST_ERR=no server running on /tmp/tmux-1/default")"
+ok "tmux: no socket is an empty answer" "|rc=0" \
+   "$(handles_of _DRV_BE=tmux "FAKE_TMUX_LIST_ERR=error connecting to /tmp/tmux-1/default (No such file or directory)")"
+ok "tmux: any other failure is unanswered" "|rc=1" \
+   "$(handles_of _DRV_BE=tmux "FAKE_TMUX_LIST_ERR=error connecting to /tmp/tmux-1/default (Permission denied)")"
 
 printf '\n── drv_pins_elsewhere ──\n'
 # A pure read over the pin directory: the set of `container-<backend>` files present IS the record
