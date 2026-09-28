@@ -91,7 +91,13 @@ tmux() {
                    if [ "$n" = 0 ]; then printf '0 zsh\n'; else printf '0 claude\n'; fi ;;
       esac
       return 0 ;;
-    capture-pane) printf 'some earlier output\n> \n'; return 0 ;;
+    # FAKE_PANE serves a committed capture instead; FAKE_PANE_AFTER replaces it once the compact
+    # command has been typed, which is the one transition the compaction cases below need.
+    capture-pane)
+      if [ -z "${FAKE_PANE:-}" ]; then printf 'some earlier output\n> \n'
+      elif [ -n "${FAKE_PANE_AFTER:-}" ] && grep -qF -- '/compact' "$KEYS" 2>/dev/null; then cat "$FAKE_PANE_AFTER"
+      else cat "$FAKE_PANE"; fi
+      return 0 ;;
   esac
   return 0
 }
@@ -261,6 +267,34 @@ compact_on() { # <slot> -> "<rc>|<keys sent>"
 }
 ok "no verdict goes on: it sends, and is not exit 8"        "4|sent" "$(compact_on 43)"
 ok "one none then agent goes on: it sends, not exit 8"      "4|sent" "$(compact_on 44)"
+
+# The completion read (#154), over live captures of both kinds from shared/adapters' fixtures. The
+# stale case is the one the old whole-capture search got wrong with no adversary at all: a
+# compaction from EARLIER still on screen read as finished on the first poll, before the new one
+# had begun, and the resume brief went into a session that had not compacted. The second kind's
+# finished line is lower-case, so the old search never matched it and every compaction there
+# timed out into exit 4.
+PANES="$(cd "$SKILL_DIR/../../../.." && pwd)/shared/adapters/tests/fixtures"
+# The three runs are independent and each pays the script's fixed sleeps, so they run
+# CONCURRENTLY, each with a keys log of its own — the fake switches screens on its own run's keys.
+compact_over() { # <tag> <before> [<after>] -> writes "<rc>|<finished line printed?>" to $TMP/co-<tag>
+  local rc=0 out
+  out=$(KEYS="$TMP/keys-$1" FAKE_PANE="$PANES/pane-$2.txt" FAKE_PANE_AFTER="${3:+$PANES/pane-$3.txt}" \
+        SHIPYARD_MOTION_INTERVAL=0.01 SHIPYARD_BACKEND=tmux SHIPYARD_SESSION=t19ex \
+        bash "$COMPACT" 42 --no-resume --timeout 1 2>&1) || rc=$?
+  printf '%s|%s' "$rc" "$(has "$out" '^compacted after')" > "$TMP/co-$1"
+}
+: > "$TMP/keys-stale"; : > "$TMP/keys-first"; : > "$TMP/keys-second"
+compact_over stale  claude-compacted &
+co1=$!
+compact_over first  claude-idle claude-compacted &
+co2=$!
+compact_over second codex-idle codex-compacted &
+co3=$!
+wait "$co1" "$co2" "$co3"
+ok "an earlier compaction on screen is not this one"        "4|no"  "$(cat "$TMP/co-stale")"
+ok "first kind: idle, then finished, reads finished"        "0|yes" "$(cat "$TMP/co-first")"
+ok "second kind: idle, then finished, reads finished"       "0|yes" "$(cat "$TMP/co-second")"
 
 printf '\n'
 if [ "$FAILURES" -eq 0 ]; then

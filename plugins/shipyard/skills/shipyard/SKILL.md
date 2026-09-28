@@ -980,8 +980,10 @@ Two traps that each produced a wrong diagnosis, and neither is visible from the 
   live child twice, and once nearly justified killing a compaction that was in progress.
   Exclude your own pid (`pgrep -f <pattern> | grep -v "^$$\$"`) or do not use it at all —
   step 1 answers the same question without the ambiguity.
-* **`shipyard-compact.sh` exit 4 is AMBIGUOUS.** It means no `Compacted` marker appeared
-  before the timeout, which has one benign cause and one real one — see the exit-4 branch of
+* **`shipyard-compact.sh` exit 4 is AMBIGUOUS.** It means the client showed no
+  compaction-finished line for THIS `/compact` before the timeout (`adp_compacted` in
+  shared/adapters; a finished line from an EARLIER compaction still on the pane is not evidence
+  that this one finished), which has one benign cause and one real one — see the exit-4 branch of
   the script, which now spells both out. Background agents keep running after the main turn
   ends, so the session sits at a live prompt, accepts `/compact`, and then compacts slowly
   or not at all while they work; the wait expires and nothing is wrong. Treat exit 4 as a
@@ -1206,7 +1208,9 @@ Exit 5 means the child was still mid-turn when the wait ran out: `shipyard-compa
 drive a terminal during a turn, because the Escape it sends to clear the input box is
 INTERRUPT while one is running — it would kill the work in flight. Re-run when idle.
 
-Exit 4 means no `Compacted` marker appeared before the timeout. **It does not mean the child
+Exit 4 means the client showed no compaction-finished line for this `/compact` before the
+timeout; an earlier compaction's line still on screen does not count, so never read it as success
+or send the resume brief on the strength of it. **It does not mean the child
 is dead**, and reading it that way would once have thrown away a healthy run: background
 agents were still working, so the session sat at a live prompt, took the slash command, and
 simply had not finished compacting when the wait expired. The script's own exit-4 output

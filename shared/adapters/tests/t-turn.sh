@@ -12,7 +12,7 @@
 # confirmation, too tight makes a healthy running turn read as not-running, so the commonest
 # healthy path alarms and an operator learns to ignore the signal. So the screens under test are
 # live captures of both admitted kinds — see fixtures/panes.notes for how each was taken and which
-# single one is derived rather than verbatim.
+# are derived rather than verbatim.
 #
 # The four ADVERSARIAL fixtures are the point of the file. Each one carries the turn marker
 # somewhere the anchor must refuse to read it, and each corresponds to a way the old unanchored
@@ -99,6 +99,16 @@ ok "predicate: running on the second kind's service line" yes "$(running_of code
 ok "predicate: not running on a typed draft"            no  "$(running_of claude-draft)"
 ok "predicate: not running on transcript content"       no  "$(running_of claude-content)"
 ok "predicate: not running on a real idle screen"       no  "$(running_of claude-idle)"
+# The service arm reads the client's live-status TAIL, not the marker (#120). Both screens below are
+# live captures of the second kind. The first is IDLE with a column-one transcript header that
+# carries the marker because the child ran a grep for it — which the bare-substring read called
+# running for as long as the line stayed visible. The second is RUNNING with text after the tail,
+# which is why the tail is matched anywhere in the line rather than at its end.
+ok "a column-one header that greps the marker is not a turn" idle    "$(state_of codex-ran-marker)"
+ok "predicate: not running on that header either"            no      "$(running_of codex-ran-marker)"
+ok "a status tail with text after it still reads running"    running "$(state_of codex-running-tail)"
+ok "the first kind's compaction reads running"               running "$(state_of claude-compacting)"
+ok "the second kind's compaction reads running"              running "$(state_of codex-compacting)"
 # The predicate ITSELF on an unreadable capture, which is not the same assertion as the state
 # read's `unknown` below: `shipyard-compact.sh`'s alt-submit branch calls the PREDICATE, and it
 # must treat an unreadable pane as "no turn running" the way the inline grep it replaced did.
@@ -144,6 +154,38 @@ ok "…but a hint that APPEARS after one does"       queued      "$(adp_delivery
 # Reachable, and pinned because it proves the pre-send slot is read for the baseline only.
 ok "a pre-send hint that then clears"              unconfirmed "$(adp_delivery_verdict queued idle)"
 ok "the first decisive sample wins"                delivered   "$(adp_delivery_verdict idle running queued)"
+
+# --- 4b. has the latest compaction finished? ---------------------------------------------------
+# #154. Every screen is a live capture except the one built inline below, which says so. The stale
+# pair is the case the old whole-capture search got wrong without any adversary: a compaction from
+# EARLIER, still in the viewport, read as done before the new one began. The second kind's line is
+# lower-case, so the old search never matched it at all and every compaction there timed out.
+printf '\n── compaction finished ──\n'
+compacted_of() { if adp_compacted "$(pane "$1")"; then printf 'yes'; else printf 'no'; fi; }
+ok "first kind, finished"                          yes "$(compacted_of claude-compacted)"
+ok "first kind, still compacting"                  no  "$(compacted_of claude-compacting)"
+ok "first kind, an earlier one then another turn"  no  "$(compacted_of claude-compacted-stale)"
+ok "second kind, finished"                         yes "$(compacted_of codex-compacted)"
+ok "second kind, still compacting"                 no  "$(compacted_of codex-compacting)"
+ok "second kind, an earlier one then another turn" no  "$(compacted_of codex-compacted-stale)"
+ok "first kind, idle, no compaction on screen"     no  "$(compacted_of claude-idle)"
+ok "second kind, idle, no compaction on screen"    no  "$(compacted_of codex-idle)"
+ok "an empty capture is never finished"            no  "$(if adp_compacted ""; then printf 'yes'; else printf 'no'; fi)"
+# DERIVED, and built here rather than committed so its derivation is visible: the finished capture
+# with the echoed command renamed, so the result line sits under an ordinary message — the shape
+# a child's own tool output takes when it prints the word. The echo is what makes the line count.
+derived=$(pane claude-compacted)
+derived=${derived/"$ADP_COMPACT_COMMAND"/grep the compact script}
+ok "the result line under any other message is tool output" no \
+   "$(if adp_compacted "$derived"; then printf 'yes'; else printf 'no'; fi)"
+# DERIVED the same way: the finished capture with the command typed into its empty composer. That
+# is the frame shipyard-compact.sh reads right after typing, and it must read not-done however
+# stale the screen above it — it is the observation that lets a later "done" be believed.
+typed=$(pane claude-compacted | awk -v g="${ADP_BOX_GLYPHS%% *}" -v c="$ADP_COMPACT_COMMAND" '
+  { l[NR] = $0; if (index($0, g) == 1) last = NR }
+  END { for (i = 1; i <= NR; i++) print (i == last ? g " " c : l[i]) }')
+ok "…and the command typed under a finished one is not done" no \
+   "$(if adp_compacted "$typed"; then printf 'yes'; else printf 'no'; fi)"
 
 # --- 5. the marker is spelled ONCE ------------------------------------------------------------
 # The point of moving this into the shared engine was deduplication: the literal used to be
@@ -195,12 +237,44 @@ ok "…and each of them spells it exactly once" \
       | xargs -0 grep -oF -- "$ADP_TURN_MARKER" /dev/null 2>/dev/null \
       | grep -v '/tests/' | grep -c .)"
 
+# The composer glyphs, the same two assertions per glyph (#121). One exemption, and it is a module
+# boundary rather than a copy: the terminal backend's own coarse idle read (`drv_signal` in
+# shared/driver) spells both glyphs, because that module deliberately does not source this one.
+# Whether it should read them at all is #156's question; exempting it here is what keeps this
+# assertion from settling that by accident. Its vendored copies are exempt with it.
+glyph_expected="$expected
+shared/driver/agent-driver.sh"
+while IFS= read -r t; do
+  case "$t" in ''|\#*) continue ;; esac
+  glyph_expected="$glyph_expected
+$t"
+done < "$REPO/shared/driver/targets.txt"
+glyph_ifs_save=$IFS; IFS=' '
+for g in $ADP_BOX_GLYPHS; do
+  IFS=$glyph_ifs_save
+  actual=$(cd "$REPO" && git ls-files -z --cached --others --exclude-standard -- '*.sh' \
+    | xargs -0 grep -lF -- "$g" /dev/null 2>/dev/null \
+    | grep -v '/tests/' | sort -u)
+  ok "the composer glyph $g is spelled only in the canonical module, its copies and the driver" \
+     "$(printf '%s\n' "$glyph_expected" | sort | tr '\n' ' ')" "$(printf '%s\n' "$actual" | tr '\n' ' ')"
+  ok "…and the canonical module and its copies spell it exactly once each" \
+     "$(printf '%s\n' "$expected" | grep -c .)" \
+     "$(cd "$REPO" && git ls-files -z --cached --others --exclude-standard -- '*.sh' \
+        | xargs -0 grep -oF -- "$g" /dev/null 2>/dev/null \
+        | grep -v '/tests/' | grep -v 'agent-driver\.sh:' | grep -c .)"
+done
+IFS=$glyph_ifs_save
+
 # The value pin, and the one place this file spells the markers out on purpose: they are observed
 # client UI, and a typo silently switches every check above off, because they all build their
 # expectations from the fixtures rather than from the constants.
 ok "the turn marker is what the clients render"  'esc to interrupt'         "$ADP_TURN_MARKER"
 ok "the composer queued hint, common prefix"     'Press up'                 "$ADP_QUEUED_BOX_HINT"
 ok "the service-line queued header, common prefix" 'Messages to be submitted' "$ADP_QUEUED_BLOCK_HINT"
+ok "the composer glyphs"                         '❯ ›'                      "$ADP_BOX_GLYPHS"
+ok "the compaction command"                      '/compact'                 "$ADP_COMPACT_COMMAND"
+ok "the first kind's compaction result line"     '  ⎿  Compacted'           "$ADP_COMPACTED_RESULT"
+ok "the second kind's compaction service line"   'Context compacted'        "$ADP_COMPACTED_SERVICE"
 
 printf '\n'
 if [ "$FAILURES" -eq 0 ]; then

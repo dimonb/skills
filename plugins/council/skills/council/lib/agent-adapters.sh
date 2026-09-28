@@ -38,7 +38,7 @@
 # sourcing anything, so it constrains nothing; shipyard is the binding caller.
 
 # A version marker, bumped when the body changes, so sync + the drift gate stay easy to prove.
-_ADP_VERSION=3
+_ADP_VERSION=4
 
 # --- the kinds -----------------------------------------------------------------
 # One per line, sorted, so a caller can `paste -sd, -` them into a message.
@@ -271,7 +271,9 @@ adp_parent_kind() {
 # delivered. Three real shapes carry the markers and nothing else may:
 #
 #   * the FOOTER, which is the last non-empty line of the capture;
-#   * a SERVICE LINE, whose first character is the bullet below, in column one;
+#   * a SERVICE LINE, whose first character is the bullet below, in column one — and within it
+#     for the turn marker only the client's live-status tail, since that column also carries
+#     transcript headers (see adp_turn_running);
 #   * the composer PLACEHOLDER, which only renders while the box is empty (see the queued arm).
 #
 # Everything else is ignored, and that is what excludes the three ways the old read was fooled: a
@@ -288,7 +290,7 @@ adp_parent_kind() {
 #
 # RESIDUAL the gate cannot check, stated here because it lives here: the footer arm assumes a
 # footer is rendered, so if a client ever omits it the last non-empty line could be a box line.
-# None of the nine captures showed that.
+# None of the committed captures (tests/fixtures/panes.notes) showed that.
 ADP_TURN_MARKER='esc to interrupt'
 
 # A service line's column-one bullet. One kind puts BOTH its turn marker and its queued header
@@ -360,11 +362,31 @@ _adp_service_content() {
 }
 
 # adp_turn_running <screen> — 0 while a turn is in flight, by the footer or service-line anchor.
+#
+# THE SERVICE ARM MATCHES THE LIVE-STATUS TAIL, NOT THE MARKER. Column one on that kind is not
+# chrome alone: its transcript headers (`• Ran <command>`, `• Explored …`) carry whatever the child
+# ran, so a child that greps the marker renders it at column one and a bare substring read the pane
+# as mid-turn until the line scrolled away (fixtures/pane-codex-ran-marker.txt, a live capture of
+# exactly that, idle). The client's own status renders the marker inside a parenthesised tail
+# that opens on the elapsed time — `Working (9s • <the marker>)` — and a command line has no
+# reason to contain that shape. The tail is matched ANYWHERE in the line, not at its end: the same
+# client appends text after it (`… · 1 background terminal running · /ps to view`,
+# fixtures/pane-codex-running-tail.txt), and an end-anchored match reads that running turn as idle.
+# The separator between the elapsed time and the marker is NOT pinned: every capture shows the
+# bullet, but a shape pinned on one codepoint nobody else relies on is tightness the evidence does
+# not buy, and a miss here makes a running turn read idle.
+#
+# RESIDUAL, stated rather than hidden: a command or an assistant message that spells the whole tail
+# out, digits and parentheses included, still reads as running. That is the safe direction (it
+# withholds a confirmation, it cannot forge one) and it takes the literal shape, not a mention.
+# Anchoring on position as well — the status as the LAST service line — was considered and not
+# taken: every capture agrees with it, but a bottom-pane service line nobody has captured would then
+# make a running turn read idle, and on the compaction path that is an Escape into live work.
 adp_turn_running() {
   local screen=${1:-} line last=''
   while IFS= read -r line || [ -n "$line" ]; do
     if _adp_service_content "$line"; then
-      case "$_ADP_LINE_CONTENT" in *"$ADP_TURN_MARKER"*) return 0 ;; esac
+      case "$_ADP_LINE_CONTENT" in *"("[0-9]*"s "*" $ADP_TURN_MARKER)"*) return 0 ;; esac
     fi
     case "$line" in *[![:space:]]*) last=$line ;; esac
   done <<<"$screen"
@@ -421,6 +443,63 @@ adp_turn_state() {
   elif adp_turn_running "$1"; then printf 'running'
   else printf 'idle'
   fi
+}
+
+# --- has the LATEST compaction finished? ----------------------------------------
+# A supervisor that types `/compact` needs to know when the client says it is done. A substring
+# search for the word over the whole capture is what this replaced, and it is wrong both ways: it
+# matches the child's own tool output and prose (a child working on the compaction script has this
+# very word on screen), and it matches a compaction from EARLIER still inside the viewport, which
+# on the first poll reads as done before the new one has begun. It also matched nothing at all on
+# the second kind, whose line is lower-case.
+#
+# The two kinds render completion in different places — both captured, with the in-progress and
+# the stale screens beside them (fixtures/pane-*-compact*.txt):
+#   * the first kind echoes the command as a submitted message, a column-one composer-glyph line,
+#     and puts its result on an indented `⎿` line under it. The echo cannot be produced by the
+#     child's output (tool output is indented; column-one glyph lines are submitted messages and
+#     the composer), so the result counts only inside the segment that echo opens — and only when
+#     that segment is the LAST one before the composer, which is what makes an earlier compaction
+#     followed by any later message read as not done;
+#   * the second kind echoes nothing and renders a column-one service line — counted only when it
+#     is the LAST service line on screen, so any later assistant or status line retires it.
+#
+# RESIDUAL, stated because it lives here. A stale completion is retired by what the client renders
+# AFTER it; until the new command's echo renders (or, on the second kind, its first status line),
+# the old one is still the latest. That window is the caller's to close, by requiring an observation
+# of not-done before it believes done — shipyard-compact.sh does. On the second kind an assistant
+# message whose text begins with the service phrase, as the last thing on screen, also reads as
+# done; the caller's not-done-first rule narrows it to a message that lands after the command.
+ADP_COMPACT_COMMAND='/compact'
+ADP_COMPACTED_RESULT='  ⎿  Compacted'
+ADP_COMPACTED_SERVICE='Context compacted'
+
+# adp_compacted <screen> — 0 when the latest compaction on screen has finished, 1 otherwise
+# (including an empty capture: unreadable is never done).
+adp_compacted() {
+  local screen=${1:-} line armed=0 seen=0 prev=0 svc=0
+  [ -n "$screen" ] || return 1
+  while IFS= read -r line || [ -n "$line" ]; do
+    if _adp_box_content "$line"; then
+      # A new segment. Close the one before it: its verdict is what the NEXT glyph line — normally
+      # the composer — leaves behind as `prev`.
+      if [ "$armed" = 1 ] && [ "$seen" = 1 ]; then prev=1; else prev=0; fi
+      case "$_ADP_LINE_CONTENT" in
+        "$ADP_COMPACT_COMMAND"|"$ADP_COMPACT_COMMAND "*) armed=1 ;;
+        *) armed=0 ;;
+      esac
+      seen=0
+      continue
+    fi
+    case "$line" in "$ADP_COMPACTED_RESULT"*) [ "$armed" = 1 ] && seen=1 ;; esac
+    if _adp_service_content "$line"; then
+      case "$_ADP_LINE_CONTENT" in "$ADP_COMPACTED_SERVICE"*) svc=1 ;; *) svc=0 ;; esac
+    fi
+  done <<<"$screen"
+  # The capture ended inside an echoed command's segment, with no composer below it: judge that
+  # segment itself. Any other last segment is taken to be the composer, which every capture has.
+  if [ "$armed" = 1 ]; then prev=$seen; fi
+  [ "$prev" = 1 ] || [ "$svc" = 1 ]
 }
 
 # adp_delivery_verdict <pre-send-state> [<post-send-state> ...]

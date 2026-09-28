@@ -9,6 +9,26 @@
 
 SHIPYARD_CONTINUITY_SCRIPT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/shipyard-continuity.sh"
 
+# The composer glyphs and the separator after them are per-agent-kind knowledge, spelled once in
+# shared/adapters (vendored here as agent-adapters.sh). Sourced by this file itself, not only via
+# shipyard-lib.sh, because the watcher runs this file as its own process.
+# shellcheck source=agent-adapters.sh
+. "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/agent-adapters.sh"
+
+# The placeholder this client renders in an EMPTY composer. Deliberately not a shared constant:
+# it answers a stricter question than "is this a composer line" — whether the box holds anybody's
+# text — and an unreadable prompt must stay "not empty" here (see shipyard_continuity_prompt_empty).
+SHIPYARD_CONTINUITY_PLACEHOLDER='Ask Codex to do anything'
+
+# shipyard_continuity_box_empty <line> — 0 when the line is the composer showing no one's text:
+# nothing after the glyph, or only the placeholder. 1 for a populated composer and for a line that
+# is not a composer line at all.
+shipyard_continuity_box_empty() {
+  _adp_box_content "${1:-}" || return 1
+  case "$_ADP_LINE_CONTENT" in ''|"$SHIPYARD_CONTINUITY_PLACEHOLDER") return 0 ;; esac
+  return 1
+}
+
 shipyard_continuity_reset() {
   SHIPYARD_CONTINUITY_HANDLED_CAPACITY=0
   SHIPYARD_CONTINUITY_HANDLED_CAPACITY_KEY=""
@@ -54,10 +74,13 @@ shipyard_continuity_capacity_state() {
           current=0
           anchor="$line"
         fi ;;
-      '›'|'› '|'› Ask Codex to do anything') ;;
-      '› '*)
-        current=0
-        anchor="$line" ;;
+      *)
+        # A submitted root prompt is a composer-glyph line with someone's text in it; the empty
+        # composer and its placeholder are not.
+        if _adp_box_content "$line" && ! shipyard_continuity_box_empty "$line"; then
+          current=0
+          anchor="$line"
+        fi ;;
     esac
   done <<<"$screen"
   printf '%s %s %s' "$total" "$current" "$key"
@@ -74,16 +97,13 @@ shipyard_continuity_capacity_counts() {
 shipyard_continuity_prompt_empty() {
   local prompt
   prompt=$(shipyard_continuity_live_prompt "$1")
-  case "$prompt" in
-    '›'|'› '|'› Ask Codex to do anything') return 0 ;;
-    *) return 1 ;;
-  esac
+  shipyard_continuity_box_empty "$prompt"
 }
 
 shipyard_continuity_live_prompt() {
   local screen="$1" line prompt=""
   while IFS= read -r line || [ -n "$line" ]; do
-    case "$line" in '›'|'› '*) prompt="$line" ;; esac
+    if _adp_box_content "$line"; then prompt="$line"; fi
   done <<<"$screen"
   printf '%s' "$prompt"
 }
@@ -225,7 +245,8 @@ shipyard_continuity_finish_owned() {
     fi
     return 2
   fi
-  if [ "$prompt" != "› $SHIPYARD_CONTINUITY_OWNED_COMMAND" ]; then
+  if ! _adp_box_content "$prompt" \
+    || [ "$_ADP_LINE_CONTENT" != "$SHIPYARD_CONTINUITY_OWNED_COMMAND" ]; then
     shipyard_continuity_clear_owned
     return 1
   fi

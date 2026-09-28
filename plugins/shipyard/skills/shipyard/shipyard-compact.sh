@@ -54,14 +54,19 @@ if [ "$(shipyard_occupant "$SLOT" 2>/dev/null)" = none ]; then
 fi
 
 pane() { shipyard_capture "$SLOT"; }
+# observe_undone <screen> — record that the latest compaction was seen NOT finished (see below).
+observe_undone() { if [ -n "${1:-}" ] && ! adp_compacted "$1"; then seen_undone=1; fi; }
 
 # Submit is not the same key on every client build, and a session AT its ceiling can
 # refuse both — so try one, look, then try the other. Never conclude from one key.
 # (On agterm both are the same real newline, so the second attempt is a harmless retry.)
 submit() {
+  local p
   shipyard_submit "$SLOT"
   sleep 3
-  if ! adp_turn_running "$(pane)"; then
+  p=$(pane)
+  observe_undone "$p"
+  if ! adp_turn_running "$p"; then
     shipyard_submit "$SLOT" alt
     sleep 3
   fi
@@ -87,17 +92,35 @@ while case "$(adp_turn_state "$(pane)")" in running|queued|unknown) true ;; *) f
 done
 [ "$waited" -gt 0 ] && echo "turn ended after ${waited}s; compacting now"
 
+# The completion baseline, read BEFORE anything is typed. adp_compacted answers for the latest
+# compaction on screen, and until the command below is echoed the latest can be an earlier one —
+# a child compacted with --no-resume and not touched since still shows it. So "done" is believed
+# only after "not done" has been seen — here, once the command is typed, inside submit(), or on
+# any poll below. Every capture from here on counts, because a small session can finish
+# compacting inside submit()'s wait. On the kind that echoes the command, the typed frame always
+# reads not-done, which closes that window. On the other kind it does not: under a stale finished
+# line, a compaction that ends before submit()'s capture is never seen as new, and the run ends in
+# exit 4. That is the safe direction, and exit 4 already says it proves nothing. An unreadable
+# frame is no observation. (The same absent-then-present rule adp_delivery_verdict states for a send.)
+seen_undone=0
+observe_undone "$(pane)"
+
 echo "compacting ship-$SLOT ($T)…"
 shipyard_esc "$SLOT"; sleep 1                # Escape CLEARS the box; BSpace restores an older draft
-shipyard_type "$SLOT" "/compact"; sleep 1
+shipyard_type "$SLOT" "$ADP_COMPACT_COMMAND"; sleep 1
+# The typed-not-submitted command opens a new composer segment on the kind that echoes it, which
+# reads not-done however stale the screen above it is.
+observe_undone "$(pane)"
 submit
 
-# Wait for it to finish. "Compacted" is the marker; a compaction of a very large
-# session retries on API errors for a while, so the timeout is generous.
+# Wait for it to finish — by the client's anchored completion line (adp_compacted, shared/adapters),
+# never by the word anywhere on screen. A compaction of a very large session retries on API errors
+# for a while, so the timeout is generous.
 waited=0
 while [ "$waited" -lt "$TIMEOUT" ]; do
   p=$(pane)
-  if printf '%s' "$p" | grep -q 'Compacted'; then
+  observe_undone "$p"
+  if [ "$seen_undone" = 1 ] && adp_compacted "$p"; then
     if ! adp_turn_running "$p"; then
       echo "compacted after ${waited}s"
       break
@@ -112,7 +135,7 @@ if [ "$waited" -ge "$TIMEOUT" ]; then
   # above cannot see that case: background agents keep working after the main turn ends, so
   # the session sits at a live prompt, accepts `/compact`, and then compacts slowly or not at
   # all while they run. Acting on the old wording means discarding a session that was fine.
-  echo "warning: no 'Compacted' marker after ${TIMEOUT}s. This does NOT prove the session is dead." >&2
+  echo "warning: the client showed no compaction-finished line after ${TIMEOUT}s. This does NOT prove the session is dead." >&2
   echo "         Two things produce it, and they need opposite responses:" >&2
   echo "           * BENIGN — background agents or a long turn. The pane still shows a spinner or an" >&2
   echo "             agent list. Re-run when that list is empty, or raise --timeout. Change nothing else." >&2

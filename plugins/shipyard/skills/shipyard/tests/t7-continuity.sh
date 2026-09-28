@@ -127,6 +127,16 @@ shipyard_continuity_decide "$suffixed" 201
 check "" "$SHIPYARD_CONTINUITY_ACTION" "only the exact root capacity banner triggers retry"
 if shipyard_continuity_prompt_empty " › Ask Codex to do anything"; then indented_empty=yes; else indented_empty=no; fi
 check no "$indented_empty" "indented prompt output is not a root input box"
+# The composer is read through shared/adapters (#121), which strips a NON-BREAKING space after the
+# glyph as well as a plain one — one client emits it, established by capture. This file's own
+# spellings used to strip only the plain space, so the two disagreed about what the box even was.
+nbsp=$'\xc2\xa0'
+if shipyard_continuity_prompt_empty "›${nbsp}Ask Codex to do anything"; then nb_empty=yes; else nb_empty=no; fi
+check yes "$nb_empty" "a placeholder after a non-breaking space is still the empty box"
+if shipyard_continuity_prompt_empty "›${nbsp}a typed draft"; then nb_draft=yes; else nb_draft=no; fi
+check no "$nb_draft" "…and typed text after one is still a populated box"
+if shipyard_continuity_prompt_empty ""; then no_prompt=yes; else no_prompt=no; fi
+check no "$no_prompt" "an unreadable prompt is still not empty"
 
 shipyard_continuity_reset
 resumed=$(printf '%s\n%s\n%s\n%s' "$capacity" '• Continued the interrupted work.' \
