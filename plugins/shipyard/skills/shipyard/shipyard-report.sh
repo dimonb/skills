@@ -211,8 +211,10 @@ no_signal_block() {  # <class> <why>
       # Two causes reach this class and the second one answers `version` perfectly well, so an
       # operator told only to check the socket would find it healthy and have nothing to act on.
       echo "  agterm: if the socket IS answering, the tree it returned did not have the shape this"
-      echo "  report requires — inspect \`agtermctl tree --json\`. The shape is asserted over the WHOLE"
-      echo "  tree, so a malformed session in an unrelated workspace reaches here too." ;;
+      echo "  report requires — inspect \`agtermctl tree --json\`. Every workspace must be well-formed,"
+      echo "  and every session in this fleet's own workspace; other workspaces' sessions are not checked." ;;
+    container)
+      shipyard_container_remedy | sed '1s/^  /- /' ;;
     elsewhere)
       echo "- \`SHIPYARD_BACKEND=auto\` decides per PROCESS, so one failed socket probe sends a single tick"
       echo "  to the other backend, where this repo's container is empty for entirely correct reasons."

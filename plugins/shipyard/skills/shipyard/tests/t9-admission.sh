@@ -174,10 +174,17 @@ names "...in the words for an explicit backend" "asked for agterm explicitly" "$
 out=$( unset SHIPYARD_BACKEND; export FAKE_AT_TREE="$TREE0" DRV_CONTAINER_PIN_DIR="$PINS"; . "$BACKEND"; . "$ADMISSION"; shipyard_admission_report ); rc=$?
 ok "auto resolving the other backend -> refuse (rc 6)" 6 "$rc"
 names "...in auto's words" "SHIPYARD_BACKEND=auto decides per process" "$out"
-# Control: the same pins with this backend's own beside them disagree with nothing, and admit.
+# This backend's own pin beside the other one no longer disarms the refusal (#132): it used to
+# admit here, and a mailbox that had ever held both pins then counted an honestly empty container
+# as an empty fleet. One of the two is stale, so the gate refuses and says how to find out which.
 : >"$PINS/container-agterm"
+out=$( export SHIPYARD_BACKEND=agterm FAKE_AT_TREE="$TREE0" DRV_CONTAINER_PIN_DIR="$PINS"; . "$BACKEND"; . "$ADMISSION"; shipyard_admission_report ); rc=$?
+ok "both pinned -> refuse (rc 6)" 6 "$rc"
+names "...saying both are pinned" "Both backends are pinned" "$out"
+# Control: this backend's pin alone disagrees with nothing, and admits.
+rm -f "$PINS/container-tmux"
 rc=0; ( export SHIPYARD_BACKEND=agterm FAKE_AT_TREE="$TREE0" DRV_CONTAINER_PIN_DIR="$PINS"; . "$BACKEND"; . "$ADMISSION"; shipyard_admission_report ) >/dev/null 2>&1 || rc=$?
-ok "control: this backend pinned too -> admit (rc 0)" 0 "$rc"
+ok "control: only this backend pinned -> admit (rc 0)" 0 "$rc"
 
 # --- 2c. the slot-name rule itself -----------------------------------------------------------
 printf '\n── slot names ──\n'

@@ -73,12 +73,12 @@ ok "the pin names the backend we resolved"     "|1" "$(pinned_elsewhere tmux)"
 rm -f "$PINDIR/container-tmux"; : > "$PINDIR/container-agterm"
 ok "pinned on agterm, resolved tmux"     "agterm|0" "$(pinned_elsewhere tmux)"
 ok "...and the reverse is not a disagreement"  "|1" "$(pinned_elsewhere agterm)"
-# Both present: this mailbox has launched on each, so neither choice is looking in the wrong place.
-# Reporting a disagreement here would alarm on a legitimate history and teach the operator to
-# ignore the block — the failure mode AGENTS.md names as costing more than the bug it guards.
+# Both present (#132): this used to read as "no disagreement", which switched corroboration off for
+# good on a mailbox that had ever held both. A mailbox runs one backend at a time (#280), so one of
+# the two pins is stale and nothing can tell which: each resolution is told about the other.
 : > "$PINDIR/container-tmux"
-ok "both pinned -> no disagreement (tmux)"     "|1" "$(pinned_elsewhere tmux)"
-ok "both pinned -> no disagreement (agterm)"   "|1" "$(pinned_elsewhere agterm)"
+ok "both pinned, resolved tmux -> agterm disagrees"   "agterm|0" "$(pinned_elsewhere tmux)"
+ok "both pinned, resolved agterm -> tmux disagrees"   "tmux|0"   "$(pinned_elsewhere agterm)"
 # A pin directory that does not exist must read as "nothing launched", never as a disagreement.
 ok "a missing pin dir is not a disagreement"   "|1" \
    "$( export SHIPYARD_BACKEND=tmux
@@ -556,6 +556,57 @@ ok "5f: ...and the re-run then reaches the child"     0      "$(rc_of "$out")"
 ok "5f: ...having really sent a directive"            yes    "$(ls "$MB"/directive-41-*.json >/dev/null 2>&1 && printf yes || printf no)"
 rm -f "$REC" "$MB"/directive-41-*.json "$MB"/directive-41-*.txt
 rm -f "$MB"/container-*
+
+# --------------------------------------------- 6. the right backend, the WRONG container (#132)
+# The pin records a backend; the container resolves override -> pin -> derive, so a run whose pin
+# was deleted, or which names another container, asks an honestly empty container. The launch
+# record says where each slot went. The class can only ADD a refusal, so every case below is a
+# driver-believed absence (the tmux pin, rc 0) and the question is whether it stays believed.
+printf '\n── 6. launched into another container ──\n'
+unset -f git tmux    # sections 3-5 export fakes; this one needs git's real worktree list
+CR="$T14TMP/cont-repo"; mkdir -p "$CR"
+git -C "$CR" init -q; git -C "$CR" -c user.email=shipyard-test -c user.name=shipyard-test commit -q --allow-empty -m init
+git -C "$CR" worktree add -q "$CR/.claude/worktrees/ship-c7" -b c7 2>/dev/null
+CMB="$CR/.git/ship-escalations"; mkdir -p "$CMB"
+printf 'new-sess\n' >"$CMB/container-tmux"
+launch_rec() { # <backend> <container>
+  jq -n --arg b "$1" --arg c "$2" '{id:"launch-c7", slot:"c7", kind:"launch", status:"info", backend:$b, container:$c}' \
+    >"$CMB/launch-c7.json"
+}
+# The fake answers for the RECORDED container only; the resolved one is never enumerated here,
+# because the caller passes the status of the list it already holds.
+TM_OLD_LISTS='tmux() { case "$*" in *"-t old-sess"*) echo ship-c7; return 0 ;; esac; echo "no such session" >&2; return 1; }'
+TM_OLD_EMPTY='tmux() { case "$*" in *"-t old-sess"*) return 0 ;; esac; echo "no such session" >&2; return 1; }'
+TM_OLD_DEAD='tmux() { echo "error connecting to server" >&2; return 1; }'
+class_in() { # <fake-def> -> "<class>|<rc>"
+  local out rc=0
+  out=$( cd "$CR" || exit 99
+         export SHIPYARD_BACKEND=tmux
+         . "$SKILL_DIR/shipyard-backend.sh" >/dev/null 2>&1
+         DRV_CONTAINER_PIN_DIR="$CMB"
+         eval "$1"
+         shipyard_signal_class 0 "" "c7" ) || rc=$?
+  printf '%s|%s' "${out%%	*}" "$rc"
+}
+
+launch_rec tmux new-sess
+ok "6a: record names the resolved container -> believed"            "|0"          "$(class_in "$TM_OLD_LISTS")"
+launch_rec tmux old-sess
+ok "6b: another container still lists the slot -> container"        "container|1" "$(class_in "$TM_OLD_LISTS")"
+ok "6c: another container that answers without it -> believed"      "|0"          "$(class_in "$TM_OLD_EMPTY")"
+ok "6d: another container that cannot answer -> container"          "container|1" "$(class_in "$TM_OLD_DEAD")"
+launch_rec agterm old-sess
+ok "6e: a record for the other backend is the pin's business"       "|0"          "$(class_in "$TM_OLD_LISTS")"
+launch_rec tmux old-sess
+out=$( cd "$CR" || exit 99; export SHIPYARD_BACKEND=tmux
+       . "$SKILL_DIR/shipyard-backend.sh" >/dev/null 2>&1; DRV_CONTAINER_PIN_DIR="$CMB"; eval "$TM_OLD_LISTS"
+       shipyard_absence_report c7 2>&1 ); rc=$?
+ok "6f: the per-slot report refuses (rc 1)"                         1             "$rc"
+ok "6f: ...naming the recorded container"                           yes           "$(has "$out" 'launched into old-sess and is still listed there')"
+ok "6f: ...and the variable that names it"                          yes           "$(has "$out" 'SHIPYARD_SESSION=<that name>')"
+# A torn-down slot's record stays in the mailbox for good; once its worktree is gone it is not read.
+git -C "$CR" worktree remove --force "$CR/.claude/worktrees/ship-c7" 2>/dev/null
+ok "6g: no worktree -> the record is not read"                      "|0"          "$(class_in "$TM_OLD_LISTS")"
 
 if [ "$FAILURES" -eq 0 ]; then
   printf 't14-signal: %d checks, all passed\n' "$CHECKS"; exit 0

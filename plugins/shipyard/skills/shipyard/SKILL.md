@@ -810,7 +810,7 @@ with it. The refusal names the class it saw and the one command that clears it
 `shipyard-down.sh` now refuses on the same answer rather than leaving that to the operator: when
 a run closed no terminal, it asks `shipyard_absence_report` before removing anything and refuses
 unless `--force` (#139(1), Step 6). `--list` asks the same question: its TERMINAL column reads
-`gone` only for a corroborated absence and `?<class>` (`?unreachable`, `?elsewhere`, `?listed`)
+`gone` only for a corroborated absence and `?<class>` (`?unreachable`, `?elsewhere`, `?listed`, `?container`)
 for one it could not corroborate — never tear a `?` slot down on the listing's say-so.
 
 Three limits, because a guarantee is worth only what it actually covers:
@@ -820,9 +820,13 @@ Three limits, because a guarantee is worth only what it actually covers:
   unreachable class is the narrower case of a socket that answers `version` while the tree call
   fails or fails the shape assertion. On tmux the precheck only tests that tmux is installed, so
   an unreachable server does reach 7.
-* **The pin half is a *disagreement* check.** A mailbox that has launched on both backends holds
-  both pins, and a pin deleted by hand (the escape hatch above) holds none — in either state
-  there is nothing to disagree with, and that half is silent. Exit 3 then rests on the other two.
+* **The pin half is a *disagreement* check.** A pin deleted by hand (the escape hatch above)
+  leaves nothing to disagree with, and that half is silent; exit 3 then rests on the other two.
+  Both pins present is a disagreement whichever backend resolved (#132): a mailbox runs one
+  backend at a time, so one of them is stale, and the refusal says to find the live fleet first.
+  The launch records add a `container` class: a slot whose worktree still exists, launched on
+  this backend into a container other than the one this run resolved, and still listed there —
+  or unanswerable there — refuses too.
 * **Exit 3 is a snapshot, like every other backend read.** It is the best answer the two
   available facts support, not a proof the process is dead.
 

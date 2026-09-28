@@ -1,0 +1,39 @@
+{
+  "ok": true,
+  "result": {
+    "tree": {
+      "workspaces": [
+        {
+          "name": "proj",
+          "sessions": [
+            {
+              "id": "proj-1",
+              "name": "proj-1"
+            }
+          ]
+        },
+        {
+          "name": "other-ws",
+          "sessions": [
+            {
+              "id": "other-1",
+              "name": "other-1"
+            },
+            {
+              "id": "other-2",
+              "name": "other-2"
+            },
+            {
+              "id": "other-3",
+              "name": "other-3"
+            }
+          ]
+        },
+        {
+          "name": "empty-ws",
+          "sessions": []
+        }
+      ]
+    }
+  }
+}

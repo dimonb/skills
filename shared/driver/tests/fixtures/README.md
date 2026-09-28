@@ -33,6 +33,20 @@ the check to repeat after any recapture.
 
 Recapture it the same way if agterm's tree changes shape; do not edit it by hand.
 
+## `agterm-workspaces.json`
+
+A real `agtermctl tree --json` from agterm 0.25, taken on a machine with nine workspaces, then
+reduced. It is the base `drv_sessions`' scoped shape check (#133) is tested on, and the evidence
+for one claim: across all nine workspaces every session carried a string `id` and a string `name`,
+so a nameless session is a case the tests derive from this file with jq, not a shape observed in
+the wild. Every workspace carried `name` and `sessions` (one also `collapsed`, which nothing reads).
+
+Reductions, and only these: three workspaces were kept — the first, one holding three sessions, and
+one holding none — and renamed `proj`, `other-ws` and `empty-ws`; each session was renamed
+`proj-<n>` or `other-<n>` with its `id` set to that name; every key but `ok`, `result.tree.workspaces`, and
+each workspace's `name` and `sessions` and each session's `id` and `name`, was removed (keys are
+dropped, never added). The dropped keys carry working directories and titles.
+
 ## `tmux-occupant.tsv`
 
 `tmux display-message -p '#{pane_dead} #{pane_current_command}'` for four windows on a PRIVATE
