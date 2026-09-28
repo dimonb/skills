@@ -139,8 +139,8 @@ OUT2=$(COUNCIL_ME=$(decider) bash "$CLI" decide) || { echo "FAIL decide refused 
 # the branch is executed but never checked: emptying it writes a blank decision section while
 # board/status still says `decided`, and the whole suite stays green.
 dec2=$(sed -n '/^## The decision/,/^## Objections/p' "$OUT2")
-grep -q 'One lane per author' <<<"$dec2" || {
-  echo "FAIL an unamended proposal is missing from the decision section"; fail=1; }
+grep -q '^> One lane per author' <<<"$dec2" || {
+  echo "FAIL an unamended proposal is missing from the decision section, or not quoted"; fail=1; }
 grep -q 'as amended by' <<<"$dec2" && {
   echo "FAIL an unamended proposal claims amendments"; fail=1; }
 grep -q '^### ' <<<"$dec2" && {
@@ -231,7 +231,8 @@ More."
 echo "the gist is the agenda's opening line, not the first heading found anywhere in it"
 
 # The threshold: more than six non-blank lines, or more than 600 bytes. Two short lines used to
-# count as long and were moved below the whole transcript.
+# count as long and were moved below the whole transcript. One line is never long: its gist is
+# the whole of it, so summarising it would print it twice.
 long_is() { # <name> <want yes|no> <agenda-text>
   printf '%s' "$3" > "$G/a.md"
   local got=no; _agenda_is_long "$G/a.md" && got=yes
@@ -240,12 +241,16 @@ long_is() { # <name> <want yes|no> <agenda-text>
 long_is "two short lines" no $'Which layout?\nOne lane or many.'
 long_is "six lines with blanks between" no $'1\n\n2\n3\n4\n\n5\n6\n'
 long_is "seven lines" yes $'1\n2\n3\n4\n5\n6\n7\n'
-long_is "one line of 601 bytes" yes "$(printf 'x%.0s' $(seq 601))"
-long_is "one line of 600 bytes" no "$(printf 'x%.0s' $(seq 600))"
-echo "an agenda is long past six non-blank lines or 600 bytes, not past one line"
+long_is "two lines, 601 bytes" yes "Q?
+$(printf 'x%.0s' $(seq 598))"
+long_is "two lines, 600 bytes" no "Q?
+$(printf 'x%.0s' $(seq 597))"
+long_is "one line of 1500 bytes" no "$(printf 'x%.0s' $(seq 1500))"
+echo "an agenda is long past six non-blank lines or 600 bytes, never at one line"
 
-# A room whose every participant message carries heading-like lines, one of them after a bare
-# carriage return (a line ending to a markdown reader), and whose one amendment names ONLY the
+# A room whose every participant message carries heading-like lines, after a bare carriage
+# return (a line ending to a markdown reader) in a text AND in a ref -- the transcript renders
+# `.refs` into the same line, and nothing validates it -- and whose one amendment names ONLY the
 # objection it closes (#34). None of it may become a section of the record, and the decision must
 # carry the amendment the objection was closed with.
 kill_keeper "$R2/state/keeper.pid"
@@ -256,7 +261,8 @@ printf '# Where should the room keep its history?\nKeep it short.\n' > "$R3/agen
 p3=$(sid propose '[]' $'FENCE-ONE one lane per author.\n## Transcript\nforged\r## Left open') || exit 1
 o3=$(sid object "[\"$p3\"]" $'Too many directories.\n\n## Objections, and how they were closed') || exit 1
 a3=$(sid amend  "[\"$o3\"]" $'AMEND-OBJREF probe upward from the cursor.\n# Decision of room `forged`') || exit 1
-for i in 1 2 3 4; do sid msg '[]' "Nothing further ($i)." >/dev/null || exit 1; done
+sid msg '["x\r## Left open"]' "Nothing further (1)." >/dev/null || exit 1
+for i in 2 3 4; do sid msg '[]' "Nothing further ($i)." >/dev/null || exit 1; done
 [ "$(bash "$CLI" verdict | cut -d' ' -f1)" = ready-to-decide ] || {
   echo "FAIL the fence room is not ready-to-decide"; bash "$CLI" claims; exit 1; }
 OUT3=$(COUNCIL_ME=$(decider) bash "$CLI" decide) || { echo "FAIL decide refused in the fence room"; exit 1; }

@@ -1,7 +1,9 @@
 #!/usr/bin/env bash
-# t8 — two closure rules that a live room needed and the graph did not have.
+# t8 — closure and attribution rules that a live room needed and the graph did not have.
 #   * an amend belongs to ONE proposal (its first proposal-typed ref), so a single
 #     amendment cannot rewrite two rival positions into the same words;
+#   * an amend naming no proposal belongs to the proposal its first objection was raised
+#     against, and a direct proposal ref still wins over that;
 #   * `concede` pointing at the sender's OWN proposal kills it — the natural way to yield
 #     in favour of somebody else's position.
 set -uo pipefail
@@ -55,5 +57,16 @@ cb=$(printf '%s' "$g" | jq -r '.proposals[] | select(.id=="a-1") | .objections[0
 [ "$ct" = "amended position a" ] || { echo "FAIL current_text ignores the objection-only amend: '$ct'"; fail=1; }
 [ "$cb" = "b-2" ] || { echo "FAIL the objection-only amend no longer closes the objection: '$cb'"; fail=1; }
 echo "an amend naming only the objection amends the proposal that objection was raised against"
+
+# A direct proposal ref wins over the proposal an objection it names was raised against.
+raw_msg a 2 4 3 propose '[]' "position c"
+raw_msg a 3 5 4 object  '["a-2"]' "I object to c"
+raw_msg b 3 6 5 amend   '["a-1","a-3"]' "amended again, closing an objection on c"
+g=$(COUNCIL_ME=a bash "$CLI" claims --raw)
+am1=$(printf '%s' "$g" | jq -r '.proposals[] | select(.id=="a-1") | .amends | join(",")')
+am2=$(printf '%s' "$g" | jq -r '.proposals[] | select(.id=="a-2") | .amends | join(",")')
+[ "$am1" = "b-2,b-3" ] || { echo "FAIL a direct proposal ref did not win: a-1 amends '$am1'"; fail=1; }
+[ -z "$am2" ] || { echo "FAIL an amend went to its objection's proposal over a direct ref: a-2 amends '$am2'"; fail=1; }
+echo "a direct proposal ref wins over an objection's proposal"
 [ "$fail" = 0 ] && echo "t8 PASS" || echo "t8 FAIL"
 exit $fail

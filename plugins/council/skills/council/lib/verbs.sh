@@ -1922,13 +1922,18 @@ _agenda_gist() { # <file>
           -e 's/[[:space:]]*$//'
 }
 # LONG means it would push the decision down the page: more than six non-blank lines, or more
-# than 600 bytes, whichever trips first. Bytes as well as lines because one paragraph on a single
-# line is just as much prompt. The threshold used to be "more than one non-blank line", so a
-# two-line agenda of 27 characters was replaced at the top by a longer link sentence and moved
-# below the whole transcript -- less self-contained than pasting it, which is the opposite of
-# why the summary exists (a DETAILED agenda opening the record with two screens of prompt).
+# than 600 bytes, whichever trips first. Bytes as well as lines because one long paragraph below
+# the question is just as much prompt. The threshold used to be "more than one non-blank line",
+# so a two-line agenda of 27 characters was replaced at the top by a longer link sentence and
+# moved below the whole transcript -- less self-contained than pasting it, which is the opposite
+# of why the summary exists (a DETAILED agenda opening the record with two screens of prompt).
+#
+# An agenda of ONE non-blank line is never long, whatever its size: its gist is that whole line,
+# so summarising it would print the same text at the top and again at the end.
 _agenda_is_long() { # <file>
-  [ "$(grep -c -v '^[[:space:]]*$' "$1")" -gt 6 ] || [ "$(wc -c < "$1")" -gt 600 ]
+  local lines; lines=$(grep -c -v '^[[:space:]]*$' "$1")
+  [ "$lines" -gt 1 ] || return 1
+  [ "$lines" -gt 6 ] || [ "$(wc -c < "$1")" -gt 600 ]
 }
 
 # Text the record did not write -- the agenda, and every message a participant sent -- goes into
@@ -2126,7 +2131,9 @@ v_decide() {
       # Quoted in all three shapes, so a heading in the agenda is the agenda's and never the
       # record's. A one-line agenda IS its own gist, so it goes through `_agenda_gist` like the
       # long one's opening line and the two cannot disagree about a heading marker; a short
-      # agenda of several lines is quoted whole, here, and not a second time at the end.
+      # agenda of several lines is quoted whole, here, and not a second time at the end. A whole
+      # quote keeps the agenda's own structure, heading markers included -- inside the quote,
+      # where they are the agenda's; only a gist, which stands for the question, drops one.
       if _agenda_is_long "$ROOM/agenda.md"; then
         gist=$(_agenda_gist "$ROOM/agenda.md")
         [ -z "$gist" ] || printf '%s\n\n' "$(printf '%s\n' "$gist" | _md_quote)"
@@ -2189,11 +2196,13 @@ v_decide() {
     # rendered from it would be missing every other position, written at rc 0 and impossible to
     # tell from a complete one afterwards.
     #
-    # Every line of it is a list item, which already keeps a heading-like line inside the list;
-    # the carriage returns are made line breaks first, so none of them can end an item early and
-    # start a column-zero line after it.
-    c_canon | jq -c "$C_MD"'if (.text | type) == "string" then .text |= _md_nl else . end' \
-      | _render_transcript | sed 's/^/* /'
+    # Every line of it is a list item, which already keeps a heading-like line inside the list.
+    # Carriage returns are split into lines over the RENDERED line, not in `.text` alone:
+    # `_render_transcript` also interpolates `.act` and `.refs`, which nothing validates, so a CR
+    # in a ref ended the item early and put the rest of it at column zero.
+    c_canon | _render_transcript \
+      | awk '{ sub(/\r$/, ""); n = split($0, a, "\r"); if (n == 0) { print "* "; next }
+               for (i = 1; i <= n; i++) print "* " a[i] }'
     if [ -f "$ROOM/agenda.md" ] && _agenda_is_long "$ROOM/agenda.md"; then
       printf '\n## The agenda in full\n\n'
       _md_quote < "$ROOM/agenda.md"

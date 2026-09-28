@@ -1284,7 +1284,7 @@ produced one false test result during development. Do not pipe status through a 
   decision could only be reconstructed from the transcript.
 * **A long agenda is summarised at the top of the record and quoted in full at the end**, so
   the decision is not pushed below two screens of prompt. Long is more than six non-blank lines
-  or more than 600 bytes; a shorter agenda stays inline.
+  or more than 600 bytes; a shorter agenda, and any agenda of a single line, stays inline.
 * **Text the record did not write is quoted in it** — the agenda and every participant's
   message — so a line of it that looks like a heading cannot become a section of the record.
 
