@@ -611,31 +611,36 @@ c_barrier() {
   #     `.from` is the lane directory (c_all), and c_peers' names are shape-checked, so a lane for
   #     a name outside `.order` — or one whose name carries a newline — anchors nothing. Before
   #     this, a single old position in `lane/<non-participant>` tripped the backstop in a room
-  #     where no participant had spoken. The names go in as `--args`: they are the validated
-  #     [A-Za-z0-9_-] set, so word splitting cannot break one up (and n > 0 here, so it is never
-  #     empty).
+  #     where no participant had spoken. The names go in as ONE `--arg`, split inside jq, and
+  #     never as `--args` words: a name may start with `-`, and jq parses options after `--args`,
+  #     so a seat called `-n` made the query fail and held the round open past both clocks.
   #   * THE ROUND CANNOT HAVE STARTED BEFORE THE ROOM EXISTED, so the anchor is floored at the
   #     roster's `created_ms`. That stops the accidental shapes — a harness stamping seconds for
   #     milliseconds lands decades back and used to close the round on the backstop with one seat
   #     in, releasing every withheld position to it. A room with no usable `created_ms` (one
   #     created before it was recorded) keeps the unfloored anchor, as c_room_age_s does.
   #
-  # WHAT STILL BYPASSES IT, recorded at the code as #204 decided for room-state residuals: a seat
-  # that also rewrites roster.json's `created_ms` backwards defeats the floor, since that field is
-  # as writable as the message. Nothing here stops that deliberate route. The reverse direction —
-  # a future `created_ms` or `sent_ms` — only DELAYS the close until the clock passes it, which is
-  # the barrier's safe direction and a freeze no longer than the stamp; a seat that can write the
-  # roster can already hold the round with an 18-digit `round_deadline_ms`.
-  # shellcheck disable=SC2046  # the split IS the point: one validated name per argument
+  # WHAT STILL BYPASSES IT, recorded at the code as #204 decided for room-state residuals:
+  #   * a seat may stamp its own position anywhere at or after `created_ms`, with no roster write,
+  #     so the round can be timed from the room's creation rather than from its first real
+  #     position. The rewind is bounded by that gap, and nothing here prevents it;
+  #   * a seat that also rewrites roster.json's `created_ms` backwards defeats the floor, since
+  #     that field is as writable as the message. Nothing here stops that deliberate route either.
+  # The reverse direction — a future `created_ms` or `sent_ms` — only DELAYS the close until the
+  # clock passes it, which is the barrier's safe direction and a freeze no longer than the stamp;
+  # a seat that can write the roster can already hold the round with an 18-digit
+  # `round_deadline_ms`.
   #
   # "No position yet" is spelled `none`, not 0, because 0 is also what _untrusted makes of a stamp
   # that is not an integer — and a zero anchor answers `open` below for ever, so before the floor a
   # seat's one badly-typed `sent_ms` froze the round past both clocks. With a `created_ms` it is
-  # now timed from the room's creation like any other stamp older than that; an empty answer (jq
-  # failed) still holds the round, the conservative reading.
-  first=$(c_round0_positions | jq -rs '[ .[] | select(.from | IN($ARGS.positional[])) ]
-    | if length == 0 then "none" else (min_by(.sent_ms).sent_ms) end' --args $(c_peers))
-  case "$first" in none|'') printf 'open'; return ;; *[!0-9]*) first=0 ;; esac
+  # now timed from the room's creation like any other stamp older than that. Anything that is not
+  # `none` or digits — an empty answer because jq failed, or output that is not a number — holds
+  # the round, the conservative reading.
+  first=$(c_round0_positions | jq -rs --arg p "$(c_peers)" '($p | split("\n")) as $peers
+    | [ .[] | select(.from | IN($peers[])) ]
+    | if length == 0 then "none" else (min_by(.sent_ms).sent_ms) end')
+  case "$first" in none|''|*[!0-9]*) printf 'open'; return ;; esac
   deadline=$(c_int_field round_deadline_ms "$C_DEF_ROUND_DEADLINE_MS")
   local created; created=$(c_int_field created_ms 0)
   [ "$first" -lt "$created" ] && first=$created

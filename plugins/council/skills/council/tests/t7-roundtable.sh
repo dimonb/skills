@@ -567,11 +567,20 @@ pos_t7i "$R9" z $(( _t7i_now - 3 * _t7i_d )); pos_t7i "$R9" a "$_t7i_now"
 # past both clocks: it is timed from the room's creation like any other stamp older than that.
 mk_t7i "$R9" $(( _t7i_now - 3 * _t7i_d )) a b; pos_t7i "$R9" a '"soon"'
 [ "$(bar "$R9")" = closed ] || { echo "FAIL a badly-typed stamp froze a two-seat round past the backstop: $(bar "$R9")"; fail=1; }
+# ...a room that records no `created_ms` (one created before it was) keeps the unfloored anchor,
+# so its backstop still fires rather than the room freezing.
+mk_t7i "$R9" 0 a b; pos_t7i "$R9" a $(( _t7i_now - 3 * _t7i_d ))
+jq 'del(.created_ms)' "$R9/roster.json" > "$R9/r.tmp" && mv "$R9/r.tmp" "$R9/roster.json"
+[ "$(bar "$R9")" = closed ] || { echo "FAIL a room with no created_ms froze instead of closing on the backstop: $(bar "$R9")"; fail=1; }
+# ...and a seat name that starts with `-` is a name, not an option to the jq that reads the
+# anchor. As `--args` words, `-n` made that query fail and held this round open for ever.
+mk_t7i "$R9" $(( _t7i_now - 4 * _t7i_d )) a -n; pos_t7i "$R9" a $(( _t7i_now - 3 * _t7i_d ))
+[ "$(bar "$R9")" = closed ] || { echo "FAIL a seat named -n froze the round past the backstop: $(bar "$R9")"; fail=1; }
 echo "the deadline anchor counts roster seats only and never reads earlier than the room's creation"
 
 # THE ROOMS THIS FILE ADDED ARE ITS OWN TO REMOVE. `run-all.sh` gives every test one shared root
 # and clears it only when the whole run ends, so a room left here outlives this file and sits
-# under every test that follows. This file used to leave two; the barrier work took it to eight,
+# under every test that follows. This file used to leave two; the barrier work added several,
 # and the four `--full` tests that run afterwards are timing tests measuring wall clock. Removing
 # them also stops their keepers, which poll `while [ -d "$room" ]`. R and R2 are left alone: they
 # predate this work, and changing what they leave behind is not this change's business.

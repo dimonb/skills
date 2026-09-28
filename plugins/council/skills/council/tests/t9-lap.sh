@@ -102,9 +102,9 @@ echo "Should the room keep a lap counter?" > "$R3/agenda.md"
 # so the old fixture's `say b msg` is refused rather than counted. (Not "always N": c_barrier
 # also closes on the deadline with a quorum, and on the 2x backstop, both with fewer. t7b asserts
 # the deadline-with-quorum close and t7's section 6 the 2x backstop. This room closes on
-# positions, which is why one proposal per seat holds HERE.) The way a room gets from several live proposals to one is the
-# lap after the barrier, which is what protocol/_channel.md tells a participant to do: yield
-# yours if someone else's is better.
+# positions, which is why one proposal per seat holds HERE.) The way a room gets from several
+# live proposals to one is the lap after the barrier, which is what protocol/_channel.md tells a
+# participant to do: yield yours if someone else's is better.
 #
 # `say b`, NOT `say_floor`, and the difference is an assertion rather than a preference:
 # claims.jq retires a proposal on a concede from THE PROPOSAL'S OWN AUTHOR, and say_floor is
