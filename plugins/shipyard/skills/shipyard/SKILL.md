@@ -861,13 +861,15 @@ guess from this list:
 * a turn began and ended between two samples, or the screen could not be read at all.
 
 **Look before re-sending** — a second send, with `--again` or after the window below, types another
-copy onto the first. The bias is
-deliberate: re-sending on a false `unconfirmed` is cheap and visible, believing a false
-`delivered` is neither. So a repeat is **refused**, not queued (#211): a directive whose text is
-identical to one recorded for the same slot within `SHIPYARD_TELL_DEDUPE_SECS` (600 by default, `0`
-turns it off) exits **9** with nothing typed and nothing recorded, naming the earlier record and its
-verdict. A child may act on each copy it reads, and "file this" or "run one round" is not
-idempotent. `shipyard-tell.sh --again <slot> "<directive>"` sends it anyway, for the supervisor who
+copy onto the first. The bias is deliberate: re-sending on a false `unconfirmed` is cheap and
+visible, believing a false `delivered` is neither. So a repeat is **refused**, not queued (#211): a
+directive whose text and reply target (the escalation id, if you sent it by one) are identical to one
+recorded for the same slot within `SHIPYARD_TELL_DEDUPE_SECS` (600 by default, `0` turns it off)
+exits **9** with nothing typed and nothing recorded, naming the earlier record and its verdict. The
+same text to a *different* escalation is not a repeat, and neither is the same text re-sent through
+the slot name after going out by escalation id: the child is typed a different line. A child may act
+on each copy it reads, and "file this" or "run one round" is not idempotent.
+`shipyard-tell.sh --again <slot|escalation-id> "<directive>"` sends it anyway, for the supervisor who
 really means to repeat it; `shipyard-compact.sh` always passes `--again`, since its resume follows a
 cleared box and a cleared context. The directive records are child-writable, so a record forged with
 the exact text of your next directive makes it refuse — loudly, naming a record you know whether you

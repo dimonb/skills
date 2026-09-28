@@ -22,10 +22,12 @@
 #   shipyard-tell.sh <slot|escalation-id> --submit   submit the draft ALREADY in the box
 #   shipyard-tell.sh --list                 every directive sent so far
 #
-# A directive whose text AND reply target (the escalation id, if one was given) are identical to one
-# already recorded for that slot within SHIPYARD_TELL_DEDUPE_SECS (default 600; 0 turns the check off) is REFUSED with exit 9, naming the
-# earlier record — nothing typed, nothing recorded (#211). It is what re-sending after an
-# `unconfirmed` verdict produces, and a child may act on both copies. `--again` sends it anyway.
+# A directive whose text AND reply target (the escalation id, if one was given) are identical to
+# one already recorded for that slot within SHIPYARD_TELL_DEDUPE_SECS (default 600; 0 turns the
+# check off) is REFUSED with exit 9, naming the earlier record — nothing typed, nothing recorded
+# (#211). It is what re-sending after an `unconfirmed` verdict produces, and a child may act on
+# both copies. `--again` sends it anyway. The same text re-sent through the slot name after going
+# out by escalation id (or the other way round) is NOT a repeat: the typed line differs.
 #
 # `--submit` types nothing: it presses Return on whatever the input box already holds and then
 # takes the same delivery reading as a directive, with the same exit codes. It is the recovery for
@@ -46,9 +48,10 @@
 #       backend reports a shell prompt or an exited pane where the agent was launched, so nothing
 #       was typed or recorded (3 is "no terminal at all"; 8 is "a terminal, and nobody in it" —
 #       recover the child either way, and on 8 the terminal itself is still there to look at),
-#       9 REPEAT — the same text was sent to this slot inside the window, so nothing was typed
-#       or recorded (see above; `--again` to send it anyway), 2 usage error, 1 mailbox/backend
-#       failure — which is also where a dead agterm control socket lands, since the backend precheck refuses before any of this runs.
+#       9 REPEAT — the same text, to the same reply target, was sent to this slot inside the
+#       window, so nothing was typed or recorded (see above; `--again` to send it anyway),
+#       2 usage error, 1 mailbox/backend failure — which is also where a dead agterm control
+#       socket lands, since the backend precheck refuses before any of this runs.
 #       6 rather than 0 on purpose: an `unconfirmed` that exits 0 is a note nobody has to
 #       notice, which is the same defect class as the false `delivered` it replaced. 7 rather
 #       than 3 for the same reason one level along: 3 tells a supervisor the child died, and the
@@ -162,8 +165,8 @@ else
   # An `unconfirmed` verdict is honest about what it cannot rule out, and what a supervisor does
   # with it is re-send — measured: two byte-identical copies of one long directive queued a minute
   # apart, and the child had to be told by hand which one to ignore. A child may act on each copy,
-  # and "file this", "run one round" are not idempotent. So a directive whose text is IDENTICAL to
-  # one recorded for this slot within $DEDUPE_SECS is refused before anything is typed or recorded,
+  # and "file this", "run one round" are not idempotent. So a directive whose text and reply target are
+  # IDENTICAL to one recorded for this slot within $DEDUPE_SECS is refused before anything is typed or recorded,
   # with its own exit code (9), naming the earlier record and its verdict and printing both ways
   # on: `--submit` when the first copy is still in the box, `--again` to send a second copy on
   # purpose. Refused rather than collapsed into a silent no-op: a collapse would exit 0 having
@@ -239,7 +242,8 @@ else
           echo "           bash $DIR/shipyard-tell.sh $SLOT --submit" >&2 ;;
       esac
       echo "         To send it again on purpose:" >&2
-      echo "           bash $DIR/shipyard-tell.sh --again $SLOT \"<the same directive>\"" >&2
+      # $TARGET, not $SLOT: a reply to an escalation keeps its `re <id>` line and its reply target.
+      echo "           bash $DIR/shipyard-tell.sh --again $(printf '%q' "$TARGET") \"<the same directive>\"" >&2
       exit 9
     fi
   fi

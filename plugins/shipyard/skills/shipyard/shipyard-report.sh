@@ -1301,7 +1301,9 @@ for slot in "${SLOTS[@]}"; do
   # escalation is already accounted for by the esc column and the escalation block, and it is
   # asking for something. Without this guard such a slot could be printed under "a stated,
   # self-healing wait ... Do not nudge" while a child is in fact blocked on an unanswered question.
-  if [ "$run" = "⏸ idle/wait" ] && [ "$pend" = 0 ]; then
+  # An UNREADABLE record counts here too (#197): it may be exactly that question, and "do not nudge"
+  # must not be printed over it. It does NOT join the stall guard below, which it would silence.
+  if [ "$run" = "⏸ idle/wait" ] && [ "$pend" = 0 ] && [ "$badrec" = 0 ]; then
     wait_line=$(shipyard_wait_state "$b" "$phase" "$stage" 2>/dev/null) || wait_line=""
     if [ -n "$wait_line" ]; then
       wait_kind=$(printf '%s' "$wait_line" | cut -f1)
@@ -1459,7 +1461,9 @@ for slot in "${SLOTS[@]}"; do
   # old completed verdict EXACTLY ... so the glyph does not change", and painting it `blocked` from
   # its first idle tick would break that — the old code only reached `blocked` after 30 motionless
   # minutes, which is not the same claim. A `wait` slot wants nobody, so it falls through too.
-  if   [ "$pend" != 0 ];             then shipyard_note "$slot" blocked --blink
+  # An unreadable record blinks too (#197): the child may be waiting on it, and only a person can
+  # repair it — the same "waiting on YOU" a readable pending question signals.
+  if   [ "$pend" != 0 ] || [ "$badrec" != 0 ]; then shipyard_note "$slot" blocked --blink
   elif [ "$wait_class" = needs_human ]; then shipyard_note "$slot" blocked
   elif [ "$stalled_now" = 1 ];        then shipyard_note "$slot" blocked
   elif [ "$unread_now" = 1 ];         then shipyard_note "$slot" blocked

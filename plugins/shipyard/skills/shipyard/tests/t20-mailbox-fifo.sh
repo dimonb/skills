@@ -258,7 +258,12 @@ ok "...and the report appends the names"         yes "$(has "$o" 'unreadable rec
 printf '{"id":"41-8","slot":"41","kind":"question","status":"pending"} x' >"$MB/41-8.json"
 o=$(bounded "$SECS" report)
 ok "trailing garbage counts once, as unreadable" yes "$(has "$o" '| ⚠️ 2 ❓ 4 |')"
-rm -f "$MB/41-5.json" "$MB/41-6.json" "$MB/41-7.json" "$MB/41-8.json"
+# Two objects in one file: every reader's filter prints two lines and matches nothing, so unless
+# it is called unreadable it is counted nowhere at all.
+printf '{"kind":"question","status":"pending"}{"kind":"question","status":"pending"}' >"$MB/41-9.json"
+o=$(bounded "$SECS" report)
+ok "two objects in one file count as unreadable"  yes "$(has "$o" '| ⚠️ 2 ❓ 5 |')"
+rm -f "$MB/41-5.json" "$MB/41-6.json" "$MB/41-7.json" "$MB/41-8.json" "$MB/41-9.json"
 # Once every unreadable record is gone the seen-file forgets them, so the same bytes coming back —
 # an empty file, whose checksum never changes — are pushed again.
 bounded "$SECS" bash "$ESC" --new >/dev/null

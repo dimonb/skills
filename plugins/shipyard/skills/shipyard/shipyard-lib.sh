@@ -233,9 +233,13 @@ shipyard_json_set() {
 #
 # Not a regular file counts as unreadable and is never opened: a FIFO at a mailbox name blocked jq
 # (#253). The window between the `-f` test and jq's open is the read residual #246 deferred.
+#
+# EXACTLY ONE object: `-s` reads the whole file as one array. Without it `jq -e` judged only the
+# LAST value, so two concatenated objects passed while every reader's filter then printed two lines
+# and matched nothing — a record counted nowhere, neither pending nor unreadable.
 shipyard_record_readable() {
   [ -f "$1" ] || return 1
-  jq -e 'type == "object"' "$1" >/dev/null 2>&1
+  jq -e -s 'length == 1 and (.[0] | type == "object")' "$1" >/dev/null 2>&1
 }
 
 # --- payload input ------------------------------------------------------------

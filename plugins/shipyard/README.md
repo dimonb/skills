@@ -207,7 +207,8 @@ Environment knobs: `SHIPYARD_AGENT`, `SHIPYARD_BACKEND`, `SHIPYARD_WORKSPACE`, `
 `SHIPYARD_AUTODOWN_TICKS`.
 
 `SHIPYARD_TELL_DEDUPE_SECS` (default 600, `0` off) is how long `tell` refuses a directive that
-repeats one already sent to the same slot, with exit 9; `--again` sends it anyway.
+repeats one already sent to the same slot with the same reply target, with exit 9; `--again` sends
+it anyway.
 
 The last two of the `TELL`/`MOTION` group are timing: `SHIPYARD_MOTION_INTERVAL` (default 3) is
 how long the report waits between the two captures of its motion diff, paid once per live slot

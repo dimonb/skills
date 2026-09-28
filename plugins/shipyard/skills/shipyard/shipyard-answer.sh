@@ -131,7 +131,8 @@ if [ "$KIND" = "notice" ] || [ "$ST" = "done" ]; then
     # and not a write to make: the record is left as it is, like 7, and the operator decides.
     if [ "$TELL_RC" = 9 ]; then
       echo "warning: nothing was sent and $ID was left untouched — this exact text already went to" >&2
-      echo "         the child (see above). To deliver it again on purpose, use shipyard-tell.sh --again." >&2
+      echo "         the child in reply to $ID (see above). To deliver it again on purpose:" >&2
+      echo "           bash $DIR/shipyard-tell.sh --again $(printf '%q' "$ID") \"<the same answer>\"" >&2
       exit 9
     fi
     if [ "$TELL_RC" = 6 ]; then

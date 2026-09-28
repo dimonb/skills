@@ -167,6 +167,13 @@ out=$(run_tell never 41-4 "ok, continue")
 ok "the same text in reply to another escalation is sent" 1 "$(grep -c -- ' -l ' "$KEYS")"
 out=$(run_tell never 41-4 "ok, continue")
 ok "...but a second reply to the same one is refused" 9 "$(rc_of "$out")"
+ok "...and its --again hint keeps the reply target" yes "$(has "$out" 'shipyard-tell.sh --again 41-4 ')"
+# The unconfirmed warning names the refusal only while the check is on.
+out=$(run_tell never 41 "a warning probe")
+ok "the unconfirmed warning names the refusal window" yes "$(has "$out" 'refused for 600s (exit 9)')"
+out=$(SHIPYARD_TELL_DEDUPE_SECS=0 run_tell never 41 "a warning probe")
+ok "...and with the check off says a copy is typed" yes "$(has "$out" 'a second send types another copy')"
+ok "...not that it is refused"                    no  "$(has "$out" 'refused for')"
 # answer.sh hands a notice to tell; on tell's 9 it sends nothing and leaves the record as it is.
 printf '{"id":"41-5","slot":"41","kind":"notice","text":"n","status":"pending"}\n' >"$MB/41-5.json"
 run_answer() { # <args...> -> output, then "rc=<n>"
