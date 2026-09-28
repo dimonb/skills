@@ -1929,8 +1929,8 @@ v_status() {
   fi
   # A ROOM THAT HAS NEVER MOVED (#158). Timed by the room, not the floor, and deferring only to a
   # `🛑 STALL` this tick already raised; the header above `_room_birth` says why each part is as it
-  # is and names what still gets past it. No single roster write can lower the age it tests,
-  # one (`mode`) can delay the threshold by at most twice the default round deadline, and a stamp
+  # is and names what still gets past it. Where a launch record exists, no single roster write can
+  # lower the age it tests; one (`mode`) can delay the threshold by at most twice the default round deadline, and a stamp
   # in the future is an alarm, not a young room. Checked last
   # among the floor's alarms because `$floor_alarmed` is what the arms above leave behind.
   if [ "$floor_alarmed" = 0 ] && [ "$(c_turns_taken)" = 0 ] && birth=$(_room_birth); then
