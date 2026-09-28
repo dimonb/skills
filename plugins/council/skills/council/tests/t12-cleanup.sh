@@ -45,22 +45,25 @@ export T12_HELPERS="$DIR/_helpers.sh"
 
 # Wait up to <secs> for <pid> to be gone. 0 if it went, 1 if not.
 gone() { local i n; n=$(( ${2:-8} * 4 )); for ((i=0; i<n; i++)); do kill -0 "$1" 2>/dev/null || return 0; sleep 0.25; done; return 1; }
-# The value of <key>= lines, first word only: a keeper line carries the pid file's whole record,
+# The value of <key>= lines, whole: a root is a path, and a path may hold a space.
+field() { sed -n "s/^$1=//p" "$2"; }
+# The pid of <key>= lines, first word only: a keeper line carries the pid file's whole record,
 # pid then start time, and the date's numeric words are pids of whatever else happens to run.
-field() { sed -n "s/^$1=//p" "$2" | awk '{print $1}'; }
-# Only ever signal a pid above 1: `kill 0` is the sender's own process group, and 1 is launchd.
+pid_field() { field "$1" "$2" | awk '{print $1}'; }
+# Only ever signal a pid above 1: `kill 0` is the sender's own process group, and 1 is init.
 reap9() { case "$1" in ''|*[!0-9]*|0|1) return 0 ;; esac; kill -9 "$1" 2>/dev/null; }
 # The direct children of <pid>, from the process table. NOT `pgrep -P`: on macOS, pgrep with no
 # pattern ignores -P and lists every process on the machine, and this list is handed to reap9.
 children_of() { ps -A -o pid= -o ppid= 2>/dev/null | awk -v p="$1" '$2 == p { print $1 }'; }
-# Assert every keeper and job the child reported is gone, within a poll period of the keepers'
-# own loop — generous, and unambiguous, since in the sharp case nothing but the trap ends them.
+# Assert every keeper and job the child reported is gone, within a bound far above the keepers'
+# poll period (COUNCIL_KEEPER_POLL_INTERVAL in _helpers.sh) — unambiguous, since in the sharp case
+# nothing but the trap ends them.
 reaped() { # <report> <label>
   local p
-  for p in $(field keeper "$1"); do
+  for p in $(pid_field keeper "$1"); do
     gone "$p" 8 || { echo "FAIL $2: keeper $p survived the child"; fail=1; reap9 "$p"; }
   done
-  for p in $(field job "$1"); do
+  for p in $(pid_field job "$1"); do
     gone "$p" 8 || { echo "FAIL $2: background job $p survived the child"; fail=1; reap9 "$p"; }
   done
 }
