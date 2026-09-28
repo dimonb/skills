@@ -118,6 +118,20 @@ n1=$(bash "$CLI" status --alarms-only 2>/dev/null)
 ok "a new turn is a new episode: full again"      1 "$(cnt "$n1" "$REMEDY")"
 ok "...and not escalated"                         0 "$(cnt "$n1" 'UNANSWERED')"
 
+# The ROOM CLOSING is a new episode too, with the same holder at the same turn: open-or-closed is
+# the third part of the key. A record is what closes a room (`c_recorded_status`: a non-empty
+# decision.md and a status word), written by hand so the floor and the count stay exactly where
+# the open episode left them. Without the state in the key, this firing would be the open
+# episode's fourth and read UNANSWERED (still), with no remedy.
+R="$COUNCIL_TEST_ROOT/t28k"; stalled_room "$R"
+for i in 1 2 3; do bash "$CLI" status --alarms-only >/dev/null 2>&1; done
+printf 'closed by hand for the test\n' > "$R/board/decision.md"; printf 'unresolved\n' > "$R/board/status"
+c1=$(bash "$CLI" status --alarms-only 2>/dev/null)
+ok "closing the room is a new episode: full again" 1 "$(cnt "$c1" "🛑 STALL: $F has held the floor for")"
+ok "...with the remedy"                           1 "$(cnt "$c1" "$REMEDY")"
+ok "...and not escalated"                         0 "$(cnt "$c1" 'UNANSWERED')"
+ok "...recorded as the closed state"              closed "$(cut -f3 "$MB/council-stall-alarms-t28k" 2>/dev/null)"
+
 # --- 5. a forged or broken record changes the wording and never the line -------------------------
 R="$COUNCIL_TEST_ROOT/t28g"; stalled_room "$R"
 EP="$MB/council-stall-alarms-t28g"
@@ -142,6 +156,12 @@ done
 printf '%s\t%s\t08\t0\n' "$KEY" "$(( $(date +%s) - 120 ))" >"$EP"
 j=$(bash "$CLI" status --alarms-only 2>/dev/null)
 ok "a leading-zero count is read base 10"         1 "$(cnt "$j" '🛑 STALL UNANSWERED: .* raised 9 times over 2 min')"
+# A record whose first firing predates the room is another room's (#200): what a room of the same
+# name, deleted by hand, leaves behind. The room here was created 9000 s ago, so a first firing
+# 20000 s ago cannot be this room's, however well the rest of the key matches.
+printf '%s\t%s\t5\t1\n' "$KEY" "$(( $(date +%s) - 20000 ))" >"$EP"
+j=$(bash "$CLI" status --alarms-only 2>/dev/null)
+ok "a record older than the room is a fresh first firing" 1 "$(cnt "$j" "🛑 STALL: $F has held")"
 # An unwritable record directory is no memory, i.e. the full line every tick.
 R="$COUNCIL_TEST_ROOT/t28h"; stalled_room "$R"
 for i in 1 2 3; do

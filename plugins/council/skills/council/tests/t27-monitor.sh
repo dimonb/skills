@@ -167,6 +167,21 @@ say_floor msg '[]' "Something new." >/dev/null
 out=$(bash "$CLI" status --only-changed 2>/dev/null)
 ok "a moved room prints again" 1 "$(printf '%s' "$out" | grep -c '^=== council')"
 
+# 1b. A ROOM REOPENED UNDER THE SAME NAME ARMS (#200). The signature file is keyed by the room's
+#     name, and a fresh room's signature is deterministic, so a new room at a freed name used to
+#     match the dead room's stored signature and print nothing on its first tick, the one that
+#     tells a supervisor the watch is live. Nothing removes the file here, as nothing does when a
+#     room directory is deleted by hand: the room's creation time in the signature is what arms it.
+R1B="$COUNCIL_TEST_ROOT/t27b"; mkroom "$R1B" a b c
+export COUNCIL_ROOM="$R1B" ROOM="$R1B"
+bash "$CLI" status --only-changed >/dev/null 2>&1
+ok "1b: an unmoved room is silent"                  0 "$(bash "$CLI" status --only-changed 2>/dev/null | wc -c | tr -d ' ')"
+mkroom "$R1B" a b c
+jq '.created_ms += 1' "$R1B/roster.json" > "$R1B/roster.tmp" && mv "$R1B/roster.tmp" "$R1B/roster.json"
+out=$(bash "$CLI" status --only-changed 2>/dev/null)
+ok "1b: the same name reopened arms on its first tick" 1 "$(printf '%s' "$out" | grep -c '^=== council')"
+export COUNCIL_ROOM="$R" ROOM="$R"
+
 # --- 2. the filter must NOT filter an alarm ---------------------------------------------
 # The whole point, asserted on the HARD tier, which is the one that is still an alarm.
 RS="$COUNCIL_TEST_ROOT/t27s"; rm -rf "$RS"
@@ -441,6 +456,27 @@ bash "$SCLI" status --only-changed >/dev/null 2>&1
 out=$(bash "$SCLI" status --only-changed 2>/dev/null)
 ok "...on every tick, through --only-changed" 1 "$(printf '%s' "$out" | grep -cE '[0-9]+ of [0-9]+ terminals are still up')"
 
+# 9a-bis. THE --me SEAT IS NOT A TERMINAL (#200). `up --me a` records `a` as never launched and
+#     writes it no launcher, and it stays in the roster. With both agent seats up, the room is
+#     whole: `2/2`, and the closed-room alarm says 2 of 2. Counted against the roster it read `2/3`
+#     for the life of the room, which is what a room that has lost a seat looks like.
+record_launch "$R3" --unlaunched a
+sessions "council-$RN-b" "council-$RN-c"
+ok "9a-bis: the --me seat is not in the total"     "2/2" "$(bash "$SCLI" terminals 2>/dev/null)"
+out=$(bash "$SCLI" status --alarms-only 2>/dev/null)
+ok "...nor in the closed-room alarm's count"       1 "$(printf '%s' "$out" | grep -c '2 of 2 terminals are still up')"
+# A seat whose LAUNCH failed keeps its launcher (`up` writes it before launching) and so stays in
+# the total: that seat was meant to have a terminal, and a count that dropped it would hide it.
+printf '#!/bin/sh\n' > "$R3/state/launch-a.sh"
+ok "...but a seat whose launch failed stays in it" "2/3" "$(bash "$SCLI" terminals 2>/dev/null)"
+rm -f "$R3/state/launch-a.sh"
+# The exclusion needs the absent verdict first: a session carrying the unlaunched seat's name
+# reads unknown, whatever the launcher says, so the exclusion can never hide a live terminal.
+sessions "council-$RN-a" "council-$RN-b" "council-$RN-c"
+ok "...and a session under its name is still ?"    "?" "$(bash "$SCLI" terminals 2>/dev/null)"
+record_launch "$R3"
+sessions "council-$RN-a" "council-$RN-b"
+
 # 9b. GENUINE TEARDOWN — verified absent. The record names what was launched and the backend,
 #     which answered, lists none of it. No alarm is owed, but the tick must still SAY what it
 #     read: the record is in the mailbox, which a seat can write, so the zero is not proof.
@@ -545,7 +581,9 @@ ok "a torn-down room beside another repo's same-named room is 0/3" "0/3" "$(bash
 out=$(bash "$SCLI" status --alarms-only 2>/dev/null)
 ok "...and raises no could-not-tell alarm"              0 "$(printf '%s' "$out" | grep -c 'could not be determined')"
 record_launch "$R3" --unlaunched a
-ok "...and a seat nothing was launched for still reads absent" "0/3" "$(bash "$SCLI" terminals 2>/dev/null)"
+# `0/2`, not `0/3`: a seat never launched AND given no launcher is the `--me` shape (#200), which
+# is left out of the total. It still reads absent rather than unknown, or this would be `?`.
+ok "...and a seat nothing was launched for still reads absent" "0/2" "$(bash "$SCLI" terminals 2>/dev/null)"
 record_launch "$R3"
 # Scoping the search to the pin opens nothing: a retargeted pin still reads unknown, because the
 # pin and the recorded container disagree before any name is searched.
