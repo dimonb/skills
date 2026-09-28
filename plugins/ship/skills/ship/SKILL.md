@@ -743,8 +743,8 @@ rule:
 | `medium` | 2–3 | correctness and conformance apart; security only on a surface; no `/code-review` |
 | `high` | 4–5 | every admitted axis its own agent; security always; both engines run |
 
-Substance narrows first and these apply to what is left: a docs-only diff at `high` is still two
-axes, and a CI change at `low` still gets its security agent.
+Substance narrows first and these apply to what is left: a docs-only diff at `high` is still its two
+prose axes plus `impl-security` (rule 2), and a CI change at `low` still gets its security agent.
 
 **Scoped rounds inherit the sizing** (§5.7): a round after the first re-opens only the axes whose
 files moved, from the set round 1 chose. One re-arm: a fix that newly touches a security surface
