@@ -2199,8 +2199,9 @@ v_decide() {
     # Every line of it is a list item, which already keeps a heading-like line inside the list.
     # Carriage returns are split into lines over the RENDERED line, not in `.text` alone:
     # `_render_transcript` also interpolates `.act`, which c_send takes as given, and `.refs`,
-    # whose strings C_UNTRUSTED type-checks and nothing reads for content -- so a CR in a ref
-    # ended the item early and put the rest of it at column zero.
+    # whose strings C_UNTRUSTED type-checks but nothing checks for content (claims.jq only
+    # compares them against message ids) -- so a CR in a ref ended the item early and put the
+    # rest of it at column zero.
     c_canon | _render_transcript \
       | awk '{ sub(/\r$/, ""); n = split($0, a, "\r"); if (n == 0) { print "* "; next }
                for (i = 1; i <= n; i++) print "* " a[i] }'
