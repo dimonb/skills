@@ -9,9 +9,12 @@ CLI="$SKILL/council.sh"
 # driving a fleet of sessions — otherwise delete each other's rooms mid-drain, and the failure
 # lands on whichever test was unlucky rather than on the one that caused it. run-all.sh exports
 # this so every test of a run shares a root; a test started on its own makes its own.
+# The parent is named once, here, so that a test checking what a root it did not make looks like
+# (t12) reads it from here rather than spelling out a temp path of its own, which the gate forbids.
+COUNCIL_TEST_PARENT="${TMPDIR:-/tmp}/council-test"
 if [ -z "${COUNCIL_TEST_ROOT:-}" ]; then
-  mkdir -p "${TMPDIR:-/tmp}/council-test" || exit 1
-  COUNCIL_TEST_ROOT=$(mktemp -d "${TMPDIR:-/tmp}/council-test/run.XXXXXXXX") || exit 1
+  mkdir -p "$COUNCIL_TEST_PARENT" || exit 1
+  COUNCIL_TEST_ROOT=$(mktemp -d "$COUNCIL_TEST_PARENT/run.XXXXXXXX") || exit 1
   export COUNCIL_TEST_ROOT
   COUNCIL_TEST_ROOT_OWNED=1
 fi

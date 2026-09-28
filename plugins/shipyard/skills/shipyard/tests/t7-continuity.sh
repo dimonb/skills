@@ -21,6 +21,33 @@ check() {
   fi
 }
 
+# reap_job <pid> [secs] — `wait` for a backgrounded start/stop, BOUNDED (#109). Every production loop
+# these jobs run is ceiling-bounded today, so a bare `wait` does not hang now; but a regression that
+# removes one of those ceilings is what this file exists to catch, and a bare `wait` would answer it
+# by hanging with no summary and no EXIT trap. So poll the job table and `wait` only once the job has
+# finished, which still returns its real status. `jobs -pr` rather than `kill -0`: it reads this
+# shell's own job table, so a pid the kernel has reused for another process cannot read as the
+# job. A job still running at the ceiling is a named, counted failure, is SIGKILLed and reaped, and
+# returns 124 so the caller's own rc check reds too. The pid is always the caller's own `$!`,
+# never a list read from elsewhere.
+# The ceiling is only ever paid by a failing case, so it is sized for a loaded box, not for speed.
+REAP_SECS=120
+reap_job() {
+  local p="$1" secs="${2:-$REAP_SECS}" i n
+  n=$((secs * 10))
+  for ((i = 0; i < n; i++)); do
+    case " $(jobs -pr | tr '\n' ' ') " in
+      *" $p "*) sleep 0.1 ;;
+      *) wait "$p"; return ;;
+    esac
+  done
+  printf 'not ok - background job %s still running after %ss; killed\n' "$p" "$secs"
+  failures=$((failures + 1))
+  kill -9 "$p" 2>/dev/null
+  wait "$p" 2>/dev/null
+  return 124
+}
+
 runtime_state_paths() {
   find "$_SHIPYARD_CONTINUITY_DIR" -mindepth 1 ! -name continuity-generation -print 2>/dev/null
 }
@@ -445,7 +472,7 @@ while [ -z "$timeout_pidfile" ] && [ "$n" -lt 20 ]; do
 done
 timeout_watcher=$(awk '{print $1}' "$timeout_pidfile" 2>/dev/null)
 timeout_rc=0
-wait "$starter_pid" || timeout_rc=$?
+reap_job "$starter_pid" || timeout_rc=$?
 check 1 "$timeout_rc" "startup timeout reports failure"
 if [ -n "$timeout_watcher" ] && kill -0 "$timeout_watcher" 2>/dev/null; then
   timeout_alive=yes
@@ -470,7 +497,7 @@ sleep 1.2
 if [ -L "$_SHIPYARD_CONTINUITY_DIR/continuity-lifecycle.lock" ]; then live_lock=yes; else live_lock=no; fi
 check yes "$live_lock" "unpublished watcher cannot release a live starter lock"
 kill "$interrupted_starter" 2>/dev/null || true
-wait "$interrupted_starter" 2>/dev/null || true
+reap_job "$interrupted_starter" 2>/dev/null || true
 interrupted_pidfiles=$(find "$_SHIPYARD_CONTINUITY_DIR" -name 'continuity-*.pid' -print)
 check "" "$interrupted_pidfiles" "interrupted unpublished start leaves no published watcher"
 unset _SHIPYARD_CONTINUITY_PUBLISH_DELAY
@@ -485,8 +512,8 @@ _SHIPYARD_CONTINUITY_BEFORE_CLAIM_DELAY=0.2
 export _SHIPYARD_CONTINUITY_BEFORE_CLAIM_DELAY
 shipyard_continuity_start agterm >"$TMP/start-one" 2>&1 & start_one=$!
 shipyard_continuity_start agterm >"$TMP/start-two" 2>&1 & start_two=$!
-start_one_rc=0; wait "$start_one" || start_one_rc=$?
-start_two_rc=0; wait "$start_two" || start_two_rc=$?
+start_one_rc=0; reap_job "$start_one" || start_one_rc=$?
+start_two_rc=0; reap_job "$start_two" || start_two_rc=$?
 check 0 "$start_one_rc" "first concurrent start succeeds"
 check 0 "$start_two_rc" "second concurrent start joins the same watcher"
 starts=$(grep -hFc 'parent continuity guard started' "$TMP/start-one" "$TMP/start-two" | awk '{n += $1} END {print n + 0}')
@@ -525,8 +552,8 @@ _SHIPYARD_CONTINUITY_RECLAIM_DELAY=0.3
 export _SHIPYARD_CONTINUITY_RECLAIM_DELAY
 shipyard_continuity_start agterm >"$TMP/reclaim-one" 2>&1 & reclaim_one=$!
 shipyard_continuity_start agterm >"$TMP/reclaim-two" 2>&1 & reclaim_two=$!
-reclaim_one_rc=0; wait "$reclaim_one" || reclaim_one_rc=$?
-reclaim_two_rc=0; wait "$reclaim_two" || reclaim_two_rc=$?
+reclaim_one_rc=0; reap_job "$reclaim_one" || reclaim_one_rc=$?
+reclaim_two_rc=0; reap_job "$reclaim_two" || reclaim_two_rc=$?
 check 0 "$reclaim_one_rc" "first stale-claim contender succeeds"
 check 0 "$reclaim_two_rc" "second stale-claim contender joins safely"
 reclaim_starts=$(grep -hFc 'parent continuity guard started' "$TMP/reclaim-one" "$TMP/reclaim-two" \
@@ -569,7 +596,7 @@ fi
 check yes "$admission_owner_alive" "start intent names the live starter process"
 admission_stop_rc=0
 shipyard_continuity_stop_all || admission_stop_rc=$?
-admission_start_rc=0; wait "$admission_start" || admission_start_rc=$?
+admission_start_rc=0; reap_job "$admission_start" || admission_start_rc=$?
 check 0 "$admission_stop_rc" "stop cancels a start admitted before lock acquisition"
 check 0 "$admission_start_rc" "cancelled admitted start exits cleanly"
 admission_files=$(runtime_state_paths)
@@ -589,7 +616,7 @@ if [ -f "$_SHIPYARD_CONTINUITY_DIR/continuity-stopping" ]; then sweep_seen=yes; 
 check yes "$sweep_seen" "stop sweep synchronization point is observed"
 sweep_start_rc=0
 shipyard_continuity_start agterm >"$TMP/during-sweep-start" 2>&1 || sweep_start_rc=$?
-sweeping_stop_rc=0; wait "$sweeping_stop" || sweeping_stop_rc=$?
+sweeping_stop_rc=0; reap_job "$sweeping_stop" || sweeping_stop_rc=$?
 check 0 "$sweeping_stop_rc" "stop with active admission marker succeeds"
 check 0 "$sweep_start_rc" "start during stop sweep is cancelled cleanly"
 sweep_files=$(runtime_state_paths)
@@ -603,7 +630,7 @@ shipyard_continuity_start agterm >"$TMP/pre-intent-start" 2>&1 & pre_intent_star
 sleep 0.1
 pre_intent_stop_rc=0
 shipyard_continuity_stop_all || pre_intent_stop_rc=$?
-pre_intent_start_rc=0; wait "$pre_intent_start" || pre_intent_start_rc=$?
+pre_intent_start_rc=0; reap_job "$pre_intent_start" || pre_intent_start_rc=$?
 check 0 "$pre_intent_stop_rc" "stop advances admission generation during pre-intent start"
 check 0 "$pre_intent_start_rc" "old-generation start is cancelled cleanly"
 pre_intent_files=$(runtime_state_paths)
@@ -623,8 +650,8 @@ done
 if [ -L "$_SHIPYARD_CONTINUITY_DIR/continuity-lifecycle.lock" ]; then start_lock_seen=yes; else start_lock_seen=no; fi
 check yes "$start_lock_seen" "start-wins lifecycle synchronization point is observed"
 shipyard_continuity_stop_all >"$TMP/racing-stop" 2>&1 & racing_stop=$!
-racing_start_rc=0; wait "$racing_start" || racing_start_rc=$?
-racing_stop_rc=0; wait "$racing_stop" || racing_stop_rc=$?
+racing_start_rc=0; reap_job "$racing_start" || racing_start_rc=$?
+racing_stop_rc=0; reap_job "$racing_stop" || racing_stop_rc=$?
 check 0 "$racing_start_rc" "in-flight start publishes before synchronized stop"
 check 0 "$racing_stop_rc" "synchronized stop waits for an in-flight start"
 racing_files=$(runtime_state_paths)

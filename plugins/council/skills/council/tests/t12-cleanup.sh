@@ -58,8 +58,16 @@ children_of() { ps -A -o pid= -o ppid= 2>/dev/null | awk -v p="$1" '$2 == p { pr
 # Assert every keeper and job the child reported is gone, within a bound far above the keepers'
 # poll period (COUNCIL_KEEPER_POLL_INTERVAL in _helpers.sh) — unambiguous, since in the sharp case
 # nothing but the trap ends them.
+#
+# The child reports exactly two of each, and a line whose pid is missing FAILS rather than being
+# skipped: `for p in $(...)` drops an empty word, so a `keeper=` line with nothing after it — a pid
+# file that was never written — used to leave nothing to check and pass vacuously (#110's shape).
 reaped() { # <report> <label>
-  local p
+  local p key n
+  for key in keeper job; do
+    n=$(pid_field "$key" "$1" | grep -cE '^[0-9]+$')
+    [ "$n" = 2 ] || { echo "FAIL $2: the child reported $n $key pid(s), not 2"; fail=1; }
+  done
   for p in $(pid_field keeper "$1"); do
     gone "$p" 8 || { echo "FAIL $2: keeper $p survived the child"; fail=1; reap9 "$p"; }
   done
@@ -67,10 +75,17 @@ reaped() { # <report> <label>
     gone "$p" 8 || { echo "FAIL $2: background job $p survived the child"; fail=1; reap9 "$p"; }
   done
 }
+# The root must be exactly what _helpers.sh's mktemp makes: one `run.XXXXXXXX` directly under
+# the existing $COUNCIL_TEST_PARENT. The report is line-oriented, so a temp directory whose path
+# holds a newline cuts `root=` short at it — and the callers `rm -rf` whatever this returns. A root
+# of any other shape is refused, never removed.
 own_root_of() { # <report> -> the root the child made for itself, or exit
-  local own; own=$(field root "$1")
+  local own parent="$COUNCIL_TEST_PARENT"
+  own=$(field root "$1")
   [ -n "$own" ] && [ "$own" != "$COUNCIL_TEST_ROOT" ] \
     || { echo "FAIL the child did not make a root of its own ('$own')"; exit 1; }
+  { [ -d "$parent" ] && [ "${own%/*}" = "$parent" ] && case "${own##*/}" in run.????????) true ;; *) false ;; esac; } \
+    || { echo "FAIL the child's root is not a run.XXXXXXXX directly under $parent ('$own'); refusing it"; exit 1; }
   printf '%s' "$own"
 }
 
