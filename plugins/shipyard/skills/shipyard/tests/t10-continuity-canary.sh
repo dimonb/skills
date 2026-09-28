@@ -61,9 +61,9 @@ no_pid() { echo "no-pid"; }
 wait_gone() { local p="$1" n="${2:-60}" i; [ -n "$p" ] || { no_pid; return; }; for ((i=0;i<n;i++)); do kill -0 "$p" 2>/dev/null || { echo gone; return; }; sleep 0.1; done; echo alive; }
 alive()     { [ -n "$1" ] || { no_pid; return; }; kill -0 "$1" 2>/dev/null && echo alive || echo gone; }
 # The owner-death reap (owner killed -> canary write end closes -> watcher's read EOFs -> it reaps
-# and exits) is meant to happen every time, and does except for the early group-kill leak in #275;
-# otherwise the question is when, and under concurrent load (a full `make test`, CI) the detached
-# watcher can be scheduled late. So the canary-reap waits use a
+# and exits) is meant to happen every time (case B's comment says what once broke that, #275); the
+# question is when, and under concurrent load (a full `make test`, CI) the detached watcher can be
+# scheduled late. So the canary-reap waits use a
 # generous bound: it still fails on a genuine never-reap (a leaked watcher runs forever), it just
 # gives scheduling jitter ample headroom instead of a tight 12s window that flaked under load.
 REAP_WAIT=600   # 60s at 0.1s/poll — generous, not a real deadline; a true leak still fails it
@@ -152,12 +152,12 @@ opgid_b=$(pgid_of "$opid_b")
 ok "owner is its own group leader" "$opid_b" "$opgid_b"
 ok "watcher group differs from owner group" yes \
    "$([ -n "$(cat "$MARK_B/watcher.pgid" 2>/dev/null)" ] && [ "$(cat "$MARK_B/watcher.pgid")" != "$opgid_b" ] && echo yes || echo no)"
-# A RED HERE IS A REAL LEAK, NOT A LOAD FLAKE (#275). This check asserts only the outcome, and when
-# it reds the watcher really is still running: orphaned, alone in its group, its canary `read -t`
-# timing out on every poll though no process holds the write end. Measured at about 1 run in 6 on an
-# idle box, only when the group is signalled within the first poll after start, as this case does.
-# The assertion stays as it is until the watcher is fixed; a settle pause before the kill would make
-# it pass by hiding exactly that.
+# A RED HERE IS A REAL LEAK, NOT A LOAD FLAKE (#275). This check asserts only the outcome, and it
+# used to red with the watcher really still running: orphaned, alone in its group, its canary
+# `read -t` timing out on every poll though no process held the write end. The cause was macOS losing
+# select() readiness for FIFO EOF when the owner died as the watcher's first select timed out;
+# shipyard_continuity_sentinel_start says what the watcher waits on instead. The kill still lands
+# straight after `ready`, with no settle pause: a pause would make this pass by hiding exactly that.
 kill -TERM -- "-$opgid_b" 2>/dev/null
 b_reaped=$(wait_gone "$wpid_b" "$REAP_WAIT")
 ok "watcher exited after owner-group SIGTERM (via EOF, not the group signal)" gone "$b_reaped"
@@ -237,6 +237,7 @@ echo "── case E: no owner-death reaping path reads \$PPID (acceptance) ─�
 reap_src=$(sed -n \
   -e '/^shipyard_continuity_watch() {/,/^}/p' \
   -e '/^shipyard_continuity_owner_gone() {/,/^}/p' \
+  -e '/^shipyard_continuity_sentinel_start() {/,/^}/p' \
   -e '/^shipyard_continuity_reap_group() {/,/^}/p' \
   -e '/^shipyard_continuity_start_owner_hold_locked() {/,/^}/p' \
   "$SKILL_DIR/shipyard-continuity.sh")

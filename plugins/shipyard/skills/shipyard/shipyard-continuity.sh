@@ -333,33 +333,78 @@ shipyard_continuity_control_check() {
   [ "$verb" = stop ]
 }
 
-# The inter-poll wait, doubling as owner-death detection ON THE OWNER-HOLD PATH ONLY. With no
-# canary fd (the historical detached watcher, and every agterm-session watcher) it is a plain
-# sleep and nothing changes. With one, a `read -t` on the canary read end tells the owner's two
-# states apart WITHOUT `$PPID`/`kill -0` (both read a reparented process as alive): rc > 128 is the
-# timeout — a writer (the live owner) still holds the pipe; rc 0 is a stray byte, owner alive too
-# (nothing writes here today, but a write must never read as death); any other rc is EOF — every
-# writer is gone, the owner has died, and the read returns AT ONCE so the reap is immediate rather
-# than a poll interval late. Returns 0 to keep looping, 1 when the owner is gone.
-shipyard_continuity_owner_gone() {
-  local cfd="$1" interval="$2" rc
-  if [ -z "$cfd" ]; then sleep "$interval"; return 0; fi
-  read -r -t "$interval" -u "$cfd" _ 2>/dev/null; rc=$?
-  [ "$rc" -eq 0 ] && return 0
-  [ "$rc" -gt 128 ] && return 0
-  return 1
+# The canary SENTINEL (owner-hold path only): a process substitution, so a child in this watcher's
+# own process group, that blocks in a plain `read` on the canary and writes one `eof` line into an
+# anonymous pipe when that read reaches EOF. Stray bytes on the canary are read and ignored, so
+# only EOF — every writer gone — produces the line. Sets SHIPYARD_CONTINUITY_SENTINEL_FD to the
+# pipe's read end; returns 1, leaving it empty, when the pipe cannot be made.
+#
+# Why the watcher does not simply `read -t` the canary itself (#275). On macOS, select() readiness
+# for EOF on a FIFO can be LOST: when the last writer closes just as a select on the read end
+# times out, that select reports a timeout and every later select reports the fd unreadable,
+# although a plain read() on the same fd returns 0 at once, on every attempt. bash's `read -t` is
+# select-based, so a watcher whose owner died at that instant polled forever. Measured with a perl
+# probe on the watcher's own inherited fd: in the stuck state select saw nothing and a blocking
+# sysread returned EOF immediately, with no writer open anywhere. The sentinel's read is the
+# blocking kind, and what the watcher selects on is DATA in a pipe, which does not have that edge.
+#
+# THE RESIDUAL: this rests on the blocking read() path seeing FIFO EOF, which was measured on the
+# platform where the select edge was found, not proven from kernel source. A blocked read has no
+# timeout to race, which is the part of the failure that was observed, but a lost wakeup for a
+# blocked reader would still leave the sentinel, and so the watcher, waiting. Nothing here detects
+# that case.
+shipyard_continuity_sentinel_start() {
+  local cfd="$1"
+  SHIPYARD_CONTINUITY_SENTINEL_FD=""
+  exec {SHIPYARD_CONTINUITY_SENTINEL_FD}< <(
+    while read -r -u "$cfd" _ 2>/dev/null; do :; done
+    printf 'eof\n') 2>/dev/null || { SHIPYARD_CONTINUITY_SENTINEL_FD=""; return 1; }
 }
 
-# Owner death: reap this watcher's own process group before it exits. The owner-hold launch put
-# the watcher in its OWN group (`set -m`), so `-$$` is the watcher and any descendant it spawned,
-# never the owner or the caller. TERM the group with the leader's own TERM disposition dropped, so
-# this leader survives the signal and falls through to its EXIT-trap state cleanup while any
-# straggler is reaped. Escalation to KILL on the group is the external teardown's job
+# The inter-poll wait, doubling as owner-death detection ON THE OWNER-HOLD PATH ONLY. With no
+# canary fd (the historical detached watcher, and every agterm-session watcher) it is a plain
+# sleep and nothing changes. With one, the owner's two states are told apart WITHOUT
+# `$PPID`/`kill -0` (both read a reparented process as alive), through the sentinel above: a
+# `read -t` on the sentinel's pipe that times out (rc > 128) means the sentinel is still blocked
+# on the canary, so a writer (the live owner) still holds it; an `eof` line means every writer is
+# gone and the owner has died, and it arrives AT ONCE, so the reap is immediate rather than a poll
+# interval late. A sentinel pipe that ends WITHOUT that line means the sentinel itself was
+# signalled, not that the owner died: its pipe is dropped, this poll sleeps out its interval, and
+# the next poll starts a new sentinel. If no sentinel can be started, the canary is read directly,
+# as before #275, which is right except for the select edge described above.
+# Returns 0 to keep looping, 1 when the owner is gone.
+shipyard_continuity_owner_gone() {
+  local cfd="$1" interval="$2" rc line=""
+  if [ -z "$cfd" ]; then sleep "$interval"; return 0; fi
+  if [ -z "${SHIPYARD_CONTINUITY_SENTINEL_FD:-}" ] \
+    && ! shipyard_continuity_sentinel_start "$cfd"; then
+    read -r -t "$interval" -u "$cfd" _ 2>/dev/null; rc=$?
+    [ "$rc" -eq 0 ] && return 0
+    [ "$rc" -gt 128 ] && return 0
+    return 1
+  fi
+  read -r -t "$interval" -u "$SHIPYARD_CONTINUITY_SENTINEL_FD" line 2>/dev/null; rc=$?
+  [ "$rc" -gt 128 ] && return 0
+  [ "$rc" -eq 0 ] && [ "$line" = eof ] && return 1
+  exec {SHIPYARD_CONTINUITY_SENTINEL_FD}<&- 2>/dev/null || true
+  SHIPYARD_CONTINUITY_SENTINEL_FD=""
+  sleep "$interval"
+  return 0
+}
+
+# Reap this watcher's own process group. The owner-hold launch put the watcher in its OWN group
+# (`set -m`), so the group is the watcher and any descendant it spawned — the canary sentinel
+# included — never the owner or the caller. It signals nothing unless this process LEADS its group
+# (pgid == $$), so a watcher that somehow shares a group with anyone else reaps nothing rather
+# than that group. TERM the group with the leader's own TERM disposition dropped, so this leader
+# survives the signal and falls through to its EXIT-trap state cleanup while any straggler is
+# reaped. Escalation to KILL on the group is the external teardown's job
 # (shipyard_continuity_terminate_pid), which can KILL without needing to survive.
 shipyard_continuity_reap_group() {
   local pgid
   pgid=$(ps -o pgid= -p "$$" 2>/dev/null | tr -d ' ')
   case "$pgid" in ''|*[!0-9]*) return 0 ;; esac
+  [ "$pgid" = "$$" ] || return 0
   trap '' TERM
   kill -TERM "-$pgid" 2>/dev/null || true
 }
@@ -374,8 +419,15 @@ shipyard_continuity_watch() {
   case "$cfd" in ''|*[!0-9]*) cfd="" ;; esac
   printf -v cleanup 'shipyard_continuity_remove_owned_state %q %q "" "" %q' \
     "$pidfile" "$heartbeat" "$token"
+  # On the owner-hold path every exit, not only the owner-death break below, reaps this watcher's
+  # own group, so the canary sentinel it starts next never outlives it.
+  [ -z "$cfd" ] || cleanup="$cleanup; shipyard_continuity_reap_group"
   trap "$cleanup" EXIT
   trap 'exit 0' INT TERM
+  SHIPYARD_CONTINUITY_SENTINEL_FD=""
+  # Started before the first poll so its read is already blocked when an owner dies straight after
+  # start, the case #275 measured. A failure here is retried by the first poll.
+  [ -z "$cfd" ] || shipyard_continuity_sentinel_start "$cfd" || true
   shipyard_continuity_reset
   if ! shipyard_continuity_wait_publication "$pidfile" "$token"; then
     # The starter owns this lock until it publishes or exits. A timed-out watcher
