@@ -404,7 +404,7 @@ clean round, never by anything external:
 | spec diff, no clean spec round recorded | `spec-review` |
 | spec diff, clean spec round recorded and the artifacts unchanged since | `apply` |
 | implementation diff, code landed after the last clean impl round | `impl-review` |
-| implementation diff, clean impl round, but `flags.effort` now calls for an axis the recorded sizing lacks (an upward raise, §5.3) | `impl-review` |
+| implementation diff, clean impl round, but the recorded sizing is smaller than what `flags.effort` now gives it — an axis, a folded axis split out, or an engine (an upward raise, §5.3) | `impl-review` |
 | implementation diff, clean impl round, archive due and not in the diff | `archive` |
 | implementation diff, clean impl round, archive in the diff or not applicable | `ready-to-merge` |
 | any stage, blockers survived `max-rounds` | `needs-human` |
@@ -535,8 +535,9 @@ passes it — the absent file does not fail safe, it fails open.)
 `reviews` is the **gate ledger**: only a `clean` entry, un-invalidated per §3.3/§5.10,
 clears a stage. It is written **at the start and end of every round**, not at hand-off, and read
 back on every re-entry (§5.7, §5.10). `head` is the head the latest round reviewed and `clean` is
-that round's verdict, false from the moment a round starts. `rounds` counts rounds started and not
-voided as failed, and `round_in_progress` names one that started and has not been written back.
+that round's verdict, false from the moment a round starts. `rounds` counts rounds started, each once
+however often it is re-run, and `round_in_progress` names one that started and has not been
+written back.
 `reviewed_at` is the head at which each axis last reviewed, which is the base of its next delta
 read. `round_log` holds one entry per round: what ran, the counts, each refuted finding with its
 reason, the fix sha, and the round's spend, which §5.9's record and `Spend:` line are built from.
@@ -901,8 +902,8 @@ round 3: …
   overloaded API, an empty report, "cannot start") reviewed nothing: do not clear the axis,
   never record `clean` from it, and do not immediately re-fire it — back off, or run the axis's
   own charter and record that instead, still inside the same round. A round does not end while an
-  axis it dispatched has reviewed nothing. A round in which **every** axis failed is void: take
-  back its start-of-round increment (below) at once, and re-fire it under the same number. Six
+  axis it dispatched has reviewed nothing. A round in which **every** axis failed is void: it is
+  re-fired as a re-run of the round `round_in_progress` names (below), so it counts once. Six
   consecutive overload errors minutes apart were once all counted as rounds: half an hour,
   zero diff read. **Judge the body, not the duration** — a fast "no findings" over a
   one-commit range is a legitimate result.
@@ -950,8 +951,8 @@ round 3: …
       confirmed no blocker;
     - `round_in_progress: null`.
 
-    A void round (every axis failed, above) is written back with the counter taken back down
-    and nothing cleared.
+    A void round (every axis failed, above) has not ended, so it writes nothing back: its re-run
+    keeps the number and the counter as they are.
   - **`max-rounds` is compared against `rounds`.** A round a crash interrupted is still visible as
     `round_in_progress`, and it is re-run under its own number on re-entry. So it neither
     vanishes nor counts twice, and a restarted or compacted session reads what it already
