@@ -151,8 +151,16 @@ opgid_b=$(pgid_of "$opid_b")
 ok "owner is its own group leader" "$opid_b" "$opgid_b"
 ok "watcher group differs from owner group" yes \
    "$([ -n "$(cat "$MARK_B/watcher.pgid" 2>/dev/null)" ] && [ "$(cat "$MARK_B/watcher.pgid")" != "$opgid_b" ] && echo yes || echo no)"
+# A RED HERE IS A REAL LEAK, NOT A LOAD FLAKE (#275). This check asserts only the outcome, and when
+# it reds the watcher really is still running: orphaned, alone in its group, its canary `read -t`
+# timing out on every poll though no process holds the write end. Measured at about 1 run in 6 on an
+# idle box, only when the group is signalled within the first poll after start, as this case does.
+# The assertion stays as it is until the watcher is fixed; a settle pause before the kill would make
+# it pass by hiding exactly that.
 kill -TERM -- "-$opgid_b" 2>/dev/null
-ok "watcher exited after owner-group SIGTERM (via EOF, not the group signal)" gone "$(wait_gone "$wpid_b" "$REAP_WAIT")"
+b_reaped=$(wait_gone "$wpid_b" "$REAP_WAIT")
+ok "watcher exited after owner-group SIGTERM (via EOF, not the group signal)" gone "$b_reaped"
+[ "$b_reaped" = alive ] && printf '         (still alive after the full REAP_WAIT of %ss — see #275)\n' "$((REAP_WAIT / 10))"
 
 # ---------------------------------------------------------------------------------------------
 echo "── case C: a launched child must not inherit the canary write end (the #89 footgun) ──"
