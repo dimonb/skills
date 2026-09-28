@@ -83,9 +83,8 @@ BEHAVIOR
     many agents from the effort level. Every blocking finding faces a skeptic that tries
     to refute it.
   - A review stage whose blocking findings survive max-rounds STOPS the run, converts the
-    PR/MR to draft, and reports — save what §5.7 lets run past it (a review-only round,
-    one prose round for blockers a fix wrote). That budget is the only thing standing in for a human
-    reviewer — honor it.
+    PR/MR to draft, and reports — save what §5.7 lets run past it. That budget is the
+    only thing standing in for a human reviewer — honor it.
   - Merges only where repo policy or the `merge` flag allows it. A clean self-review is
     never a merge authorization by itself, and ship never self-approves.
   - At hand-off, a close sweep tries to reproduce every open issue that names a file the
@@ -545,7 +544,7 @@ written back.
 `reviewed_at` is the head at which each axis last reviewed, which is the base of its next delta
 read. `round_log` holds one entry per round: what ran, the counts, each refuted finding with its
 reason, the fix sha, and the round's spend, which §5.9's record and `Spend:` line are built from —
-plus the void attempts, failed axes, a revert that made the head reviewed, and whether it was the
+plus the void attempts, failed axes, the sha of any revert its fix made, and whether it was the
 prose round (§5.7).
 `open` carries every confirmed finding, raised or carried, each with its `status`. Its `deferred`
 array is the written record §5.11 requires — one entry per finding the ladder placed, carrying the
@@ -950,7 +949,10 @@ round 3: …
   axis it dispatched has reviewed nothing — up to one back-off and one charter fallback for that
   axis, where some other axis of the round returned a body; still without a body after both, the
   axis is logged in `failed_axes` and the round ends unclean, and a failed axis at the budget is a
-  stop (Non-convergence, below). A round in which **every** axis failed is void: it is
+  stop (Non-convergence, below). An axis in `failed_axes` has cleared nothing, so every later round
+  dispatches it until it returns a body, whether or not its files moved, reading from its
+  `reviewed_at` or, where it has none, the whole branch diff. A round in which **every** axis
+  failed is void: it is
   re-fired as a re-run of the round `round_in_progress` names (below), so it counts once, and each
   void attempt is counted as `void_attempts` on the entry the round finally writes. Six
   consecutive overload errors minutes apart were once all counted as rounds: half an hour,
@@ -991,15 +993,14 @@ round 3: …
     increment.
   - **When the round ends**, write it back: after its fixes are pushed, or at once when it pushed
     nothing. The write-back sets:
-    - `head` to the head the round reviewed, never the post-fix head — except a post-revert
-      head the revert rule below makes reviewed, which is recorded as `head`;
+    - `head` to the head the round reviewed, never the post-fix head;
     - the round's `round_log` entry;
     - every confirmed finding, raised this round or carried, with its `status`;
     - `reviewed_at` for each axis that returned a body, again the head it reviewed. An axis
       that failed keeps its previous value, or none;
     - any deferral placed;
     - `clean: true` only when every axis the round dispatched returned a body and the round
-      confirmed no blocker, or every blocker it confirmed was removed by such a revert;
+      confirmed no blocker;
     - `round_in_progress: null`.
 
     A void round (every axis failed, above) has not ended, so it writes nothing back: its re-run
@@ -1042,17 +1043,12 @@ round 3: …
   answered an optional finding is dropped, and the optional goes back to the ladder (§5.11) with
   the regression noted. One that answered a blocker re-opens it, and it is re-fixed from the clean
   line with the regression as a failure scenario the new fix must avoid. Fix forward only where no
-  clean line exists to restore, and say why in `round_log`. A revert is a fix, predicate check
-  included. A revert that drops an optional's fix earns its clearance from one verifier instead of
-  a round. The verifier reads the revert commit against the head, and checks with
-  `git diff <clean sha> HEAD -- <path>` that the restored range matches the clean head's bytes.
-  It also reports anything left on the head that refers to or depends on what the revert removed.
-  Where the revert touches a predicate, the predicate check serves as this verifier, counted once.
-  When it confirms nothing, and every blocker the round confirmed was removed that way, the
-  post-revert head is a reviewed head. The round's write-back records it as `head`, its
-  `round_log` entry names the revert's sha as `reverted`, and the stage clears on it. Measured: a
-  round spent on optional fixes made after a clean round found its blocker in one of them, and
-  reverting that hunk ended the stage.
+  clean line exists to restore, and say why in `round_log`. A revert is a fix like any other: the
+  predicate check where it touches a predicate, its sha named as `reverted` in the round's
+  `round_log` entry, and a scoped round that reads it before the stage clears. At the budget, that
+  round is a review-only round (below). Measured: a round spent on optional fixes made after a
+  clean round found its blocker in one of them, and the fix was to revert that hunk to the
+  reviewed line.
 - **A fix changes the defective lines and nothing more.** It does not add a CI gate, a
   runbook section, or a paragraph of comment explaining itself — that is new machinery, it
   enters the next round's scope, and it is how one measured diff went from 2 970 to 5 900
@@ -1073,7 +1069,8 @@ round 3: …
   Everything else leaves the change down the ladder of §5.11. On one change, 55 of 85 rounds
   reviewed code that was already live.
 - **Non-convergence** — a round at or past `max-rounds` ends with a confirmed blocker that the
-  revert default (above) did not remove, or with an axis in `failed_axes`. Then do **not** hand
+  revert default (above) did not remove (a blocker a revert re-opened counts), or with an axis in
+  `failed_axes`. Then do **not** hand
   off as ready, and do **not** loosen the bar. Do **not** take another fix round unless the prose
   round below applies, and never reclassify a finding to get past the gate — `kind` is the
   verifier's (§5.5), and ship does not change it. Write the blockers to the ledger as open,
@@ -1083,8 +1080,8 @@ round 3: …
   pointless — a human re-runs `ship` after deciding.
 - **The prose round, bounded by the kind of finding.** The stage may take ONE more scoped round
   instead of escalating when all of the following hold:
-  - at least one blocker survives round `max-rounds`, judged after the revert default, so a
-    blocker a revert re-opens is a surviving one;
+  - at least one blocker survives a round at or past `max-rounds`, judged after the revert
+    default, so a blocker a revert re-opens is a surviving one;
   - every surviving blocker is `origin: fix` (§5.6) and `kind: prose` (§5.5);
   - no axis failed.
 
@@ -1096,10 +1093,12 @@ round 3: …
   change's behaviour converged in round 1, and its rounds 2 and 3 were each spent on the previous
   fix's sentence disagreeing with a sibling passage. It needed a human to authorise a fourth round
   for two blockers of that kind.
-- **Rounds past `max-rounds` that only review.** Two kinds of round still run once `rounds`
-  has reached `max-rounds`, because the budget bounds fixing, never reviewing:
+- **Rounds past `max-rounds` that only review.** These rounds still run once `rounds` has
+  reached `max-rounds`, because the budget bounds fixing, never reviewing:
   - a stage re-opened after it cleared (§5.3);
-  - a fix-only push made after a clean round, which §5.10 says needs a scoped round of its own.
+  - a fix-only push made after a clean round, which §5.10 says needs a scoped round of its own;
+  - a push whose only fixes are reverts under the default above, removing every blocker the
+    round before it confirmed.
 
   Such a round counts in `rounds`. What it confirms is handled by Non-convergence and the prose
   round above.
@@ -1244,8 +1243,7 @@ A verdict is bound to a **head sha**.
   clean entry for the new sha — but that entry is **earned by a scoped round, not a fresh
   full battery**. Re-run only the axes whose files the push touched; untouched axes carry
   their clearance forward. Treating every fix push as a fresh full battery is the loop that
-  does not converge — it is what turned one change into 85 engine runs. A revert §5.7 makes a
-  reviewed head needs no round of its own: its verifier read it, and its round's entry names it.
+  does not converge — it is what turned one change into 85 engine runs.
 - **Archive-only head advance** (§7.F): when the diff between the last clean-reviewed sha and
   the new head is solely the archive move plus the specs it syncs, do NOT re-run the battery
   — run ONE `final-archive` subagent (charter: *the synced specs match the change's deltas;
