@@ -379,7 +379,7 @@ Three consequences worth knowing:
   visible only once the keeper has written the file, so a `relaunch` that looked just before can
   still race it. Second, both inputs are room state a participant can write, so this guards
   against accidents, not against a participant. A file planted there makes `relaunch` refuse and
-  name the path, and `down` followed by `relaunch` clears it.
+  name the path. Removing that file and running `relaunch` again clears it.
 
 `down` is untouched by this and still the way to close a room by hand: an unresolved one, one whose
 teardown could not happen, or any room at all before it decides. `down --purge` remains the only

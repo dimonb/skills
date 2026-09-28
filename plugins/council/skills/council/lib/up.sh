@@ -353,7 +353,7 @@ _keeper_teardown() { # <room> -> 0 asked, 1 no live keeper to ask, 2 the request
   # too, for a peer that planted one in the window and then removed the temp from inside it: a
   # request the keeper took or `relaunch` cancelled is never a directory, so this raises no false
   # alarm. For shapes planted BEFORE the write the `[ -d ]` above catches the same directory, so
-  # deleting that test alone leaves t26 green; t26 case O2 builds the race and pins this line.
+  # deleting that test alone leaves t26 green; t26 cases O2 and O3 build the race, one per arm.
   if [ -e "$f/${tmp##*/}" ] || [ -d "$f" ]; then rm -f "$f/${tmp##*/}" "$tmp" 2>/dev/null; return 2; fi
   return 0
 }
@@ -495,7 +495,11 @@ _keeper_loop() { # <room> <pid-file> <canary-read-fd-or-empty> <poll-interval> <
       # another reason — `state/reaping` planted as a directory the keeper cannot write into, or
       # one holding a `teardown` directory — and a peer's plant must not turn a decided close into
       # no reap at all, which the `rm -f` this replaced never allowed. So that reap still happens,
-      # consuming the request by `rm`; what the plant costs is `relaunch`'s view of that one reap.
+      # consuming the request by `rm`. What the plant costs depends on its shape: with a directory
+      # left at `state/reaping` — both shapes above — `relaunch` still sees it and waits out this
+      # reap, and the cost is the refusal route named at `_keeper_await_reap`; only a rename that
+      # fails with nothing at `state/reaping` (an unwritable `state/`, say) loses `relaunch`'s view
+      # of this one reap.
       if mv -f "$tdn" "$rpn" 2>/dev/null; then _keeper_reap "$room" "$@"; return 0; fi
       if [ -e "$tdn" ]; then rm -f "$tdn"; _keeper_reap "$room" "$@"; return 0; fi
     fi
@@ -513,20 +517,19 @@ _keeper_loop() { # <room> <pid-file> <canary-read-fd-or-empty> <poll-interval> <
       # Say a reap is in flight before starting it, as the teardown branch's rename does, so a
       # `relaunch` arriving during it waits instead of trusting this keeper (#189). Temp and
       # rename, so a link planted at the FINAL name is replaced rather than written through. The
-      # temp's name is guessable (this pid is in `keeper.pid`), so it is removed first and written
-      # under noclobber, which refuses a link to a regular file planted there in between; a link
-      # to a non-regular file such as /dev/null is still written through, harmlessly. A failed
-      # write does not stop the reap, since the owner is gone and nothing else will close these
+      # temp comes from `mktemp`, which creates it exclusively under a name nobody can guess in
+      # advance — a pid-based name could be pre-planted as a link (written through) or a fifo (the
+      # write-only open parks for good, and the reap with it). What is left: a peer that lists
+      # `state/` and swaps the fresh temp for a fifo in the instant before the write still parks
+      # it. A failed write does not stop the reap, since the owner is gone and nothing else will close these
       # terminals. What this does NOT close: a `relaunch` that checked the name just before this
       # write still races the reap. Nobody asked for this reap — the owner died — so there is no
       # request for `relaunch` to cancel, only a window to wait out once it is visible.
-      # The name is fixed OUTSIDE the noclobber subshell: `$BASHPID` inside it is the subshell's
-      # own pid, so writing and renaming would name two different files.
-      local rtmp="$rpn.$BASHPID"
-      rm -f "$rtmp" 2>/dev/null
-      { ( set -C; printf 'owner-gone\n' 2>/dev/null > "$rtmp" ) 2>/dev/null \
-          && mv -f "$rtmp" "$rpn" 2>/dev/null; } \
-        || rm -f "$rtmp" 2>/dev/null
+      local rtmp
+      if rtmp=$(mktemp "$rpn.XXXXXX" 2>/dev/null); then
+        { printf 'owner-gone\n' 2>/dev/null > "$rtmp" && mv -f "$rtmp" "$rpn" 2>/dev/null; } \
+          || rm -f "$rtmp" 2>/dev/null
+      fi
       _keeper_reap "$room" "$@"
       return 0
     fi
@@ -1476,7 +1479,9 @@ council_relaunch() {
   # A reap already IN FLIGHT is not cancellable — the keeper has taken the request and is closing
   # terminals — so it is WAITED OUT instead (#189). The keeper takes a request by renaming it onto
   # `state/reaping`, so the two cannot both miss: either this `rm -f` wins and the keeper's rename
-  # fails (no reap), or the rename wins and `state/reaping` exists by the time the wait looks.
+  # fails (no reap), or the rename wins and `state/reaping` exists by the time the wait looks. A
+  # third outcome comes from a plant: a rename that already failed on something planted at
+  # `state/reaping` reaps anyway (`_keeper_loop`), and the plant itself is then what the wait sees.
   # Without the wait, `_keeper_live` vouched for the reaping keeper, `_keeper_ensure` returned
   # early, and the room was left with no keeper once the reap ended — and at a large roster the
   # reap could close the seat launched below, while this printed `relaunched:` and exited 0. So
@@ -1489,7 +1494,7 @@ council_relaunch() {
     echo "                  the keeper it would belong to is still alive after 30 s. Starting '$peer'" >&2
     echo "                  now could leave the room without a keeper, or be closed by that reap." >&2
     echo "                  Nothing was launched. If no close is in progress, the file is left over:" >&2
-    echo "                  'council.sh down --room $(basename "$ROOM")' and then relaunch clears it." >&2
+    echo "                  remove $(_keeper_reaping_file "$ROOM") and run relaunch again." >&2
     return 1
   fi
   # A seat can be relaunched after `down`, which killed the keeper along with the terminals.

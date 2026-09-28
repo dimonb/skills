@@ -632,6 +632,15 @@ mkroom_faked "$RO2" o2 a b
   _keeper_teardown "$RO2" ) 2>/dev/null; rc=$?
 ok "a directory planted in the same instant is still refused" 2 "$rc"
 ok "...and no temp is left inside it" no "$(ls "$RO2"/state/teardown/.teardown.* >/dev/null 2>&1 && echo yes || echo no)"
+# The same plant, with the temp then taken back OUT of the directory — so the only evidence left is
+# the directory itself at the marker path. The post-check's second arm is what refuses this one.
+RO3="$COUNCIL_TEST_ROOT/t26o3"
+mkroom_faked "$RO3" o3 a b
+( . "$SKILL/lib/up.sh"
+  mv() { local dst="${!#}"; [ "$dst" = "$RO3/state/teardown" ] && mkdir "$dst"
+         command mv "$@" || return; [ -d "$dst" ] && rm -f "$dst"/.teardown.*; return 0; }
+  _keeper_teardown "$RO3" ) 2>/dev/null; rc=$?
+ok "a directory left at the marker path with its temp removed is still refused" 2 "$rc"
 
 # ================================================================================================
 echo "--- P. the wait on a reap in flight is bounded by the keeper, not by the file ---"
@@ -646,6 +655,12 @@ printf '%s' "$DEADPID" > "$RP/state/keeper.pid"
 ( . "$SKILL/lib/up.sh"; _keeper_await_reap "$RP" 3 ); rc=$?
 ok "a reap whose keeper is dead: not waited on" 0 "$rc"
 ok "...and its leftover file is cleared" no "$([ -e "$RP/state/reaping" ] && echo yes || echo no)"
+# A DIRECTORY left there, which `rm -f` could not clear: a planted one would otherwise make every
+# later `relaunch` against a live keeper wait out the ceiling and refuse.
+mkdir -p "$RP/state/reaping/sub"
+( . "$SKILL/lib/up.sh"; _keeper_await_reap "$RP" 3 ); rc=$?
+ok "a leftover DIRECTORY with a dead keeper: not waited on" 0 "$rc"
+ok "...and cleared too" no "$([ -e "$RP/state/reaping" ] && echo yes || echo no)"
 RP2="$COUNCIL_TEST_ROOT/t26p2"
 mkroom_faked "$RP2" p2 a b
 printf 'teardown\n' > "$RP2/state/reaping"
