@@ -12,7 +12,9 @@
 #   2. #155 — an empty capture is what a FAILED read returns, and two failed reads compared equal
 #      and rendered `⏸ idle/wait`. An empty capture is no observation: the tick gets no motion
 #      verdict, does not fire, and writes back the row it read, so the next readable tick's clock
-#      is neither rebased nor fed a screen hash nobody saw.
+#      is neither rebased nor fed a screen hash nobody saw;
+#   3. and the absence may not silence the alarm in turn: a slot that STAYS unreadable past the
+#      stall threshold raises its own 🛑 UNREADABLE block, which bypasses --only-changed.
 #
 # Executed against the real report over a faked tmux and gh, as t13 and t19 do.
 set -uo pipefail
@@ -151,8 +153,8 @@ ok "...whose empty hash is not stored"            "$before"     "$(cat "$MB/repo
 
 fresh
 out=$(FAKE_CAP=blank run_report)
-ok "with no row to carry, an unreadable tick writes none" no \
-   "$( [ -s "$MB/report-stall" ] && echo yes || echo no )"
+ok "with no row to carry, an unreadable tick starts its own clock" "unread" \
+   "$(awk -F'\t' '$1 == "51" { print $2 }' "$MB/report-stall")"
 
 # A supervision gap still restarts the clock on an unreadable tick: the stale row is dropped
 # rather than carried past time nobody watched.
@@ -174,9 +176,42 @@ FAKE_CAP=only51 run_pair >/dev/null
 out=$(FAKE_CAP=only51 run_pair)
 ok "beside an unreadable slot, a readable one fires"  yes       "$(has "$out" '^- `52` — STILL motionless')"
 ok "...with its firing count stored"                  2         "$(awk -F'\t' '$1 == "52" { print $6 }' "$MB/report-stall")"
-ok "...while the unreadable one does not fire"        no        "$(has "$out" '^- `51`')"
+ok "...while the unreadable one is not STALLED"       no \
+   "$(has "$(printf '%s\n' "$out" | sed -n '/^### 🛑 STALLED/,/^###/p')" '^- `51`')"
+ok "...it is UNREADABLE instead"                      yes \
+   "$(has "$(printf '%s\n' "$out" | sed -n '/^### 🛑 UNREADABLE/,/^###/p')" '^- `51`')"
 
-# A screen that stays unreadable never alarms, so its start and its end must be news.
+# AN ABSENCE MAY NOT SILENCE THE ALARM. Past the threshold an unreadable slot raises its own block,
+# which bypasses --only-changed like STALLED, names the backend read as what failed, and gives the
+# read to try; the tick the screen reads again, it is gone.
+unreadable() { printf '%s\n' "$1" | sed -n '/^### 🛑 UNREADABLE/,/^###/p'; }
+fresh
+run_report >/dev/null
+backdate_stall 7200
+out=$(FAKE_CAP=blank run_report)
+ok "unreadable past the threshold: its own block"     yes "$(has "$(unreadable "$out")" '^- `51` — its captures come back EMPTY')"
+ok "...saying the backend read is what failed"        yes "$(has "$(unreadable "$out")" 'is the BACKEND READ, not the child')"
+ok "...naming the capture command to try"             yes "$(has "$(unreadable "$out")" 'tmux capture-pane -p -t t22ex:1')"
+ok "...and it is not STALLED"                         no  "$(stalled "$out")"
+FAKE_CAP=blank run_report --only-changed >/dev/null
+out=$(FAKE_CAP=blank run_report --only-changed)
+ok "it bypasses --only-changed on every tick it holds" yes "$(has "$(unreadable "$out")" '^- `51`')"
+out=$(run_report)
+ok "readable again: the block is gone"                no  "$(has "$out" '^### 🛑 UNREADABLE')"
+# Under the threshold there is nothing to raise yet.
+fresh
+run_report >/dev/null
+out=$(FAKE_CAP=blank run_report)
+ok "unreadable under the threshold: no block"         no  "$(has "$out" '^### 🛑 UNREADABLE')"
+# Unreadable from its very first tick, so there was never a readable row to carry: the clock it
+# started itself still reaches the threshold.
+fresh
+FAKE_CAP=blank run_report >/dev/null
+backdate_stall 7200
+out=$(FAKE_CAP=blank run_report)
+ok "never readable at all: the block still fires"     yes "$(has "$(unreadable "$out")" '^- `51`')"
+
+# Its start and its end are news under --only-changed as well, before any threshold.
 fresh
 run_report --only-changed >/dev/null
 out=$(run_report --only-changed)
