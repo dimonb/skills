@@ -520,8 +520,9 @@ _keeper_loop() { # <room> <pid-file> <canary-read-fd-or-empty> <poll-interval> <
       # temp comes from `mktemp`, which creates it exclusively under a name nobody can guess in
       # advance — a pid-based name could be pre-planted as a link (written through) or a fifo (the
       # write-only open parks for good, and the reap with it). What is left: a peer that lists
-      # `state/` and swaps the fresh temp for a fifo in the instant before the write still parks
-      # it. A failed write does not stop the reap, since the owner is gone and nothing else will close these
+      # `state/` and swaps the fresh temp in the instant before the write — for a fifo, which parks
+      # the write and the reap with it, or for a link to a regular file, which the write then
+      # overwrites (same uid, so no privilege is gained). A failed write does not stop the reap, since the owner is gone and nothing else will close these
       # terminals. What this does NOT close: a `relaunch` that checked the name just before this
       # write still races the reap. Nobody asked for this reap — the owner died — so there is no
       # request for `relaunch` to cancel, only a window to wait out once it is visible.
