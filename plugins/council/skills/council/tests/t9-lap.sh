@@ -101,9 +101,8 @@ echo "Should the room keep a lap counter?" > "$R3/agenda.md"
 # COMPLETES ON POSITIONS puts N proposals on the table -- only `propose` opens a round (#175),
 # so the old fixture's `say b msg` is refused rather than counted. (Not "always N": c_barrier
 # also closes on the deadline with a quorum, and on the 2x backstop, both with fewer. t7b asserts
-# the deadline-with-quorum close; the 2x backstop is asserted by NO test in this suite, so do not
-# read this parenthesis as saying it is covered. This room closes on positions, which is why one
-# proposal per seat holds HERE.) The way a room gets from several live proposals to one is the
+# the deadline-with-quorum close and t7's section 6 the 2x backstop. This room closes on
+# positions, which is why one proposal per seat holds HERE.) The way a room gets from several live proposals to one is the
 # lap after the barrier, which is what protocol/_channel.md tells a participant to do: yield
 # yours if someone else's is better.
 #

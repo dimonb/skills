@@ -7,7 +7,9 @@
 #   * when the last one lands, all of them are released at once, in one order;
 #   * the round counts as one lap, and the room is turn-taking from there on;
 #   * a participant that never posts does not hold the room: the deadline plus a quorum
-#     closes the round without it.
+#     closes the round without it, and twice the deadline closes it with any position in;
+#   * that deadline is timed from roster seats' positions only, never from before the room
+#     was created.
 set -uo pipefail
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 . "$DIR/_helpers.sh"
@@ -366,7 +368,7 @@ echo "a seat that has stated no position cannot close a round another seat has s
 
 # ...but a round NOBODY has posted in holds nothing to disclose, so any seat may close it. This
 # is the wedge the gate had before it asked whether there was anything to buy: `c_barrier`
-# returns `open` from its `[ "$first" = 0 ]` short-circuit before it consults the deadline, so
+# returns `open` from its no-position (`none`) short-circuit before it consults the deadline, so
 # such a round never closes on its own — every seat refused, for ever, and no supervisor able to
 # run `decide` at all. The deadline here is 1ms and the fixture still proves it by consequence.
 R4="$COUNCIL_TEST_ROOT/t7d"; rm -rf "$R4"
@@ -505,13 +507,75 @@ for t in "a record must not be written through the barrier" "nor may it lose the
 done
 echo "a record forced mid-round holds every position, not only the writer's own"
 
+# ------------------------------- 6. the 2x backstop, and what the deadline is timed from
+# THE BACKSTOP (#180) is the only thing that closes a two-seat round whose partner never speaks:
+# the quorum is clamped to 2, so one position can never satisfy the deadline-with-quorum branch,
+# and without the backstop that room freezes. No test reached it before this block — t7b closes on
+# deadline + quorum, and t7d never gets past "no position yet".
+#
+# The rooms are built by hand, with the stamps placed minutes either side of each boundary, so no
+# case depends on how long a fork takes. `bar` reads c_barrier from seat a.
+bar() { COUNCIL_ROOM="$1" COUNCIL_ME=a bash -c ". $SKILL/lib/lib.sh; c_barrier"; }
+_t7i_now=$(( 10#${EPOCHREALTIME/./} / 1000 )); _t7i_d=600000
+mk_t7i() { # <room> <created_ms> <peer>...  — a roundtable room with that creation stamp
+  local room="$1" cms="$2"; shift 2
+  mkroom "$room" "$@"
+  jq --argjson d "$_t7i_d" --argjson c "$cms" '.mode="roundtable" | .round_deadline_ms=$d | .created_ms=$c' \
+    "$room/roster.json" > "$room/r.tmp" && mv "$room/r.tmp" "$room/roster.json"
+}
+pos_t7i() { # <room> <lane> <sent_ms-json>  — one opening position, written into <lane>
+  mkdir -p "$1/lane/$2"
+  jq -n --argjson ms "$3" --arg who "$2" \
+    '{id:($who+"-1"),from:$who,lamport:1,deps:{},act:"propose",refs:[],to:["*"],hand:false,
+      turn:null,round:0,text:"a position",created_at:"test",sent_ms:$ms}' > "$1/lane/$2/000001.json"
+}
+R9="$COUNCIL_TEST_ROOT/t7i"
+
+# One of two seats in, past twice the deadline: only the backstop can close this.
+mk_t7i "$R9" $(( _t7i_now - 4 * _t7i_d )) a b; pos_t7i "$R9" a $(( _t7i_now - 3 * _t7i_d ))
+[ "$(bar "$R9")" = closed ] || { echo "FAIL a two-seat round with one position did not close past twice the deadline (the backstop): $(bar "$R9")"; fail=1; }
+# ...and not before twice: past the deadline alone, one position is not a quorum.
+mk_t7i "$R9" $(( _t7i_now - 4 * _t7i_d )) a b; pos_t7i "$R9" a $(( _t7i_now - 3 * _t7i_d / 2 ))
+[ "$(bar "$R9")" = open ] || { echo "FAIL the backstop fired at 1.5x the deadline: $(bar "$R9")"; fail=1; }
+# ...and the same freeze, reached through the real `send`: the deadline is moved in the roster
+# rather than waited out, as t7b does.
+mkroom "$R9" a b
+jq '.mode="roundtable" | .round_deadline_ms=60000' "$R9/roster.json" > "$R9/r.tmp" && mv "$R9/r.tmp" "$R9/roster.json"
+COUNCIL_ROOM="$R9" COUNCIL_ME=a bash "$CLI" send --act propose "position a" >/dev/null \
+  || { echo "FAIL could not post the one position"; fail=1; }
+[ "$(bar "$R9")" = open ] || { echo "FAIL the two-seat round closed before any deadline: $(bar "$R9")"; fail=1; }
+jq '.round_deadline_ms=1' "$R9/roster.json" > "$R9/r.tmp" && mv "$R9/r.tmp" "$R9/roster.json"
+sleep 0.1
+[ "$(bar "$R9")" = closed ] || { echo "FAIL a two-seat room whose partner never speaks froze: $(bar "$R9")"; fail=1; }
+echo "the 2x backstop closes a two-seat round with one position, and not before twice the deadline"
+
+# THE ANCHOR (#165). `sent_ms` is the message's own claim. A position stamped `1` — a harness
+# writing seconds for milliseconds does it by accident — in a room created just now must not
+# close the round on the backstop: the anchor is floored at `created_ms`.
+mk_t7i "$R9" "$_t7i_now" a b c; pos_t7i "$R9" a 1
+[ "$(bar "$R9")" = open ] || { echo "FAIL one position stamped 1ms tripped the backstop in a new room: $(bar "$R9")"; fail=1; }
+# ...the floor does not switch the backstop off: an old room still closes on it.
+mk_t7i "$R9" $(( _t7i_now - 3 * _t7i_d )) a b c; pos_t7i "$R9" a 1
+[ "$(bar "$R9")" = closed ] || { echo "FAIL the floor at created_ms disabled the backstop in an old room: $(bar "$R9")"; fail=1; }
+# ...only roster seats anchor it: an ancient position in a lane that is not a participant's is
+# ignored, and the round is timed from a's, posted just now. The room is old enough that the
+# floor alone would not save it, so this separates the roster filter from the floor.
+mk_t7i "$R9" $(( _t7i_now - 4 * _t7i_d )) a b c
+pos_t7i "$R9" z $(( _t7i_now - 3 * _t7i_d )); pos_t7i "$R9" a "$_t7i_now"
+[ "$(bar "$R9")" = open ] || { echo "FAIL a non-participant's old position anchored the deadline: $(bar "$R9")"; fail=1; }
+# ...and a stamp that is not an integer, which _untrusted reads as 0, no longer holds the round
+# past both clocks: it is timed from the room's creation like any other stamp older than that.
+mk_t7i "$R9" $(( _t7i_now - 3 * _t7i_d )) a b; pos_t7i "$R9" a '"soon"'
+[ "$(bar "$R9")" = closed ] || { echo "FAIL a badly-typed stamp froze a two-seat round past the backstop: $(bar "$R9")"; fail=1; }
+echo "the deadline anchor counts roster seats only and never reads earlier than the room's creation"
+
 # THE ROOMS THIS FILE ADDED ARE ITS OWN TO REMOVE. `run-all.sh` gives every test one shared root
 # and clears it only when the whole run ends, so a room left here outlives this file and sits
 # under every test that follows. This file used to leave two; the barrier work took it to eight,
 # and the four `--full` tests that run afterwards are timing tests measuring wall clock. Removing
 # them also stops their keepers, which poll `while [ -d "$room" ]`. R and R2 are left alone: they
 # predate this work, and changing what they leave behind is not this change's business.
-rm -rf "$R3" "$R4" "$R5" "$R6" "$R7" "$R8"
+rm -rf "$R3" "$R4" "$R5" "$R6" "$R7" "$R8" "$R9"
 
 [ "$fail" = 0 ] && echo "t7 PASS" || echo "t7 FAIL"
 exit $fail
