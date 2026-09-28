@@ -219,6 +219,29 @@ shipyard_json_set() {
   printf '%s\n' "$out" | policy_mailbox_write "$f"
 }
 
+# shipyard_record_readable <file> — succeeds when <file> is a regular file holding a JSON object.
+#
+# ASK THIS BEFORE A READER'S OWN FILTER, NOT INSTEAD OF IT (#197). The readers' idiom,
+# `jq -r '.kind // ""' "$f" 2>/dev/null`, prints an empty string for a truncated record, for one
+# that is not JSON, and for an empty file (jq given no input prints nothing and exits 0) — so
+# "I could not read this" took the same branch as "this is a record of another kind", and a
+# corrupted question was skipped by every view while its child waited on it. A reader that asks
+# this first can give an unreadable record its own visible outcome instead. Every mailbox reader in
+# this skill is meant to ask it (grep for the callers rather than trusting a list here);
+# `slot_unsettled` in the report makes the same split on its own and fails closed. A reader added
+# later that does not ask it inherits the old fail-open — nothing enforces that.
+#
+# Not a regular file counts as unreadable and is never opened: a FIFO at a mailbox name blocked jq
+# (#253). The window between the `-f` test and jq's open is the read residual #246 deferred.
+#
+# EXACTLY ONE object: `-s` reads the whole file as one array. Without it `jq -e` judged only the
+# LAST value, so two concatenated objects passed while every reader's filter then printed two lines
+# and matched nothing — a record counted nowhere, neither pending nor unreadable.
+shipyard_record_readable() {
+  [ -f "$1" ] || return 1
+  jq -e -s 'length == 1 and (.[0] | type == "object")' "$1" >/dev/null 2>&1
+}
+
 # --- payload input ------------------------------------------------------------
 # Long technical payloads (answers, directives, escalation context) travel as a
 # shell ARGUMENT, so the CALLER's shell expands them before this code ever runs.

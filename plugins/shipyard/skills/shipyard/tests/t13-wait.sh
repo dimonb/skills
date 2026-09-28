@@ -164,6 +164,12 @@ ok "report.sh asks why before the clock" 1 \
    "$(grep -Fc 'wait_line=$(shipyard_wait_state "$b" "$phase" "$stage" 2>/dev/null) || wait_line=""' "$REPORT")"
 ok "...only of a motionless child with nothing pending" 1 \
    "$(grep -Fc 'if [ "$run" = "⏸ idle/wait" ] && [ "$pend" = 0 ]; then' "$REPORT")"
+# ...and the stall guard does NOT carry the unreadable count: an unreadable record must not be what
+# silences a stall alarm (#197).
+ok "the stall guard is not silenced by an unreadable record" 0 \
+   "$(grep -c 'motionless.*badrec\|badrec.*motionless' "$REPORT")"
+ok "an unreadable record blinks the glyph like a pending one" 1 \
+   "$(grep -Fc 'if   [ "$pend" != 0 ] || [ "$badrec" != 0 ]; then shipyard_note "$slot" blocked --blink' "$REPORT")"
 ok "an answered slot never reaches STALLED" 1 \
    "$(grep -Fc 'if [ -n "$wait_kind" ]; then' "$REPORT")"
 # Pins the whole field list by exact text, not just the wait class — so a field added, removed or
@@ -171,7 +177,11 @@ ok "an answered slot never reaches STALLED" 1 \
 # band field became `$sig_band` (the band, plus the bound's own band where the band is `unknown`)
 # and this assertion is what caught it. A count would not have.
 ok "the class is in the --only-changed signature" 1 \
-   "$(grep -Fc 'SIG+=("$slot|$mr_label|term=1|$state|$stage|$pend|$sig_band|$wait_class|$reap_note|noagent=$noagent|fna=$finished_noagent|unread=$unread")' "$REPORT")"
+   "$(grep -Fc 'SIG+=("$slot|$mr_label|term=1|$state|$stage|$pend/$badrec|$sig_band|$wait_class|$reap_note|noagent=$noagent|fna=$finished_noagent|unread=$unread")' "$REPORT")"
+# Every signature line carries the unreadable-record count beside the pending one (#197), so a
+# record that becomes unreadable is news under --only-changed on a gone or reaped slot too.
+ok "every signature line carries the unreadable count" "$(grep -c 'SIG+=(' "$REPORT")" \
+   "$(grep -c 'SIG+=(.*|\$pend/\$badrec|' "$REPORT")"
 ok "the stall clock restarts across an unwatched gap" 1 \
    "$(grep -Fc 'if [ "$GAP" != 0 ] || [ -n "$wait_kind" ]; then' "$REPORT")"
 ok "a gap breaks --only-changed silence" 1 \

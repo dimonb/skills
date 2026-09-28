@@ -82,7 +82,9 @@ run_tell() { # <env assignments...> -> output, then a last line "rc=<n>"
   # over: thirteen of this file's forty-four measured seconds. No case below reads it; the knobs
   # under test are the two CONFIRM ones. `${:-}` so an outer value still wins, which is what makes
   # an A/B measurement of #203 possible on one box.
-  out=$( env SHIPYARD_TELL_SETTLE_DELAY="${SHIPYARD_TELL_SETTLE_DELAY:-0.01}" \
+  # SHIPYARD_TELL_DEDUPE_SECS=0: every case sends the same text to the same slot, which tell now
+  # refuses as a repeat (#211, pinned in t18). The knobs under test sit after that check.
+  out=$( env SHIPYARD_TELL_SETTLE_DELAY="${SHIPYARD_TELL_SETTLE_DELAY:-0.01}" SHIPYARD_TELL_DEDUPE_SECS=0 \
              "$@" SHIPYARD_BACKEND=tmux SHIPYARD_SESSION=t16ex \
          bash "$TELL" 41 "a directive" 2>&1 ) || rc=$?
   printf '%s\nrc=%s\n' "$out" "$rc"

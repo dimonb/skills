@@ -10,6 +10,11 @@
 # second one. This file pins the half that makes it safe to reach for: it must never type, since
 # typing is exactly what concatenates onto the draft it is there to send.
 #
+# Its last section pins the other half of the same recovery (#211): the retry an `unconfirmed`
+# verdict invites is REFUSED (exit 9) when it repeats a directive's exact text inside the window,
+# typing and recording nothing, while `--again`, different text, an old or future-dated record and a
+# sibling slot's record all still send.
+#
 # The rig is t16's: exported shell functions shadow `git` and `tmux`. Here the fake `tmux` also
 # LOGS every send-keys call, so the assertion is on what reached the backend, not on a message.
 # No live terminal, no agterm, no network.
@@ -113,6 +118,88 @@ ok "...and records itself"                  1   "$(records | awk '{print ($1 > 0
 # operator would paste fails with `permission denied` on exactly this path.
 ok "its advice names --submit, via bash"    yes "$(has "$out" 'bash .*/shipyard-tell.sh 41 --submit')"
 ok "...and no longer the silent one-liner"  no  "$(has "$out" 'shipyard_submit')"
+
+# --- the retry that verdict invites: refused, not queued a second time (#211) --------------------
+# Measured: an `unconfirmed` directive was re-sent a minute later and the child received two
+# byte-identical copies. The same text to the same slot inside the window must type nothing and
+# record nothing, with its own exit code; `--submit` and `--again` stay the two ways on.
+printf '\n── the same directive again ──\n'
+before=$(records)
+out=$(run_tell never 41 "a directive")
+ok "a repeat inside the window is exit 9"   9   "$(rc_of "$out")"
+ok "...types nothing"                       0   "$(wc -l < "$KEYS" | tr -d ' ')"
+ok "...records nothing"                     "$before" "$(records)"
+ok "...names the earlier record"            yes "$(has "$out" 'directive-41-1')"
+ok "...with its verdict"                    yes "$(has "$out" 'delivery: unconfirmed')"
+ok "...and points at --submit"              yes "$(has "$out" 'shipyard-tell.sh 41 --submit')"
+ok "...and at --again"                      yes "$(has "$out" 'shipyard-tell.sh --again 41')"
+out=$(run_tell never --again 41 "a directive")
+ok "--again sends it anyway"                1   "$(grep -c -- ' -l ' "$KEYS")"
+ok "...and records it"                      yes "$( [ "$(records)" -gt "$before" ] && printf yes || printf no )"
+out=$(run_tell never 41 "a different directive")
+ok "different text is not a repeat"         1   "$(grep -c -- ' -l ' "$KEYS")"
+out=$(run_tell never 41 "a different directive")
+ok "...but sending it twice is refused"     9   "$(rc_of "$out")"
+out=$(SHIPYARD_TELL_DEDUPE_SECS=0 run_tell never 41 "a different directive")
+ok "SHIPYARD_TELL_DEDUPE_SECS=0 turns it off" 1 "$(grep -c -- ' -l ' "$KEYS")"
+# Outside the window: an old record of the same text is not a repeat.
+for n in 3 4; do
+  jq '.created_at="2000-01-01T00:00:00Z"' "$MB/directive-41-$n.json" >"$TMP/old" && mv "$TMP/old" "$MB/directive-41-$n.json"
+done
+out=$(run_tell never 41 "a different directive")
+ok "an old copy outside the window is not" 1   "$(grep -c -- ' -l ' "$KEYS")"
+# A record dated in the future would otherwise refuse the text for as long as it stood.
+printf '{"id":"directive-41-90","slot":"41","kind":"directive","text":"a future one","created_at":"2999-01-01T00:00:00Z","delivery":"unknown"}\n' >"$MB/directive-41-90.json"
+out=$(run_tell never 41 "a future one")
+ok "a future-dated record does not refuse"  1   "$(grep -c -- ' -l ' "$KEYS")"
+# The launcher names a second slot from one idea `<slot>-2`: its records are not this slot's.
+printf '{"id":"directive-41-2-1","slot":"41-2","kind":"directive","text":"a sibling one","created_at":"%s","delivery":"unknown"}\n' \
+  "$(date -u +%Y-%m-%dT%H:%M:%SZ)" >"$MB/directive-41-2-1.json"
+out=$(run_tell never 41 "a sibling one")
+ok "a sibling slot's record is not a repeat" 1  "$(grep -c -- ' -l ' "$KEYS")"
+# The reply target is part of the key: the same short answer to two different escalations is two
+# different lines to the child (`re 41-3` / `re 41-4`), so the second is not refused.
+for n in 3 4; do
+  printf '{"id":"41-%s","slot":"41","kind":"notice","text":"n","status":"pending"}\n' "$n" >"$MB/41-$n.json"
+done
+out=$(run_tell never 41-3 "ok, continue")
+out=$(run_tell never 41-4 "ok, continue")
+ok "the same text in reply to another escalation is sent" 1 "$(grep -c -- ' -l ' "$KEYS")"
+out=$(run_tell never 41-4 "ok, continue")
+ok "...but a second reply to the same one is refused" 9 "$(rc_of "$out")"
+ok "...and its --again hint keeps the reply target" yes "$(has "$out" 'shipyard-tell.sh --again 41-4 ')"
+# The unconfirmed warning names the refusal only while the check is on.
+out=$(run_tell never 41 "a warning probe")
+ok "the unconfirmed warning names the refusal window" yes "$(has "$out" 'refused for 600s (exit 9)')"
+out=$(SHIPYARD_TELL_DEDUPE_SECS=0 run_tell never 41 "a warning probe")
+ok "...and with the check off says a copy is typed" yes "$(has "$out" 'a second send types another copy')"
+ok "...not that it is refused"                    no  "$(has "$out" 'refused for')"
+# answer.sh hands a notice to tell; on tell's 9 it sends nothing and leaves the record as it is.
+printf '{"id":"41-5","slot":"41","kind":"notice","text":"n","status":"pending"}\n' >"$MB/41-5.json"
+run_answer() { # <args...> -> output, then "rc=<n>"
+  local out rc=0
+  : > "$KEYS"
+  out=$( env FAKE_TURN=never SHIPYARD_TELL_SETTLE_DELAY=0.01 \
+             SHIPYARD_TELL_CONFIRM_SECS=1 SHIPYARD_TELL_CONFIRM_INTERVAL=0.2 \
+             SHIPYARD_BACKEND=tmux SHIPYARD_SESSION=t18ex \
+         bash "$SKILL_DIR/shipyard-answer.sh" "$@" 2>&1 ) || rc=$?
+  printf '%s\nrc=%s\n' "$out" "$rc"
+}
+out=$(run_answer 41-5 "take the first")
+before_at=$(jq -r '.answered_at // ""' "$MB/41-5.json")
+out=$(run_answer 41-5 "take the first")
+ok "answer.sh passes a repeat's exit 9 through" 9  "$(rc_of "$out")"
+ok "...saying it left the record untouched"   yes "$(has "$out" 'left untouched')"
+ok "...and did not rewrite it"                "$before_at" "$(jq -r '.answered_at // ""' "$MB/41-5.json")"
+ok "...and typed nothing"                     0   "$(grep -c -- ' -l ' "$KEYS")"
+# `--again` belongs before the slot; in the second position it must not be typed as the text.
+out=$(run_tell never 41 --again "retry it")
+ok "--again after the slot is a usage error"  2   "$(rc_of "$out")"
+ok "...and types nothing"                     0   "$(wc -l < "$KEYS" | tr -d ' ')"
+# compact's resume is the same text on every compaction, after a cleared box and context, so every
+# arm must pass --again or a second compaction inside the window leaves an idle child.
+ok "compact passes --again on every resume arm" 3 \
+   "$(grep -Fc 'exec bash "$DIR/shipyard-tell.sh" --again "$SLOT"' "$SKILL_DIR/shipyard-compact.sh")"
 
 printf '\n'
 if [ "$FAILURES" -eq 0 ]; then

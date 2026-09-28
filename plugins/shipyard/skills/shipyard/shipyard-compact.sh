@@ -165,10 +165,15 @@ fi
 # them apart by whether `compacting ship-<slot>…` was printed; SKILL.md's Step 5 spells it out.
 # (No list of which codes are free: an enumeration in a comment is a latent defect, and this one
 # was already stale.)
+#
+# `--again` on every arm: tell refuses a repeat of the same text inside its window (#211), and the
+# standard brief below is the same text on every compaction. A resume is never a duplicate of
+# anything the child still holds — the Escape above cleared the box and the compaction cleared its
+# context — and a refused one would leave exactly the idle child this section exists to prevent.
 if [ -n "$RESUME_FILE" ]; then
-  exec bash "$DIR/shipyard-tell.sh" "$SLOT" "@$RESUME_FILE"
+  exec bash "$DIR/shipyard-tell.sh" --again "$SLOT" "@$RESUME_FILE"
 elif [ -n "$RESUME_TEXT" ]; then
-  exec bash "$DIR/shipyard-tell.sh" "$SLOT" "$RESUME_TEXT"
+  exec bash "$DIR/shipyard-tell.sh" --again "$SLOT" "$RESUME_TEXT"
 else
   # Standing orders are the ONLY thing that reliably survives a compaction, because a
   # rule held in conversation dies with the context. If the slot has such a file, the
@@ -181,5 +186,5 @@ else
     EXTRA=" STANDING ORDERS ARE IN FORCE: read $ORDERS NOW, before doing anything else, and treat it as authoritative over anything you remember. It exists because your remembered context was just discarded."
     echo "note: standing orders found for $SLOT — the resume brief points at them"
   fi
-  exec bash "$DIR/shipyard-tell.sh" "$SLOT" "You were compacted — that was your supervisor, not a failure, and you lost no work: worktree, branch and mailbox are intact. Do NOT re-derive the change from scratch; read only what the next slice needs. Check git log and your tasks file for where you actually are, then continue with the next unticked task. Escalate as usual if anything is ambiguous.$EXTRA"
+  exec bash "$DIR/shipyard-tell.sh" --again "$SLOT" "You were compacted — that was your supervisor, not a failure, and you lost no work: worktree, branch and mailbox are intact. Do NOT re-derive the change from scratch; read only what the next slice needs. Check git log and your tasks file for where you actually are, then continue with the next unticked task. Escalate as usual if anything is ambiguous.$EXTRA"
 fi

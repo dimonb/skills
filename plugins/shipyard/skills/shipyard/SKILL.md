@@ -363,7 +363,11 @@ so do not plan on driving it from here.
   what makes it do so;
 * `MR state / stage` — forge state plus ship's own pipeline stage;
 * `esc` — open escalations for that slot, and the full escalation block is appended
-  under the table;
+  under the table. `❓ N` beside or instead of the count is N of the slot's mailbox records that
+  cannot be read at all — a truncated or non-JSON file. It is not a pending question (nothing can be
+  said about its kind), and the escalation block names each such file as `❓ unreadable record`:
+  a child may be waiting on it, and no answer can be written into it, so look at the file and repair
+  or remove it (#197);
 * on agterm, it also repaints each child's sidebar glyph (its completed/active verdict comes
   from the declared slot graph — see below);
 * **and it TEARS DOWN a slot that is finished** — merged on consecutive ticks, ship's stage
@@ -856,10 +860,22 @@ guess from this list:
   **healthy** child, and the commonest of the three;
 * a turn began and ended between two samples, or the screen could not be read at all.
 
-**Look before re-sending** — a second send types another copy onto the first. The bias is
-deliberate: re-sending on a false `unconfirmed` is cheap and visible, believing a false
-`delivered` is neither. The warning prints the peek command and the command that submits what is
-already there:
+**Look before re-sending** — a second send, with `--again` or after the window below, types another
+copy onto the first. The bias is deliberate: re-sending on a false `unconfirmed` is cheap and
+visible, believing a false `delivered` is neither. So a repeat is **refused**, not queued (#211): a
+directive whose text and reply target (the escalation id, if you sent it by one) are identical to one
+recorded for the same slot within `SHIPYARD_TELL_DEDUPE_SECS` (600 by default, `0` turns it off)
+exits **9** with nothing typed and nothing recorded, naming the earlier record and its verdict. The
+same text to a *different* escalation is not a repeat, and neither is the same text re-sent through
+the slot name after going out by escalation id: the child is typed a different line. A child may act
+on each copy it reads, and "file this" or "run one round" is not idempotent.
+`shipyard-tell.sh --again <slot|escalation-id> "<directive>"` sends it anyway, for the supervisor who
+really means to repeat it; `shipyard-compact.sh` always passes `--again`, since its resume follows a
+cleared box and a cleared context. The directive records are child-writable, so a record forged with
+the exact text of your next directive makes it refuse — loudly, naming a record you know whether you
+sent, and `--again` bypasses it. Two tells of one text started at the same moment both go out: the
+check is a scan, not a lock. The warning prints the peek command and the command that submits what
+is already there:
 
 ```bash
 bash <SKILL>/shipyard-tell.sh <slot> --submit
@@ -1283,8 +1299,8 @@ idle *because it is waiting for you*, and tearing it down destroys the session t
 after which `shipyard-answer.sh` still exits 0 and claims the child will pick the answer up.
 Held slots get their own `✋ HELD` block naming the records that hold them; answer the question
 and the slot tears itself down on the next tick. A record the report cannot PARSE holds it too and
-cannot be answered — the block names the file to look at, because the escalation view skips it
-(#197).
+cannot be answered — the block names the file to look at, and the escalation view lists it as an
+unreadable record but can offer no reply for it, so the remedy is the file (#197).
 
 This applies to `/shipyard` with no arguments too — discovery mode reaches the same code.
 
