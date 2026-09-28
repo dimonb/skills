@@ -1082,6 +1082,7 @@ state; a new turn, a different holder or the room closing starts a new one. Each
 own count, so the ten-minute block still gets the full line even when the fast loop has already
 fired on the same stall, and a plain `status` has no memory and always prints it in full.
 
+| `🛑 NEVER MOVED` | no turn-consuming message in the log **and** the room older than `COUNCIL_STALL_HARD_SECS` (5400s) — plus, in a `roundtable` room, twice the opening round's deadline, taken as the smaller of the roster's and the 10-minute default. The room's age is the **older** of the roster's `created_ms` and the launch record's copy in the mailbox; either one stamped more than 60s in the future raises it at once, worded as an age that cannot be read. It reads no pane, and it covers an opening round nobody ever posted into, which otherwise stays open for ever. Not added on a tick where a `🛑 STALL` line above already fired, since that line is the alarm about the same room | the alarms line: both loops, and it bypasses every filter — the whole line on every tick | yes, one `notice`, keyed `[never:<floor>:<turns>]` (`[neverclock:…]` for the future stamp) — not on a tick that pushed a `🛑 STALL` instead |
 * **first firing** — `🛑 STALL: <seat> has held the floor for <N>s — …`, the remedy included;
 * **later firings** — one line, `🛑 STALL (still): <seat> — now <N>s, firing <k>, first raised <M>
   min ago; …`, ending in `nothing sent` or in what `council.sh say` sent since the first firing:
@@ -1175,7 +1176,7 @@ client nobody has captured probably renders like its neighbours.
 ### Reading the block
 
 `council.sh status` is the block to read: whose floor and for how long, what is on the
-table, what is open, the verdict, and the alarms (`STUCK`, `STALL`, `LONG TURN`, turn conflicts, budget
+table, what is open, the verdict, and the alarms (`STUCK`, `STALL`, `LONG TURN`, `NEVER MOVED`, turn conflicts, budget
 exhausted, **"this room is closed but N of M terminals are still up"**, and
 **"this room's state could not be computed"** — that last one means the room's
 participant list could not be read, so the lines above it are incomplete and none of them
@@ -1214,7 +1215,11 @@ terminal before relaunching"*, with the matched line printed as evidence.
 > **It does not make this verb unsuppressible, and no rule about how untrusted evidence is *used*
 > could — while every input is room state.** Narrowing it needs a held time that is not room
 > state, such as a launch record written outside the room. Even that does not close it: under the
-> trust contract a record outside the room is only a second forgery away.
+> trust contract a record outside the room is only a second forgery away. `🛑 NEVER MOVED` is the
+> alarm that takes that step today (#158): it times a room that has never moved from the older of
+> the roster's creation stamp and the launch record's, so one roster write no longer silences it,
+> and rewriting both still does. A room with no launch record — built by hand, or ad hoc with its
+> record inside the room — has only the roster's copy, and one write is enough again there.
 > Every field in the block above
 > is a function of room state, `held` included. A message stamped in the *future* no longer
 > removes the `STALL` line and its push (#165): it raises its own `STALL`, saying the held time

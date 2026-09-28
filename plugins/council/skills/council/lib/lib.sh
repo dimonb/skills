@@ -1373,8 +1373,16 @@ c_visible() {
 c_turns() {
   local base=0
   if [ "$(c_mode)" = roundtable ] && c_round_closed; then base=$(c_npeers); fi
-  local n; n=$(c_canon | jq -s '[.[] | select(.hand == false and .turn != null and .valid)] | length')
+  local n; n=$(c_turns_taken)
   echo $(( base + n ))
+}
+
+# How many turn-consuming messages the log holds — c_turns WITHOUT the barrier's lap. 0 means no
+# seat has taken a turn yet, which c_turns cannot say by itself: once a roundtable barrier closes it
+# counts the opening round as a whole lap, so a `debate` room whose first holder never speaks reads
+# `turns N`, never `turns 0`. v_status's never-moved alarm asks this, not c_turns (#158).
+c_turns_taken() {
+  c_canon | jq -s '[.[] | select(.hand == false and .turn != null and .valid)] | length'
 }
 
 # How many turns have gone by since the last NEW claim; -1 when the room holds no claim.
@@ -1494,9 +1502,11 @@ c_last_turn_ms() {
 # (Writing it into the FUTURE no longer does: past C_CLOCK_SKEW_MS that raises v_status's
 # clock-wrong STALL instead, via c_floor_anchor_ahead_s — #165.) v_status's own header
 # forbids that direction, and it still holds for every alarm that existed before this: nothing
-# previously firing became suppressible. The new one arrives suppressible. The roundtable half is
-# still unalarmed, and a never-moved-room alarm that does not read the floor at all — which would
-# fix both — is filed rather than smuggled in here.
+# previously firing became suppressible. The new one arrives suppressible. What sits under it is
+# v_status's `🛑 NEVER MOVED` (#158), which does not read the floor at all: it times the ROOM, from
+# the older of this roster's `created_ms` and the launch record's copy outside the room, so one
+# roster write no longer silences a never-moved room, and it covers the roundtable half this
+# function leaves at 0. Its header in verbs.sh (above `_room_birth`) names what still gets past it.
 c_floor_held_ms() {
   local last now
   last=$(c_floor_anchor_ms)

@@ -449,6 +449,10 @@ v_verdict() {
 #     long as it stays ahead, and a stamp kept RECENT by rewriting it — both room state, so both
 #     are named here rather than left for a reader to find, because a rule stated absolutely and
 #     contradicted by the same file is worse than a rule stated with its hole;
+#   * the NEVER MOVED alarm — the room's age from the older of the roster's and the launch record's
+#     `created_ms`, and the log's turn count. The record sits in the mailbox, which a seat can also
+#     write, so this raises the forgery to two coordinated writes rather than preventing it; the
+#     header above `_room_birth` lists the routes;
 #   * the mailbox push — everything the alarm is gated on, PLUS the closed-room early return
 #     (`board/status` + `board/decision.md`, forgeable, #66) and the mailbox's own contents, which
 #     are not room state. It carries strictly more gates than the alarm, so "same condition as the
@@ -836,7 +840,10 @@ _stall_escalate() {
   # and none pretends to. Said plainly because this diff labels its OTHER unreachable branch
   # (`_floor_mid_turn`'s `unknown`) as unreachable, and leaving this one reading like a working
   # check would be the same claim told two ways in one file.
-  case "$tier" in longturn|clock) : ;; *) tier=stall ;; esac
+  # `never` and `neverclock` are the never-moved alarm's (#158), keyed apart from `stall` for the
+  # reason `clock` is: the same (peer, turns) can later stall for real, and that notice must not
+  # find its key already spent — nor may a stall notice spend theirs.
+  case "$tier" in longturn|clock|never|neverclock) : ;; *) tier=stall ;; esac
   key="[$tier:$peer:$turns]"
   # Fails OPEN by construction, which is the right way round for a de-duplication check: an empty
   # glob, an unreadable mailbox, a malformed entry or a missing jq all make this print nothing, and
@@ -902,6 +909,12 @@ _stall_escalate() {
   elif [ "$tier" = clock ]; then
     text="council room '$room': $who holds the floor, but how long cannot be read — the instant it is timed from is stamped in the future $key"
     ctx="turn $turns; one seat's clock is wrong or a stamp was written forward, so no held time from this room can be trusted — it may have stopped long ago. Go and look at every participant's terminal."
+  elif [ "$tier" = never ]; then
+    text="council room '$room': no turn has been taken in the ${held}s since this room was created — it may never have started $key"
+    ctx="go and look at $where. A seat on a permission or first-launch trust prompt needs that prompt answered IN PLACE; council.sh relaunch is only for a seat that is genuinely dead. The room's age is the older of the roster's creation stamp and the launch record's, so rewriting one of them does not silence this."
+  elif [ "$tier" = neverclock ]; then
+    text="council room '$room': no turn has been taken, and how long this room has existed cannot be read — its creation stamp is in the future $key"
+    ctx="one seat's clock is wrong or a creation stamp was written forward, so this room may have been dead for a long time. Go and look at every participant's terminal."
   else
     text="council room '$room': $who has been held for ${held}s — the room has stopped $key"
     ctx="turn $turns; go and look at $where. A permission or first-launch trust prompt is answered IN PLACE; council.sh relaunch is only for a seat that is genuinely dead, and it discards everything that seat has read."
@@ -1247,6 +1260,99 @@ _stall_remedy() {
   printf '%s' "A seat sitting on a permission or first-launch trust prompt needs that prompt ANSWERED IN PLACE; council.sh relaunch is only for a seat that is genuinely dead, and it discards everything that seat has read."
 }
 
+# --- a room that has NEVER MOVED is timed by the room, not by the floor (#158) ------------------
+# "Has this floor been held too long?" and "has this room ever moved?" are different questions, and
+# the STALL arm only asks the first. Before the first turn-consuming message it has an answer only
+# in a token room (c_floor_held_ms times `order[0]` from `created_ms`), and there its CONDITION is
+# that one roster field, so one write silences it. In a roundtable room it has no answer at all:
+# the floor reads held 0 for ever after the barrier closes, and a round where no seat ever posts a
+# position never closes (c_barrier's backstop needs one position), so `OPEN ROUND: posted 0/N` sat
+# on the block with no alarm. A room whose first seat never starts is the likeliest dead room there
+# is — a permission or trust prompt fires on a seat's first command — so this is its own alarm.
+#
+# WHAT IT READS, AND WHY THAT ORDER. The room's age, from the OLDER of two creation stamps: the
+# roster's `created_ms` and the launch record's copy (lib/launch-record.sh), which `up` writes into
+# the mailbox beside the room rather than inside it. Older wins, so a roster `created_ms` written
+# forward no longer makes the room young: the record still says when it was made. The record is
+# read raw rather than through lr_read, whose binding refuses a record whose `created_ms` differs
+# from the roster's — exactly the disagreement this read exists to see past. It is bound to the
+# room's path only, so a record from another room is never read as this one's.
+#
+# A STAMP IN THE FUTURE IS NOT A YOUNG ROOM, and it alarms. Either copy more than C_CLOCK_SKEW_MS
+# ahead of this clock means the room's age cannot be read at all, which is the same unknown #165
+# made an alarm of for the floor: silencing this line with a forward stamp means raising a 🛑 about
+# the room's clock instead.
+#
+# THE THRESHOLD IS THE BACKSTOP, NOT THE STALL TIER, and a measurement decides that. A token room's
+# first holder thinking a healthy long turn is at no turns for the whole of it, and healthy single
+# turns have been measured to 5040s (see _stall_hard_secs). This alarm reads no pane, so it has no
+# LONG TURN tier to soften a think with, and at 900s it would fire on those — the false alarm #188
+# removed. So it fires past `_stall_hard_secs`, plus, in a roundtable room, twice the opening
+# round's deadline: the round may legitimately take that long before the first holder even has the
+# floor. That deadline is peer-writable, so the value used is the SMALLER of the roster's and the
+# default: a roster deadline can make this fire sooner, never later. With that allowance the open
+# round needs no exemption — a round still open past its own backstop plus the stall backstop is
+# the dead room this is for — so nothing a seat writes can hold the round open to hold this off.
+#
+# IT DEFERS TO A LOUDER LINE, and only to that. Where the STALL arm raised `🛑 STALL` this tick (any
+# of its three 🛑 wordings), that line is already the alarm about this room and this one would
+# repeat it, so it is not added and its push is not made; the STALL push is. `⏳ LONG TURN` is not
+# louder and is not deferred to. So the case this changes is the one it exists for: a floor that
+# is NOT alarming although the room has never moved.
+#
+# WHAT STILL SILENCES IT, stated because a guard whose limits are undocumented gets trusted past
+# them. Each is room or mailbox state a seat can write (SKILL.md, "The room is not a trust
+# boundary"); none is a single write to the one field the STALL arm reads:
+#   * a turn-consuming message in the log — but that is the room moving as far as anything here can
+#     tell, it is visible to every reader, and the STALL arm then times the floor from it;
+#   * BOTH creation stamps rewritten forward together, inside the skew tolerance — the two-write
+#     shape launch-record.sh already names for its own readers;
+#   * a room with NO launch record (built by hand, or an ad hoc room whose record lives inside the
+#     room) — the roster copy is then the only one, and one write to it is enough again;
+#   * `mode` rewritten to `roundtable`, which delays it by at most twice the default deadline;
+#   * the push only: everything `_stall_escalate` returns early on — a forged closure first
+#     (the console line still fires on a closed room, as `🛑 STALL` does).
+# Self-revealing where it is not prevented: no single write removes it, and the one-write routes
+# that remain are a room the log shows moving or one that was never launched.
+
+# _room_birth — `age<TAB><seconds>` for the older of this room's two creation stamps, or
+# `ahead<TAB><seconds>` when either lies further in the future than C_CLOCK_SKEW_MS; rc 1 when
+# neither copy is usable (a room made before `created_ms` was recorded, with no launch record).
+_room_birth() {
+  local now c rec="" f oldest="" lead=""
+  now=$(c_ms)
+  if _lr_ensure && f=$(lr_file) && [ -f "$f" ]; then
+    rec=$(jq -rs --arg room "$(lr_room_path)" \
+            '[.[] | select(type == "object" and .room == $room)
+                  | .created_ms | select(type == "number") | tostring][0] // empty' \
+            "$f" 2>/dev/null) || rec=""
+  fi
+  # The same three tests c_int_field applies (type, digits, width), so a wide or fractional stamp
+  # is ABSENT here rather than wrapping in `$(( ))` (#157).
+  for c in "$(c_int_field created_ms 0)" "$rec"; do
+    case "$c" in ''|*[!0-9]*) continue ;; esac
+    [ "${#c}" -le 18 ] || continue
+    c=$((10#$c)); [ "$c" -gt 0 ] || continue
+    if [ $(( c - now )) -gt "$C_CLOCK_SKEW_MS" ]; then lead=$(( (c - now) / 1000 )); continue; fi
+    if [ -z "$oldest" ] || [ "$c" -lt "$oldest" ]; then oldest=$c; fi
+  done
+  if [ -n "$lead" ]; then printf 'ahead\t%s' "$lead"; return 0; fi
+  [ -n "$oldest" ] || return 1
+  if [ "$now" -gt "$oldest" ]; then printf 'age\t%s' $(( (now - oldest) / 1000 )); else printf 'age\t0'; fi
+}
+
+# _never_moved_secs — the room age past which a room with no turn taken raises `🛑 NEVER MOVED`.
+_never_moved_secs() {
+  local s d
+  s=$(_stall_hard_secs)
+  if [ "$(c_mode)" = roundtable ]; then
+    d=$(c_int_field round_deadline_ms "$C_DEF_ROUND_DEADLINE_MS")
+    [ "$d" -le "$C_DEF_ROUND_DEADLINE_MS" ] || d=$C_DEF_ROUND_DEADLINE_MS
+    s=$(( s + 2 * d / 1000 ))
+  fi
+  printf '%s' "$s"
+}
+
 # _stall_sent_note <first-epoch> <now-epoch> — `nothing sent`, or what `say` recorded (c_said_stem)
 # since the episode's first firing: the latest entry's peer, age and excerpt, and how many there
 # were. Prints nothing and returns 1 when nothing was sent — the caller escalates on that — and
@@ -1371,6 +1477,7 @@ v_status() {
   local only_changed=0 alarms_only=0 term_live="" term_total="" term_rc term_out="" live_note=""
   local out="" round_line="" openct sig sigfile TAB term_line="" quiet_line=""
   local hard fscreen="" tier=stall mid=0 stall_mon="" noagent=0 na_backend="" ahead=""
+  local floor_alarmed=0 birth="" nm_secs="" nm_where=""
   TAB=$(printf '\t')
   while [ $# -gt 0 ]; do
     case "$1" in
@@ -1512,8 +1619,9 @@ v_status() {
   # a seat can switch it off by writing `created_ms` forward to a recent instant or by rewriting
   # `mode` to roundtable. (Forward into the FUTURE no longer: that raises the clock STALL below.)
   # Nothing that fired before became suppressible; this one arrives that way, which is still
-  # better than the silence it replaced but is not what the paragraphs above promise. Closing it
-  # means a never-moved-room alarm that does not read the floor's age at all; that is filed.
+  # better than the silence it replaced but is not what the paragraphs above promise. What closes
+  # the one-write route is the `🛑 NEVER MOVED` alarm after this chain (#158), which does not read
+  # the floor's age at all and whose threshold no single roster write can move.
   #
   # THE THRESHOLD IS NOT THE INSTRUMENT, AND THAT IS WHAT THE SECOND TIER BELOW IS FOR (#188).
   # At 900s this alarm fired on every healthy long turn: single turns on real rooms have been
@@ -1573,6 +1681,7 @@ v_status() {
   if [ "$held" -gt "${COUNCIL_STALL_SECS:-900}" ]; then
     if [ -n "$room_age" ] && [ "$held" -gt "$room_age" ]; then
       alarms="$alarms 🛑 STALL: the floor has been held for ${held}s, which is longer than this room has existed (${room_age}s) — one seat's clock is wrong, so check every terminal rather than trusting the figure"
+      floor_alarmed=1
       # No terminal read on this arm: `held` is not a trustworthy number here, so nothing about a
       # seat should be concluded from it, and the threshold-first ordering the paragraph above
       # insists on stays exactly as it was. The PUSH still happens — see below.
@@ -1657,6 +1766,7 @@ v_status() {
         stall_mon=""
         if [ "$alarms_only" = 1 ]; then stall_mon=alarms; elif [ "$only_changed" = 1 ]; then stall_mon=block; fi
         alarms="$alarms $(_stall_line "$stall_mon" "$floor" "$t" "$held" "$([ -n "$rec" ] && echo closed || echo open)")"
+        floor_alarmed=1
       fi
       # WHAT the seat looks like, where the backend can be asked. It narrows the two remedies
       # above whenever presence is corroborated, and says nothing rather than guessing when it is
@@ -1755,6 +1865,7 @@ v_status() {
     # RECENT by rewriting it still reads as a live floor, and a forged closure still stops the push.
     # Each is room state, which is #204's question rather than this arm's.
     alarms="$alarms 🛑 STALL: the floor's held time cannot be read — the instant it is timed from is stamped ${ahead}s in the future, so one seat's clock is wrong or a stamp was written forward; check every terminal rather than trusting any figure"
+    floor_alarmed=1
     _stall_escalate "$floor" "$t" "$held" clock
   elif [ "$held" -gt "${COUNCIL_STALL_WARN_SECS:-300}" ] && [ -z "$(c_recorded_status)" ] \
        && ! c_round_open && _is_seat "$floor"; then
@@ -1810,6 +1921,26 @@ v_status() {
       live_note=$(_seat_liveness "$floor") || live_note=""
       [ -n "$live_note" ] && quiet_line="$quiet_line $live_note"
     fi
+  fi
+  # A ROOM THAT HAS NEVER MOVED (#158). Timed by the room, not the floor, and deferring only to a
+  # `🛑 STALL` this tick already raised; the header above `_room_birth` says why each part is as it
+  # is and names what still gets past it. The threshold is tested against a figure no single
+  # roster write can lower, and a stamp in the future is an alarm, not a young room. Checked last
+  # among the floor's alarms because `$floor_alarmed` is what the arms above leave behind.
+  if [ "$floor_alarmed" = 0 ] && [ "$(c_turns_taken)" = 0 ] && birth=$(_room_birth); then
+    if _is_seat "$floor"; then nm_where="the first turn is $floor's, so start at its terminal"
+    else nm_where="the opening round is still open, so look at every terminal"; fi
+    case "$birth" in
+      ahead*)
+        alarms="$alarms 🛑 NEVER MOVED: no turn has been taken, and how long this room has existed cannot be read — its creation time is stamped ${birth#*"$TAB"}s in the future, so one seat's clock is wrong or the stamp was written forward; $nm_where"
+        _stall_escalate "$floor" "$t" 0 neverclock ;;
+      *)
+        nm_secs=$(_never_moved_secs)
+        if [ "${birth#*"$TAB"}" -gt "$nm_secs" ]; then
+          alarms="$alarms 🛑 NEVER MOVED: this room was created ${birth#*"$TAB"}s ago and no turn has been taken — past the ${nm_secs}s a first turn gets; $nm_where. $(_stall_remedy)"
+          _stall_escalate "$floor" "$t" "${birth#*"$TAB"}" never
+        fi ;;
+    esac
   fi
   openct=$(printf '%s' "$g" | jq -r '.open | length' 2>/dev/null)
   # --only-changed: stay silent unless the meaningful state moved. THE TERMS ARE THE LINE THAT
