@@ -156,7 +156,7 @@ has not been decided — read this as a description of what the code does today,
 gap somebody is on their way to filling.
 
 **Participants are told so.** `protocol/_channel.md`, which every seat's file opens with
-whatever its role, names `overrule` in its act list with that same description — ungated, no
+whatever its role, names `overrule` under its speech acts with that same description — ungated, no
 chair — framed as a repair for an objection answered on the substance whose author has stopped
 engaging, and with its cost: the record shows the objection closed by an overrule from that
 seat rather than conceded. No scenario role block adds anything to that; each seat reads it
@@ -1082,7 +1082,7 @@ files, one of which was missed.
 | `⏳ LONG TURN` | `COUNCIL_STALL_SECS`, 900s, **and** the seat's own client reads as mid-turn — which needs an agent kind whose pane has been captured, so it is unreachable for `agy` (see below) | the alarms line: both loops, and it bypasses every filter, exactly as the row below does | yes, one `notice`, keyed `[longturn:<peer>:<turns>]` |
 | `🛑 STALL` | `COUNCIL_STALL_SECS`, 900s, otherwise — and `COUNCIL_STALL_HARD_SECS`, 5400s, **whatever the pane says**. Also **always** on a closed room, at any age | the alarms line: both loops, and it bypasses every filter — in full at an episode's first firing, then as its delta (below) | yes, one `notice`, keyed `[stall:<peer>:<turns>]` |
 | `🛑 STALL: the floor's held time cannot be read` | none: the instant the floor is timed from (the last turn's `sent_ms`, or `created_ms` before a token room's first turn) is stamped more than 60s **in the future**, so there is no held time to hold against a threshold. An unknown held time in a live room is the alarm | the alarms line: both loops, and it bypasses every filter — the whole line on every tick, with no episode delta | yes, one `notice`, keyed `[clock:<peer>:<turns>]` |
-| `🛑 NEVER MOVED` | no turn-consuming message in the log **and** the room older than `COUNCIL_STALL_HARD_SECS` (5400s) — plus, in a `roundtable` room, twice the opening round's deadline, taken as the smaller of the roster's and the 10-minute default. The room's age is the **older** of the roster's `created_ms` and the launch record's copy in the mailbox; either one stamped more than 60s in the future raises it at once, worded as an age that cannot be read. It reads no pane, and it covers an opening round nobody ever posted into, which otherwise stays open for ever. Not added on a tick where a `🛑 STALL` line above already fired, since that line is the alarm about the same room | the alarms line: both loops, and it bypasses every filter — the whole line on every tick | yes, one `notice`, keyed `[never:<floor>:<turns>]` (`[neverclock:…]` for the future stamp) — not on a tick that pushed a `🛑 STALL` instead |
+| `🛑 NEVER MOVED` | no turn-consuming message in the log **and** the room older than `COUNCIL_STALL_HARD_SECS` (5400s) — plus, in a `roundtable` room, twice the opening round's deadline, taken as the smaller of the roster's and the 10-minute default. The room's age is the **older** of the roster's `created_ms` and the launch record's copy in the mailbox; either one stamped more than 60s in the future raises it at once, worded as an age that cannot be read. It reads no pane, and it covers an opening round nobody ever posted into, which otherwise stays open for ever. It fires on a closed room as well, as `🛑 STALL` does, worded as a finished room that never moved rather than with the relaunch advice. Not added on a tick where a `🛑 STALL` line above already fired, since that line is the alarm about the same room | the alarms line: both loops, and it bypasses every filter — the whole line on every tick | yes, one `notice`, keyed `[never:<floor>:<turns>]` (`[neverclock:…]` for the future stamp) — not on a tick that pushed a `🛑 STALL` instead |
 
 **A `🛑 STALL` is printed in full once per episode, then as what changed.** An episode is one
 unbroken hold of the floor by the same seat at the same turn count, in the same open-or-closed
@@ -1225,8 +1225,9 @@ terminal before relaunching"*, with the matched line printed as evidence.
 > trust contract a record outside the room is only a second forgery away. `🛑 NEVER MOVED` is the
 > alarm that takes that step today (#158): it times a room that has never moved from the older of
 > the roster's creation stamp and the launch record's, so one roster write no longer silences it,
-> and rewriting both still does. A room with no launch record — built by hand, or ad hoc with its
-> record inside the room — has only the roster's copy, and one write is enough again there.
+> and rewriting both still does. A room with no launch record (built by hand) has only the
+> roster's copy, and one write is enough again there; an ad hoc room keeps its record inside the
+> room, so both copies sit in the one directory a seat writes.
 > Every field in the block above
 > is a function of room state, `held` included. A message stamped in the *future* no longer
 > removes the `STALL` line and its push (#165): it raises its own `STALL`, saying the held time

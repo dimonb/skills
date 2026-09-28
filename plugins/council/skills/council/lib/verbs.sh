@@ -911,7 +911,7 @@ _stall_escalate() {
     ctx="turn $turns; one seat's clock is wrong or a stamp was written forward, so no held time from this room can be trusted — it may have stopped long ago. Go and look at every participant's terminal."
   elif [ "$tier" = never ]; then
     text="council room '$room': no turn has been taken in the ${held}s since this room was created — it may never have started $key"
-    ctx="go and look at $where. A seat on a permission or first-launch trust prompt needs that prompt answered IN PLACE; council.sh relaunch is only for a seat that is genuinely dead. The room's age is the older of the roster's creation stamp and the launch record's, so rewriting one of them does not silence this."
+    ctx="go and look at $where. A seat on a permission or first-launch trust prompt needs that prompt answered IN PLACE; council.sh relaunch is only for a seat that is genuinely dead. The room's age is the older of the roster's creation stamp and the launch record's, so where a launch record exists, rewriting one of them does not silence this."
   elif [ "$tier" = neverclock ]; then
     text="council room '$room': no turn has been taken, and how long this room has existed cannot be read — its creation stamp is in the future $key"
     ctx="one seat's clock is wrong or a creation stamp was written forward, so this room may have been dead for a long time. Go and look at every participant's terminal."
@@ -1276,7 +1276,9 @@ _stall_remedy() {
 # forward no longer makes the room young: the record still says when it was made. The record is
 # read raw rather than through lr_read, whose binding refuses a record whose `created_ms` differs
 # from the roster's — exactly the disagreement this read exists to see past. It is bound to the
-# room's path only, so a record from another room is never read as this one's.
+# room's path only, so a record for a different path is never read; one an earlier room left at
+# this same path (a plain `down` keeps it, and a room then rebuilt there by hand does not rewrite
+# it) IS read, and can only make this room read older — a false alarm, never a silence.
 #
 # A STAMP IN THE FUTURE IS NOT A YOUNG ROOM, and it alarms. Either copy more than C_CLOCK_SKEW_MS
 # ahead of this clock means the room's age cannot be read at all, which is the same unknown #165
@@ -1294,8 +1296,8 @@ _stall_remedy() {
 # round needs no exemption — a round still open past its own backstop plus the stall backstop is
 # the dead room this is for — so nothing a seat writes can hold the round open to hold this off.
 #
-# IT DEFERS TO A LOUDER LINE, and only to that. Where the STALL arm raised `🛑 STALL` this tick (any
-# of its three 🛑 wordings), that line is already the alarm about this room and this one would
+# IT DEFERS TO A LOUDER LINE, and only to that. Where the STALL arm raised a `🛑 STALL` line this
+# tick (wherever it sets `floor_alarmed`), that line is already the alarm about this room and this one would
 # repeat it, so it is not added and its push is not made; the STALL push is. `⏳ LONG TURN` is not
 # louder and is not deferred to. So the case this changes is the one it exists for: a floor that
 # is NOT alarming although the room has never moved.
@@ -1306,9 +1308,12 @@ _stall_remedy() {
 #   * a turn-consuming message in the log — but that is the room moving as far as anything here can
 #     tell, it is visible to every reader, and the STALL arm then times the floor from it;
 #   * BOTH creation stamps rewritten forward together, inside the skew tolerance — the two-write
-#     shape launch-record.sh already names for its own readers;
-#   * a room with NO launch record (built by hand, or an ad hoc room whose record lives inside the
-#     room) — the roster copy is then the only one, and one write to it is enough again;
+#     shape launch-record.sh already names for its own readers. `relaunch` can supply the second
+#     write: after a roster-only rewrite lr_read calls the record foreign, and ct_record_launch then
+#     rebuilds it from the roster's forged stamp. That only delays the alarm, since the stamp ages;
+#   * a room with NO launch record (built by hand) — the roster copy is then the only one, and one
+#     write to it is enough again. An ad hoc room has both copies, but its record lives inside the
+#     room (council.sh #178), so both writes land in the one directory a seat already writes;
 #   * `mode` rewritten to `roundtable`, which delays it by at most twice the default deadline;
 #   * the push only: everything `_stall_escalate` returns early on — a forged closure first
 #     (the console line still fires on a closed room, as `🛑 STALL` does).
@@ -1924,11 +1929,16 @@ v_status() {
   fi
   # A ROOM THAT HAS NEVER MOVED (#158). Timed by the room, not the floor, and deferring only to a
   # `🛑 STALL` this tick already raised; the header above `_room_birth` says why each part is as it
-  # is and names what still gets past it. The threshold is tested against a figure no single
-  # roster write can lower, and a stamp in the future is an alarm, not a young room. Checked last
+  # is and names what still gets past it. No single roster write can lower the age it tests,
+  # one (`mode`) can delay the threshold by at most twice the default round deadline, and a stamp
+  # in the future is an alarm, not a young room. Checked last
   # among the floor's alarms because `$floor_alarmed` is what the arms above leave behind.
   if [ "$floor_alarmed" = 0 ] && [ "$(c_turns_taken)" = 0 ] && birth=$(_room_birth); then
-    if _is_seat "$floor"; then nm_where="the first turn is $floor's, so start at its terminal"
+    # A closed room still gets the line — its closure is two files a seat can forge, the reason
+    # `🛑 STALL` fires there too — but not the advice to go and look at live terminals: the room
+    # says it is finished, and the alarm says that is odd rather than telling anyone to relaunch.
+    if [ -n "$rec" ]; then nm_where="yet this room is recorded as $rec, so check that it was closed on purpose (council.sh decision)"
+    elif _is_seat "$floor"; then nm_where="the first turn is $floor's, so start at its terminal"
     else nm_where="the opening round is still open, so look at every terminal"; fi
     case "$birth" in
       ahead*)
@@ -1937,7 +1947,8 @@ v_status() {
       *)
         nm_secs=$(_never_moved_secs)
         if [ "${birth#*"$TAB"}" -gt "$nm_secs" ]; then
-          alarms="$alarms 🛑 NEVER MOVED: this room was created ${birth#*"$TAB"}s ago and no turn has been taken — past the ${nm_secs}s a first turn gets; $nm_where. $(_stall_remedy)"
+          alarms="$alarms 🛑 NEVER MOVED: this room was created ${birth#*"$TAB"}s ago and no turn has been taken — past the ${nm_secs}s a first turn gets; $nm_where."
+          [ -n "$rec" ] || alarms="$alarms $(_stall_remedy)"
           _stall_escalate "$floor" "$t" "${birth#*"$TAB"}" never
         fi ;;
     esac

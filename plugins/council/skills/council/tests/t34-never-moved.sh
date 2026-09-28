@@ -79,11 +79,21 @@ out=$(st "$R2")
 ok "an open round younger than the threshold is quiet" 0 "$(cnt "$out" '🛑')"
 ok "...and pushes nothing"                          0 "$(notices t34b '[never:')"
 
-# The threshold is spelled from the default deadline, and a roster deadline can only lower it:
-# an 18-digit one that holds the round open does not hold this off.
+# The threshold is spelled from the default deadline, and a roster deadline can only lower it.
+# Twice the default is a value every jq holds exactly; uncapped it would move the threshold to
+# 7800s, past this room's 7000s.
 R3="$COUNCIL_TEST_ROOT/t34c"; mkroom "$R3" alpha beta
-set_roster "$R3" '.mode = "roundtable" | .round_deadline_ms = 999999999999999999'; aged "$R3" 7000
-ok "a huge roster round deadline does not delay it" 1 "$(cnt "$(st "$R3")" '🛑 NEVER MOVED')"
+set_roster "$R3" '.mode = "roundtable" | .round_deadline_ms = 1200000'; aged "$R3" 7000
+ok "a longer roster round deadline does not delay it" 1 "$(cnt "$(st "$R3")" '🛑 NEVER MOVED')"
+# The roundtable allowance itself: 6000s is past the 5400s backstop and inside twice the default
+# round, so a default room is quiet there — and a roster deadline shorter than the default brings
+# the threshold down to meet it (5400 + 2 x 60 = 5520s).
+R3b="$COUNCIL_TEST_ROOT/t34c2"; mkroom "$R3b" alpha beta
+set_roster "$R3b" '.mode = "roundtable"'; aged "$R3b" 6000
+ok "the round allowance keeps a 6000s open round quiet" 0 "$(cnt "$(st "$R3b")" 'NEVER MOVED')"
+R3c="$COUNCIL_TEST_ROOT/t34c3"; mkroom "$R3c" alpha beta
+set_roster "$R3c" '.mode = "roundtable" | .round_deadline_ms = 60000'; aged "$R3c" 6000
+ok "...and a shorter roster deadline makes it sooner" 1 "$(cnt "$(st "$R3c")" '🛑 NEVER MOVED')"
 
 # --- 2. a closed barrier whose first holder never spoke --------------------------------------
 # `turns` reads 2 here (the barrier's lap), which is why the alarm counts turn-consuming messages
@@ -144,6 +154,26 @@ out=$(st "$R10")
 ok "a STALL about the same room is the one line"    1 "$(cnt "$out" '🛑 STALL: alpha has held the floor')"
 ok "...and the never-moved alarm defers to it"      0 "$(cnt "$out" 'NEVER MOVED')"
 ok "...pushing the stall, not a second notice"      0 "$(notices t34j '[never:')"
+ok "...and the stall push is there"                 1 "$(notices t34j '[stall:alpha:')"
+# The same deference to the clock-wrong STALL: a token room whose roster stamp is in the future
+# raises that STALL (the floor is timed from it), and this alarm must not add a second 🛑 or push.
+R12="$COUNCIL_TEST_ROOT/t34l"; mkroom "$R12" alpha beta
+set_roster "$R12" '.created_ms = $c' --argjson c "$(( $(now_ms) + 86400000 ))"
+out=$(st "$R12")
+ok "a future stamp in a token room is one 🛑 line"  1 "$(printf '%s' "$out" | grep -o '🛑' | wc -l | tr -d ' ')"
+ok "...the clock STALL, pushed under its own key"   1 "$(notices t34l '[clock:')"
+ok "...and no never-moved notice beside it"         0 "$(notices t34l '[neverclock:')"
+# A closed room that never moved still prints the line — a closure is two files a seat can forge —
+# but says the room is recorded as closed rather than telling anyone to relaunch, and pushes nothing.
+R13="$COUNCIL_TEST_ROOT/t34m"; mkroom "$R13" alpha beta
+set_roster "$R13" '.mode = "roundtable"'; aged "$R13" 8000
+mkdir -p "$R13/board"; printf 'unresolved' > "$R13/board/status"
+printf '# decision\n\nstatus: **unresolved**\n' > "$R13/board/decision.md"
+out=$(st "$R13")
+ok "a closed never-moved room still alarms"         1 "$(cnt "$out" '🛑 NEVER MOVED')"
+ok "...worded as a recorded close"                  1 "$(cnt "$out" 'recorded as unresolved')"
+ok "...without the relaunch advice"                 0 "$(printf '%s' "$out" | grep 'NEVER MOVED' | grep -c 'relaunch')"
+ok "...and pushes nothing"                          0 "$(notices t34m '[never:')"
 # A fresh room says nothing at all.
 R11="$COUNCIL_TEST_ROOT/t34k"; mkroom "$R11" alpha beta
 ok "a fresh room raises nothing"                    0 "$(cnt "$(st "$R11")" '🛑')"
