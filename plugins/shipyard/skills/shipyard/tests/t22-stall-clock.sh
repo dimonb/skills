@@ -13,8 +13,9 @@
 #      and rendered `⏸ idle/wait`. An empty capture is no observation: the tick gets no motion
 #      verdict, does not fire, and writes back the row it read, so the next readable tick's clock
 #      is neither rebased nor fed a screen hash nobody saw;
-#   3. and the absence may not silence the alarm in turn: a slot that STAYS unreadable past the
-#      stall threshold raises its own 🛑 UNREADABLE block, which bypasses --only-changed.
+#   3. and the absence may not silence the alarm in turn: a slot that reads empty, that nothing has
+#      seen move for longer than the stall threshold, and that has no open escalation raises its own
+#      🛑 UNREADABLE block, which bypasses --only-changed — possibly on its first unreadable tick.
 #
 # Executed against the real report over a faked tmux and gh, as t13 and t19 do.
 set -uo pipefail
