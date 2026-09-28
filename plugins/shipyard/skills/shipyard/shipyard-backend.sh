@@ -220,11 +220,12 @@ shipyard_focus()   { drv_focus "ship-$1"; }
 # tells the two apart, and `shipyard-tell.sh` and `shipyard-compact.sh` ask it before they say
 # anything to a human.
 #
-# `shipyard-down.sh` asks the same question on both of its paths: `shipyard_absence_report` before
-# a teardown that closed no terminal removes the worktree (#139(1)), and `shipyard_signal_class`
-# for each `--list` row, which reads `gone` only for a corroborated absence (#139(2)). The
-# continuity cleanup in its tail asks the classifier too rather than trusting the status alone
-# (#139(3)). No driver twin.
+# `shipyard-down.sh` asks the same question wherever it treats a slot as gone:
+# `shipyard_absence_report` before a teardown that closed no terminal removes the worktree
+# (#139(1)), `shipyard_signal_class` for each `--list` row, which reads `gone` only for a
+# corroborated absence (#139(2)), and the classifier again in its tail — through the continuity
+# cleanup, which no longer trusts the status alone (#139(3)), and for the warning that names which
+# fact failed. No driver twin.
 shipyard_slot_addr() {
   local t; t=$(shipyard_target "$1") || return 1
   case "$(shipyard_backend)" in
@@ -409,8 +410,9 @@ shipyard_backend_pinned_elsewhere() { drv_pins_elsewhere; }
 # it COUNTED); `shipyard_absence_report` and `shipyard-down.sh --list` pass all three with full
 # session names; the launch dedup in `shipyard-launch.sh` passes all three with BARE slots from
 # `shipyard_slots` on both sides, per the namespace note above; the continuity cleanup and
-# `shipyard-down.sh`'s tail pass a status alone, having no slot to name. `shipyard-tell.sh` and
-# `shipyard-compact.sh` reach this only THROUGH `shipyard_absence_report`, so they pass three too.
+# `shipyard-down.sh`'s tail pass a status alone, having no slot to name. `shipyard-tell.sh`,
+# `shipyard-compact.sh`, `shipyard-down.sh`'s teardown and the report's autodown lock 3 reach this
+# only THROUGH `shipyard_absence_report`, so they pass three too.
 #
 # So NO caller uses the argument-less mode today. It is kept as a fail-closed default, not for a
 # caller: the driver treats an EMPTY status as `unreachable`, so a status-less call there would

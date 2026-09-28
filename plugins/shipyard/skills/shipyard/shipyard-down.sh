@@ -129,8 +129,9 @@ if [ "$LIST" = 1 ]; then
     echo
     echo "?<class>: no terminal on the $(shipyard_backend) backend, and that absence could not be corroborated"
     echo "  (unreachable: the backend did not answer; elsewhere: the fleet was launched on another backend;"
-    echo "  listed: the backend lists the slot but its lookup failed). Do NOT tear such a slot down on this"
-    echo "  listing — \`shipyard-down.sh\` refuses it without --force, and the STATE column does not change that."
+    echo "  listed: the backend lists the slot but its lookup failed; any other class: see shipyard_signal_class)."
+    echo "  Do NOT tear such a slot down on this listing — \`shipyard-down.sh\` refuses it without --force,"
+    echo "  and the STATE column does not change that."
   fi
   exit 0
 fi

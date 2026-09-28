@@ -181,8 +181,10 @@ EOF
 fi
 
 TAB=$(printf '\t')
-# "May an absence be believed?" is `shipyard_signal_class` in shipyard-backend.sh — same two facts
-# (did enumeration answer; does the pin name another backend), same two classes, one implementation.
+# "May an absence be believed?" is `shipyard_signal_class` in shipyard-backend.sh — same facts
+# (did enumeration answer; does the pin name another backend; does it still list the slot), one
+# implementation. The status-only calls can return `unreachable` or `elsewhere`; the per-slot
+# re-check near the terminal exit can also return `listed`, and `no_signal_block` has an arm for each.
 # This file used to carry its own `fleet_signal` saying exactly that; #137 added the shared one and
 # named this deletion as owed to this branch, because two answers to one question is the defect the
 # shared engine exists to remove.
