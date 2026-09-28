@@ -60,7 +60,15 @@ ok() { # <label> <expected> <actual>
 # Poll for a file to appear, up to <deciseconds> tenths of a second. Prints "yes"/"no".
 wait_file() { local f="$1" n="${2:-60}" i; for ((i=0;i<n;i++)); do [ -e "$f" ] && { echo yes; return; }; sleep 0.1; done; echo no; }
 # Poll for a pid to be gone, up to <deciseconds>. Prints "gone"/"alive".
-wait_gone() { local p="$1" n="${2:-60}" i; for ((i=0;i<n;i++)); do kill -0 "$p" 2>/dev/null || { echo gone; return; }; sleep 0.1; done; echo alive; }
+#
+# BOTH liveness helpers refuse an empty pid — the guard t19-keeper-rebuild carries, ported verbatim
+# so the files stop drifting (#110). `kill -0 ""` is an error, so an unguarded wait_gone answers
+# `gone` for a pid that was never captured, and every step-down row below passes against a build
+# that started nothing. The tempting `"${pid:-0}"` spelling is worse: `kill -0 0` addresses the
+# caller's own process group and SUCCEEDS. `no-pid` matches no expected value, so it always reds.
+no_pid() { echo "no-pid"; }
+wait_gone() { local p="$1" n="${2:-60}" i; [ -n "$p" ] || { no_pid; return; }; for ((i=0;i<n;i++)); do kill -0 "$p" 2>/dev/null || { echo gone; return; }; sleep 0.1; done; echo alive; }
+alive()     { [ -n "$1" ] || { no_pid; return; }; kill -0 "$1" 2>/dev/null && echo alive || echo gone; }
 
 # THE CANARY-REAP CEILING. The owner dies -> the write end closes -> the keeper's read EOFs -> it
 # reaps and exits. That sequence is GUARANTEED to happen; the only question is when, and a keeper
@@ -111,7 +119,7 @@ ok "owner came up" yes "$(wait_file "$MARK_A/ready" 80)"
 kpid_a=$(cat "$MARK_A/keeper.pid" 2>/dev/null); opid_a=$(cat "$MARK_A/owner.pid" 2>/dev/null)
 [ -n "$kpid_a" ] && KEEPERS+=("$kpid_a")
 ok "keeper started" yes "$([ -n "$kpid_a" ] && echo yes || echo no)"
-ok "keeper is alive before the kill" yes "$(kill -0 "$kpid_a" 2>/dev/null && echo yes || echo no)"
+ok "keeper is alive before the kill" alive "$(alive "$kpid_a")"
 # It is in its OWN process group — the whole point of `set -m` in _keeper_ensure.
 ok "keeper is in its own process group" yes \
    "$([ -n "$(cat "$MARK_A/keeper.pgid" 2>/dev/null)" ] && [ "$(cat "$MARK_A/keeper.pgid")" != "$(cat "$MARK_A/owner.pgid")" ] && echo yes || echo no)"
@@ -165,12 +173,18 @@ _keeper_pid "$ROOM/state/keeper.pid" > "$MARK/keeper.pid" || true
 printf 'up\n' > "$MARK/ready"
 START_EOF
 "$BASH" "$STARTER" "$SKILL" "$ROOM_C" "$MARK_C" p q &
+spid_c=$!
 ok "starter came up" yes "$(wait_file "$MARK_C/ready" 80)"
-wait "$!" 2>/dev/null                        # the starter EXITS; the keeper is on its own now
+# The starter EXITS; the keeper is on its own now. Signal BEFORE reaping, never a bare `wait` (#109):
+# `ready` is the starter's last act, so on the success path it has exited or is about to and the
+# kill is a no-op; on the failure path — `_mkroom`/`_keeper_ensure` stalled, `ready` never written —
+# a bare `wait` would record the FAIL above and then hang with no summary and no EXIT trap. The
+# starter was never given a canary, so killing it cannot reap anything this case asserts on.
+kill "$spid_c" 2>/dev/null; wait "$spid_c" 2>/dev/null
 kpid_c=$(cat "$MARK_C/keeper.pid" 2>/dev/null); [ -n "$kpid_c" ] && KEEPERS+=("$kpid_c")
 ok "keeper started" yes "$([ -n "$kpid_c" ] && echo yes || echo no)"
 sleep 1
-ok "keeper survives the starter's exit" yes "$(kill -0 "$kpid_c" 2>/dev/null && echo yes || echo no)"
+ok "keeper survives the starter's exit" alive "$(alive "$kpid_c")"
 ok "detached keeper reaps nothing" no "$([ -e "$MARK_C/reaped-p" ] && echo yes || echo no)"
 rm -rf "$ROOM_C"                              # the directory-bound death trigger, unchanged
 ok "keeper exits when the room directory is removed" gone "$(wait_gone "$kpid_c" "$REAP_WAIT")"
@@ -232,7 +246,7 @@ e_owner=$!; OWNERS+=("$e_owner")
 E_KP="$E_REPO/.git/council/r/state/keeper.pid"
 ok "up --hold created a room + keeper via the real CLI" yes "$(wait_file "$E_KP" 100)"
 e_kpid=""; read -r e_kpid _ < "$E_KP" 2>/dev/null; [ -n "$e_kpid" ] && KEEPERS+=("$e_kpid")
-ok "the --hold owner is still holding (blocked on wait)" yes "$(kill -0 "$e_owner" 2>/dev/null && echo yes || echo no)"
+ok "the --hold owner is still holding (blocked on wait)" alive "$(alive "$e_owner")"
 kill -TERM "$e_owner" 2>/dev/null
 ok "killing the --hold owner reaps its keeper" gone "$(wait_gone "$e_kpid" "$REAP_WAIT")"
 rm -rf "$E_REPO"

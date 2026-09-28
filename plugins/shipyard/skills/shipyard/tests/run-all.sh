@@ -75,9 +75,10 @@ tests=(t1-totals.sh t2-window.sh t3-probe.sh t4-band.sh t5-agent.sh t6-codex-ctx
 # to write and much worse to read.
 #
 # DUPLICATED, not shared with the council runner, and deliberately: the two runners are not one
-# algorithm — that one wraps each file in `timeout` and `nice` and has a `--full` arm, this one has
-# neither — so what would be shared is scheduling boilerplate, not an answer to a question both
-# ask. It also keeps this suite runnable from an installed plugin, which has no repo `scripts/`
+# algorithm — that one also wraps each file in `nice` and has a `--full` arm, this one has neither —
+# so what would be shared is scheduling boilerplate, not an answer to a question both ask. The
+# per-test ceiling below IS the same in both, copied from that runner (#108); it is small enough
+# that a third copy of the scheduling, not this, is the trigger for moving it. It also keeps this suite runnable from an installed plugin, which has no repo `scripts/`
 # beside it. Scope checked today: these two runners and no other. If a THIRD runner needs the same
 # scheduling, or if these two converge so the differences above go away, move it to `shared/`.
 #
@@ -94,10 +95,32 @@ case "$JOBS" in ''|*[!0-9]*) JOBS=1 ;; esac
 OUTDIR=$(mktemp -d "${TMPDIR:-/tmp}/shipyard-tests.XXXXXXXX") || exit 1
 trap 'rm -rf "$OUTDIR"' EXIT
 
+# A ceiling, not a deadline (#108) — the council runner's, and for its reasons. A slow test under
+# load finishes far inside it; a wedged one is REPORTED as a failure rather than hanging the run —
+# in CI, until the job's own multi-hour cap, with this file's last header as the last line of output,
+# which reads as if the test never ran. The cap needs timeout(1) — GNU coreutils, which a stock
+# macOS does not ship — so its absence is announced rather than passed over: without it the suite
+# runs exactly as it did before. No --foreground, for the council runner's reason: the group signal
+# is what reaches a test wedged past its own cleanup, and -k is what reaches one that ignores TERM.
+# The shared/* runners carry no ceiling. When #108 was fixed, the only jobs their tests backgrounded
+# were one fifo writer each in t-driver and t-policy, and each is bounded by hand (poll, then kill
+# and unblock the fifo) before its `wait`. A test added there that waits on anything unbounded needs
+# this block too.
+TIMEOUT_BIN=$(command -v timeout || command -v gtimeout || true)
+PER_TEST_SECS="${SHIPYARD_TEST_TIMEOUT:-600}"
+[ -n "$TIMEOUT_BIN" ] || echo "note: no timeout(1) on PATH — a wedged test will not be capped"
+
 i=0
 for t in "${tests[@]}"; do
   while [ "$(jobs -pr | wc -l)" -ge "$JOBS" ]; do sleep 0.05; done
-  ( bash "$DIR/$t" >"$OUTDIR/$i.out" 2>&1; printf '%s' "$?" >"$OUTDIR/$i.rc" ) &
+  (
+    if [ -n "$TIMEOUT_BIN" ]; then
+      "$TIMEOUT_BIN" -k 10 "$PER_TEST_SECS" bash "$DIR/$t" >"$OUTDIR/$i.out" 2>&1; st=$?
+    else
+      bash "$DIR/$t" >"$OUTDIR/$i.out" 2>&1; st=$?
+    fi
+    printf '%s' "$st" >"$OUTDIR/$i.rc"
+  ) &
   i=$((i + 1))
 done
 wait
@@ -110,7 +133,11 @@ for t in "${tests[@]}"; do
   # A missing .rc means the worker itself died (killed, out of memory) — which is a failure, and
   # one that would otherwise be reported as a pass over a file whose output is also missing.
   st=$(cat "$OUTDIR/$i.rc" 2>/dev/null) || st=""
-  if [ "$st" != 0 ]; then printf 'FAILED: %s\n' "$t"; rc=1; fi
+  case "$st" in
+    0)       ;;
+    124|137) printf 'TIMED OUT after %ss: %s\n' "$PER_TEST_SECS" "$t"; rc=1 ;;
+    *)       printf 'FAILED: %s\n' "$t"; rc=1 ;;
+  esac
   i=$((i + 1))
 done
 printf '\n%s\n' "$([ $rc = 0 ] && echo 'all tests passed' || echo 'THERE ARE FAILURES')"

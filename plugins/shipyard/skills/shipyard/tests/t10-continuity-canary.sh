@@ -52,7 +52,14 @@ ok() { # <label> <expected> <actual>
   else printf '  FAIL %s\n         expected: [%s]\n         actual:   [%s]\n' "$1" "$2" "$3"; FAILURES=$((FAILURES + 1)); fi
 }
 wait_file() { local f="$1" n="${2:-60}" i; for ((i=0;i<n;i++)); do [ -e "$f" ] && { echo yes; return; }; sleep 0.1; done; echo no; }
-wait_gone() { local p="$1" n="${2:-60}" i; for ((i=0;i<n;i++)); do kill -0 "$p" 2>/dev/null || { echo gone; return; }; sleep 0.1; done; echo alive; }
+# BOTH liveness helpers refuse an empty pid — the guard t19-keeper-rebuild carries, ported verbatim
+# so the files stop drifting (#110). `kill -0 ""` is an error, so an unguarded wait_gone answers
+# `gone` for a pid that was never captured, and every reap assertion below passes against a build
+# that started nothing. The tempting `"${pid:-0}"` spelling is worse: `kill -0 0` addresses the
+# caller's own process group and SUCCEEDS. `no-pid` matches no expected value, so it always reds.
+no_pid() { echo "no-pid"; }
+wait_gone() { local p="$1" n="${2:-60}" i; [ -n "$p" ] || { no_pid; return; }; for ((i=0;i<n;i++)); do kill -0 "$p" 2>/dev/null || { echo gone; return; }; sleep 0.1; done; echo alive; }
+alive()     { [ -n "$1" ] || { no_pid; return; }; kill -0 "$1" 2>/dev/null && echo alive || echo gone; }
 # The owner-death reap (owner killed -> canary write end closes -> watcher's read EOFs -> it reaps
 # and exits) is GUARANTEED to happen; the only question is when, and under concurrent load (a full
 # `make test`, CI) the detached watcher can be scheduled late. So the canary-reap waits use a
@@ -119,7 +126,7 @@ ok "owner came up" yes "$(wait_file "$MARK_A/ready" 120)"
 wpid_a=$(cat "$MARK_A/watcher.pid" 2>/dev/null); opid_a=$(cat "$MARK_A/owner.pid" 2>/dev/null)
 [ -n "$wpid_a" ] && WATCHERS+=("$wpid_a")
 ok "watcher started" yes "$([ -n "$wpid_a" ] && echo yes || echo no)"
-ok "watcher is alive before the kill" yes "$(kill -0 "$wpid_a" 2>/dev/null && echo yes || echo no)"
+ok "watcher is alive before the kill" alive "$(alive "$wpid_a")"
 ok "watcher is in its own process group" yes \
    "$([ -n "$(cat "$MARK_A/watcher.pgid" 2>/dev/null)" ] && [ "$(cat "$MARK_A/watcher.pgid")" != "$(cat "$MARK_A/owner.pgid")" ] && echo yes || echo no)"
 kill -9 "$opid_a" 2>/dev/null

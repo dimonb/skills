@@ -36,8 +36,9 @@ peer() {
     c_bell_wait 0.3
   done
 }
-for p in a b; do peer "$p" & done
-peer c 0 & CPID=$!
+PEERS=()   # every peer this file starts, by its own `$!` — the only list the sweep below signals
+for p in a b; do peer "$p" & PEERS+=("$!"); done
+peer c 0 & CPID=$!; PEERS+=("$CPID")
 # Let a couple of clean laps happen, THEN wedge c — gated on the TURN COUNT, never a wall clock.
 # A fixed `sleep 4` here raced the room on a fast machine: all TURNS finished before the wedge, so
 # no skip was ever needed and the room's skip path went untested (the run read turns=24 skips=0).
@@ -56,7 +57,15 @@ while [ "$(turns_now)" -lt "$TURNS" ]; do
   [ $(( $(date +%s) - t0 )) -gt 40 ] && { echo "FAIL room froze with a wedged peer"; break; }
   sleep 1
 done
-kill -CONT $CPID 2>/dev/null; sleep 0.2; jobs -p | xargs -r kill 2>/dev/null; wait 2>/dev/null
+# Stop the peers BEFORE the log is read, and never with a bare `wait` (#109) — the shape
+# _helpers.sh's EXIT trap forbids, in the file that SIGSTOPs a peer on purpose. TERM, then CONT
+# (the order that trap explains: a stopped peer acts on a queued TERM only once it runs again),
+# then a bounded poll on the job table — `jobs -pr` lists only jobs still RUNNING, where `kill -0`
+# would also answer yes for an exited, unreaped one — then KILL for whatever ignored the TERM. Only
+# after the KILL is `wait` guaranteed to return.
+kill "${PEERS[@]}" 2>/dev/null; kill -CONT "${PEERS[@]}" 2>/dev/null
+for ((i=0; i<50; i++)); do [ -z "$(jobs -pr)" ] && break; sleep 0.1; done
+kill -9 "${PEERS[@]}" 2>/dev/null; wait "${PEERS[@]}" 2>/dev/null
 
 fail=0
 # Canonical turns only: a message that LOST a turn conflict is kept in the log but does

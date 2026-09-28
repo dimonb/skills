@@ -11,8 +11,13 @@ export COUNCIL_ROOM="$R" ROOM="$R"
 ( export COUNCIL_ME=b
   . "$SKILL/lib/lib.sh"
   c_bell_open
-  seen=0
-  while [ $seen -lt $N ]; do
+  # A wall-clock DEADLINE, as t1-order.sh has on the identical loop (#109): `c_bell_wait` always
+  # returns, so one dropped or mis-stamped message would otherwise pin `seen` below N and hang the
+  # run. The count check after the loop turns that into a red. A ceiling, not a budget: only a
+  # failing run pays it, so it is sized for a loaded box. The sends are slower than their 0.15s gap
+  # suggests — 47 in 12s on an idle machine (measured), so ~15s for the default 60.
+  seen=0 deadline=$(( $(date +%s) + 300 ))
+  while [ $seen -lt $N ] && [ "$(date +%s)" -lt "$deadline" ]; do
     c_bell_wait 3
     wake=$(c_ms)
     if out=$(c_drain); then
@@ -29,6 +34,8 @@ sleep 1
 ( export COUNCIL_ME=a; . "$SKILL/lib/lib.sh"
   for ((i=1;i<=N;i++)); do c_send --hand --text "p$i" >/dev/null; sleep 0.15; done )
 wait $LP
+n=$(wc -l 2>/dev/null < "$R/log/split" | tr -d ' '); n=${n:-0}
+[ "$n" = "$N" ] || { echo "t2b FAIL (listener saw $n of $N messages before its deadline)"; exit 1; }
 awk '{w[NR]=$1; p[NR]=$2} END{
   n=asort(w); m=asort(p);
   printf "wake  (bell -> peer awake): p50=%dms p95=%dms max=%dms\n", w[int(n/2)], w[int(n*0.95)], w[n];

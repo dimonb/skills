@@ -84,9 +84,9 @@ tests=(t4-conflict.sh t7-roundtable.sh t8-graph.sh t11-decision.sh t14-verbs.sh 
 # against the file it fired on.
 #
 # DUPLICATED, not shared with the shipyard runner, and deliberately: the two are not one algorithm
-# — this one wraps each file in `timeout` and `nice` and has a `--full` arm, that one has neither
-# — so what would be shared is scheduling boilerplate rather than an answer to a question both
-# ask. It also keeps this suite runnable from an installed plugin, which has no repo `scripts/`
+# — this one also wraps each file in `nice` and has a `--full` arm, that one has neither — so what
+# would be shared is scheduling boilerplate rather than an answer to a question both ask. The
+# per-test `timeout` ceiling is the same in both (that runner copied this one's, #108). It also keeps this suite runnable from an installed plugin, which has no repo `scripts/`
 # beside it. Scope checked today: these two runners and no other. If a THIRD runner needs the same
 # scheduling, or if these two converge so the differences above go away, move it to `shared/`.
 NPROC=$( { command -v nproc >/dev/null 2>&1 && nproc; } || sysctl -n hw.ncpu 2>/dev/null || echo 4 )
