@@ -88,4 +88,45 @@ check 0 "$(shipyard_agent_prepare_worktree codex "$TMP/repo" "$TMP/worktree"; ec
 mkdir "$TMP/not-a-worktree"
 check 1 "$(shipyard_agent_prepare_worktree codex "$TMP/repo" "$TMP/not-a-worktree" >/dev/null 2>&1; echo $?)" "unregistered path is refused"
 
+# --- a kind with no env-pass arm refuses the LAUNCH (#113) ------------------------------------
+# Executed, not grepped: shipyard-launch.sh runs as a dry run from a COPY of this skill whose
+# `shipyard_agent_env_pass_default` has lost its claude arm — the state a newly admitted kind is in
+# when nobody added the arm. The preamble then fails, and the launcher used to be written anyway
+# with no export and no unset lines in it. The control run on an unmodified copy is what keeps the
+# refusal checks from passing on a launch that fails for some other reason.
+dry_launch() { # <skill-dir> <repo> -> stdout+stderr, then "rc=<n>"
+  local rc=0 out
+  git init -q "$2"
+  git -C "$2" -c user.email=shipyard-test -c user.name=shipyard-test commit -q --allow-empty -m fixture
+  out=$( cd "$2" || exit 1
+         # Functions, not binaries on PATH: shipyard-lib.sh prepends the system PATH.
+         tmux() { return 1; }; claude() { :; }; export -f tmux claude
+         unset CLAUDECODE CLAUDE_CODE_SESSION_ID CODEX_SESSION_ID CODEX_THREAD_ID
+         SHIPYARD_AGENT=claude SHIPYARD_BACKEND=tmux SHIPYARD_SESSION=t5ex SHIPYARD_DRY=1 \
+           bash "$1/shipyard-launch.sh" "#42" 2>&1 ) || rc=$?
+  printf '%s\nrc=%s\n' "$out" "$rc"
+}
+cp -R "$SKILL_DIR" "$TMP/skill-ok"
+cp -R "$SKILL_DIR" "$TMP/skill-noarm"
+sed '/^shipyard_agent_env_pass_default()/,/^}/{/claude)/d;}' "$SKILL_DIR/shipyard-agent.sh" \
+  >"$TMP/skill-noarm/shipyard-agent.sh"
+check 1 "$(sed -n '/^shipyard_agent_env_pass_default()/,/^}/p' "$SKILL_DIR/shipyard-agent.sh" | grep -c 'claude)')" \
+  "the fixture's sed has a claude arm to remove"
+check 0 "$(sed -n '/^shipyard_agent_env_pass_default()/,/^}/p' "$TMP/skill-noarm/shipyard-agent.sh" | grep -c 'claude)')" \
+  "...and removed it from the env-pass default"
+
+out=$(dry_launch "$TMP/skill-ok" "$TMP/launch-ok")
+check 0 "$(printf '%s' "$out" | sed -n 's/^rc=//p')" "control: a known kind's dry launch succeeds"
+if grep -q '^unset CLAUDE_CODE_MESSAGING_SOCKET$' "$TMP/launch-ok/.git/ship-escalations/launch-42.sh" 2>/dev/null; then
+  scrubbed=yes; else scrubbed=no; fi
+check yes "$scrubbed" "control: ...and its launcher scrubs the parent's IPC socket"
+
+out=$(dry_launch "$TMP/skill-noarm" "$TMP/launch-noarm")
+check 1 "$(printf '%s' "$out" | sed -n 's/^rc=//p')" "no env-pass arm: the launch is refused"
+check 1 "$(printf '%s' "$out" | grep -c 'no environment preamble for agent kind')" "...saying why"
+if [ -e "$TMP/launch-noarm/.git/ship-escalations/launch-42.sh" ]; then left=yes; else left=no; fi
+check no "$left" "...and leaves no launcher behind"
+if [ -e "$TMP/launch-noarm/.git/ship-escalations/protocol-42.md" ]; then left=yes; else left=no; fi
+check no "$left" "...nor a protocol file"
+
 exit "$failures"
