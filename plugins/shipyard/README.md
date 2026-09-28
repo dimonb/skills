@@ -31,14 +31,18 @@ equivalent field, so there it is a documented requirement only.
 
 **A terminal per change, addressed by slot.** A slot is the key of a terminal plus a worktree
 — the number for an existing issue/PR/MR, a slug for a free-text idea. Numeric slots are
-deduplicated (two agents in one worktree collide); text slots get a numeric suffix.
+deduplicated (two agents in one worktree collide); text slots get a numeric suffix. When the
+backend cannot say whether a slot is taken, the launch is refused rather than guessed, and a
+slot name outside letters, digits, `-` and `_` (or past 59 characters) is refused before
+anything is created.
 
 **A launch this machine cannot take is refused before it starts.** Each launch clears an
 admission gate first — a **concurrency cap** (`SHIPYARD_MAX_SLOTS`, default 2 live `ship-*`
 slots) and, on macOS, a **memory-pressure floor** (`SHIPYARD_MEM_MIN_FREE_PCT`, default 10%
 free, read from `memory_pressure`). Over either limit and the launch is refused, with a
 distinct exit code and a message naming the gate, the current value versus the limit, and the
-env var to override it — no worktree or terminal is created. This exists because an uncapped
+env var to override it — no worktree or terminal is created. A slot count the backend cannot
+answer is refused as well, since an empty answer is not an empty fleet. This exists because an uncapped
 fleet once drove a 16 GB machine into swap until macOS recycled the whole GUI login session;
 the gate is that "stop the bleeding" check, not a scheduler. Where `memory_pressure` is
 unavailable the memory gate is a no-op, never a hard failure. `SHIPYARD_DRY=1` reports the

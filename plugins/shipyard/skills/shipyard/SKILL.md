@@ -198,8 +198,14 @@ and prints `SLOT:<slot>` as its last line — **record the slots, the report nee
 
 Exit codes: `0` started, `3` a terminal for that numeric slot already exists (do not
 start a duplicate — look inside with the command the error prints), `1`/`2`
-environment/argument error, `4` the admission gate refused on the concurrency cap, `5`
-the admission gate refused on memory pressure (see the admission gate below).
+environment/argument error — `2` includes a slot name `shipyard_slot_check` refuses (only
+letters, digits, `-` and `_`, at most 59 characters, so the worktree name stays within the
+agent's limit), `4` the admission gate refused on the concurrency cap, `5` the admission
+gate refused on memory pressure, `6` the admission gate could not count the live slots,
+`7` the backend could not say whether the slot is already taken (it did not answer, or this
+process resolved a different backend from the one the fleet was launched on). `6` and `7`
+are "cannot tell", not "full": fix what the message names and re-run — never
+`SHIPYARD_FORCE=1` past a `7`, which that knob does not override.
 
 **The admission gate — refuse a launch this machine cannot take.** Before it creates any
 worktree or terminal, `shipyard-launch.sh` runs two cheap checks, because an uncapped fleet
@@ -207,7 +213,9 @@ once drove a 16 GB machine into swap until macOS recycled the whole GUI session:
 
 * **Concurrency cap.** It counts the live `ship-*` slots and refuses (exit `4`) when that
   count is at or above `SHIPYARD_MAX_SLOTS`. The default is **2**, sized conservatively for a
-  ~16 GB machine — raise it on a bigger box.
+  ~16 GB machine — raise it on a bigger box. A count it cannot take — the backend did not
+  answer, or answered about a different backend from the fleet's — refuses too (exit `6`),
+  whatever the cap: an empty answer there is not an empty fleet.
 * **Memory-pressure floor (macOS).** It reads the system-wide free-memory percentage from
   `memory_pressure` and refuses (exit `5`) when it is below `SHIPYARD_MEM_MIN_FREE_PCT`
   (default **10**). Where `memory_pressure` is unavailable (non-macOS, or no reading) this

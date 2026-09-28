@@ -131,7 +131,8 @@ declare -a SLOTS=()
 for a in "$@"; do
   case "$a" in
     --only-changed) ONLY_CHANGED=1 ;;
-    *)              SLOTS+=("$a") ;;
+    # Exit 1, never 0: a refused argument must not read as the monitor's stop signal.
+    *)              shipyard_slot_check "$a" || exit 1; SLOTS+=("$a") ;;
   esac
 done
 
@@ -344,16 +345,15 @@ autodown_consider() {
   local prev_m prev_iid prev_n seen=1 sig out down_rc=0
   [ "$AUTODOWN" = 1 ] || return 1
   [ -n "$MERGEDFILE" ] || return 1
-  # A slot name is a terminal name with `ship-` stripped (`shipyard_slots`), and nothing
-  # validates it. One containing `/` reaches the locks and the removal target DIFFERENTLY: the
-  # mailbox glob `$mb/$slot-*.json` is a flat-directory match and misses it, while `slot_stage`,
-  # `slot_iid`, the worktree test below and `shipyard-down.sh`'s own `wt_of` all collapse the
-  # path and resolve the VICTIM slot's real worktree. Measured on tmux, which accepts `ship-7/`
-  # as a window name and lists it verbatim: slot `7/` was not held, and the teardown it would
-  # have run targets slot `7`. Refusing here keeps the AUTOMATIC path away from a name it cannot
-  # reason about. Validating slot names at the boundary would fix the manual path too — that is
-  # #198, and it belongs there because it changes a function with other callers.
-  case "$slot" in *"/"*) return 1 ;; esac
+  # A slot containing `/` reaches the locks and the removal target DIFFERENTLY: the mailbox glob
+  # `$mb/$slot-*.json` is a flat-directory match and misses it, while `slot_stage`, `slot_iid`, the
+  # worktree test below and `shipyard-down.sh`'s own `wt_of` all collapse the path and resolve the
+  # VICTIM slot's real worktree. Measured on tmux, which accepts `ship-7/` as a window name and
+  # lists it verbatim: slot `7/` was not held, and the teardown it would have run targets slot `7`.
+  # Every slot reaching here has already passed `shipyard_slot_check` — `shipyard_slots` leaves an
+  # invalid name out and the argument parse above refuses one — and the check is asked again here
+  # because this is the path that removes a worktree without a person in the loop.
+  shipyard_slot_check "$slot" 2>/dev/null || return 1
   # Lock 2 first, because it is a file read and lock 1's value costs a forge call on the
   # no-terminal path. Both are already in hand for a live slot, so the order costs nothing
   # there and saves a query per tick for every gone slot whose child never finished.

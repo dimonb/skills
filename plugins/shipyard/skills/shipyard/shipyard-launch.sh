@@ -17,8 +17,14 @@
 #   * numeric arg / `!123` / `#42` / an MR/PR/issue URL  -> slot = the number
 #   * free text                                          -> slot = slug of the text
 #
+# A slot must pass shipyard_slot_check (shipyard-backend.sh) — letters, digits, `-`, `_`,
+# bounded length — or the launch exits 2 before anything is created.
+#
 # Dedup: a numeric slot is never started twice (two agents in one worktree collide)
-# — exit 3. A text slot gets a -2, -3, ... suffix instead.
+# — exit 3. A text slot gets a -2, -3, ... suffix instead. When the backend cannot say
+# whether a slot is taken — it did not answer, or this process resolved a different
+# backend from the fleet's — the launch is refused with exit 7 rather than guessed.
+# The admission gate below has its own codes (4, 5, 6; see shipyard-admission.sh).
 #
 # Every child is launched with an escalation protocol appended to its system prompt: no
 # human is present in a child terminal, so questions, design decisions and blockers go
@@ -68,13 +74,6 @@ SELF_REF=$(shipyard_self_ref "$AGENT") || exit 1
 shipyard_backend_check || exit 1
 BACKEND=$(shipyard_backend)
 KIND=$(shipyard_container_kind)
-# PIN the container on the way in. On agterm it is derived from the workspace this
-# shell sits in, so re-deriving it later — from a report run in another workspace, or
-# from a child — would silently name a different container and find no children there.
-# The mailbox is created below, so pin against it explicitly first.
-shipyard_mailbox_ensure >/dev/null 2>&1
-CONTAINER=$(shipyard_container_pin) || { echo "error: cannot resolve the container name" >&2; exit 1; }
-_SHIPYARD_CONTAINER="$CONTAINER"
 
 # --- slot + /ship target -------------------------------------------------------
 if [[ "$ARG" =~ ^[0-9]+$ ]]; then
@@ -97,22 +96,86 @@ elif [[ "$ARG" =~ pull/([0-9]+) ]]; then
   # GitHub PR URL -> `pr N`.
   SLOT="${BASH_REMATCH[1]}"; TARGET="pr ${BASH_REMATCH[1]}"; NUMERIC=1
 else
-  SLOT=$(printf '%s' "$ARG" | tr '[:upper:]' '[:lower:]' \
-    | sed -E 's/[^a-z0-9]+/-/g; s/^-+//; s/-+$//' | cut -c1-28 | sed -E 's/-+$//')
+  # `tr -cs`, not a `sed` substitution: sed works one LINE at a time, so a newline in the text
+  # survived into the slot — and from there into the launcher's comment line, where the rest of the
+  # launch text ran as shell commands (#198). `tr` treats a newline like any other character. The C
+  # locale makes it a byte operation, so a non-ASCII letter becomes a separator rather than a
+  # character the slot check then refuses.
+  SLOT=$(printf '%s' "$ARG" | LC_ALL=C tr 'A-Z' 'a-z' | LC_ALL=C tr -cs 'a-z0-9' '-' \
+    | sed -E 's/^-+//; s/-+$//' | cut -c1-28 | sed -E 's/-+$//')
   [ -z "$SLOT" ] && SLOT="idea"
   TARGET="$ARG"; NUMERIC=0
 fi
 
-if shipyard_target "$SLOT" >/dev/null 2>&1; then
+# The boundary for every name derived below it — the terminal, the worktree, the mailbox files and
+# the launcher. Exit 2, the usage error: nothing has been created yet.
+shipyard_slot_check "$SLOT" || exit 2
+
+# --- dedup ---------------------------------------------------------------------
+# slot_taken <slot> — 0 taken, 1 free, 2 cannot tell (the verdict left in UNRESOLVED).
+#
+# A failed `shipyard_target` is not a free slot. It is also what a backend that did not answer
+# returns, and what this process returns when it resolved a different backend from the one the
+# fleet was launched on — and reading either as "free" started a second agent in the same worktree,
+# because `shipyard_agent_prepare_worktree` accepts one that is already registered (#140). So a
+# miss is put to `shipyard_signal_class` with ONE enumeration taken before any candidate is looked
+# at, and bare slots on both sides of the comparison (its namespace note). `listed` — the backend
+# answered and has the slot, only the lookup failed — is simply taken. Called without `$( )` so
+# UNRESOLVED reaches this shell.
+TAB=$(printf '\t')
+ENUM_RC=0
+ENUM=$(shipyard_slots 2>/dev/null) || ENUM_RC=$?
+UNRESOLVED=""
+slot_taken() {
+  local sig src=0
+  shipyard_target "$1" >/dev/null 2>&1 && return 0
+  sig=$(shipyard_signal_class "$ENUM_RC" "$ENUM" "$1") || src=$?
+  [ "$src" = 0 ] && return 1
+  case "${sig%%"$TAB"*}" in listed) return 0 ;; esac
+  UNRESOLVED=$sig
+  return 2
+}
+# Exit 7, the code tell and compact already give an absence that could not be corroborated. Not
+# overridden by SHIPYARD_FORCE: that asks for a second terminal on a slot KNOWN to be running, and
+# this is not knowing.
+refuse_unresolved() {  # <slot>
+  echo "error: cannot tell whether slot \`$1\` is free, so nothing was launched." >&2
+  echo "       ${UNRESOLVED#*"$TAB"}." >&2
+  echo "       Launching anyway could start a second agent in .claude/worktrees/ship-$1 while the" >&2
+  echo "       first is still working there." >&2
+  case "${UNRESOLVED%%"$TAB"*}" in
+    elsewhere)
+      echo "       SHIPYARD_BACKEND=auto decides per process; pin the fleet's backend and re-run:" >&2
+      echo "       SHIPYARD_BACKEND=$(shipyard_backend_pinned_elsewhere)" >&2 ;;
+    *)
+      echo "       Start the terminal backend (agterm: \`agtermctl version\` answers; tmux: \`tmux ls\`)" >&2
+      echo "       and re-run." >&2 ;;
+  esac
+  exit 7
+}
+
+st=0; slot_taken "$SLOT" || st=$?
+[ "$st" = 2 ] && refuse_unresolved "$SLOT"
+if [ "$st" = 0 ]; then
   if [ "$NUMERIC" = 1 ] && [ "${SHIPYARD_FORCE:-}" != 1 ]; then
-    echo "already running: $(shipyard_where "$SLOT") exists (use SHIPYARD_FORCE=1 to override)" >&2
-    echo "look inside: $(shipyard_peek_hint "$SLOT")" >&2
+    if shipyard_target "$SLOT" >/dev/null 2>&1; then
+      echo "already running: $(shipyard_where "$SLOT") exists (use SHIPYARD_FORCE=1 to override)" >&2
+      echo "look inside: $(shipyard_peek_hint "$SLOT")" >&2
+    else
+      echo "already running: the $(shipyard_backend) backend lists ship-$SLOT, though its terminal lookup failed (use SHIPYARD_FORCE=1 to override)" >&2
+    fi
     exit 3
   fi
   if [ "$NUMERIC" != 1 ]; then
     n=2
-    while shipyard_target "$SLOT-$n" >/dev/null 2>&1; do n=$((n+1)); done
+    while :; do
+      st=0; slot_taken "$SLOT-$n" || st=$?
+      [ "$st" = 2 ] && refuse_unresolved "$SLOT-$n"
+      [ "$st" = 1 ] && break
+      n=$((n+1))
+    done
     SLOT="$SLOT-$n"
+    shipyard_slot_check "$SLOT" || exit 2
   fi
 fi
 NAME="ship-$SLOT"
@@ -121,7 +184,8 @@ WORKTREE="$ROOT/.claude/worktrees/$NAME"
 # --- admission gate ------------------------------------------------------------
 # Refuse a launch this machine cannot take, BEFORE creating any worktree or terminal. Two
 # gates, each with a distinct exit code and an actionable message: a concurrency cap
-# (SHIPYARD_MAX_SLOTS, counting live ship-* slots) and, on macOS, a memory-pressure floor
+# (SHIPYARD_MAX_SLOTS, counting live ship-* slots; a count that cannot be taken refuses too)
+# and, on macOS, a memory-pressure floor
 # (SHIPYARD_MEM_MIN_FREE_PCT via `memory_pressure`; a no-op where that detector is absent).
 # See shipyard-admission.sh. Evaluate once here; SHIPYARD_DRY reports the decision below
 # without enforcing it, so a dry run always shows what the gate would do.
@@ -130,6 +194,20 @@ if [ "$ADMISSION_RC" != 0 ] && [ "${SHIPYARD_DRY:-}" != 1 ]; then
   printf '%s\n' "$ADMISSION" >&2
   exit "$ADMISSION_RC"
 fi
+
+# PIN the container on the way in. On agterm it is derived from the workspace this
+# shell sits in, so re-deriving it later — from a report run in another workspace, or
+# from a child — would silently name a different container and find no children there.
+# The mailbox is created below, so pin against it explicitly first.
+#
+# AFTER the dedup and the admission gate, not before them: the pin's file name records which
+# backend the fleet runs on, and both gates ask whether that is the backend THIS process resolved.
+# Pinned first, a launch that resolved the other backend wrote its own pin beside the fleet's, the
+# two then agreed with either resolution, and the gates admitted exactly the launch they exist to
+# refuse. Until here the gates resolve the container the same way without writing it down.
+shipyard_mailbox_ensure >/dev/null 2>&1
+CONTAINER=$(shipyard_container_pin) || { echo "error: cannot resolve the container name" >&2; exit 1; }
+_SHIPYARD_CONTAINER="$CONTAINER"
 
 # --- first prompt --------------------------------------------------------------
 # `/ship` takes all three shapes itself: a number, a `#N`/`pr N` marker, and a
