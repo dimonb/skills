@@ -1078,6 +1078,14 @@ judgement an author makes about their own work, and the costliest defects measur
 one-line diffs their authors were sure of. When it is genuinely unclear whether a fix passes,
 that uncertainty is the answer: go to rung 2.
 
+**A defect in code this change itself adds** (`origin: original` or `fix`, §5.6) **is fixed in this
+change.** Correcting a mechanism the change introduces finishes the change rather than adding
+machinery to it, so question 2 does not send it down the ladder; questions 3 and 4 still hold. It
+leaves this rung only when fixing it would widen the change beyond its issue, and then the hand-off
+record (§7.G) names it and says why it was not fixed in place. Measured: a gate arm's false
+negative, found by the review of the change that added the arm, was filed as a new issue for being
+"new tokenizer machinery" — machinery that change had itself just written.
+
 **A fix taken under this rung is still recorded** — in the ledger's `deferred` entry, with the sha
 in its `outcome`, and in the deferral line of the stage record (§5.9). **`deferred` is the
 authority for where the ladder put a finding, and the finding's own `status` follows it** — a rung-1
@@ -1247,7 +1255,12 @@ checklist after a merge. Neither is automated; skipping it makes the board drift
 
 ### 7.B — `issue-ready` → open the change
 
-1. Claim the issue (§3.2).
+1. Claim the issue (§3.2), then **check its scope before implementing.** When the listed work is
+   more than one reviewable change — several independent test files, subsystems or issues that
+   share no code — report a proposed split naming the pieces (to the user, or as a notice to the
+   supervisor that launched the run). It is a notice, not a question: the run keeps the scope it
+   was given unless told otherwise. Measured: a work unit of three issues and about nine separate
+   test instances ran one turn for 40+ minutes while four smaller ones each finished in 12-35.
 2. **Branch from a freshly fetched base branch.** Never branch off a local base you have not
    just updated.
    ```bash
