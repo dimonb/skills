@@ -74,6 +74,12 @@ out=$(bash "$CLI" decision); rc=$?
 case "$out" in *"status: **decided**"*) ;; *) echo "FAIL the record read back does not say decided"; exit 1 ;; esac
 echo "decided room:       exit 0, $(printf '%s' "$out" | wc -l | tr -d ' ') lines, verbatim"
 
+# The exit reports the room, not the write (#193): with stdout closed the record cannot be
+# printed, and rc 1 would tell the caller "still open" about a decided room.
+bash "$CLI" decision >&- 2>/dev/null; rc=$?
+[ "$rc" = 0 ] || { echo "FAIL decision on a decided room with stdout closed exited $rc, expected 0"; exit 1; }
+echo "decided, stdout closed: exit 0"
+
 # --- the protocol a participant receives must not hand out a path --------------------
 # The whole point of the verbs. If the rendered protocol still tells a participant to open a
 # file in the room, the prompt class comes straight back — and it comes back silently,

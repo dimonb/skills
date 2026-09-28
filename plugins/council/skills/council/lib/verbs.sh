@@ -48,7 +48,12 @@ v_decision() {
     printf 'council: no decision yet — the room is still open (council.sh verdict)\n'
     return 1
   }
-  cat "$ROOM/board/decision.md"
+  # The exit reports the ROOM, not the write (#193): rc 1 already means "still open", and a
+  # closed or dead stdout used to make `cat`'s failure this verb's status, telling a caller whose
+  # output is gone that a decided room is running. Exit 0 stays "a record exists", which is the
+  # one fact SKILL.md and protocol/_channel.md tell every reader to stop on.
+  cat "$ROOM/board/decision.md" || true
+  return 0
 }
 
 v_send() { # --act A [--refs J] [--hand] "<text>"
@@ -2277,13 +2282,11 @@ v_decide() {
   #
   # WHAT IS PARTICULAR HERE IS THAT THE WRITE IS ADVISORY, not that no other tail ends on a write.
   # An earlier revision of this comment claimed the latter and it is false: `v_protocol`,
-  # `v_agenda`, `v_decision`, `v_floor` and `v_claims` all end on a write to stdout. The
-  # difference is what the write IS — those emit the verb's own output, where a failed write is
-  # arguably a real failure, while this one is a note about the terminals appended after the
-  # record path has already gone out. `v_decision` is the one worth a second look rather than a
-  # reassurance: its tail is a bare `cat`, which returns 1 on a closed stdout, and SKILL.md tells
-  # supervisors to trust `decision`'s exit 0 as the signal that the record exists — so its rc 1
-  # collides with its own documented "no decision yet". Pre-existing, not touched here; filed as #193.
+  # `v_agenda`, `v_floor` and `v_claims` end on a write to stdout. The difference is what the
+  # write IS — those emit the verb's own output, where a failed write is arguably a real failure,
+  # while this one is a note about the terminals appended after the record path has already gone
+  # out. `v_decision` ended on a bare `cat` too, until its rc 1 on a closed stdout was found to
+  # collide with its own documented "no decision yet" (#193); it now returns explicitly.
   return 0
 }
 
