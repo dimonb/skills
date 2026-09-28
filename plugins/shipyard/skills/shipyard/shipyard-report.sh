@@ -10,7 +10,8 @@
 # printed report, so a child parked in idle-wait for hours stops generating identical
 # tables. Meaningful = slot, MR iid, terminal present, MR state, pipeline stage, open
 # escalation count, the ctx BAND, the WAIT CLASS, the REAP class, and whether the agent is still
-# in its terminal (`noagent=`, and `fna=` for a finished slot — see drv_occupant) (see the stall section
+# in its terminal (`noagent=`, and `fna=` for a finished slot — see drv_occupant), and whether its
+# screen could be read at all (`unread=`, #155 — past the stall threshold it is its own 🛑 block) (see the stall section
 # below — entering or leaving a stated wait is news, and it is news exactly once, which is what
 # makes suppressing the stall block for it cost the operator nothing).
 # THE REAP CLASSES DO NOT RIDE THE SIGNATURE. A torn-down, held or refused slot bypasses this
@@ -498,7 +499,7 @@ STALL_ROWS=()
 # `last_fired` (the epoch of the latest firing). The record rides with the stall clock's `since`,
 # plus ONE exception, the carry in the slot loop, which exists because a nudge types into the very
 # screen whose hash is the signature: whenever `since` is not carried (the screen part of the
-# signature moved, or a stored `since` was refused) while the state, stage and escalation part did
+# signature moved, or a stored `since` was refused) while the stage and escalation part did
 # not move, within one stall threshold of the last firing, and once a directive has been recorded
 # since the episode's first firing. That is
 # a condition on timing, not proof that the directive CAUSED the change — a child that moves by
@@ -611,6 +612,7 @@ last_directive_since() {
 WAITING=()    # motionless for a stated, self-healing reason — nothing to do
 ATTENTION=()  # motionless for a known reason that needs a person, but never compaction
 NOAGENT=()    # "<slot>|<ctx>" — a live terminal whose agent is gone (drv_occupant `none`, twice)
+UNREADABLE=() # "<slot>|<mins>|<target>" — no readable capture, past the stall threshold (#155)
 UNSCALED=()   # "<slot>|<display>" — a ctx figure with no window to assert it against; the
               # display distinguishes the two causes, which take different remedies (Step 5)
 
@@ -1073,6 +1075,13 @@ for slot in "${SLOTS[@]}"; do
   occ_b=$(shipyard_occupant "$slot" 2>/dev/null) || occ_b=""
   b=$(shipyard_capture "$slot")
   [ "$a" = "$b" ] && run="⏸ idle/wait" || run="▶️ running"
+  # AN EMPTY CAPTURE IS NO OBSERVATION (#155). drv_read yields "" for every backend failure as well
+  # as for a blank screen, and a live agent's pane is never blank — it draws its own chrome — so two
+  # failed reads used to compare equal, render idle, and feed the stall clock below. `unknown` IS NOT
+  # `idle`, as adp_turn_state already says for the same capture: either read empty means no motion
+  # verdict this tick, and the stall clock neither fires nor rebases on it (see stall detection).
+  unread=0
+  if [ -z "$a" ] || [ -z "$b" ]; then unread=1; run="❔ unreadable"; fi
   noagent=0
   if [ "$occ_a" = none ] && [ "$occ_b" = none ]; then noagent=1; run="💀 no agent"; fi
 
@@ -1270,9 +1279,16 @@ for slot in "${SLOTS[@]}"; do
   # ⏸ idle with esc — and NOTHING changes, so the monitor says nothing. One ran that
   # way for 8.5 hours. So track how long each slot has been motionless and shout
   # when it crosses the threshold, bypassing --only-changed entirely.
-  slot_sig="$state|$stage|$pend|$(printf '%s' "$b" | md5 -q 2>/dev/null || printf '%s' "$b" | md5sum | cut -d" " -f1)"
+  #
+  # THE CLOCK'S KEY CARRIES NO FORGE STATE (#142). It is the stall clock's alone — --only-changed
+  # reads SIG, which keeps `$state` — and `since` carries only on an exact match. `$state` is two
+  # chained network reads that turn a failure into a different string (`?`, or `no MR yet` when the
+  # iid lookup fails), so an INTERMITTENT forge rebased the clock of a child that had not moved and
+  # the alarm could need eight consecutive good reads to fire. A sustained outage was harmless; a
+  # flaky one disarmed it. The clock measures the child: its stage, its open escalations, its screen.
+  slot_sig="$stage|$pend|$(printf '%s' "$b" | md5 -q 2>/dev/null || printf '%s' "$b" | md5sum | cut -d" " -f1)"
   now_epoch=$(date +%s)
-  since=""; fired_epoch=""; fired_at=""; firings=0; last_fired=""
+  since=""; fired_epoch=""; fired_at=""; firings=0; last_fired=""; prev=""
   if [ -n "$STALLFILE" ] && [ -f "$STALLFILE" ]; then
     # The slot is matched as an exact FIELD: a substring match on "<slot><TAB>" also hits the row of
     # a slot whose name ends in this one, which the launcher's `<slot>-N` naming makes ordinary.
@@ -1304,7 +1320,7 @@ for slot in "${SLOTS[@]}"; do
       # the firing record rode with `since` alone, would end the episode it was sent about: the
       # child stays stuck, and half an hour later the operator is told of a brand-new stall with
       # "nothing sent to it", about a slot they nudged. So the record survives a signature change
-      # when all three hold: state, stage and open escalations did not move (only the SCREEN part
+      # when all three hold: stage and open escalations did not move (only the SCREEN part
       # did — or a stored `since` was refused, which reaches here the same way), a directive was recorded for this slot since the episode's first
       # firing, and the last firing was within one stall threshold — so a child that goes on to
       # work for longer than that sheds the record and its next stall is a new one. The clock
@@ -1346,7 +1362,48 @@ for slot in "${SLOTS[@]}"; do
   fi
   # Written for every visited slot, stalled or not, as the three-field row was: a slot that does not
   # fire on this tick carries its clock and its firing record forward unchanged.
-  STALL_ROWS+=("$slot	$slot_sig	$since	$fired_epoch	$fired_at	$firings	$last_fired")
+  #
+  # An UNREADABLE tick (#155) writes back the row it read, verbatim: its screen hash is not an
+  # observation, so storing it would rebase the next readable tick's clock — the #142 disarm again,
+  # through the capture instead of the forge. It cannot fire either: its `run` is not idle — except
+  # on the finished-with-no-agent path, which resets `run` to idle, and there `wait_kind` (or the
+  # `pend` guard) keeps the firing branch from being taken. Keeping `since` means the minutes spent
+  # unreadable count once the screen reads again with the same hash; freezing the clock instead
+  # would let a flaky capture disarm the alarm as #142's forge did. A supervision gap still restarts the clock, so a gap tick writes
+  # its fresh row as any other tick does — dropping the row instead would leave the stale one in
+  # place whenever this is the only slot, since an empty table is not written.
+  #
+  # AN ABSENCE MAY NOT SILENCE THE ALARM EITHER. Not firing STALLED on an empty read is right — it is
+  # not evidence of idleness — but a slot that stayed unreadable would then never alarm at all, and
+  # hours of it would show as one ❔ row the --only-changed filter printed once. So the carried
+  # `since` keeps running across unreadable ticks and, past $STALL_SECS, raises 🛑 UNREADABLE, which
+  # bypasses the filter like STALLED. Its claim is narrower than STALLED's and it says so: the
+  # BACKEND READ failed, so nothing is known about the child. A slot unreadable from its first tick
+  # has no row to carry, and neither does one whose stored `since` stall_num refused, so each starts
+  # its clock now under the key `unread`, which no readable screen's key can equal. The threshold is
+  # measured from that carried `since` — the screen's last observed CHANGE — so a slot already
+  # motionless past it raises the block on its FIRST unreadable tick; the block's own line says
+  # "nothing has seen it move for N min", which is what was measured. NOT closed, the route STALLED
+  # already has: a child that rewrites or deletes its own row (a recent or future `since`) keeps its
+  # clock under the threshold, which removes it from the block outright. A dead agent is 💀 NO
+  # AGENT's to report; a stated wait (only a finished slot with no agent reaches one here) is not a
+  # stall of any kind; and a slot with an open escalation is excluded for STALLED's reason — it is
+  # already asking for you, in its own block, and its clock ages without firing by design.
+  unread_now=0
+  if [ "$unread" = 1 ] && [ "$GAP" = 0 ]; then
+    if [ -n "$prev" ] && [ -n "$prev_epoch" ]; then
+      STALL_ROWS+=("$prev"); u_since="$prev_epoch"
+    else
+      STALL_ROWS+=("$slot	unread	$now_epoch			0	"); u_since="$now_epoch"
+    fi
+    if [ "$noagent" = 0 ] && [ -z "$wait_kind" ] && [ "$pend" = 0 ] \
+       && [ $(( now_epoch - u_since )) -ge "$STALL_SECS" ]; then
+      UNREADABLE+=("$slot|$(( (now_epoch - u_since) / 60 ))|$(shipyard_target "$slot" 2>/dev/null)")
+      unread_now=1
+    fi
+  else
+    STALL_ROWS+=("$slot	$slot_sig	$since	$fired_epoch	$fired_at	$firings	$last_fired")
+  fi
 
   # Paint the same verdict on the sidebar glyph (agterm only; a no-op on tmux), so the
   # board is readable without reading the table: blocked = it is waiting on YOU. The
@@ -1361,6 +1418,7 @@ for slot in "${SLOTS[@]}"; do
   if   [ "$pend" != 0 ];             then shipyard_note "$slot" blocked --blink
   elif [ "$wait_class" = needs_human ]; then shipyard_note "$slot" blocked
   elif [ "$stalled_now" = 1 ];        then shipyard_note "$slot" blocked
+  elif [ "$unread_now" = 1 ];         then shipyard_note "$slot" blocked
   elif [ "$noagent" = 1 ];            then shipyard_note "$slot" blocked
   else                                    shipyard_note "$slot" "$verdict"
   fi
@@ -1373,7 +1431,7 @@ for slot in "${SLOTS[@]}"; do
   # bypasses the filter while it holds, so only the signature can make its ending news. `fna=` is
   # there for a FINISHED slot whose agent exited: it gets no 💀 block and no bypass, so without it
   # that death would change nothing the filter sees and the monitor would never print it.
-  SIG+=("$slot|$mr_label|term=1|$state|$stage|$pend|$sig_band|$wait_class|$reap_note|noagent=$noagent|fna=$finished_noagent")
+  SIG+=("$slot|$mr_label|term=1|$state|$stage|$pend|$sig_band|$wait_class|$reap_note|noagent=$noagent|fna=$finished_noagent|unread=$unread")
   :
 done
 
@@ -1593,6 +1651,9 @@ fi
 # A slot with NO AGENT in its terminal bypasses it too, for STALLED's reason: it is the same
 # silhouette — nothing moves and nothing is asked — except that nobody is left to move, so every
 # tick it lasts is a tick of lost work that only the operator can end.
+# A slot UNREADABLE past the stall threshold bypasses it for the same reason again: it is the
+# alarm STALLED would have raised had the screen been readable, and an absence of evidence must
+# not be the thing that silences it (#155). It prints in full on every tick it holds, like NO SIGNAL.
 # A REAPED, HELD or REFUSED slot bypasses the silence outright, like STALLED above and for the
 # same reason: each is a state where a destructive act has just happened, or is being attempted
 # and declined every tick, and where the operator owes an action nobody else can take. Leaving
@@ -1618,7 +1679,7 @@ fi
 # monitor performs the teardown and consumes the only 🧹 block, leaving the monitor to show a
 # table the slot has merely vanished from. The same hazard is documented for $MERGEDFILE above.
 if [ "$ONLY_CHANGED" = 1 ] && [ "$TERMINAL" = 0 ] && [ "${#STALLED[@]}" -eq 0 ] \
-   && [ "${#NOAGENT[@]}" -eq 0 ] \
+   && [ "${#NOAGENT[@]}" -eq 0 ] && [ "${#UNREADABLE[@]}" -eq 0 ] \
    && [ "${#REAP_HELD[@]}" -eq 0 ] && [ "${#REAP_REFUSED[@]}" -eq 0 ] \
    && [ "${#REAPED[@]}" -eq 0 ] \
    && [ "$NOSIG_RC" = 0 ] && [ -z "$PINNED_ELSEWHERE" ] && [ "$GAP" = 0 ] && [ -n "$SIGFILE" ]; then
@@ -1748,6 +1809,31 @@ EOF
       echo "     produced before it went is usually more than its last notice said."
       echo "  2. THEN RECOVER IT the way a dead child is recovered (SKILL.md, Step 5): a fresh session on the"
       echo "     SAME worktree, with a written handoff. Do not tear the slot down — its work is not finished."
+    done
+  fi
+  if [ "${#UNREADABLE[@]}" -gt 0 ]; then
+    echo
+    echo "### 🛑 UNREADABLE — the report cannot read the screen, and nothing has seen it move for longer than the stall threshold"
+    for x in "${UNREADABLE[@]}"; do
+      IFS='|' read -r sl mins tgt <<EOF
+$x
+EOF
+      # QUOTED, because the operator is told to paste it: a tmux target is `<container>:<index>`, and
+      # the container comes from a pin in the mailbox every child can write.
+      if [ -n "$tgt" ]; then tgt=$(printf '%q' "$tgt"); else tgt="<target>"; fi
+      # The same read drv_read performs, whole — on agterm that includes the jq step, without which
+      # the command prints JSON and an empty `text` looks like an answer.
+      case "$(shipyard_backend)" in
+        agterm) cmd="agtermctl session text --target $tgt --json | jq -r '.result.text // \"\"'" ;;
+        *)      cmd="tmux capture-pane -p -t $tgt" ;;
+      esac
+      echo "- \`$sl\` — its captures come back EMPTY, and nothing has seen it move for ${mins} min. What failed"
+      echo "  is the BACKEND READ, not the child: this report has no motion verdict, so it cannot tell a working"
+      echo "  child from a stuck one, and it will not raise STALLED on a screen it could not see."
+      echo "  1. TRY THE READ YOURSELF: \`$cmd\`. If it prints the screen, the next tick"
+      echo "     clears this; if it fails too, the terminal or the backend is what needs fixing."
+      echo "  2. GIT SAYS WHAT IT PRODUCED meanwhile: \`git -C $ROOT/.claude/worktrees/ship-$sl log --oneline -5\`."
+      echo "     Do not nudge it blind — a directive typed into a screen nobody can read cannot be confirmed."
     done
   fi
   # The two blocks the STALLED one used to swallow. Each is a slot that is motionless for a reason

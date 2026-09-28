@@ -436,7 +436,7 @@ closer. Both counts are fixed on purpose rather than tunable; the report's sourc
 
 **Some blocks bypass `--only-changed` entirely** rather than riding the per-slot signature:
 `🛑 STALLED` (and `🛑 STALL UNANSWERED`, which comes from the same condition), `💀 NO AGENT`,
-`🛑 NO SIGNAL`, and — added with the automatic teardown — `🧹 TORN DOWN`,
+`🛑 NO SIGNAL`, `🛑 UNREADABLE` (a slot whose screen reads empty now and that nothing has seen move for longer than the stall threshold — so it can fire on the first failed read of a slot already motionless that long), and — added with the automatic teardown — `🧹 TORN DOWN`,
 `✋ HELD` and `✋ AWAITING REMOVAL`. `🧹 TORN DOWN` reports an act already taken, and a signature
 is the wrong thing to gate that on because the signature file lives in the mailbox children write
 into. The other two report a destructive act being attempted and declined on every tick, and an
@@ -453,7 +453,7 @@ holding the slot changes, and `✋ AWAITING REMOVAL` does the same when the refu
 because each of those is news. An episode ends on the first tick its condition does not fire, and
 after a supervision gap every episode starts over. `🧹 TORN DOWN` needs none of this: it fires once
 per act, because the slot's stage file goes with its worktree, so nothing is left to tear down a
-second time. `🛑 NO SIGNAL` still prints in full on every tick. Episodes are recorded in
+second time. `🛑 NO SIGNAL` and `🛑 UNREADABLE` still print in full on every tick. Episodes are recorded in
 `report-episodes` in the mailbox, and that file can only change which form a slot's entry takes.
 It never decides whether the entry appears. A forged row can still hold back the full remedy. It
 shows up as a first-raised time you never saw, but you can only catch that against your own memory
@@ -1338,7 +1338,7 @@ starts a fresh watcher for its own parent session.
 | slot | terminal/worktree key (number or slug) |
 | MR | `!<number>` once the MR/PR exists |
 | term | tmux window index, or the agterm session-id prefix |
-| session | ▶️ running / ⏸ idle-wait (snapshot diff) / ⛔ no terminal — or, when a motionless slot's reason is known, `⏳ rate-limited`, `⏳ overloaded`, `✅ finished` or `🙋 needs you` (Step 2). `🧹 torn down` means this tick removed the slot's worktree, and its terminal if one was still there (Step 6) — it is the report's own act, not something the child did to itself |
+| session | ▶️ running / ⏸ idle-wait (snapshot diff) / ⛔ no terminal — or, when a motionless slot's reason is known, `⏳ rate-limited`, `⏳ overloaded`, `✅ finished` or `🙋 needs you` (Step 2). `🧹 torn down` means this tick removed the slot's worktree, and its terminal if one was still there (Step 6) — it is the report's own act, not something the child did to itself. `❔ unreadable` means a capture came back empty this tick: no motion verdict, and STALLED does not fire on it; the clock keeps its start across it (a supervision gap still restarts it), and a slot that is unreadable and has not been seen to move for longer than the stall threshold (with no open escalation) raises its own 🛑 UNREADABLE block, which names the backend read as what failed and bypasses `--only-changed` |
 | MR state / stage | forge state (opened/merged/closed) + ship's pipeline stage |
 | esc | open escalations for this slot |
 | ctx | child context usage as `<pct>% · <tokens>`, read from its transcript; `⚠️` ≥65%, `🛑` ≥80%. A bare `<pct>%` is the client's own footer figure, used when no transcript was found. Two non-readings, neither meaning healthy: `—` = nothing measurable yet; `❓` = no window this script can defend asserting the figure against, in two forms with different remedies — `❓ <=92% · 185k` is a bound over the sizes it knows — not a ceiling on the truth — fixed by naming the window with `SHIPYARD_CTX_WINDOW`; `❓ 1240k` is past every window it knows, fixed by a new `CTX_WINDOWS` entry (Step 5) |
