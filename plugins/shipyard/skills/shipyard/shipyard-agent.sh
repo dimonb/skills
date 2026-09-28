@@ -22,14 +22,13 @@
 # syntax, not data — so they are kept in this one file. Both operator-facing refusals below ARE
 # derived from the list, so the half a person reads cannot drift even when the cases do.
 #
-# THE THIRD ONE FAILS OPEN, which is why it is counted rather than left to be discovered.
-# `shipyard_agent_env_pass_default` returns 1 for a kind it does not know; `shipyard_env_preamble`
-# then returns 1 having emitted NO exports and NO unsets; and its only caller
-# (`shipyard-launch.sh`, inside `{ … } | policy_mailbox_write "$LAUNCHER"`) does not check that status, and no script
-# here runs `set -e`. So the launch SUCCEEDS and the child is misconfigured rather than refused:
-# it falls back to the profile-default config dir — possibly with no `/ship` at all — and
-# inherits the un-scrubbed per-session variables, the parent's IPC socket and token among them.
-# A kind added without this arm does not announce itself.
+# THE THIRD ONE IS WHY THIS IS COUNTED. `shipyard_agent_env_pass_default` returns 1 for a kind it
+# does not know, and `shipyard_env_preamble` then returns 1 having emitted NO exports and NO
+# unsets. `shipyard-launch.sh` renders the preamble into a variable and refuses the launch on that
+# status, before any launcher is written (t5-agent.sh pins the refusal). It used to be called
+# inside the launcher's `{ … } | policy_mailbox_write` group with its status dropped, and the
+# launch then SUCCEEDED with a child falling back to the profile-default config dir and inheriting
+# the un-scrubbed per-session variables, the parent's IPC socket and token among them (#113).
 #
 # Other places branch on a kind without being admission, and this is NOT a closed list — treat it
 # as where to start looking, not as a checklist to tick off:
@@ -40,7 +39,7 @@
 #     there DEFAULTS an unrecognised kind to claude. So a new kind's ctx column is computed by
 #     hunting for a claude transcript it will never have, and the column and its stall alarm go
 #     quietly wrong for that slot.
-# Both fail the same way as the arm above: silently. That is the reason to go looking rather than
+# Both fail the way the arm above used to: silently. That is the reason to go looking rather than
 # to trust a count in a comment — including this one.
 shipyard_agent_kinds() { printf '%s\n' claude codex; }
 # `-F`: a LITERAL match. Without it the pattern is a basic regular expression, and this function
