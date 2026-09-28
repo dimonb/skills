@@ -766,7 +766,9 @@ Normalization ship applies on receipt — deterministic, no judgement needed:
 ### 5.5 Adversarial verification (a skeptic per blocking finding)
 
 Every **blocking** candidate goes to a fresh verifier subagent whose job is to **refute** it.
-Optional findings are not verified — they are never acted on anyway.
+Optional findings are not verified. One the change does not fix reaches the ladder (§5.11)
+marked **unverified**, with its confidence, so the issue it lands on shows it was never put to a
+skeptic, and a later change addresses it (§3.2) by fixing it or refuting it.
 
 Verifier charter: *"Here is a claimed defect: `<finding>`. Read the actual code at that
 location and its callers. Try to refute it. Construct the concrete failure path — specific
@@ -945,7 +947,7 @@ Axes (4 agents): correctness, security, spec-conformance, conventions.
 Skipped: gates — no suite covers the touched script; the check command is its only gate.
 Round 1: 7 candidates -> 3 confirmed, fixed in 4f2a1c9. Round 2: clean.
 Security (engine): no issues found in this diff.
-Optional (non-blocking): 4 — listed below, no action required.
+Optional (non-blocking): 4 — listed below, each with where it went.
 Deferred: 2 — fixed here 1; scenario onto #123; new issues none.
 ```
 
@@ -966,9 +968,9 @@ Deferred: 2 — fixed here 1; scenario onto #123; new issues none.
     `skipped` — a skipped axis never sets `security_engine`. Never `no issues found` for an
     axis that did not look.
 - **Optional findings**: batch them ALL into ONE comment (`file:line` plus one line each), each
-  line ending with where it went — `fixed in <sha>` or the open issue §5.11 placed it on. Never one
-  comment per nit, and never a finding that lives only on this PR/MR: after the merge nobody reads
-  it again.
+  line ending with where it went — `fixed in <sha>`, the open issue §5.11 placed it on, or
+  `unfiled — <reason>` where rung 3 is barred (§5.11). Never one comment per nit, and never a
+  finding that lives only on this PR/MR: after the merge nobody reads it again.
 - **Deferred findings**: ONE line giving the disposition by rung (§5.11) — how many were fixed
   in the change, which open issues received a scenario, which issues were created. Numbers and
   issue references, never contents: the reasons live in the ledger and in the created issue.
@@ -1375,7 +1377,7 @@ Run the repo's own final-push checklist, then the close sweep below, then the me
 #### The close sweep — what this change, or an earlier one, already fixed
 
 At hand-off ship knows exactly what the change touched, and that is the moment to ask whether any
-open issue in those areas is no longer true. Nothing else in the pipeline asks whether an open
+open issue naming those files is no longer true. Nothing else in the pipeline asks whether an open
 issue still holds — §7.A and §5.11 rung 2 read the backlog only to place new work — so without
 this step an issue fixed days ago, by this change or by another, stays open until somebody
 happens to notice. The sweep is what makes the backlog shrink as well as grow.
@@ -1585,7 +1587,8 @@ change whose run was still in progress. Poll until nothing is pending or running
 - **Read every issue with its comments** (§3.2); `Closes #N` only when each comment scenario is
   addressed or re-homed onto another open issue, and the move is stated.
 - **No finding lives only on a PR/MR** (§5.9, §5.11): every unfixed one, optional included, is
-  placed on an open issue and the record says where.
+  placed on an open issue — or, where rung 3 is barred, held unfiled in the ledger (§5.11) — and
+  the record says which.
 - **Read the kill, signal and `rm -rf` paths of code you did not write before it runs** (§7.D),
   and on resume after a crash check whether the interrupted command caused it before re-running
   it (§6).
