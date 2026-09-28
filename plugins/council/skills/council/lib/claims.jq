@@ -39,16 +39,30 @@
 # log and NOT in the record, so it can close nothing, open nothing, and never be counted OPEN. Doing
 # any of that is how the room contradicted its own record for ever.
 #
-# THE SNAPSHOT MOVES A MESSAGE, IT NEVER DROPS ONE. Every message is in exactly one of the two sets
-# below. `late` carries every late message whose act this graph reads, and `claims` prints them in
-# a section of their own. The acts it leaves out are the ones the graph ignores anyway: `msg`,
-# `notice`, `clarify`, `support`, `skip`, and `decide`, whose announcement follows the record by
-# construction. The snapshot is room state, so a seat can write it. That lets a seat move a claim
-# between "in the record" and "after the close"; it cannot make one vanish from what `claims`
-# prints. With `$closed` null, `late` is empty and nothing differs from before.
+# EVERY MESSAGE IS IN EXACTLY ONE OF THE TWO SETS below, the kept set and `late`. `late` carries
+# every late message whose act this graph reads, and `claims` and `status` print them in a section
+# of their own. The acts it leaves out are the ones the graph ignores anyway: `msg`, `notice`,
+# `clarify`, `support`, `skip`, and `decide`, whose announcement follows the record by
+# construction. With `$closed` null, `late` is empty and nothing differs from before.
 #
-# THE KEPT SET IS CLOSED UNDER ITS REFERENCES, and that is what makes the sentence above true for a
-# PARTIAL snapshot and not only for an empty one. An objection is printed under its proposal and an
+# WHAT THIS HOLDS AGAINST, stated as a scope rather than as "a claim can never vanish", which is not
+# true. It holds for the ordinary paths: a claim sent after the close, a send that raced the
+# close, an emptied or partly emptied snapshot (below), a copied id, and a ref to an id that first
+# appears later. It does NOT hold against a seat that forges room state on purpose, and three
+# routes were measured and are left open:
+#   * a lane file with a chosen lamport that reuses a kept (from, id) sorts first, takes the kept
+#     slot, and can then close an objection the record left open;
+#   * a pair appended to board/closed-over moves a post-close closing act into the kept set;
+#   * a snapshot that drops a proposal named by an EARLIER objection's forward ref leaves that
+#     objection attached to nothing, so it prints nowhere. The same happens with no snapshot at all
+#     when an objection names only an id that never becomes a proposal.
+# None of these is new ground. On main, one legal `send --hand --act overrule` after the close
+# silenced the same OPEN line, which the refusal and this snapshot now prevent. Each route needs a
+# write a human reading the lanes or the snapshot can see. The room is not a trust boundary
+# (SKILL.md, "The trust contract").
+#
+# THE KEPT SET IS CLOSED UNDER ITS REFERENCES, and that is what covers a PARTIAL snapshot and not
+# only an empty one. An objection is printed under its proposal and an
 # amend under its owner. So a snapshot that kept `b-1` and dropped the `a-1` it objects to used to
 # print `b-1` nowhere and count it nowhere: one edit of the file hid an objection the record left
 # open. Now a kept message is late too when one of its refs names a message that is NOT kept and
@@ -57,13 +71,17 @@
 #
 # The set is worked in POSITIONS, never in ids, because `.id` is the message's own claim and
 # nothing makes it unique. Two things follow, each of which an id-keyed version got wrong:
-#   * a snapshot pair keeps only its FIRST message in that order, so a later message that reuses a
-#     kept (from, id) is late rather than silently part of the record;
+#   * a snapshot pair keeps only its FIRST message in that order, so a message later in that order
+#     that reuses a kept (from, id) is late rather than silently part of the record. "Later" is
+#     canonical order, which a lamport a seat chooses can invert (the first route above). And a
+#     pair duplicated in the log BEFORE the close is rendered twice in the record but kept once
+#     here, so the readers then show more than the record, never less;
 #   * a ref orphans only through an EARLIER dropped message. A copy of a dropped proposal's id in
 #     another lane therefore still orphans the objection. A ref to an id that first appears LATER
-#     (a typo, or a guess at a seat's next id, then filled by a legal `--hand` send after the
-#     close) cannot: a message cannot have attached to one sent after it. Without this, one such
-#     send moved a claim of an unedited record to `late`.
+#     cannot. That id is a typo or a guess at a seat's next id, and a legal `--hand` send after
+#     the close may fill it; every such send stamps a lamport above the whole log, so it sorts
+#     after the claim. Without this rule, one such send moved a claim of an unedited record to
+#     `late`.
 ($closed // null) as $co
 | def _pair_in_snapshot: . as $x | any($co[]; .from == $x.from and .id == $x.id);
 . as $all

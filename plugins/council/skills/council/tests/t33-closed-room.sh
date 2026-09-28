@@ -8,7 +8,8 @@
 #   2  what still reaches the lane after the close (a `--hand` claim, or a send that passed the
 #      check just before the record landed) is listed "after the close" and never counted OPEN,
 #      because readers build a closed room's graph from the snapshot `decide` wrote;
-#   3  the snapshot can MOVE a claim between the two sections, never hide one.
+#   3  on the ordinary paths the snapshot can MOVE a claim between the two sections, not hide one
+#      (the forgery routes it does not cover are named in lib/claims.jq).
 # Plus the scenario #295 re-homed onto #176: an amend closes objections only on the proposal it
 # amends.
 set -uo pipefail
@@ -141,8 +142,8 @@ ok "4b: setup — the record left b-1 open"            '["b-1"]' "$(bash "$CLI" 
 COUNCIL_ME=b bash "$CLI" send --hand --act notice "This takes the id b-2." >/dev/null
 ok "4b: a later message with that id changes nothing" '["b-1"]' "$(bash "$CLI" claims --raw | jq -c '[.open[].id]')"
 ok "4b: ...and moves nothing to late"                 '[]' "$(bash "$CLI" claims --raw | jq -c '[.late[].id]')"
-# A post-close message that REUSES a kept (from, id) is not part of the record: only the first
-# message carrying a snapshot pair is. Here it would otherwise overrule the open objection.
+# A post-close message that REUSES a kept (from, id), sorting after it, is not part of the record:
+# the readers keep only the first message carrying a snapshot pair. It would otherwise overrule b-1.
 jq -n '{id:"a-1",from:"a",lamport:99,deps:{},act:"overrule",refs:["b-1"],to:["*"],hand:true,turn:null,round:null,text:"reused id",created_at:"t",sent_ms:0}' > "$ROOM/lane/a/000009.json"
 ok "4b: a reused kept id does not close b-1"          '["b-1"]' "$(bash "$CLI" claims --raw | jq -c '[.open[].id]')"
 ok "4b: ...it is listed late instead"                 yes "$(has "$(bash "$CLI" claims)" "⊘ a-1 (a) overrule: reused id")"

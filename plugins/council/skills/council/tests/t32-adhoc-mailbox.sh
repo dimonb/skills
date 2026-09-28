@@ -96,7 +96,7 @@ ok "B: ...and its notice still reached a shared mailbox" yes "$(present "$OTHER/
   && git -C "$REPO" worktree add -q "$ROOT/wt" ) || { echo "t32: worktree setup failed" >&2; exit 1; }
 WGD="$GD/worktrees/wt"; mkdir -p "$WGD/council"
 close_unresolved "$WGD/council/perwt" "$REPO"
-ok "A: a room under a per-worktree git dir is ad hoc"  yes "$(present "$WGD/council/perwt/mailbox/council-perwt-1.json")"
+ok "B: a room under a per-worktree git dir is ad hoc"  yes "$(present "$WGD/council/perwt/mailbox/council-perwt-1.json")"
 
 # --- C. the explicit override wins ------------------------------------------------------------------
 RC="$ROOT/scratch/explicit"; MC="$ROOT/explicit-mb"

@@ -264,7 +264,8 @@ v_claims() {
       , "" ),
     # A claim made after the close, or racing it (#176). It is in the log and not in the record,
     # so it is neither open nor closed, and it is not counted below. It is still PRINTED: this
-    # section is what keeps the snapshot from hiding anything (claims.jq says why).
+    # section is what keeps the snapshot from hiding a claim on the ordinary paths (claims.jq
+    # says which, and names the forgery routes it does not cover).
     (if (.late|length) > 0
      then "after the close, or outside the snapshot of the record — in the log, counted nowhere:",
           (.late[] | "  ⊘ \(.id) (\(.from)) \(.act): \(.text)"), ""
@@ -1159,6 +1160,9 @@ _floor_no_agent() { # <peer>
 # buy itself silence on the one display a supervisor is told to watch. It lives in the shared
 # escalation mailbox instead, beside the signature shipyard's own reporter keeps there
 # (`report-sig`), which is in the git common dir and so resolves the same from every worktree.
+# That is a SUPERVISED room. An ad hoc room's mailbox is `<room>/mailbox/` (council.sh, #178), so
+# for it this file IS inside the room. That is accepted: no monitor reads an ad hoc room, and the
+# shared mailbox is no less seat-writable anyway (SKILL.md, "The trust contract").
 # A room whose mailbox cannot be resolved gets no filter at all rather than a forgeable one:
 # `--only-changed` then prints every tick, which is the safe direction.
 _status_sigfile() {

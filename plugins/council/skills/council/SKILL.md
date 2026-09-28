@@ -157,8 +157,8 @@ gap somebody is on their way to filling.
 
 An `amend` belongs to **one** proposal — the first proposal-typed id it references; its
 other refs are objections, and it closes those raised against that proposal. (Referencing two
-proposals used to apply the amendment to both, so a room displayed two participants proposing the same words.) An
-`amend` that names only an objection belongs to the proposal that objection was raised
+proposals used to apply the amendment to both, so a room displayed two participants proposing the
+same words.) An `amend` that names only an objection belongs to the proposal that objection was raised
 against, so the decision record carries the amendment it closed the objection with. An `amend`
 closes objections **only on the proposal it belongs to** (#176). Before that rule, an amend
 owned by one proposal could close an objection on another. The live proposal was then recorded
@@ -201,14 +201,26 @@ record was written from, taken from the same read of the log. For a closed room,
 `verdict`, `status` and `rooms` build their graph from those messages. Every later claim is listed
 apart, in its own section of `claims` and as a `⊘ not in the record` line of `status`. It is
 neither open nor closed, and it is never counted OPEN, because the record does not contain it.
-The snapshot is room state like any other, so a seat can edit it. That can move a claim between
-the record's section and the late one; it cannot remove a claim from what `claims` and `status`
-print. The kept set is closed under its references: a kept claim whose earlier referent was left
-out (an objection whose proposal was dropped) is listed apart as well, rather than printed nowhere.
-It is worked in log positions, not ids, because a message chooses its own id: only the first
-message carrying a snapshot pair is in the record, and a reference to an id that first appears
-after the claim cannot orphan it. A room with no snapshot is read over the whole
-log, as before. That is a room older than this change, or one whose snapshot write failed, which
+The kept set is closed under its references: a kept claim whose earlier referent was left out (an
+objection whose proposal was dropped) is listed apart as well, rather than printed nowhere. It is
+worked in log positions, not ids, because a message chooses its own id: the readers keep only the
+first message carrying a snapshot pair, and a reference to an id that first appears after the
+claim cannot orphan it.
+
+**What that covers, and what it does not.** It covers the ordinary paths: a claim sent after the
+close, a send that raced it, an emptied or partly emptied snapshot, a copied id, and a reference
+filled after the close. It does not stop a seat that forges room state on purpose. The snapshot
+and the lanes are room state like any other. Three routes were measured and are named in
+`lib/claims.jq`:
+- a lane file with a chosen lamport that takes a kept message's place;
+- a pair appended to the snapshot;
+- a dropped proposal that a forward reference pointed at. That one can leave an objection printed
+  nowhere.
+Each needs a write the lanes or the snapshot show. None is new ground: before this change, one
+legal post-close `send --hand --act overrule` silenced the same OPEN line, and that is now
+refused or listed apart. A pair duplicated in the log before the close is rendered twice in the
+record and kept once by the readers, which then show more than the record, never less. A room with
+no snapshot is read over the whole log, as before. That is a room older than this change, or one whose snapshot write failed, which
 `decide` reports on stderr. `decide --force` on a room already recorded `unresolved` rewrites the
 record over the whole log and takes a new snapshot, so the late claims are then in the record.
 
