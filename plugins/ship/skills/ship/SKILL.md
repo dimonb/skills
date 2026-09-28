@@ -494,7 +494,8 @@ passes it — the absent file does not fail safe, it fails open.)
   "close_sweep": {
     "head": "a1b2c3d4...", "areas": ["area:<x>"], "examined": [31, 40, 57],
     "gone": [ { "issue": 31, "evidence": "grep on the head: the count it names is no longer in the file" } ],
-    "reproduces": [40], "unverified": [57]
+    "reproduces": [ { "issue": 40, "evidence": "lib/foo.sh:42 still reads the unchecked value" } ],
+    "unverified": [ { "issue": 57, "evidence": "needs a live forge to reproduce" } ]
   }
 }
 ```
@@ -1399,8 +1400,10 @@ happens to notice. The sweep is what makes the backlog shrink as well as grow.
    as one line of the hand-off record: the areas swept, how many examined, which close, which still
    reproduce, which are unverified. The issues left open because the reproduction still succeeded
    are the part of the record worth most: they say the sweep looked and was right not to close.
-   The sweep is bound to the head it ran on, like a review verdict: a push after it re-runs every
-   GONE issue, and every other issue whose evidence names a file the push changed.
+   Every verdict carries its evidence, so the record says why each issue stayed open too. The
+   sweep is bound to the head it ran on, like a review verdict: a push after it recomputes step 1's
+   scope against the new diff, and re-runs every GONE issue, every newly scoped one, and every other
+   issue whose evidence names a file the push changed.
    An area with no open issue besides the change's own is recorded as swept with nothing to examine.
 
 Where the repo tracks work some other way (§7.A, §5.11), the sweep runs over whatever it keeps — an
