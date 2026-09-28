@@ -1072,19 +1072,20 @@ two apart, so apply it instead of judging the fix "small":
 3. **Do the discovered check commands (§2.4) stay green?**
 4. **Is it one revert away from undone**, with nothing else to unwind?
 
-All four must hold. Three of four is rung 2. **"It is only a few lines" is not one of the four,
+All four must hold — for a defect in this change's own code too, below. Three of four is rung 2. **"It is only a few lines" is not one of the four,
 and neither is confidence** — the reason this is a test and not an adjective is that "small" is a
 judgement an author makes about their own work, and the costliest defects measured here were
 one-line diffs their authors were sure of. When it is genuinely unclear whether a fix passes,
 that uncertainty is the answer: go to rung 2.
 
 **A defect in code this change itself adds** (`origin: original` or `fix`, §5.6) **is fixed in this
-change.** Correcting a mechanism the change introduces finishes the change rather than adding
-machinery to it, so question 2 does not send it down the ladder; questions 3 and 4 still hold. It
-leaves this rung only when fixing it would widen the change beyond its issue, and then the hand-off
-record (§7.G) names it and says why it was not fixed in place. Measured: a gate arm's false
-negative, found by the review of the change that added the arm, was filed as a new issue for being
-"new tokenizer machinery" — machinery that change had itself just written.
+change, not filed.** Correcting the defective lines of a mechanism the change introduced is not new
+machinery, so question 2 asks what the *fix* adds, not where the defect sits: a fix that would add a
+further gate, script, config key or harness still fails it, and so does one that fails question 1,
+3 or 4. Such a defect leaves this rung only when the fix fails the test or would widen the change
+beyond its issue, and the hand-off record (§7.G) then names it and says which. Measured: a gate
+arm's false negative, found by the review of the change that added the arm, was filed as a new
+issue for being "new tokenizer machinery" when the fix corrected lines that change had just written.
 
 **A fix taken under this rung is still recorded** — in the ledger's `deferred` entry, with the sha
 in its `outcome`, and in the deferral line of the stage record (§5.9). **`deferred` is the
@@ -1260,7 +1261,7 @@ checklist after a merge. Neither is automated; skipping it makes the board drift
    share no code — report a proposed split naming the pieces (to the user, or as a notice to the
    supervisor that launched the run). It is a notice, not a question: the run keeps the scope it
    was given unless told otherwise. Measured: a work unit of three issues and about nine separate
-   test instances ran one turn for 40+ minutes while four smaller ones each finished in 12-35.
+   test instances ran one turn for 40+ minutes while four smaller ones each finished in 12–35.
 2. **Branch from a freshly fetched base branch.** Never branch off a local base you have not
    just updated.
    ```bash
