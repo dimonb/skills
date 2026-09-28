@@ -52,7 +52,8 @@ check:
 # assertions check.
 #
 # AND THE TARGET IS NOT MET, SO SAY SO HERE RATHER THAN LEAVE IT TO BE INFERRED. #203 wanted
-# `make check` + `make test` comfortably under a minute; together they are ~2:20. The remaining
+# `make check` + `make test` comfortably under a minute; together they were ~2:20 against the
+# earlier 2:10 figure, and a figure taken on a quiet box is what would settle it now. The remaining
 # lever is that this recipe runs the two slow suites ONE AFTER THE OTHER even though each now
 # fans out internally — overlapping them would cost roughly the longer of the two instead of the
 # sum. It was not taken: each already fans out to min(nproc, 8), so running both at once

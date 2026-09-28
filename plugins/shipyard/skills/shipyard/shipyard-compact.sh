@@ -96,10 +96,12 @@ done
 # compaction on screen, and until the command below is echoed the latest can be an earlier one —
 # a child compacted with --no-resume and not touched since still shows it. So "done" is believed
 # only after "not done" has been seen — here, once the command is typed, inside submit(), or on
-# any poll below. Every capture this script takes counts, because a small session can finish
-# compacting inside submit()'s wait; a window with no capture in it is one where a finished
-# compaction is never seen as new and the run ends in exit 4. An unreadable frame is no
-# observation. (The same absent-then-present rule adp_delivery_verdict states for a send.)
+# any poll below. Every capture from here on counts, because a small session can finish
+# compacting inside submit()'s wait. On the kind that echoes the command, the typed frame always
+# reads not-done, which closes that window. On the other kind it does not: under a stale finished
+# line, a compaction that ends before submit()'s capture is never seen as new, and the run ends in
+# exit 4. That is the safe direction, and exit 4 already says it proves nothing. An unreadable
+# frame is no observation. (The same absent-then-present rule adp_delivery_verdict states for a send.)
 seen_undone=0
 observe_undone "$(pane)"
 

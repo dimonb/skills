@@ -12,7 +12,7 @@
 # confirmation, too tight makes a healthy running turn read as not-running, so the commonest
 # healthy path alarms and an operator learns to ignore the signal. So the screens under test are
 # live captures of both admitted kinds — see fixtures/panes.notes for how each was taken and which
-# single one is derived rather than verbatim.
+# are derived rather than verbatim.
 #
 # The four ADVERSARIAL fixtures are the point of the file. Each one carries the turn marker
 # somewhere the anchor must refuse to read it, and each corresponds to a way the old unanchored

@@ -63,7 +63,7 @@ visible without real renders to measure against.
 A SECOND BATCH, taken later from throwaway sessions of both kinds in a detached tmux terminal at
 100x40 (tmux capture-pane), each driven by a trivial prompt in an empty scratch directory. Same
 substitutions as above, plus the model's own announcement tip and the wall-clock times. All of them
-are verbatim; the one derived screen built from them lives inline in t-turn.sh and says so.
+are verbatim; the screens derived from them are built inline in t-turn.sh, each marked DERIVED.
 
   pane-codex-ran-marker.txt      live, the second kind, IDLE after running a grep for the turn
                                  marker. The command's header renders in column one as a service
