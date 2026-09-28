@@ -86,9 +86,22 @@ gh issue view N --repo "$REPO" --json number,title,body,labels
 # rung 2 — add the scenario to an issue that is already open (body via file)
 gh issue comment N --repo "$REPO" --body-file "$BODY"
 
-# labels — read before inventing one
-gh label list --repo "$REPO" --limit 200
-gh label create "<name>" --repo "$REPO" --color RRGGBB --description "<what it means>"
+# labels — read WITH their descriptions before choosing or inventing one (core §2.7): the
+# description is what says which paths an area label covers. @tsv for the same reason as above.
+gh label list --repo "$REPO" --limit 1000 --json name,description \
+  --jq '.[] | [.name, .description] | @tsv'
+gh label create "<name>" --repo "$REPO" --color RRGGBB --description "<what it covers>"
+gh label edit "<name>" --repo "$REPO" --description "<what it covers>"
+
+# the close sweep (core §7.G) — every open issue in one area, in full
+gh issue list --repo "$REPO" --state open --label "<area>" --limit 1000 \
+  --json number,title,labels \
+  --jq '.[] | [.number, ([.labels[].name] | join(",")), .title] | @tsv'
+
+# close with the evidence — only where the merge did not close it (core §7.G). The comment
+# first, so an issue is never closed without the reason beside it.
+gh issue comment N --repo "$REPO" --body-file "$BODY"
+gh issue close N --repo "$REPO" --reason completed
 
 # create (body via file — NEVER an escaped \n in a quoted arg; it publishes literally)
 gh issue create --repo "$REPO" --title "<title>" --assignee "@me" \
@@ -220,6 +233,10 @@ Poll until nothing is `PENDING`, `QUEUED` or `IN_PROGRESS`.
   older run's result says nothing about the new head.
 - **`--body-file` or stdin for every multiline body.** An escaped `\n` inside a quoted `--body`
   argument publishes as the literal two characters.
+- **A label description is capped at 100 characters.** An area label's path list has to fit, so
+  name directory prefixes rather than files; `gh label edit` rejects a longer one.
+- **A closing keyword closes only on a merge into the default branch**, and needs its own line per
+  issue — `Closes #1, #2` closes only the first. One `Closes #N` line each.
 - **`gh pr view --json files` is paginated by the API**; for a very large change confirm you
   saw every path before concluding a diff is spec-only.
 - **`/code-review` and `/security-review` must never be passed `--comment` or `--fix` here

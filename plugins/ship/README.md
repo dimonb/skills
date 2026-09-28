@@ -44,6 +44,12 @@ one.
 explicit go-ahead in the invocation. A clean self-review is a better first pair of eyes, not
 a second one.
 
+**It looks back at the backlog at hand-off.** Every open issue in the areas the change touched
+goes to a verifier that tries to reproduce it on the branch head. Each one that no longer
+reproduces gets its own `Closes #N` line in the PR/MR description, with the evidence, so the
+merge closes it — and nothing is closed on reasoning alone: an issue that only *looks* fixed
+stays open until something tried to reproduce it and could not.
+
 ## It discovers your repo — nothing is hardcoded
 
 | Fact | Discovered from |
@@ -54,6 +60,7 @@ a second one.
 | Check and test commands | `Makefile` targets, `package.json` scripts, or the repo's own instructions |
 | Spec artifact stage | whether a spec tool's tree and CLI are present, or a design-doc convention is stated |
 | Merge policy | the `merge` / `no-merge` flag, else the repo's stated law, else stop and hand over |
+| Which label, which area | the forge's own label descriptions — an area label's description names the paths it covers |
 
 A fact that cannot be discovered is asked about, never guessed and never defaulted to a value
 copied from some other project.

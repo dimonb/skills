@@ -86,6 +86,9 @@ BEHAVIOR
     reviewer — honor it.
   - Merges only where repo policy or the `merge` flag allows it. A clean self-review is
     never a merge authorization by itself, and ship never self-approves.
+  - At hand-off, a close sweep tries to reproduce every open issue in the areas the
+    change touched, and adds a closing line for each one that no longer reproduces —
+    never on reasoning alone. Labels are picked by the forge's label descriptions.
   - All human prompts happen at invocation time; scheduled re-wakes run unattended.
   - Idempotent + re-entrant: safe to re-run; state in .pipeline-state/.
 ```
@@ -232,6 +235,34 @@ Read `AGENTS.md` (and `CLAUDE.md`) in full and treat it as binding for the rest 
 commit granularity and message style, protected branches, assignment discipline, working
 language, attribution rules, anything about labels. Where this skill and the repo's law
 disagree, **the repo's law wins** — say so and follow it.
+
+**The label taxonomy is read here too, from the forge, with its descriptions.** List the labels
+**with their descriptions** (the reference file has the query), not as a flat list of names: a name
+carries no information about what belongs under it, so a choice made from names is a string match
+and the project's partition drifts one near-match at a time. The description is where a project
+says what a label covers, and for an **area** label (a prefixed partition such as `area:<x>`) the
+useful description names **the paths or modules it covers** — that turns "which area is this?"
+from a guess into a lookup. Which dimensions a label must carry (one kind, one area, a severity)
+comes from the repo's law; where the law is silent, the labels on a page of recent issues show how
+they are combined.
+
+**The forge's own descriptions are the record — ship keeps no copy.** A copy in the repo would be a
+cache of a forge that can move, and would need a staleness check to be trusted; reading the
+descriptions each run needs neither, and a human corrects the partition by editing a label, where
+every other tool that reads it sees the correction too. The lookup is used at three points:
+
+- **choosing labels** for an issue or a PR/MR (§7.A step 4, §7.B step 5) — pick the area whose
+  description covers the paths the change or finding names; the kind from what the change is;
+- **choosing which existing issue a finding belongs to** (§5.11 rung 2) and **which areas a change
+  touched** (the close sweep, §7.G) — the area's path list is the partition to enumerate;
+- **answering "is this a new area?"** (§5.11 rung 3) — no area description covers the path.
+
+Where a description does not say what the label covers — a bare name, or prose such as "the X
+skill" — fall back to matching the name and the component, **say so in the record** that used it,
+and treat creating a label as more questionable, not less. Creating one stays a reported event, and
+a label ship creates carries a description in the shape above (an area label: its path list), so
+the next run can look it up instead of guessing. Where the project has no labels at all, skip every
+label step — labels are never a precondition for filing (§5.11).
 
 ### 2.8 Write the state file — the last fact of discovery, and a real step
 
@@ -459,14 +490,21 @@ passes it — the absent file does not fail safe, it fails open.)
     }
   },
   "swept": [ { "trigger": 1, "sha": "819f7d74...", "note": "drops a column that encoded authorization" } ],
-  "external_threads_grace": { "since": "2026-08-23T10:30:00Z", "thread_ids": ["abc"] }
+  "external_threads_grace": { "since": "2026-08-23T10:30:00Z", "thread_ids": ["abc"] },
+  "close_sweep": {
+    "head": "a1b2c3d4...", "areas": ["area:<x>"], "examined": [31, 40, 57],
+    "gone": [ { "issue": 31, "evidence": "grep on the head: the count it names is no longer in the file" } ],
+    "reproduces": [40], "unverified": [57]
+  }
 }
 ```
 
 `reviews` is the **gate ledger**: only a `clean` entry, un-invalidated per §3.3/§5.10,
 clears a stage. Its `deferred` array is the written record §5.11 requires — one entry per finding
 the ladder placed, carrying the rung it landed on, why each rung above it was ruled out, and at
-rung 1 that it was taken. `iteration` / `deadline` are enforced FIRST on every wake (§6).
+rung 1 that it was taken. `close_sweep` is §7.G's record of which open issues were examined on
+which head, and what each verdict was. `iteration` / `deadline` are enforced FIRST on every wake
+(§6).
 
 ---
 
@@ -1052,8 +1090,8 @@ a few thousand tokens — cheaper than the duplicate it prevents, and that is th
 written for. Thousands of open issues is a different problem: a tracker in the tens of thousands
 is one real listing of hundreds of thousands of tokens, which is not a read an agent can do at
 every stage record. Past the point where the full listing is impractical, **scope the enumeration
-by the repo's own partition** — the area label, the component, or the path prefix the finding
-names — read *that* partition in full, and record in the deferral entry that the scoping is what
+by the repo's own partition** — the area label whose description covers the path the finding
+names (§2.7), the component, or the path prefix — read *that* partition in full, and record in the deferral entry that the scoping is what
 replaced the full read. A scoped enumeration is still an enumeration; a bare keyword search is
 not. **What the scoping gives up** is a duplicate that sits outside the partition you chose, which
 is the case for filing under the wrong area in the first place — so widen the partition when the
@@ -1081,7 +1119,8 @@ whoever owns the issue decides what that evidence means.
 
 #### Rung 3 — a new issue
 
-Only a class no open issue names, or an area none covers. Record in the issue body why rungs 1
+Only a class no open issue names, or an area none covers — an area no label's description
+covers (§2.7), where the project keeps area labels. Record in the issue body why rungs 1
 and 2 did not fit — one line each — so the next reader can check that judgement instead of
 repeating the work behind it.
 
@@ -1173,9 +1212,10 @@ On each wake, in order:
    confirmation**. Respect `no-create` (abort instead). General prior approval does not
    count — ask here.
 4. On yes, create it assigned to `$ME`, with labels. **Labels are not decoration** where the
-   repo requires them: check the existing label list first and reuse a near-match; create a
-   new one only when genuinely missing, and report anything created. Pipeline/stage labels do
-   not satisfy a labelling requirement.
+   repo requires them, and they are chosen as §2.7 says — **by the forge's own label
+   descriptions, not by name similarity**. Create a new one only when no existing label's
+   description covers it, and report anything created. Pipeline/stage labels do not satisfy a
+   labelling requirement.
 5. Capture the number; fall through to §7.B.
 
 Where the repo tracks issues differently — an umbrella issue with a checklist, or no issues
@@ -1302,19 +1342,74 @@ Only in a spec-engine repo whose law puts the archive in the implementation chan
 
 ### 7.G — `ready-to-merge` → hand off, or merge
 
-Run the repo's own final-push checklist, then the merge gate (§10).
+Run the repo's own final-push checklist, then the close sweep below, then the merge gate (§10).
+
+#### The close sweep — what this change, or an earlier one, already fixed
+
+At hand-off ship knows exactly what the change touched, and that is the moment to ask whether any
+open issue in those areas is no longer true. Nothing else in the pipeline looks back at the
+backlog, so without this step an issue fixed days ago — by this change or by another — stays open
+until somebody happens to notice. The sweep is what makes the backlog shrink as well as grow.
+
+1. **Scope: the areas the diff touched, leaning WIDE.** Map each touched path to its area through
+   the label descriptions (§2.7); a path no description covers, or one two could cover, takes
+   every area it plausibly belongs to. Where the project has no area labels, the scope is the open
+   issues whose title or body names a touched path, module or script — found by enumerating every
+   open issue and matching, as §5.11 rung 2 does, never by keyword search. **Wide is the default on
+   purpose:** the reproduction attempt in step 2 gates every close, so over-wide scoping costs a few
+   extra attempts and closes nothing it should not, while over-narrow scoping silently misses
+   exactly the issues this step exists to close. List the area's open issues in full (the
+   reference file has the per-forge query) and drop only the ones this PR/MR already closes.
+2. **Reproduce each one on the branch head, in subagents.** Every candidate goes to a read-only
+   verifier with §5.5's charter pointed at the issue instead of a finding: *here is the issue;
+   construct its concrete failure on this head — the input, the state, the wrong result.* Batch
+   about four issues per verifier and dispatch them in one message. A verifier may run the one
+   reproduction the issue itself names or that it constructs for that one case — a single command,
+   a single test, a grep — and never a suite runner, a mutation harness or the check command (§5.3:
+   those run once per head, by ship). Each issue comes back as exactly one of:
+   - **REPRODUCES** — the failure path still exists on this head. The issue stays open.
+   - **GONE** — the attempt was made and did not reproduce, with the evidence: the command run and
+     what it printed, or, for an issue whose premise is a static property of the tree (a stale
+     count, a missing test, a version already surpassed), the `file:line` read on this head that
+     shows the premise no longer holds.
+   - **UNVERIFIED** — no attempt could be made inside those limits. The issue stays open.
+3. **Never close on reasoning alone.** "This diff looks like it fixes that" is not evidence, and
+   neither is a verifier's opinion without the attempt it made. Only **GONE** with its evidence
+   leads to a close; REPRODUCES and UNVERIFIED both leave the issue open, and a verdict whose
+   evidence is missing is read as UNVERIFIED. An issue that looks fixed stays open until something
+   tried to reproduce it and could not.
+4. **Close through the change, not around it.** For each GONE issue add its own closing line to the
+   PR/MR description — `Closes #N` in the form §7.A settled on — with the one-line evidence beside
+   it and the head sha it was established on. The merge then closes it, so the close happens when a
+   person merges and not before, and a change that is never merged closes nothing. Editing the
+   description moves no code, so the reviewed head stays the head handed off (§5.10). Where the
+   merge will not close it — the repo does not honour closing keywords, or the forge setting is off
+   — ship closes it after the merge with the evidence as a comment (the reference file has the
+   close-with-evidence query), and only where §2.6 lets ship merge at all; otherwise the hand-off
+   record names them for the person who merges.
+5. **Record what was examined, not only what closed** — in the state file's `close_sweep` (§4) and
+   as one line of the hand-off record: the areas swept, how many examined, which close, which still
+   reproduce, which are unverified. The issues left open because the reproduction still succeeded
+   are the part of the record worth most: they say the sweep looked and was right not to close.
+   The sweep is bound to the head it ran on, like a review verdict: a push after it re-runs it.
+   An area with no open issue besides the change's own is recorded as swept with nothing to examine.
+
+Where the repo tracks work some other way (§7.A, §5.11), the sweep runs over whatever it keeps — an
+umbrella checklist, a file of deferred work — and a GONE item is ticked or struck through in that
+repo's own form, with the same evidence. Where it keeps nothing, there is nothing to sweep.
 
 **Where policy says `no-merge` (the default): STOP here and hand over.** Post a record of the
 end state — what was reviewed, at which heads, how many rounds, checks green, anything
-deliberately deferred — and end the loop with `record state=ready-to-merge`. That last record
+deliberately deferred, the close sweep's line — and end the loop with `record state=ready-to-merge`. That last record
 is the one a supervisor reads to know the change is waiting on a person rather than still
 working. Say what is *holding*,
 not that everything is fine: "holding for the go-ahead" is the status. Do not phrase it in a
 way that invites someone to read a clean self-review as an approval.
 
 **Where policy says `merge`** and the gate fully passes: merge with the strategy the repo
-uses, delete the source branch if that is the convention, verify the issue closed (close it
-explicitly if the reference did not do it), then `record state=done`, stop the watch, schedule
+uses, delete the source branch if that is the convention, verify that every issue the
+description closes — the change's own and the sweep's — actually closed (close it explicitly,
+with its evidence, if the reference did not do it), then `record state=done`, stop the watch, schedule
 nothing more.
 
 If the forge refuses the merge because the **project** requires approvals, do NOT attempt to
@@ -1447,6 +1542,9 @@ change whose run was still in progress. Poll until nothing is pending or running
 - **Delta review is blind to seams — sweep when a trigger fires, not on a round counter**
   (§5.8), and latch each trigger.
 - **The handed-off head must be a reviewed head** (§5.10).
+- **The close sweep closes only on a reproduction attempt that failed** (§7.G) — never on
+  reasoning alone — and through the change's own closing lines, so a merge closes it.
+- **Labels are chosen by the forge's own label descriptions**, not by name similarity (§2.7).
 - **Never resolve another person's thread** (§8); reply with the fix or the rationale.
 - **Never self-approve; never merge without policy** (§2.6, §10).
 - **No AI/assistant attribution anywhere**: not in an issue, PR/MR, comment, reply, commit,
