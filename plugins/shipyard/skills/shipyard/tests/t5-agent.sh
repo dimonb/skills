@@ -101,7 +101,9 @@ dry_launch() { # <skill-dir> <repo> -> stdout+stderr, then "rc=<n>"
   out=$( cd "$2" || exit 1
          # Functions, not binaries on PATH: shipyard-lib.sh prepends the system PATH.
          tmux() { return 1; }; claude() { :; }; export -f tmux claude
-         unset CLAUDECODE CLAUDE_CODE_SESSION_ID CODEX_SESSION_ID CODEX_THREAD_ID
+         # The two env knobs replace the per-kind defaults these checks are about.
+         unset CLAUDECODE CLAUDE_CODE_SESSION_ID CODEX_SESSION_ID CODEX_THREAD_ID \
+           SHIPYARD_ENV_PASS SHIPYARD_ENV_SCRUB
          SHIPYARD_AGENT=claude SHIPYARD_BACKEND=tmux SHIPYARD_SESSION=t5ex SHIPYARD_DRY=1 \
            bash "$1/shipyard-launch.sh" "#42" 2>&1 ) || rc=$?
   printf '%s\nrc=%s\n' "$out" "$rc"

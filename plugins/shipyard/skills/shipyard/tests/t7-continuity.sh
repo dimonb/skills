@@ -749,8 +749,9 @@ rearm_rc=0
 CODEX_SESSION_ID=test-thread AGTERM_ENABLED=1 SHIPYARD_BACKEND=agterm SHIPYARD_WORKSPACE=test-ai \
   _SHIPYARD_CONTINUITY_LAUNCH_MODE=agterm-session SHIPYARD_MOTION_INTERVAL=0.01 \
   bash "$SKILL_DIR/shipyard-report.sh" >"$TMP/rearm.out" 2>"$TMP/rearm.err" || rearm_rc=$?
+check 1 "$rearm_rc" "a report tick over a live slot reports work in flight"
 check 1 "$(grep -c '^| 41 |' "$TMP/rearm.out")" \
-  "a report tick over a live slot reaches its slot loop"
+  "...and reaches its slot loop"
 check 1 "$(grep -c '^session-new:.*watch-foreground' "$FAKE_LOG")" \
   "...and its re-arm starts the parent continuity watcher"
 rearm_pid=$(awk '{print $1}' "$_SHIPYARD_CONTINUITY_DIR/continuity-test-session.pid" 2>/dev/null)
@@ -758,6 +759,23 @@ if [ -n "$rearm_pid" ] && kill -0 "$rearm_pid" 2>/dev/null; then rearmed=yes; el
 check yes "$rearmed" "...which is running once the tick has returned"
 check 0 "$(grep -Fc 'could not ensure the Codex parent continuity guard' "$TMP/rearm.err")" \
   "...and the tick does not warn that it failed"
+check 0 "$(grep -Fc 'parent continuity guard started' "$TMP/rearm.out")" \
+  "...nor puts the watcher's start line in the report"
+shipyard_continuity_stop_all >/dev/null 2>&1 || true
+
+# ...AND DOES NOT RE-ARM ONE THE LAST-SLOT CLEANUP JUST STOPPED. The monitor names its slots, so it
+# never reaches the empty branch the positional check below guards: after a by-hand teardown of the
+# last slot, the next tick still names 41 while the workspace lists nothing, and a watcher started
+# there is one nothing would stop again.
+reset_fake
+printf '%s\n' empty-workspace >"$FAKE_MODE"
+CODEX_SESSION_ID=test-thread AGTERM_ENABLED=1 SHIPYARD_BACKEND=agterm SHIPYARD_WORKSPACE=test-ai \
+  _SHIPYARD_CONTINUITY_LAUNCH_MODE=agterm-session SHIPYARD_MOTION_INTERVAL=0.01 \
+  bash "$SKILL_DIR/shipyard-report.sh" 41 >"$TMP/rearm-drained.out" 2>"$TMP/rearm-drained.err" || true
+check 0 "$(grep -c '^session-new:' "$FAKE_LOG")" \
+  "a named-slot tick over a drained workspace starts no watcher"
+if [ -e "$_SHIPYARD_CONTINUITY_DIR/continuity-test-session.pid" ]; then drained_pid=yes; else drained_pid=no; fi
+check no "$drained_pid" "...and leaves no watcher record"
 shipyard_continuity_stop_all >/dev/null 2>&1 || true
 printf '%s\n' normal >"$FAKE_MODE"
 

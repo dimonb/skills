@@ -2,9 +2,10 @@
 # shipyard-continuity.sh - keep a Codex parent supervising after a capacity stop.
 #
 # Source this file for the lifecycle and parser functions. `shipyard-launch.sh`
-# starts one session-hosted watcher per parent agterm session; the watcher exits
-# when that session disappears, and `shipyard-down.sh` stops every watcher after
-# the last ship slot is removed.
+# starts one session-hosted watcher per parent agterm session, and each
+# `shipyard-report.sh` tick re-ensures it while the fleet still lists a terminal;
+# the watcher exits when that session disappears, and `shipyard-down.sh` stops
+# every watcher after the last ship slot is removed.
 
 SHIPYARD_CONTINUITY_SCRIPT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/shipyard-continuity.sh"
 
