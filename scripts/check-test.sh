@@ -53,6 +53,100 @@ RUNNER=$TESTS_DIR/run-all.sh
 # it reds the run that added it, instead of the next person's.
 GUARDED='.claude .agents plugins scripts .claude-plugin shared Makefile .github'
 
+# Built from code points rather than written out, for the reason enprobe gives below: a literal
+# would put the very bytes under test into this file. `ö` is Latin, so check 8 permits it either
+# way -- what is under test is git's C-quoting, which fires on any byte >= 0x80.
+NONASCII=$(printf '_probe-n\303\266n')
+# Untracked probe files: `git checkout --` cannot bring these back OR take them away, so an
+# interrupt between writing one and its inline rm would leave it. A stray t99-probe.sh reds the
+# gate on its own assertion and then blocks the next run on the dirty-tree guard below. Named ONCE
+# here because two readers need the list: the restore removes these paths, and the entry guard
+# names any it finds as this file's own leftovers rather than as a repository violation (#136).
+PROBE_FILES=(
+  docs/_probe.md docs/stray .claude/skills/_probe-local
+  plugins/ship/skills/_probe-skill .claude/skills/_probe-skill .agents/skills/_probe-skill
+  .claude/skills/_probe-tracked plugins/ship/skills/_probe-pkg plugins/ship/skills/ship/_probe.sh
+  ".claude/skills/$NONASCII" ".agents/skills/$NONASCII" "plugins/ship/skills/$NONASCII"
+  plugins/hollow
+  "$TESTS_DIR/t99-probe.sh" "$TESTS_DIR/t98-unregistered.sh" "$TESTS_DIR/nested"
+  shared/driver/tests/_probe-unreg.sh plugins/shipyard/skills/shipyard/tests/_probe-unreg.sh
+  shared/flow/tests/_probe-unreg.sh shared/flow/extra.sh
+  shared/adapters/tests/_probe-unreg.sh shared/policy/tests/_probe-unreg.sh
+  shared/knobs/tests/_probe-unreg.sh
+  plugins/shipyard/skills/shipyard/tests/t1-probe-dup.sh "$TESTS_DIR/t1z-probe.sh"
+)
+
+# THE RUN MARKER (#136). While a run is in flight its probes are in the tree, and from outside a
+# live probe and one a killed run left behind are the same file with the same edit. That cost a
+# supervisor a wrong revert: a probe applied to a Makefile was read as a leftover and reverted in
+# the middle of the run that owned it. So a run holds this file from just before its trap is armed
+# until the trap has restored, recording its pid and start time. A reader tells the two apart with
+# `ps -p <pid>`: the pid alive and running this script means live; the file present and the pid
+# gone means the run was killed (SIGKILL, which no trap can catch) and what it left is stale.
+# It lives in the worktree's own git directory, so it is never committed, never shows in
+# `git status` (which the end-of-run assertion reads), and each worktree has its own.
+MARKER=$(git rev-parse --git-path check-test.running)
+
+restore() {
+  # shellcheck disable=SC2086
+  git checkout -- $GUARDED 2>/dev/null || true
+  # Only the entries this test replaces, never a whole directory.
+  for s in .claude/skills .agents/skills; do
+    rm -rf "$s/ship" "$s/shipyard" 2>/dev/null || true
+  done
+  # shellcheck disable=SC2086
+  git checkout -- $GUARDED 2>/dev/null || true
+  rm -rf "${PROBE_FILES[@]}" ${SCRATCH:+"$SCRATCH"} 2>/dev/null || true
+  rmdir docs 2>/dev/null || true
+  # Last, so the marker says "in progress" for as long as anything of this run is in the tree.
+  rm -f "$MARKER"
+}
+
+# A marker whose pid is still running THIS script is a live run: refuse, and say that its fixtures
+# must be left alone. The command is checked as well as the pid, so a pid the system has since
+# reused for something else reads as the dead run it is.
+prev=""
+if [ -f "$MARKER" ]; then
+  prev_pid=$(sed -n 's/^pid=\([0-9][0-9]*\)$/\1/p' "$MARKER" | head -1)
+  prev_started=$(sed -n 's/^started=//p' "$MARKER" | head -1)
+  if [ -n "$prev_pid" ] && ps -p "$prev_pid" -o command= 2>/dev/null | grep -q 'check-test\.sh'; then
+    echo "refusing to run: a check-test run is in progress in this worktree (pid $prev_pid, started ${prev_started:-unknown})" >&2
+    echo "the probe fixtures in the tree are that run's LIVE probes, not leftovers: do not revert them; it restores them itself" >&2
+    exit 2
+  fi
+  prev="a check-test run in this worktree did not finish (pid ${prev_pid:-unknown}, started ${prev_started:-unknown}, no longer running)"
+fi
+left_over=()
+for p in "${PROBE_FILES[@]}"; do
+  if [ -e "$p" ] || [ -L "$p" ]; then left_over+=("$p"); fi
+done
+explain_leftovers() {
+  if [ -n "$prev" ]; then echo "$prev" >&2; fi
+  if [ "${#left_over[@]}" -gt 0 ]; then
+    echo "check-test's own probe fixtures are in the tree, left by a run that did not finish — not a repository violation:" >&2
+    printf '  %s\n' "${left_over[@]}" >&2
+  fi
+  echo "inspect them, then 'bash scripts/check-test.sh --recover' restores $GUARDED and removes the probe files (it discards every change listed)" >&2
+}
+
+# --recover: the restore a killed run never got to, run on request. It refuses a live run above,
+# like any other invocation, and discards what it lists, which is why it is never run implicitly.
+if [ "${1:-}" = "--recover" ]; then
+  # shellcheck disable=SC2086
+  dirty=$(git status --porcelain --untracked-files=all -- $GUARDED)
+  if [ -z "$prev" ] && [ "${#left_over[@]}" -eq 0 ] && [ -z "$dirty" ]; then
+    echo "nothing to recover: no marker of an unfinished run, no probe fixture and no change under $GUARDED"
+    exit 0
+  fi
+  echo "recovering: restoring $GUARDED and removing check-test's probe files; discarding:"
+  if [ -n "$dirty" ]; then printf '%s\n' "$dirty"; fi
+  if [ "${#left_over[@]}" -gt 0 ]; then printf '  %s\n' "${left_over[@]}"; fi
+  SCRATCH=""
+  restore
+  echo "recovered"
+  exit 0
+fi
+
 # The guard comes FIRST and the trap is installed only after it passes. Installing the trap
 # earlier makes the guard's own early exit run the restore, which would discard exactly the
 # uncommitted work the guard exists to protect. `--untracked-files=all` is the other half:
@@ -63,9 +157,22 @@ dirty=$(git status --porcelain --untracked-files=all -- $GUARDED)
 if [ -n "$dirty" ]; then
   echo "refusing to run: uncommitted or untracked changes under $GUARDED" >&2
   printf '%s\n' "$dirty" >&2
-  echo "this test restores with 'git checkout --', which cannot recover untracked files" >&2
+  if [ -n "$prev" ] || [ "${#left_over[@]}" -gt 0 ]; then
+    explain_leftovers
+  else
+    echo "this test restores with 'git checkout --', which cannot recover untracked files" >&2
+  fi
   exit 2
 fi
+# A leftover outside $GUARDED passes the guard above (`docs/` is untracked, so it cannot be in that
+# list), and would otherwise surface as `BASELINE DIRTY`, which reads as the repository being in a
+# bad state rather than as this script's previous run having died.
+if [ "${#left_over[@]}" -gt 0 ]; then
+  echo "refusing to run:" >&2
+  explain_leftovers
+  exit 2
+fi
+if [ -n "$prev" ]; then echo "note: $prev; nothing it left was found in the tree"; fi
 
 # The tree as it was ADMITTED, so the assertion at the bottom reports what this run changed
 # rather than what it found. The entry guard above is scoped to $GUARDED and the assertion is
@@ -77,36 +184,16 @@ fi
 PRE_STATUS=$(git status --porcelain --untracked-files=all)
 
 SCRATCH=$(mktemp -d)
-# Built from code points rather than written out, for the reason enprobe gives below: a literal
-# would put the very bytes under test into this file. `ö` is Latin, so check 8 permits it either
-# way -- what is under test is git's C-quoting, which fires on any byte >= 0x80.
-NONASCII=$(printf '_probe-n\303\266n')
-restore() {
-  # shellcheck disable=SC2086
-  git checkout -- $GUARDED 2>/dev/null || true
-  # Only the entries this test replaces, never a whole directory.
-  for s in .claude/skills .agents/skills; do
-    rm -rf "$s/ship" "$s/shipyard" 2>/dev/null || true
-  done
-  # shellcheck disable=SC2086
-  git checkout -- $GUARDED 2>/dev/null || true
-  # Untracked probe files: `git checkout --` cannot bring these back OR take them away, so an
-  # interrupt between writing one and its inline rm would leave it. A stray t99-probe.sh reds the
-  # gate on its own assertion and then blocks the next run on the dirty-tree guard above.
-  rm -rf docs/_probe.md "$SCRATCH" .claude/skills/_probe-local \
-    plugins/ship/skills/_probe-skill .claude/skills/_probe-skill .agents/skills/_probe-skill \
-    .claude/skills/_probe-tracked plugins/ship/skills/_probe-pkg plugins/ship/skills/ship/_probe.sh \
-    ".claude/skills/$NONASCII" ".agents/skills/$NONASCII" "plugins/ship/skills/$NONASCII" \
-    "$TESTS_DIR/t99-probe.sh" "$TESTS_DIR/t98-unregistered.sh" "$TESTS_DIR/nested" \
-    shared/driver/tests/_probe-unreg.sh plugins/shipyard/skills/shipyard/tests/_probe-unreg.sh \
-    shared/flow/tests/_probe-unreg.sh shared/flow/extra.sh \
-    shared/adapters/tests/_probe-unreg.sh shared/policy/tests/_probe-unreg.sh \
-    shared/knobs/tests/_probe-unreg.sh \
-    plugins/shipyard/skills/shipyard/tests/t1-probe-dup.sh "$TESTS_DIR/t1z-probe.sh" \
-    2>/dev/null || true
-  rmdir docs 2>/dev/null || true
+write_marker() {
+  printf 'pid=%s\nstarted=%s\n' "$$" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" > "$MARKER"
 }
+write_marker
 trap restore EXIT
+# Measured on bash 3.2 and 5.x: the EXIT trap already runs on HUP, INT and TERM, but an INT exits
+# 0. These make the exit status name the signal and keep the restore from resting on that
+# behaviour. SIGKILL cannot be trapped; the marker above is what covers it. No probe below covers
+# these traps, since one would have to signal a full nested run; they were checked by hand.
+trap 'exit 129' HUP; trap 'exit 130' INT; trap 'exit 143' TERM
 
 pass=0; nocatch=0
 # $1 is the label. $2, OPTIONAL, is a fixed string the gate's output must contain.
@@ -1106,6 +1193,33 @@ expect_fail "check 13: an unreadable \$GUARDED is loud, not silent" \
   "could not read \$GUARDED"
 git checkout -- scripts/check-test.sh
 
+# 33d — the backstop (#215): a `paths:` list under `push:` makes the run on main conditional. The
+# flat scrape this replaced read the new entry as one more pull-request filter entry and said
+# nothing. Every pull-request entry stays in place, so only the push arm can fire.
+perl -0pi -e "s{(\n  push:\n    branches: \\[main\\]\n)}{\$1    paths:\n      - 'docs/**'\n}" .github/workflows/check-test.yml
+expect_fail "check 13: a path filter under push: is refused" \
+  "filters its push: trigger by paths"
+git checkout -- .github/workflows/check-test.yml
+# 33e — and the backstop removed outright.
+perl -0pi -e 's{\n  push:\n    branches: \[main\]\n}{\n}' .github/workflows/check-test.yml
+expect_fail "check 13: a workflow with no push: trigger reds" \
+  "has no push: trigger"
+git checkout -- .github/workflows/check-test.yml
+# 33f — an entry under ANOTHER trigger cannot stand in for one missing from the pull-request
+# filter. Under the flat scrape this line was read as coverage, so dropping `shared/**` from
+# `pull_request:` passed green. `pull_request_target:` rather than `push:`, so the push arm above
+# cannot claim the red.
+perl -0pi -e "s{\non:\n}{\non:\n  pull_request_target:\n    paths:\n      - 'shared/**'\n}; s{\n *- 'shared/\\*\\*'\n( *- 'Makefile')}{\n\$1}" .github/workflows/check-test.yml
+expect_fail "check 13: an entry under another trigger does not cover the pull-request filter" \
+  "path filter has no 'shared/**'"
+git checkout -- .github/workflows/check-test.yml
+# 33g — the reader's fail-closed arm: an awk error is never read as an empty filter.
+cp scripts/check.sh "$SCRATCH/check13.bak"
+perl -pi -e 's{^(\s*)# A line in column 0 opens a top-level key.*$}{$1) (}' scripts/check.sh
+expect_fail "check 13 reds when its trigger reader cannot run" \
+  "could not read the triggers out of"
+cp "$SCRATCH/check13.bak" scripts/check.sh
+
 # 34 — check 14: a parent-pid lookup with no pattern reds (#265). The fixture is TEXT: the gate
 # only reads it, nothing here or in check.sh executes it, and it opens with `exit 0` besides. The
 # command word comes from a variable so that this file never spells the shape check 14 matches —
@@ -1178,6 +1292,29 @@ expect_fail "check 14: a quoted sh -c inside a double-quoted \$(...)" \
 # span, so a lookup there WITH a pattern stays green.
 printf '#!/usr/bin/env bash\nexit 0\nkids="$(%s -P "$x" sleep)"\n' "$PG" > "$SH_PROBE"
 expect_pass "check 14: a double-quoted \$(...) lookup WITH a pattern stays green"
+# 34e8 — a quoted command word that IS the command word, though it holds a blank (#272): on a
+# path holding a space, in either quote style, and with a leading blank. Each was read as a
+# nested command, cut off from its `-P`, and passed.
+PK=pkill
+printf '#!/usr/bin/env bash\nexit 0\nkids=$("$d/a b/%s" -P "$x")\n' "$PG" > "$SH_PROBE"
+expect_fail "check 14: a quoted command word on a path holding a space" \
+  "pgrep/pkill with -P/--parent and no pattern"
+printf '#!/usr/bin/env bash\nexit 0\n\047/opt/my tools/%s\047 -P "$x"\n' "$PK" > "$SH_PROBE"
+expect_fail "check 14: a single-quoted pkill path holding a space" \
+  "pgrep/pkill with -P/--parent and no pattern"
+printf '#!/usr/bin/env bash\nexit 0\nkids=$(" %s" -P "$x")\n' "$PG" > "$SH_PROBE"
+expect_fail "check 14: a quoted command word with a leading blank" \
+  "pgrep/pkill with -P/--parent and no pattern"
+# ...while a quoted command string that merely ENDS in the command word is still read as the
+# command it is: a draft that kept every such span whole hid the lookup at its start.
+printf '#!/usr/bin/env bash\nexit 0\nkids=$(sh -c "%s -P $x; /usr/bin/%s")\n' "$PG" "$PG" > "$SH_PROBE"
+expect_fail "check 14: a lookup in a quoted sh -c string that ends in the command word" \
+  "pgrep/pkill with -P/--parent and no pattern"
+# 34e9 — and the mirrors: the same quoted path WITH a pattern, and a quoted path as the pattern.
+printf '#!/usr/bin/env bash\nexit 0\nkids=$("$d/a b/%s" -P "$x" sleep)\n' "$PG" > "$SH_PROBE"
+expect_pass "check 14: a quoted command path holding a space WITH a pattern stays green"
+printf '#!/usr/bin/env bash\nexit 0\nkids=$(%s -P "$x" "/opt/a b/%s")\n' "$PG" "$PG" > "$SH_PROBE"
+expect_pass "check 14: a quoted path holding a space as the pattern stays green"
 rm -f "$SH_PROBE"
 
 # 34f — check 14's fail-closed arms, in the shapes 14a and 14b use. The listing errors with its
@@ -1216,6 +1353,55 @@ printf '#!/usr/bin/env bash\nexit 0\n' > "$TESTS_DIR/t1z-probe.sh"
 expect_pass "check 10b: a letter suffix on an existing number stays green"
 rm -f "$TESTS_DIR/t1z-probe.sh"
 git checkout -- "$RUNNER"
+
+# 36 — this file's own entry arms (#136): the run marker and the leftover-fixture refusal. They are
+# not gate assertions, so they are proven by running this script a second time, NESTED, and reading
+# how it refuses. Every nested run below must refuse before it arms a trap or mutates anything,
+# because a nested run that got past its entry guards would start a second full run over this
+# tree. So each one is given a leftover that also reds the gate — a non-Latin `docs/_probe.md`,
+# the exact state #136 measured — which makes a broken arm fall to another refusal, or to
+# `BASELINE DIRTY`, and report here as a wrong arm rather than run.
+# $1 label, $2 the exit status wanted, $3 a fixed string the nested output must contain, then the
+# nested run's arguments.
+expect_nested() {
+  local label=$1 want=$2 pin=$3 got; shift 3
+  bash scripts/check-test.sh "$@" >"$SCRATCH/nested" 2>&1; got=$?
+  if [ "$got" -ne "$want" ]; then
+    echo "NOT CAUGHT: $label (nested exit $got, wanted $want): $(grep -m1 . "$SCRATCH/nested" | cut -c1-70)"
+    nocatch=$((nocatch+1))
+  elif ! grep -qF -- "$pin" "$SCRATCH/nested"; then
+    echo "WRONG ARM:  $label"
+    echo "            expected: $pin"
+    echo "            got:      $(grep -m1 . "$SCRATCH/nested" | cut -c1-70)"
+    nocatch=$((nocatch+1))
+  else
+    echo "caught:     $label"
+    pass=$((pass+1))
+  fi
+}
+mkdir -p docs
+printf 'probe \320\226\n' > docs/_probe.md
+# 36a — this run's own marker names a live run, so a second run refuses and says the fixtures in
+# the tree are live. This is the case that cost the wrong revert.
+expect_nested "a second run refuses while this one is live" 2 "a check-test run is in progress"
+# 36b — the marker of a run that died, with its leftover outside $GUARDED: named as this file's own
+# fixture, not reported as a repository violation. A pid that has just exited stands in for it.
+( : ) & dead=$!; wait "$dead"
+printf 'pid=%s\nstarted=probe\n' "$dead" > "$MARKER"
+expect_nested "a killed run's leftover is named as check-test's own" 2 "left by a run that did not finish"
+# 36c — the same marker with a probe edit under $GUARDED: the dirty-tree refusal says whose it
+# most likely is.
+printf '# probe\n' >> Makefile
+expect_nested "a killed run's edit under \$GUARDED is attributed to it" 2 "did not finish (pid $dead"
+# 36d — --recover restores both and removes the marker; then, with nothing left, says so.
+expect_nested "--recover restores what a killed run left" 0 "recovered" --recover
+if [ -e docs/_probe.md ] || [ -e "$MARKER" ] || ! git diff --quiet -- Makefile; then
+  echo "NOT CAUGHT: --recover left something behind"; nocatch=$((nocatch+1))
+fi
+expect_nested "--recover with nothing to recover" 0 "nothing to recover" --recover
+git checkout -- Makefile
+rm -f docs/_probe.md
+write_marker
 
 echo
 echo "assertions proven: $pass   not proven: $nocatch"
