@@ -130,8 +130,8 @@ pass=0; nocatch=0
 #   * check 12's `could not scan the Makefile for a test runner invocation`
 # Both are per-item "this matcher errored" arms whose only trigger is an unreadable file, which is
 # a no-op when the gate runs as root, so they cannot be probed portably. Their siblings that error
-# on a LISTING rather than a per-item read are probed (14a, 21, 32f), because a listing's exit
-# status can be forced directly. Recorded here because a green run would otherwise be read as
+# on a LISTING rather than a per-item read are probed (for example 14a, 21, 32f, 34f), because a
+# listing's exit status can be forced directly. Recorded here because a green run would otherwise be read as
 # covering them.
 expect_fail() {
   if bash scripts/check.sh >"$SCRATCH/out" 2>&1; then
@@ -1132,6 +1132,10 @@ expect_fail "check 14: the incident line, with a redirection after the options" 
 # 34e — the lookup inside a quoted `sh -c` string: the command word carries the quote.
 printf '#!/usr/bin/env bash\nexit 0\nkids=$(sh -c "%s -P $x")\n' "$PG" > "$SH_PROBE"
 expect_fail "check 14: a no-pattern lookup inside sh -c \"...\"" \
+  "pgrep/pkill with -P/--parent and no pattern"
+# 34e2 — and the alias-bypassing backslash form.
+printf '#!/usr/bin/env bash\nexit 0\nkids=$(\\%s -P "$x")\n' "$PG" > "$SH_PROBE"
+expect_fail "check 14: a backslash-escaped command word" \
   "pgrep/pkill with -P/--parent and no pattern"
 rm -f "$SH_PROBE"
 

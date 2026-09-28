@@ -876,7 +876,10 @@ fi
 # any OTHER way — a different tool, a pattern that matches more than intended, a parent lookup in
 # a file that is not `*.sh` (a Makefile recipe, an extensionless script), or `pgrep` reached
 # through a variable or an alias. It also over-reads a quoted string that happens to spell the
-# shape (`echo "pgrep -P x"`); that reds, loudly, which is the direction to err in. The rule it
+# shape (`echo "pgrep -P x"`); that reds, loudly, which is the direction to err in. Words are
+# split on whitespace with no regard to quoting, so a quoted argument or redirect target holding
+# a space (`-P "$a $b"`, `2>"$d/a b"`) leaves a fragment that reads as the pattern and passes; a
+# process substitution before the pattern (`<(…) sleep`) goes the other way and reds. The rule it
 # backs is broader and lives in AGENTS.md: a helper that signals a LIST of pids refuses pid 1 and
 # bounds the list, because the list is exactly what a wrong lookup inflates.
 pg_files=$(git $GIT_Q ls-files --cached --others --exclude-standard '*.sh'); pg_rc=$?
@@ -913,8 +916,9 @@ else
         n = split(s, t, /[ \t]+/)
         for (i = 1; i <= n; i++) {
           if (t[i] ~ /^#/) return
-          # Quotes off the command word, so `sh -c "pgrep -P $x"` is read as the lookup it is.
-          base = t[i]; gsub(/["\047]/, "", base); sub(/.*\//, "", base)
+          # Quotes and a leading backslash off the command word, so `sh -c "pgrep -P $x"` and the
+          # alias-bypassing `\pgrep` are read as the lookup they are.
+          base = t[i]; gsub(/["\047\\]/, "", base); sub(/.*\//, "", base)
           if (base != "pgrep" && base != "pkill") continue
           hasP = 0; pat = 0
           for (j = i + 1; j <= n; j++) {
