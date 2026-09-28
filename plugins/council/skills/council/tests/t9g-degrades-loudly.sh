@@ -585,5 +585,25 @@ else
   echo "ok   lane directory: this filesystem refused the fixture"
 fi
 
+# --- a send whose counters cannot be written (#169) ------------------------------
+# The lane write succeeds and the seq counter does not, so the NEXT send would compute the same
+# seq and overwrite this message with a valid file no reader can tell apart. The send must say
+# so and fail, rather than print an id at rc 0.
+fresh
+chmod 555 "$R/state"
+if [ -w "$R/state" ]; then
+  echo "ok   send counters: this user writes through a read-only dir, fixture skipped"
+else
+  err="$R/../t9g-send.err"
+  out=$(COUNCIL_ME=a bash "$CLI" send --act propose "first" 2>"$err"); rc=$?
+  if [ "$rc" != 0 ] && [ -z "$out" ] && grep -q 'could not be written' "$err"; then
+    echo "ok   send counters: rc $rc, no id on stdout, the failure named"
+  else
+    echo "FAIL send counters: rc $rc, stdout '$out', stderr: $(cat "$err")"; fail=1
+  fi
+  rm -f "$err"
+fi
+chmod 755 "$R/state"
+
 [ "$fail" = 0 ] && echo "t9g PASS" || echo "t9g FAIL"
 exit $fail

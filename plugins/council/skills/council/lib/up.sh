@@ -631,7 +631,15 @@ council_up() {
   local sf="$SKILL/scenarios/$scenario.md"
   [ -f "$sf" ] || { echo "council up: no such scenario '$scenario'" >&2; return 2; }
   eval "$(_scenario_meta "$sf")"
-  [ -n "$turns" ] && SC_TURNS="$turns"
+  # Checked where the user typed it (#169): the value goes into the roster by `--argjson`, which
+  # refuses anything that is not JSON, and that refusal used to leave roster.json at zero bytes
+  # under a room that went on to launch every participant.
+  if [ -n "$turns" ]; then
+    case "$turns" in *[!0-9]*) turns=x ;; esac
+    [ "$turns" != x ] && [ $((10#$turns)) -ge 1 ] \
+      || { echo "council up: --turns needs a positive integer" >&2; return 2; }
+    SC_TURNS=$((10#$turns))
+  fi
   # Resolve it here, once. The value is recorded in the roster and later baked into a
   # regenerated launcher's `cd` line by `relaunch`, so a RELATIVE one would be re-resolved
   # against whatever directory the supervisor happened to be standing in — `--cwd .` passes
@@ -717,14 +725,25 @@ council_up() {
     '{order:$order, peers:$peers, scenario:$sc, mode:$mode, decide_by:$dec,
       order_rotate:true, turn_deadline_ms:180000, turns_budget:$turns,
       round_deadline_ms:$rdl, cwd:$cwd, created_at:$at, created_ms:$cms}' \
-    > "$room/roster.json"
+    > "$room/roster.json" || {
+    # Before anything is launched (#169): every verb refuses a room without a roster, so seats
+    # started around one would spend tokens in a room none of them can read. The keeper goes
+    # now; the directory stays for the operator to look at and remove.
+    echo "council up: could not write $room/roster.json; nothing was launched" >&2
+    local kpid; kpid=$(_keeper_live "$room/state/keeper.pid") && kill "$kpid" 2>/dev/null
+    echo "            remove the room with: council.sh down --purge --room $rname" >&2
+    return 1; }
   printf '%s\n' "${agenda:-(no agenda given)}" > "$room/agenda.md"
 
   # Every participant gets a protocol, including the seat the human took with --me. Only the
   # ones that get a TERMINAL get a launcher, which is what makes the launcher's existence the
-  # record of that, and what `relaunch` reads it as.
+  # record of that, and what `relaunch` reads it as. A seat whose protocol could not be written
+  # is not launched (#169): its prompt says to read that file, and it would not exist.
+  local noproto=" "
   for i in "${!peers[@]}"; do
-    _write_protocol "$room" "${peers[$i]}" "${roles[$i]}" "$sf" "${peers[@]}"
+    _write_protocol "$room" "${peers[$i]}" "${roles[$i]}" "$sf" "${peers[@]}" \
+      || { echo "council up: could not write the protocol for ${peers[$i]}" >&2
+           noproto="$noproto${peers[$i]} "; }
   done
 
   # term.sh is already sourced above (before _mkroom), so the launch loop just uses ct_*.
@@ -741,8 +760,11 @@ council_up() {
       ct_record_launch "$recmode" "$p" "$(ct_container)" "" false 2>/dev/null || true
       recmode=up; continue
     fi
-    if ! _write_launcher "$room" "$p" "$kind" "$cwd"; then
-      echo "council up: could not write the launcher for $p" >&2
+    local why=""
+    case "$noproto" in *" $p "*) why="it has no protocol" ;; esac
+    [ -n "$why" ] || _write_launcher "$room" "$p" "$kind" "$cwd" || why="could not write its launcher"
+    if [ -n "$why" ]; then
+      echo "council up: not launching $p: $why" >&2
       ct_record_launch "$recmode" "$p" "$(ct_container)" "" false 2>/dev/null || true
       recmode=up; continue
     fi
@@ -1409,7 +1431,10 @@ council_down() {
     # The launch record goes with it: a plain `down` keeps it as the evidence the next read checks
     # the teardown against, and once the room is gone nothing reads it.
     lr_forget 2>/dev/null || true
-    rm -rf "$ROOM"; echo "room deleted: $ROOM"
+    # Checked (#169), as shipyard-down.sh checks its own removal: a failed `rm -rf` leaves the
+    # whole room, record included, and `rooms` goes on listing it.
+    if rm -rf "$ROOM" && [ ! -e "$ROOM" ]; then echo "room deleted: $ROOM"
+    else echo "council down: could not delete $ROOM (rm failed); it still exists" >&2; return 1; fi
   else
     echo "room kept: $ROOM  (decision: $ROOM/board/decision.md)"
   fi
