@@ -962,7 +962,17 @@ fi
 
 # Re-arm only while the report has work to supervise. Doing this before the
 # empty report would recreate a watcher immediately after last-slot cleanup.
-if ! shipyard_continuity_start "$KIND"; then
+# It takes the BACKEND, as the launcher's call does — not $KIND, which is a container kind
+# (workspace|session) and made this a silent no-op on every tick (#192).
+#
+# Named slots (the monitor's shape) never reach the empty branch above, so the same rule is
+# restated here against the enumeration this run captured: re-arm only while it answered and still
+# lists a terminal. That is the inverse of what shipyard_continuity_cleanup_last_slot stops the
+# watcher on, so a tick after a by-hand last-slot `shipyard-down.sh` does not start a watcher that
+# nothing would stop again. Its "started" line goes to stderr: an --only-changed tick with nothing
+# new must print nothing.
+if [ "$ENUM_RC" = 0 ] && [ -n "$SLOTS_OUT" ] \
+  && ! shipyard_continuity_start "$(shipyard_backend)" >&2; then
   echo "warning: could not ensure the Codex parent continuity guard" >&2
 fi
 

@@ -426,60 +426,59 @@ echo "--- K. a teardown that could not be WRITTEN says so, and does not blame a 
 # `_keeper_teardown` can fail two ways and they are different facts. While both returned 1, a room
 # whose keeper was alive and answering `kill -0` was told "this room has no live keeper to do the
 # reaping" — a verb reporting a cause it had not established, which is the defect exit 5 exists to
-# prevent, one level down. Reached with an unwritable `state/`, and the reason that is reachable
-# rather than theoretical is worth recording: `c_send` bumps `state/$ME.seq` and `.lamport` with
-# NO status check, so an unwritable state directory does not fail the close first — the room
-# closes, the announcement lands, and only the teardown notices.
+# prevent, one level down.
+#
+# Reached through the verb with a DIRECTORY at the marker path, which `_keeper_teardown` refuses at
+# rc 2 while the counters and the announcement still write. This case used to make all of `state/`
+# unwritable, and reached the teardown only because `c_send` did not check its counter writes;
+# since #169 it does, so that fixture now fails the announcement first and never gets here. The
+# read-only-`state/` shape is kept below, against `_keeper_teardown` itself, for the one thing
+# only it can show.
+RK="$COUNCIL_TEST_ROOT/t26k"
+mkroom_faked "$RK" k a b c
+export COUNCIL_ROOM="$RK" ROOM="$RK"
+echo "Should the log keep one lane per author?" > "$RK/agenda.md"
+prop=$(say_floor propose '[]' "Keep the history as one lane per author.")
+obj=$(say_floor  object  '["'"$prop"'-1"]' "Then a reader scans N directories on every poll.")
+say_floor amend '["'"$prop"'-1","'"$obj"'-1"]' "One lane per author; readers probe upward from a cursor." >/dev/null
+say_floor msg '[]' "Agreed."        >/dev/null
+say_floor msg '[]' "No objections." >/dev/null
+say_floor msg '[]' "Record it."     >/dev/null
+KK=$(kpid_of "$RK/state/keeper.pid")
+mkdir "$RK/state/teardown"
+errk="$COUNCIL_TEST_ROOT/t26k.err"
+outk=$(COUNCIL_ME=a bash "$CLI" decide 2>"$errk"); rc=$?
+ok "a teardown request that cannot be written still exits 5, like any teardown that did not happen" 5 "$rc"
+ok "...still printing the record path, because the close stands" "$RK/board/decision.md" "$outk"
+ok "...saying the request could not be WRITTEN" yes "$(has "$(cat "$errk")" 'could not be written to')"
+# The whole point: it must NOT claim the room has no keeper, because the keeper is right there.
+ok "...and NOT blaming a missing keeper" no "$(has "$(cat "$errk")" 'no live keeper')"
+ok "the keeper really was alive throughout" yes "$([ -n "$KK" ] && kill -0 "$KK" 2>/dev/null && echo yes || echo no)"
+ok "the room is closed regardless" decided "$(cat "$RK/board/status" 2>/dev/null)"
+
+# And the suppressor has to be in front of the redirection, or bash's own diagnostic for the
+# MARKER write lands above council's sentence. Since the message no longer says "the error above
+# says why", a silent revert would leave that raw line unexplained. Only an unwritable `state/`
+# fails that write, so this half runs the function directly, against a live keeper.
 #
 # Root cannot be made to fail an open(2) by mode bits, so skip rather than assert a lie.
 if [ "$(id -u)" = 0 ]; then
   echo "  SKIP K: running as root — mode bits do not apply"
 else
-  RK="$COUNCIL_TEST_ROOT/t26k"
-  mkroom_faked "$RK" k a b c
-  export COUNCIL_ROOM="$RK" ROOM="$RK"
-  echo "Should the log keep one lane per author?" > "$RK/agenda.md"
-  prop=$(say_floor propose '[]' "Keep the history as one lane per author.")
-  obj=$(say_floor  object  '["'"$prop"'-1"]' "Then a reader scans N directories on every poll.")
-  say_floor amend '["'"$prop"'-1","'"$obj"'-1"]' "One lane per author; readers probe upward from a cursor." >/dev/null
-  say_floor msg '[]' "Agreed."        >/dev/null
-  say_floor msg '[]' "No objections." >/dev/null
-  say_floor msg '[]' "Record it."     >/dev/null
-  KK=$(kpid_of "$RK/state/keeper.pid")
+  rmdir "$RK/state/teardown"
   # RESTORE THE MODE FROM A TRAP, chained onto the helpers' own handler rather than replacing it.
   # t23 carries this same guard and says why: a test killed between the two chmods leaves a
   # mode-500 directory that `rm -rf` CANNOT remove, so run-all.sh's EXIT trap fails and the whole
   # run root leaks permanently — and nothing ever reuses or cleans that path. The suite's 600 s
   # ceiling group-kills a wedged test, so it is a reachable path, not a hypothetical one.
-  # Reproduced here before it was added: abort between the chmods, `rm: … Directory not empty`,
-  # root left behind. Copying t23's chmod without t23's trap is exactly how it came back.
   _t26_restore_state() { local rc=$?; chmod 700 "$RK/state" 2>/dev/null; ( exit $rc ); _council_test_cleanup; }
   trap _t26_restore_state EXIT
   chmod 500 "$RK/state" || { echo "  FAIL K: could not make state/ read-only"; exit 1; }
-  errk="$COUNCIL_TEST_ROOT/t26k.err"
-  outk=$(COUNCIL_ME=a bash "$CLI" decide 2>"$errk"); rc=$?
+  ( . "$SKILL/lib/up.sh"; _keeper_teardown "$RK" ) 2>"$errk"; rc=$?
   chmod 700 "$RK/state"
   trap _council_test_cleanup EXIT
-  ok "an unwritable state/ still exits 5, like any teardown that did not happen" 5 "$rc"
-  ok "...still printing the record path, because the close stands" "$RK/board/decision.md" "$outk"
-  ok "...saying the request could not be WRITTEN" yes "$(has "$(cat "$errk")" 'could not be written to')"
-  # The whole point: it must NOT claim the room has no keeper, because the keeper is right there.
-  ok "...and NOT blaming a missing keeper" no "$(has "$(cat "$errk")" 'no live keeper')"
-  # And the suppressor has to be in front of the redirection, or bash's own diagnostic for the
-  # MARKER write lands above council's sentence. Since the message no longer says "the error above
-  # says why", a silent revert would leave that raw line unexplained.
-  #
-  # Matched on the PATH, not on "Permission denied" alone, and the difference is the whole
-  # assertion: this fixture makes `state/` unwritable, so `c_send`'s own `state/<me>.seq` and
-  # `.lamport` bumps fail too and leak their own "Permission denied" (lib.sh:696-697 writes them
-  # through `c_atomic` with no status check — which is also why the close still reaches the
-  # teardown instead of failing earlier). A bare "Permission denied" test therefore passes or
-  # fails for a reason that has nothing to do with the suppressor. Caught by this assertion
-  # reporting the wrong thing on its first run.
-  ok "...with no raw shell diagnostic for the marker write above it" no \
-     "$(has "$(cat "$errk")" 'teardown: Permission denied')"
-  ok "the keeper really was alive throughout" yes "$([ -n "$KK" ] && kill -0 "$KK" 2>/dev/null && echo yes || echo no)"
-  ok "the room is closed regardless" decided "$(cat "$RK/board/status" 2>/dev/null)"
+  ok "an unwritable state/ is refused at rc 2" 2 "$rc"
+  ok "...with no raw shell diagnostic for the marker write" no "$(has "$(cat "$errk")" 'Permission denied')"
 fi
 
 # ================================================================================================
