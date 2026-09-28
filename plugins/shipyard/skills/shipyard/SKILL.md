@@ -809,8 +809,9 @@ with it. The refusal names the class it saw and the one command that clears it
 
 `shipyard-down.sh` now refuses on the same answer rather than leaving that to the operator: when
 a run closed no terminal, it asks `shipyard_absence_report` before removing anything and refuses
-unless `--force` (#139(1), Step 6). `--list` still prints `gone` for an unresolvable slot —
-#139(2), open — so do not read that column as the answer to this question.
+unless `--force` (#139(1), Step 6). `--list` asks the same question: its TERMINAL column reads
+`gone` only for a corroborated absence and `?<class>` (`?unreachable`, `?elsewhere`, `?listed`)
+for one it could not corroborate — never tear a `?` slot down on the listing's say-so.
 
 Three limits, because a guarantee is worth only what it actually covers:
 
@@ -1323,8 +1324,10 @@ refuses a branch whose content is fully in the base branch (measured). Once tear
 correct follow-up; keep `-d` for a CLOSE, where nothing has been proven contained.
 Removing the last slot also asks every token-matched parent continuity watcher to stop itself
 and removes its live mailbox records, but only after a successful, structurally valid backend
-query proves that no slot remains. A small admission generation remains so a start already in
-flight cannot publish a watcher after teardown returns. An unreadable backend or unacknowledged
+query proves that no slot remains — on the backend the fleet was launched on: an empty answer from
+the other one (the pin names a different backend) proves nothing and preserves everything. A
+small admission generation remains so a start already in flight cannot publish a watcher after
+teardown returns. An unreadable backend or unacknowledged
 watcher preserves lifecycle state instead of signaling an unverified PID. A later shipyard run
 starts a fresh watcher for its own parent session.
 

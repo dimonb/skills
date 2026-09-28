@@ -74,19 +74,35 @@ wt_of() { printf '%s/.claude/worktrees/ship-%s' "$ROOT" "$1"; }
 # at. Hand-rolled single quotes are not enough for a ref that contains one, so use bash's own
 # quoting and never interpolate a ref or a path raw.
 qq() { printf '%q' "$1"; }
+TAB=$(printf '\t')
 
 if [ "$LIST" = 1 ]; then
-  printf '%-24s %-10s %-9s %s\n' SLOT TERMINAL WORKTREE STATE
+  # #139(2): a terminal this run cannot resolve is `gone` only when its absence is CORROBORATED —
+  # the same `shipyard_signal_class` question `shipyard_absence_report` asks for tell, compact and
+  # the teardown below. Anything else prints `?<class>`: a listing that said `gone / safe` for a
+  # child alive in the other backend positively recommended the teardown that removes its worktree.
+  # ONE enumeration for the whole listing, kept with its answer for the `listed` arm; full session
+  # names on both sides, as the classifier's namespace note requires.
+  enum_rc=0
+  enum_list=$(drv_sessions "$(shipyard_container)" 2>/dev/null) || enum_rc=$?
+  unsure=""
+  printf '%-24s %-13s %-9s %s\n' SLOT TERMINAL WORKTREE STATE
   for w in "$ROOT"/.claude/worktrees/ship-*; do
     [ -d "$w" ] || continue
     s=$(basename "$w"); s="${s#ship-}"
     # Listed, not skipped — the directory is there and the operator should see it — but with its
     # name quoted and no gate run over it: nothing below would act on it (shipyard_slot_check).
     if ! shipyard_slot_check "$s" 2>/dev/null; then
-      printf '%-24s %-10s %-9s %s\n' "$(printf '%q' "$s")" "-" "present" "INVALID SLOT NAME (not managed)"
+      printf '%-24s %-13s %-9s %s\n' "$(printf '%q' "$s")" "-" "present" "INVALID SLOT NAME (not managed)"
       continue
     fi
-    t="gone"; shipyard_target "$s" >/dev/null 2>&1 && t="live"
+    if shipyard_target "$s" >/dev/null 2>&1; then
+      t="live"
+    elif sig=$(shipyard_signal_class "$enum_rc" "$enum_list" "ship-$s"); then
+      t="gone"
+    else
+      t="?${sig%%"$TAB"*}"; unsure=1
+    fi
     # The listed state is the GATE's own verdict, not a second opinion computed here: a
     # column that says "clean" where teardown then refuses is how an operator learns to
     # stop reading the column.
@@ -107,8 +123,15 @@ if [ "$LIST" = 1 ]; then
       no-default)    st="NO BASE REF" ;;
       *)             st="UNKNOWN ($kind)" ;;
     esac
-    printf '%-24s %-10s %-9s %s\n' "$s" "$t" "present" "$st"
+    printf '%-24s %-13s %-9s %s\n' "$s" "$t" "present" "$st"
   done
+  if [ -n "$unsure" ]; then
+    echo
+    echo "?<class>: no terminal on the $(shipyard_backend) backend, and that absence could not be corroborated"
+    echo "  (unreachable: the backend did not answer; elsewhere: the fleet was launched on another backend;"
+    echo "  listed: the backend lists the slot but its lookup failed). Do NOT tear such a slot down on this"
+    echo "  listing — \`shipyard-down.sh\` refuses it without --force, and the STATE column does not change that."
+  fi
   exit 0
 fi
 
@@ -242,6 +265,10 @@ cleanup_status=0
 shipyard_continuity_cleanup_last_slot "$enumeration_status" "$remaining_slots" || cleanup_status=$?
 if [ "$cleanup_status" -eq 2 ]; then
   echo "warning: could not verify that every shipyard slot is gone; lifecycle state was preserved" >&2
+  # Which of the two facts failed — the backend did not answer, or it answered about a container
+  # this fleet was not launched in (#139(3)) — so the operator knows which one to go and fix.
+  sig=$(shipyard_signal_class "$enumeration_status") || true
+  [ -z "$sig" ] || echo "         ${sig#*"$TAB"}." >&2
   rc=1
 elif [ "$cleanup_status" -eq 3 ]; then
   echo "warning: could not stop every parent continuity watcher; lifecycle state was preserved" >&2

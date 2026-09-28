@@ -167,6 +167,29 @@ ok "tmux: an unreachable server is a failure" "|1" "$r"
 r=$(slots_rc tmux "$TM_ABSENT")
 ok "tmux: an absent session is honestly empty" "|0" "$r"
 
+# shipyard_container_prune deletes the workspace only on a SHAPED empty answer (#139(4)). It used to
+# count sessions with a raw jq read, so a workspace whose `.sessions` was not an array counted 0 and
+# was deleted with every terminal in it. Each fake answers `tree` and records a `workspace delete`.
+PRUNE_LOG="$T14TMP/prune-log"; export PRUNE_LOG
+prune_deletes() { # <tree-json> -> yes|no
+  : >"$PRUNE_LOG"
+  ( export SHIPYARD_BACKEND=agterm SHIPYARD_WORKSPACE=t14ws SHIPYARD_SESSION=t14ex
+    . "$SKILL_DIR/shipyard-backend.sh" >/dev/null 2>&1
+    PRUNE_TREE="$1"
+    agtermctl() { case "$1 ${2:-}" in
+                    "tree --json")      printf '%s\n' "$PRUNE_TREE" ;;
+                    "workspace delete") printf '%s\n' "$*" >>"$PRUNE_LOG" ;;
+                  esac; }
+    shipyard_container_prune ) >/dev/null 2>&1
+  [ -s "$PRUNE_LOG" ] && printf yes || printf no
+}
+PT_EMPTY='{"ok":true,"result":{"tree":{"workspaces":[{"id":"w1","name":"t14ws","sessions":[]}]}}}'
+PT_BADSHAPE='{"ok":true,"result":{"tree":{"workspaces":[{"id":"w1","name":"t14ws","sessions":"oops"}]}}}'
+PT_UNNAMED='{"ok":true,"result":{"tree":{"workspaces":[{"id":"w1","name":"t14ws","sessions":[{"id":"a","name":""}]}]}}}'
+ok "prune: a shaped, empty workspace is deleted"                yes "$(prune_deletes "$PT_EMPTY")"
+ok "prune: a workspace whose sessions are not a list is kept"   no  "$(prune_deletes "$PT_BADSHAPE")"
+ok "prune: one session with an empty name still keeps it"       no  "$(prune_deletes "$PT_UNNAMED")"
+
 # --------------------------------------------- 3./4. THE REPORT, EXECUTED
 # The rig is t13-wait.sh's: exported shell functions shadow `git`, `tmux` and `gh`, which works
 # where a fake binary on PATH does not, because shipyard-lib.sh prepends the system PATH.
@@ -347,8 +370,18 @@ out=$(run_report blip)
 ok "4c4: enumerated but unresolvable -> NOT exit 0"   1 "$(rc_of "$out")"
 ok "4c4: ...and does NOT print monitor stopped"       0 \
    "$(printf '%s' "$out" | grep -c 'monitor stopped')"
-ok "4c4: ...and names the contradiction"              yes "$(has "$out" 'still listed by the backend')"
+ok "4c4: ...and names the contradiction"              yes "$(has "$out" 'answered and still lists 41,')"
 ok "4c4: ...having rendered that very slot as gone"   yes "$(has "$out" '^| 41 .*⛔ no terminal')"
+# #153: the class is `listed`, so the remedy is the lookup's, not a down backend's — the socket
+# demonstrably answered. The old hand-matched copy labelled this `unreachable` and printed both
+# `tmux ls` and `agtermctl version` advice here.
+ok "4c4: ...with the listed remedy"                   yes "$(has "$out" 'transient lookup failure')"
+ok "4c4: ...and NOT the unreachable one"              no  "$(has "$out" 'tmux ls')"
+# ...and a class the block does not know still gets advice rather than a bare heading (#153). The
+# function is lifted out of the report by its own braces, because reaching an unknown class through
+# the report would need a classifier that invents one.
+nsb=$( eval "$(sed -n '/^no_signal_block() {/,/^}/p' "$REPORT")"; no_signal_block bogus 'a reason' )
+ok "4c5: an unknown class still prints a remedy line"  yes "$(has "$nsb" 'does not recognise the class `bogus`')"
 
 # 4d. --only-changed must not swallow it, for the reason the STALLED block bypasses the filter:
 #     silence is what made the original defect invisible. The first run seeds the signature so the

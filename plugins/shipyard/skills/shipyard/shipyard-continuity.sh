@@ -1193,9 +1193,15 @@ shipyard_continuity_stop_all() {
 
 # 0 cleaned up, 1 still has slots, 2 could not prove the fleet is empty,
 # 3 could not stop every watcher.
+#
+# "Proved empty" is `shipyard_signal_class`'s question, not the status alone (#139(3)). A run that
+# resolved tmux while the fleet was launched on agterm gets rc 0 and an empty list — a true answer
+# about the wrong container — and on the status alone that read as drained: every watcher stopped,
+# the container pruned, the pin dropped. The classifier reads the pin as well, so that `elsewhere`
+# case returns 2 like an unanswered enumeration. No slot is named, so its `listed` arm cannot fire.
 shipyard_continuity_cleanup_last_slot() {
   local enumeration_status="$1" slots="$2"
-  [ "$enumeration_status" -eq 0 ] || return 2
+  shipyard_signal_class "$enumeration_status" >/dev/null || return 2
   [ -z "$slots" ] || return 1
   shipyard_continuity_stop_all || return 3
   shipyard_container_prune

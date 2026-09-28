@@ -220,13 +220,11 @@ shipyard_focus()   { drv_focus "ship-$1"; }
 # tells the two apart, and `shipyard-tell.sh` and `shipyard-compact.sh` ask it before they say
 # anything to a human.
 #
-# THEY ARE NOT THE ONLY CALLERS THAT SPEAK. `shipyard-down.sh` renders this failure as `gone` in
-# its `--list` TERMINAL column and asks nothing there — #139(2), still open. Its TEARDOWN path no
-# longer does: #181 put `shipyard_absence_report` in front of the worktree removal, because that
-# is the path where acting on a wrong answer takes a live child's worktree, and the monitor now
-# drives it. #139(3) and (4) — the continuity cleanup's status-only corroboration and
-# `shipyard_container_prune`'s unshaped tree read — are open too. Named so a later reader does not
-# take this paragraph as a claim that the sweep is finished. No driver twin.
+# `shipyard-down.sh` asks the same question on both of its paths: `shipyard_absence_report` before
+# a teardown that closed no terminal removes the worktree (#139(1)), and `shipyard_signal_class`
+# for each `--list` row, which reads `gone` only for a corroborated absence (#139(2)). The
+# continuity cleanup in its tail asks the classifier too rather than trusting the status alone
+# (#139(3)). No driver twin.
 shipyard_slot_addr() {
   local t; t=$(shipyard_target "$1") || return 1
   case "$(shipyard_backend)" in
@@ -406,12 +404,13 @@ shipyard_backend_pinned_elsewhere() { drv_pins_elsewhere; }
 # WHY THE STATUS IS A PARAMETER. A caller that has already enumerated must classify the status of
 # the list it ACTED ON, not of a second enumeration that could disagree with it, so it captures
 # the rc once and passes it in. Who actually does what, rather than an absolute: `shipyard-report.sh`
-# passes a status alone (it classifies the list it PRINTED), and so does
-# `shipyard_admission_slot_count` (it classifies the list it COUNTED); `shipyard_absence_report`
-# passes all three (it needs the list for the `listed` arm anyway), with full session names. The
-# launch dedup in `shipyard-launch.sh` passes all three with BARE slots from `shipyard_slots` on
-# both sides, per the namespace note above. `shipyard-tell.sh` and `shipyard-compact.sh` reach this
-# only THROUGH `shipyard_absence_report`, so they pass three too.
+# passes a status alone where it classifies the list it PRINTED, and all three (bare slots) in its
+# per-slot re-check; `shipyard_admission_slot_count` passes a status alone (it classifies the list
+# it COUNTED); `shipyard_absence_report` and `shipyard-down.sh --list` pass all three with full
+# session names; the launch dedup in `shipyard-launch.sh` passes all three with BARE slots from
+# `shipyard_slots` on both sides, per the namespace note above; the continuity cleanup and
+# `shipyard-down.sh`'s tail pass a status alone, having no slot to name. `shipyard-tell.sh` and
+# `shipyard-compact.sh` reach this only THROUGH `shipyard_absence_report`, so they pass three too.
 #
 # So NO caller uses the argument-less mode today. It is kept as a fail-closed default, not for a
 # caller: the driver treats an EMPTY status as `unreachable`, so a status-less call there would
@@ -421,18 +420,10 @@ shipyard_backend_pinned_elsewhere() { drv_pins_elsewhere; }
 # already hold a list — reintroducing the disagreement the parameter exists to prevent.
 #
 # THE DUPLICATION, RESTATED AGAINST THE TREE AS IT IS. `shipyard-report.sh` used to carry its own
-# `fleet_signal`: #137 added the shared function and scheduled the deletion, #138 made it, and both
-# of that file's call sites now come here — its own `fleet_signal` mention records exactly that.
-# What survives there is narrower: an open-coded per-slot "still listed" contradiction check, which
-# is this function's `listed` arm spelled a second time — and it labels that verdict `unreachable`,
-# so the operator is sent to check a socket that demonstrably answered.
-#
-# It is filed rather than folded in here because the obstacle is on report.sh's side, not this
-# one's: `no_signal_block` has arms for `unreachable` and `elsewhere` only — and no default — so a
-# `listed` verdict would print a heading and a reason with no remedy at all. Whoever takes it must
-# also heed the namespace note above: that loop holds BARE slots on both sides, which is
-# legitimate, but mixing them with the full names this file passes would match nothing and turn the
-# guard off silently.
+# `fleet_signal` (#137 added the shared function, #138 deleted that copy) and, after it, an
+# open-coded per-slot "still listed" check that labelled the `listed` case `unreachable`. #153
+# replaced that check with a per-slot call here, passing BARE slots on both sides per the namespace
+# note above, and gave `no_signal_block` a `listed` arm and a default.
 #
 # NOT USED AS EVIDENCE: the slot's worktree. A worktree outlives its terminal by design — that is
 # the state of every child whose terminal was killed but not torn down — so reading its presence as
@@ -585,13 +576,18 @@ shipyard_note() {
 # shipyard_container_prune — drop the container once it holds no ship terminals, so a repo
 # that has finished all its work stops showing an empty `<repo>-ai` workspace. Only
 # ever removes an EMPTY one, so a human tab parked in there keeps it alive. No driver twin.
+#
+# The emptiness is read through `drv_sessions`, whose shape assertion turns a tree it does not
+# recognise into "unanswered" (#139(4)). A raw count here used to read a workspace whose `.sessions`
+# was not an array as holding 0 sessions, and deleted it with every terminal in it. Every session in
+# the workspace counts, not only `ship-*`, which is what keeps a human's tab protecting it. The `.`
+# sentinel is there because a session may be named "" and `$( )` would strip its lone newline.
 shipyard_container_prune() {
   case "$(shipyard_backend)" in
     agterm)
-      local n ws
-      n=$(agtermctl tree --json 2>/dev/null | jq -r --arg ws "$(shipyard_container)" \
-            '[.result.tree.workspaces[]? | select(.name==$ws) | .sessions[]?] | length' 2>/dev/null)
-      [ "${n:-1}" = 0 ] || return 0
+      local sessions ws
+      sessions=$(drv_sessions "$(shipyard_container)" 2>/dev/null && printf .) || return 0
+      [ "$sessions" = . ] || return 0
       ws=$(agtermctl tree --json 2>/dev/null | jq -r --arg ws "$(shipyard_container)" \
             '.result.tree.workspaces[]? | select(.name==$ws) | .id' 2>/dev/null | head -1)
       [ -n "$ws" ] || return 0
