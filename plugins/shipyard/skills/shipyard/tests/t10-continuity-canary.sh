@@ -61,8 +61,9 @@ no_pid() { echo "no-pid"; }
 wait_gone() { local p="$1" n="${2:-60}" i; [ -n "$p" ] || { no_pid; return; }; for ((i=0;i<n;i++)); do kill -0 "$p" 2>/dev/null || { echo gone; return; }; sleep 0.1; done; echo alive; }
 alive()     { [ -n "$1" ] || { no_pid; return; }; kill -0 "$1" 2>/dev/null && echo alive || echo gone; }
 # The owner-death reap (owner killed -> canary write end closes -> watcher's read EOFs -> it reaps
-# and exits) is GUARANTEED to happen; the only question is when, and under concurrent load (a full
-# `make test`, CI) the detached watcher can be scheduled late. So the canary-reap waits use a
+# and exits) is meant to happen every time, and does except for the early group-kill leak in #275;
+# otherwise the question is when, and under concurrent load (a full `make test`, CI) the detached
+# watcher can be scheduled late. So the canary-reap waits use a
 # generous bound: it still fails on a genuine never-reap (a leaked watcher runs forever), it just
 # gives scheduling jitter ample headroom instead of a tight 12s window that flaked under load.
 REAP_WAIT=600   # 60s at 0.1s/poll — generous, not a real deadline; a true leak still fails it

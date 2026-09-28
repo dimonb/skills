@@ -418,7 +418,7 @@ ok "4b: ...and does not abort on it"           0   "$(rc_of "$out")"
 #     digit is what covers them all at once; these cases exist so the next reader cannot "fix" it
 #     back into an enumeration.
 #
-#     The FIRST case holds the seat idle for a whole second and counts the samples, so it fails if
+#     The FIRST case holds the seat idle for its whole window and counts the samples, so it fails if
 #     the fallback stops being applied even while the message still prints. The rest only have to
 #     show that the classification reaches them, so they use the fast fixture.
 #     THE WINDOW IS FIVE SECONDS AND THAT IS NOT ARBITRARY. The poll's deadline compares WHOLE
