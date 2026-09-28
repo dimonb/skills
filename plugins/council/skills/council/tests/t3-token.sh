@@ -60,9 +60,8 @@ done
 # Stop the peers BEFORE the log is read, and never with a bare `wait` (#109) — the shape
 # _helpers.sh's EXIT trap forbids, in the file that SIGSTOPs a peer on purpose. TERM, then CONT
 # (the order that trap explains: a stopped peer acts on a queued TERM only once it runs again),
-# then a bounded poll on the job table — `jobs -pr` lists only jobs still RUNNING, where `kill -0`
-# would also answer yes for an exited, unreaped one — then KILL for whatever ignored the TERM. Only
-# after the KILL is `wait` guaranteed to return.
+# then a bounded poll on this shell's own job table (`jobs -pr` lists only jobs still running),
+# then KILL for whatever ignored the TERM. Only after the KILL is `wait` guaranteed to return.
 kill "${PEERS[@]}" 2>/dev/null; kill -CONT "${PEERS[@]}" 2>/dev/null
 for ((i=0; i<50; i++)); do [ -z "$(jobs -pr)" ] && break; sleep 0.1; done
 kill -9 "${PEERS[@]}" 2>/dev/null; wait "${PEERS[@]}" 2>/dev/null

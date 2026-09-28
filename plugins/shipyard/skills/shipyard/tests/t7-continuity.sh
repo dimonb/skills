@@ -25,10 +25,10 @@ check() {
 # these jobs run is ceiling-bounded today, so a bare `wait` does not hang now; but a regression that
 # removes one of those ceilings is what this file exists to catch, and a bare `wait` would answer it
 # by hanging with no summary and no EXIT trap. So poll the job table and `wait` only once the job has
-# finished, which still returns its real status. `jobs -pr` rather than `kill -0`: an exited child
-# stays a zombie until it is waited for, and `kill -0` on a zombie SUCCEEDS. A job still running at
-# the ceiling is a named, counted failure, is SIGKILLed and reaped, and returns 124 so the caller's
-# own rc check reds too. The pid is always the caller's own `$!`, never a list read from elsewhere.
+# finished, which still returns its real status. `jobs -pr` rather than `kill -0`: it reads this
+# shell's own job table, so a pid the kernel has reused for another process cannot read as the
+# job. A job still running at the ceiling is a named, counted failure, is SIGKILLed and reaped, and
+# returns 124 so the caller's own rc check reds too. The pid is always the caller's own `$!`, never a list read from elsewhere.
 # The ceiling is only ever paid by a failing case, so it is sized for a loaded box, not for speed.
 REAP_SECS=120
 reap_job() {

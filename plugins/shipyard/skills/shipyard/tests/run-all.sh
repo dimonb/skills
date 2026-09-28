@@ -78,8 +78,8 @@ tests=(t1-totals.sh t2-window.sh t3-probe.sh t4-band.sh t5-agent.sh t6-codex-ctx
 # algorithm — that one also wraps each file in `nice` and has a `--full` arm, this one has neither —
 # so what would be shared is scheduling boilerplate, not an answer to a question both ask. The
 # per-test ceiling below IS the same in both, copied from that runner (#108); it is small enough
-# that a third copy of the scheduling, not this, is the trigger for moving it. It also keeps this suite runnable from an installed plugin, which has no repo `scripts/`
-# beside it. Scope checked today: these two runners and no other. If a THIRD runner needs the same
+# that a third copy of the scheduling, not this, is the trigger for moving it. It also keeps this
+# suite runnable from an installed plugin, which has no repo `scripts/` beside it. Scope checked today: these two runners and no other. If a THIRD runner needs the same
 # scheduling, or if these two converge so the differences above go away, move it to `shared/`.
 #
 # `jobs -pr` counts what is still running. It is read inside `$( )`, which is a subshell — the job
