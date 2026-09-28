@@ -56,15 +56,26 @@ says_err() { # <peer> <verb> <text>
 # a participant that owes a position must be released at once: in a barrier round there is
 # no floor holder to wait for, and --until-floor would otherwise wait forever (a live Codex
 # participant did exactly that the first time a roundtable room ran).
-COUNCIL_ME=a timeout 12 bash "$CLI" recv --until-floor --timeout 8 >/dev/null
-[ $? = 0 ] || { echo "FAIL a participant that still owes a position was not released from --until-floor"; fail=1; }
+#
+# The cap is the defect's own watchdog — without it a regression here hangs instead of failing —
+# and timeout(1) is GNU coreutils, which a stock macOS does not ship. Resolved once, the way
+# run-all.sh resolves it; absent, the two recv cases are SKIPPED and say so, because a missing
+# tool exiting 127 would otherwise read as the protocol failure these lines assert against.
+TB=$(command -v timeout || command -v gtimeout || true)
+if [ -z "$TB" ]; then
+  say a propose '[]' "position a: the barrier is for the first lap only"
+  echo "recv in a barrier: SKIPPED (needs timeout(1) or gtimeout on PATH)"
+else
+  COUNCIL_ME=a "$TB" 12 bash "$CLI" recv --until-floor --timeout 8 >/dev/null
+  [ $? = 0 ] || { echo "FAIL a participant that still owes a position was not released from --until-floor"; fail=1; }
 
-say a propose '[]' "position a: the barrier is for the first lap only"
+  say a propose '[]' "position a: the barrier is for the first lap only"
 
-# ...and one that HAS posted keeps waiting for the round, not for a turn
-COUNCIL_ME=a timeout 12 bash "$CLI" recv --until-floor --timeout 6 >/dev/null
-[ $? = 4 ] || { echo "FAIL a participant that has posted did not wait for the round to complete"; fail=1; }
-echo "recv in a barrier: releases the one that owes a position, holds the one that posted"
+  # ...and one that HAS posted keeps waiting for the round, not for a turn
+  COUNCIL_ME=a "$TB" 12 bash "$CLI" recv --until-floor --timeout 6 >/dev/null
+  [ $? = 4 ] || { echo "FAIL a participant that has posted did not wait for the round to complete"; fail=1; }
+  echo "recv in a barrier: releases the one that owes a position, holds the one that posted"
+fi
 [ -z "$(seen b)" ] || { echo "FAIL b saw the position of a before the round completed: $(seen b)"; fail=1; }
 say b propose '[]' "position b: the barrier is not needed at all"
 [ -z "$(seen c)" ] || { echo "FAIL c saw other positions before the round completed: $(seen c)"; fail=1; }

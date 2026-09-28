@@ -145,13 +145,17 @@ kill_keeper() { # <pid-file> [signal]
 # one root per run means no later run reuses this path, so a root left behind here is a directory
 # and a live process that survive until the machine reboots.
 #
-# An EXIT trap alone is the right and only handler. Bash runs it when the shell dies on an
-# untrapped fatal signal as well as on a normal exit, so a killed test cleans up too; SIGKILL is
-# the one exception and nothing can catch that. Do NOT add INT/TERM traps: a TRAPPED signal is
-# deferred until the current foreground command returns, so `trap 'exit 143' TERM` turns a prompt
-# kill into one that waits for whatever the test is wedged on — which for a test blocked on a
-# fifo is forever. Measured on bash 5.3: 60s to die with that trap, 0s without it, and the
-# cleanup ran either way.
+# An EXIT trap alone is the right and only handler. Bash runs it on a normal exit and when the
+# shell dies on a fatal signal such as TERM, INT or HUP, so a killed test cleans up too. Where it
+# does NOT run, stated as limits rather than as coverage: SIGKILL, which nothing can catch, and a
+# fatal signal bash leaves at its default action without running the trap — an untrapped SIGPROF
+# ends the shell with no trap run (measured on bash 5.3). Neither is a kill this suite can
+# realistically see. Do NOT add INT/TERM traps: a TRAPPED signal is deferred until the current
+# foreground command returns, so `trap 'exit 143' TERM` turns a prompt kill into one that waits
+# for whatever child the test is wedged on. Under the runner's `timeout -k 10` that is worse than
+# slow: wedged on a child the TERM does not end, the trapped test is still waiting when the KILL
+# arrives, and then no cleanup runs at all, while the untrapped one dies on the TERM and cleans up
+# (measured on bash 5.3, both shapes). t12 holds the untrapped shape.
 _council_test_cleanup() {
   local rc=$?
   local k p i
