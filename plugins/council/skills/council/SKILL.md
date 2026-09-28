@@ -380,14 +380,16 @@ thing that deletes a record.
 council.sh up --scenario debate --agents claude,codex,agy "question"   # or @file
 council.sh status | claims | verdict | order | transcript | floor
 council.sh status --only-changed | --alarms-only   # the two supervisor monitors
-council.sh terminals               # <live>/<total> seats still holding one; ? unknown; - never had any
+council.sh terminals               # <live>/<total> seats given a terminal (never the --me seat)
+                                   # still holding one; ? unknown; - never had any
 council.sh agenda | protocol | decision   # the room's own files, through the entrypoint
 council.sh say <peer> "..."        # out of band, into that participant's terminal
 council.sh relaunch <peer>         # put one seat back up, mid-room
 council.sh decide [--force]        # write the ADR and close the room; a close recorded DECIDED
                                    # then closes its own terminals, an UNRESOLVED one leaves
                                    # them up (--force only lifts the not-ripe refusal)
-council.sh down [--purge]          # close terminals; the room (the record) survives
+council.sh down [--purge]          # close terminals; the room (the record) survives; refuses
+                                   # (exit 4) a room whose seats are on the other backend
 council.sh rooms                   # what exists and where each room stands
 ```
 
@@ -480,6 +482,16 @@ launched. The three answers that are not a plain corroborated absence:
 | `listed` | Says the seat is **alive** and **continues**. That is an ordinary reason to be here ("killed to pick up new permissions"); it is a statement of what is about to happen, not a refusal. |
 
 An absence the backend corroborates says nothing at all.
+
+**`down` asks the same question before it closes anything**, about the room rather than one seat,
+because on the wrong backend it destroys more than `relaunch` does. Every close looks in an empty
+container and prints nothing, the keeper that rings the still-running seats is stopped, and
+`--purge` deletes the container pin and the launch record, which are the only records of where
+those seats run. On `elsewhere` it therefore **refuses, exit 4**, plain or `--purge`: nothing is
+closed, the keeper stays up, nothing is deleted, and the message names the backend to pin. On
+`unreachable` it says the closes cannot reach any seat still running there and **continues**, as
+`relaunch` does. A room-level question has no seat of its own to find listed, so `listed` does
+not arise.
 
 ### What survives the restart, and what does not
 

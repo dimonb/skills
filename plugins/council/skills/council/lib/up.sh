@@ -1424,6 +1424,54 @@ council_relaunch() {
 council_down() {
   local purge=0; [ "${1:-}" = "--purge" ] && purge=1
   . "$SKILL/lib/term.sh"
+  # ESTABLISH WHICH BACKEND THE SEATS ARE ON BEFORE CLOSING ANYTHING (#171), the twin of
+  # `relaunch`'s gate above and read the same way: one enumeration, classified by the driver's
+  # `drv_absence_class`. What `down` destroys on the wrong backend is different, and worse under
+  # `--purge`. On `elsewhere` every `ct_kill` below looks in the other backend's container, which is
+  # empty for entirely correct reasons, so it closes nothing and prints nothing; the keeper is
+  # killed, so no bell reaches the seats that are still running; and `--purge` then deletes the
+  # container pin (it lives in the room) and the launch record (`lr_forget`), which are the only
+  # records of where those seats run. After that no verb can see the split, and a room reopened
+  # under the same name gets two agents per peer name writing one set of lanes.
+  #
+  # So the disposition is per class, as in `relaunch`, and only one class changes behaviour:
+  #
+  #   elsewhere    REFUSE, at exit 4, before any kill, the keeper, or the purge. Plain `down`
+  #                refuses too, rather than warning and continuing: it would close nothing it was
+  #                asked to close and still report the room down, and the keeper it kills is what
+  #                keeps the live seats reachable.
+  #   unreachable  WARN and continue, as `relaunch` does. The operator asked for a teardown; a
+  #                backend that will not answer is not authority to refuse it, and the kills below
+  #                cannot reach it either way. The warning says the room may still hold live
+  #                seats, so a `--purge` that follows is not read as proof that it did not.
+  #   listed       nothing to say. There is no per-session name here, so this arm is never drawn:
+  #                a room-level question has no session of its own to find in the list.
+  #
+  # The name argument is left empty on purpose: `down` asks about the ROOM, not one seat, and the
+  # `elsewhere` verdict is drawn from the pin alone once the backend has answered.
+  local sig class why list erc=0 arc=0 TAB
+  TAB=$(printf '\t')
+  list=$(ct_sessions 2>/dev/null) || erc=$?
+  sig=$(ct_absence_class "$erc" "$list" "") || arc=$?
+  if [ "$arc" != 0 ]; then
+    class=${sig%%"$TAB"*}; why=${sig#*"$TAB"}
+    case "$class" in
+      elsewhere)
+        echo "council down: refusing — $why." >&2
+        echo "              Closing from here would reach none of this room's seats, stop the keeper" >&2
+        echo "              that rings them, and report the room down while they keep running." >&2
+        [ "$purge" = 1 ] && {
+          echo "              --purge would also delete the container pin and the launch record," >&2
+          echo "              the only records of which backend those seats are on." >&2; }
+        echo "              Nothing was closed and nothing was deleted." >&2
+        _council_elsewhere_remedy "              "
+        return 4 ;;
+      *)
+        echo "council down: note — $why." >&2
+        echo "              So the closes below cannot reach any seat still running there, and print" >&2
+        echo "              nothing either way. Continuing." >&2 ;;
+    esac
+  fi
   # Through c_peers, like every other reader of this list: `down` runs after council.sh has
   # sourced lib.sh, so the validated reader is in scope here. Reading `.order` raw left the
   # last unquoted word-split of an unvalidated peer list in the skill, one function away from
@@ -1440,6 +1488,10 @@ council_down() {
   # keeper's pid to misread (#30). A missing file is what `_keeper_ensure` treats as "no keeper".
   pid=$(_keeper_live "$keep") && kill "$pid" 2>/dev/null
   rm -f "$keep"
+  # The monitors' memory of this room (#200), kept in the mailbox under the room's name: a room
+  # reopened under that name must not inherit it. Guarded because it lives in verbs.sh, which
+  # council.sh sources for this verb and a library caller of this function may not have.
+  command -v _status_forget >/dev/null 2>&1 && _status_forget
   if [ "$purge" = 1 ]; then
     # The room IS the record — the ADR and the transcript live in it. Deleting it throws
     # away the only durable output the room produced, so it takes an explicit flag.

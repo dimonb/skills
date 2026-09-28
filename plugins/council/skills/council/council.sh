@@ -231,6 +231,9 @@ case "$VERB" in
   # note reads.
   say)    . "$SKILL/lib/up.sh"; . "$SKILL/lib/policy.sh"; council_say "$@" ;;
   relaunch) . "$SKILL/lib/up.sh"; council_relaunch "$@" ;;
-  down)   . "$SKILL/lib/up.sh"; council_down "$@" ;;
+  # verbs.sh and policy.sh for `_status_forget`: `down` removes the monitors' memory of the room
+  # from the mailbox (#200), which is where `status` keeps it.
+  down)   . "$SKILL/lib/verbs.sh"; . "$SKILL/lib/policy.sh"; . "$SKILL/lib/up.sh"
+          council_down "$@" ;;
   *) echo "council: unknown verb '$VERB'" >&2; usage >&2; exit 2 ;;
 esac

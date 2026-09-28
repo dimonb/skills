@@ -969,19 +969,33 @@ EOF
   # Captured too: a verdict pass that failed must not read as a room with no seats.
   verd=$(ct_seat_verdicts "$rec" "$hrc" "$hl" "${seats[@]}") \
     || { printf 'the launch record could not be checked against the backend'; return 2; }
+  # `<total>` COUNTS THE SEATS THAT WERE GIVEN A TERMINAL, not the roster (#200). The seat the
+  # human took with `--me` is in `.order` but gets no launcher and no terminal, so counting it made
+  # a healthy `me,alpha,beta` room read `2/3` for its whole life, and the closed-room alarm say
+  # "2 of 3 are still up" when 2 of 2 is the truth. A seat is left out of the total only when BOTH
+  # records agree nothing was ever meant to run there: the launch record says `never-launched`
+  # (absent, with nothing of its name listed) and the room holds no launcher for it. That is the
+  # `--me` seat, and a seat `up` refused to launch before writing its launcher. A seat whose
+  # launch FAILED keeps its launcher and stays in the total, so that failure still reads as a seat
+  # without a terminal. Both inputs are seat-writable, and the exclusion needs a verdict of absent
+  # first, so it can only drop a seat that is already not up out of the denominator: the wording
+  # of a count changes, never whether the alarm fires, which is decided by `<live>` alone.
+  # `answered` is every verdict line, so the every-seat check below still covers the excluded ones.
+  local answered=0
   while IFS= read -r line; do
     [ -n "$line" ] || continue
-    total=$((total + 1))
+    answered=$((answered + 1))
     p=${line%%"$TAB"*}; v=${line#*"$TAB"}; w=${v#*"$TAB"}; v=${v%%"$TAB"*}
     case "$v" in
-      live)   live=$((live + 1)) ;;
-      absent) ;;
-      *)      [ -n "$why" ] || why="$p: $w" ;;
+      live)   live=$((live + 1)); total=$((total + 1)) ;;
+      absent) [ "$w" = never-launched ] && [ ! -e "$ROOM/state/launch-$p.sh" ] \
+                || total=$((total + 1)) ;;
+      *)      total=$((total + 1)); [ -n "$why" ] || why="$p: $w" ;;
     esac
   done <<EOF
 $verd
 EOF
-  [ "$total" = "${#seats[@]}" ] || { printf 'the launch record check did not answer for every seat'; return 2; }
+  [ "$answered" = "${#seats[@]}" ] || { printf 'the launch record check did not answer for every seat'; return 2; }
   [ -z "$why" ] || { printf '%s' "$why"; return 2; }
   # A SEAT THE RECORD HOLDS AND THE ROSTER DOES NOT. The count walks the roster, which is a file in
   # the room, so dropping a live seat from `.order` would drop it from the count and could leave
@@ -1240,6 +1254,20 @@ _stall_epfile() {
   local s
   s=$(_status_sigfile) || return 1
   printf '%s/council-stall-%s-%s' "${s%/*}" "$1" "$(basename "$ROOM")"
+}
+
+# _status_forget — remove this room's monitor memory from the mailbox: the `--only-changed`
+# signature and both monitors' STALL firing records. `down` calls it (#200), plain and `--purge`
+# alike, so a room reopened under the same name starts both monitors with no memory, and a kept
+# room is left with none to go stale. Removing a memory can only make the next tick louder: a
+# block that prints, a STALL line in its full form. Fails quietly when the mailbox cannot be
+# resolved, since there is then nothing of this room's there to remove.
+_status_forget() {
+  local s m e
+  s=$(_status_sigfile) || return 0
+  rm -f "$s"
+  for m in alarms block; do e=$(_stall_epfile "$m") && rm -f "$e"; done
+  return 0
 }
 
 # _stall_line <alarms|block|""> <floor> <turns> <held-seconds> <open|closed> — the `🛑 STALL`
@@ -1771,7 +1799,14 @@ v_status() {
     # BIT, not the text: entering or leaving the quiet state breaks silence exactly once rather
     # than every tick for as long as it lasts, which is the same treatment shipyard's reporter
     # gives a wait class and the right one for something that is explicitly not an alarm.
-    sig="$floor|$verd|$t|$openct|${quiet_line:+q}"
+    # THE ROOM'S BIRTH IS IN IT TOO (#200). The file is keyed by the room's NAME, and the default
+    # name is the scenario's, so a room reopened after `down --purge` (or a hand deletion) under
+    # the same name starts at the same deterministic `<first peer>|no-proposal|0|0|` as the dead
+    # one, and its arming tick, the one that tells a supervisor the watch is live, matched the
+    # stale file and printed nothing. `created_ms` is written once by `up`, so it tells the two
+    # apart without anything having to remove the file. It is peer-writable like every other term,
+    # and moving it can only make a tick print. `down` removes the file as well (`_status_forget`).
+    sig="$(c_int_field created_ms 0)|$floor|$verd|$t|$openct|${quiet_line:+q}"
     if [ -z "$alarms" ] && [ -z "$(c_recorded_status)" ] \
        && [ -f "$sigfile" ] && [ "$sig" = "$(cat "$sigfile" 2>/dev/null)" ]; then
       return 1   # the room is open, carries no alarm, and nothing worth saying has moved
