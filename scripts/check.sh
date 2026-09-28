@@ -876,10 +876,10 @@ fi
 # any OTHER way — a different tool, a pattern that matches more than intended, a parent lookup in
 # a file that is not `*.sh` (a Makefile recipe, an extensionless script), or `pgrep` reached
 # through a variable or an alias. It also over-reads a quoted string that happens to spell the
-# shape (`echo "pgrep -P x"`); that reds, loudly, which is the direction to err in. Words are
-# split on whitespace with no regard to quoting, so a quoted argument or redirect target holding
-# a space (`-P "$a $b"`, `2>"$d/a b"`) leaves a fragment that reads as the pattern and passes; a
-# process substitution before the pattern (`<(…) sleep`) goes the other way and reds. The rule it
+# shape (`echo "pgrep -P x"`); that reds, loudly, which is the direction to err in. Quoting is
+# read one level deep (#272): a quoted span is one word unless it holds the command word, and an
+# escaped quote nested inside a quoted command (`sh -c "pgrep -P \"$a $b\""`) is not unwrapped,
+# so its space still splits a fragment off that reads as the pattern and passes. The rule it
 # backs is broader and lives in AGENTS.md: a helper that signals a LIST of pids refuses pid 1 and
 # bounds the list, because the list is exactly what a wrong lookup inflates.
 pg_files=$(git $GIT_Q ls-files --cached --others --exclude-standard '*.sh'); pg_rc=$?
@@ -906,8 +906,33 @@ else
         if (j < n && t[j+1] != ";" && t[j+1] !~ /^#/) return j + 1
         return j
       }
+      # A quoted span is one word: its blanks and separators become \001, so `-P "$a $b"` or
+      # `2>"$d/a b"` leaves no fragment to read as the pattern. A span that holds a command word
+      # (`sh -c "cd d && pgrep -P $x"`) is read as the command it is instead, and its closing quote
+      # ends that command, so a word after it (`sh -c "..." arg`) is not its pattern.
+      function unquote(s,   out, i, n, q, j, c, body) {
+        out = ""; n = length(s); i = 1
+        while (i <= n) {
+          q = substr(s, i, 1)
+          if (q == "\\") { out = out substr(s, i, 2); i += 2; continue }
+          if (q != "\"" && q != "\047") { out = out q; i++; continue }
+          for (j = i + 1; j <= n; j++) {
+            c = substr(s, j, 1)
+            if (q == "\"" && c == "\\") { j++; continue }
+            if (c == q) break
+          }
+          body = substr(s, i + 1, j - i - 1)
+          if (body ~ /(^|[^A-Za-z0-9_.-])p(grep|kill)([^A-Za-z0-9_.-]|$)/) out = out q unquote(body) " ; "
+          else { gsub(/[ \t|;&()`<>]/, "\001", body); out = out q body q }
+          i = j + 1
+        }
+        return out
+      }
       function scan(s, where,   n, t, i, j, tok, base, hasP, pat, k, c, rest) {
         if (s ~ /^[ \t]*#/) return
+        s = unquote(s)
+        # A process substitution is one argument, so `<(true) sleep` leaves `sleep` as the pattern.
+        gsub(/[<>]\([^)]*\)/, " psub ", s)
         # A redirection and its target are not a pattern, and the incident line itself carried
         # one (`pgrep -P "$cpid" 2>/dev/null`). Removed BEFORE the separators, so the `&` of
         # `2>&1` and `&>` is still attached to its operator here.

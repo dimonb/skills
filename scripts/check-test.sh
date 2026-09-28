@@ -1137,6 +1137,27 @@ expect_fail "check 14: a no-pattern lookup inside sh -c \"...\"" \
 printf '#!/usr/bin/env bash\nexit 0\nkids=$(\\%s -P "$x")\n' "$PG" > "$SH_PROBE"
 expect_fail "check 14: a backslash-escaped command word" \
   "pgrep/pkill with -P/--parent and no pattern"
+# 34e3 — a quoted word holding a space is one word (#272): split on whitespace, `$b"` read as the
+# pattern and this passed. Then the same through a redirect target, and a word after the quoted
+# `sh -c` string, which is sh's argument and not pgrep's pattern.
+printf '#!/usr/bin/env bash\nexit 0\nkids=$(%s -P "$a $b")\n' "$PG" > "$SH_PROBE"
+expect_fail "check 14: a quoted -P argument holding a space" \
+  "pgrep/pkill with -P/--parent and no pattern"
+printf '#!/usr/bin/env bash\nexit 0\nkids=$(%s -P "$x" 2>"$d/a b")\n' "$PG" > "$SH_PROBE"
+expect_fail "check 14: a quoted redirect target holding a space" \
+  "pgrep/pkill with -P/--parent and no pattern"
+printf '#!/usr/bin/env bash\nexit 0\nkids=$(sh -c "%s -P $x" arg)\n' "$PG" > "$SH_PROBE"
+expect_fail "check 14: a word after the quoted sh -c string" \
+  "pgrep/pkill with -P/--parent and no pattern"
+# 34e4 — a quoted command that does not open with the lookup is still read as a command, so
+# collapsing quoted words did not blind the sh -c case.
+printf '#!/usr/bin/env bash\nexit 0\nkids=$(sh -c "cd /d && %s -P $x")\n' "$PG" > "$SH_PROBE"
+expect_fail "check 14: a lookup later in a quoted sh -c string" \
+  "pgrep/pkill with -P/--parent and no pattern"
+# 34e5 — and the mirror: a process substitution before the pattern is one argument, so the real
+# pattern after it is reached and the line stays green.
+printf '#!/usr/bin/env bash\nexit 0\nkids=$(%s -P "$x" <(true) sleep)\n' "$PG" > "$SH_PROBE"
+expect_pass "check 14: a process substitution before the pattern stays green"
 rm -f "$SH_PROBE"
 
 # 34f — check 14's fail-closed arms, in the shapes 14a and 14b use. The listing errors with its
