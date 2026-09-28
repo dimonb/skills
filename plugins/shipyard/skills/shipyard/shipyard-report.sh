@@ -962,7 +962,9 @@ fi
 
 # Re-arm only while the report has work to supervise. Doing this before the
 # empty report would recreate a watcher immediately after last-slot cleanup.
-if ! shipyard_continuity_start "$KIND"; then
+# It takes the BACKEND, as the launcher's call does — not $KIND, which is a container kind
+# (workspace|session) and made this a silent no-op on every tick (#192).
+if ! shipyard_continuity_start "$(shipyard_backend)"; then
   echo "warning: could not ensure the Codex parent continuity guard" >&2
 fi
 

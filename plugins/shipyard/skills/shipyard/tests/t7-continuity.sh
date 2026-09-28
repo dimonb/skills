@@ -230,6 +230,11 @@ if [ "${1:-}" = tree ]; then
     printf '%s\n' '{"ok":true,"result":{"tree":{"idleMs":5000,"workspaces":[{"name":"test-ai","sessions":[]}]}}}'
     exit 0
   fi
+  # One live ship child beside the parent session, so a report tick gets past its empty branch.
+  if [ "$(cat "$FAKE_MODE")" = live-slot ]; then
+    printf '%s\n' '{"ok":true,"result":{"tree":{"idleMs":5000,"workspaces":[{"name":"test-ai","sessions":[{"id":"test-session","name":"parent"},{"id":"s41","name":"ship-41"}]}]}}}'
+    exit 0
+  fi
   jq -n --argjson idle "$(cat "$FAKE_IDLE")" \
     '{ok:true,result:{tree:{idleMs:$idle,workspaces:[{sessions:[{id:"test-session"}]}]}}}'
   exit 0
@@ -731,6 +736,29 @@ for bad_tree in malformed-session malformed-tree; do
   check 1 "$(grep -Fc '🛑 NO SIGNAL' "$TMP/report.out")" \
     "a $bad_tree enumeration raises the alarm instead"
 done
+
+# A REPORT TICK RE-ARMS THE WATCHER (#192). Executed rather than grepped: the call site used to pass
+# the container kind (`workspace`) where continuity expects a backend name, so it returned 0 at its
+# first line on every tick having started nothing — and a textual check of that line stayed green.
+# Here a Codex parent on agterm runs one tick over a live slot with no watcher yet, and the watcher
+# must exist afterwards.
+shipyard_continuity_stop_all >/dev/null 2>&1 || true
+reset_fake
+printf '%s\n' live-slot >"$FAKE_MODE"
+rearm_rc=0
+CODEX_SESSION_ID=test-thread AGTERM_ENABLED=1 SHIPYARD_BACKEND=agterm SHIPYARD_WORKSPACE=test-ai \
+  _SHIPYARD_CONTINUITY_LAUNCH_MODE=agterm-session SHIPYARD_MOTION_INTERVAL=0.01 \
+  bash "$SKILL_DIR/shipyard-report.sh" >"$TMP/rearm.out" 2>"$TMP/rearm.err" || rearm_rc=$?
+check 1 "$(grep -c '^| 41 |' "$TMP/rearm.out")" \
+  "a report tick over a live slot reaches its slot loop"
+check 1 "$(grep -c '^session-new:.*watch-foreground' "$FAKE_LOG")" \
+  "...and its re-arm starts the parent continuity watcher"
+rearm_pid=$(awk '{print $1}' "$_SHIPYARD_CONTINUITY_DIR/continuity-test-session.pid" 2>/dev/null)
+if [ -n "$rearm_pid" ] && kill -0 "$rearm_pid" 2>/dev/null; then rearmed=yes; else rearmed=no; fi
+check yes "$rearmed" "...which is running once the tick has returned"
+check 0 "$(grep -Fc 'could not ensure the Codex parent continuity guard' "$TMP/rearm.err")" \
+  "...and the tick does not warn that it failed"
+shipyard_continuity_stop_all >/dev/null 2>&1 || true
 printf '%s\n' normal >"$FAKE_MODE"
 
 unset -f git
@@ -754,9 +782,7 @@ shipyard_continuity_cleanup_last_slot 0 ""
 check 3 "$cleanup_calls" "successful empty enumeration performs last-slot cleanup"
 check 1 "$(grep -Fc 'shipyard_continuity_start "$BACKEND"' "$SKILL_DIR/shipyard-launch.sh")" \
   "child launch wires automatic parent continuity from the parent environment"
-check 1 "$(grep -Fc 'shipyard_continuity_start "$KIND"' "$SKILL_DIR/shipyard-report.sh")" \
-  "status monitoring re-arms Codex goal continuity"
-report_start_line=$(grep -n 'shipyard_continuity_start "$KIND"' "$SKILL_DIR/shipyard-report.sh" | cut -d: -f1)
+report_start_line=$(grep -n 'shipyard_continuity_start "$(shipyard_backend)"' "$SKILL_DIR/shipyard-report.sh" | cut -d: -f1)
 empty_exit_line=$(grep -n '^  exit 0$' "$SKILL_DIR/shipyard-report.sh" | head -1 | cut -d: -f1)
 if [ -n "$report_start_line" ] && [ -n "$empty_exit_line" ] \
   && [ "$report_start_line" -gt "$empty_exit_line" ]; then
