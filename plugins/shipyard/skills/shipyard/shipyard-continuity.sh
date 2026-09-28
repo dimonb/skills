@@ -287,14 +287,31 @@ shipyard_continuity_session_exists() {
   return 1
 }
 
+# Every file this script writes lives in the state dir, which defaults to the shared mailbox that
+# every child can write — so nothing here opens a mailbox path with `>` or `>>`: a FIFO planted at
+# that path would block the open until something read it (#256). A record is written into a temp
+# file `mktemp` creates exclusively beside <path>, then renamed over <path>, which replaces a FIFO
+# without opening it. The temp is a DOTFILE, so no `continuity-*` glob below matches a half-written
+# or leaked one, and it carries <token> so remove_owned_state can sweep one a killed writer leaked.
+# The old predictable `<path>.<token>.tmp.<pid>` name could be planted in advance: the token and the
+# pid are both readable from the mailbox. Residual, as in shared/policy's policy_mailbox_write: the
+# random name could be swapped between `mktemp` and the shell's open of it.
 shipyard_continuity_write_record() {
   local path="$1" token="$2" rest="$3" tmp
-  tmp="$path.$token.tmp.$$"
-  printf '%s %s\n' "$token" "$rest" >"$tmp" 2>/dev/null || return 1
-  if ! mv -f "$tmp" "$path" 2>/dev/null; then
+  [ ! -d "$path" ] || return 1
+  tmp=$(mktemp "${path%/*}/.${path##*/}.$token.tmp.XXXXXXXX" 2>/dev/null) || return 1
+  if ! { printf '%s %s\n' "$token" "$rest" >"$tmp" && mv -f "$tmp" "$path"; } 2>/dev/null; then
     rm -f "$tmp"
     return 1
   fi
+}
+
+# A fresh temp beside <logfile>, for a caller to open on a descriptor and then rename over
+# <logfile> while holding it. Every later write goes through that descriptor, so the log's NAME is
+# opened by nobody: `: >log` then `>>log` would each block on a FIFO planted there (#256).
+shipyard_continuity_log_temp() {
+  [ ! -d "$1" ] || return 1
+  mktemp "${1%/*}/.continuity-log.XXXXXXXX" 2>/dev/null
 }
 
 # A matching stop request is acknowledged before the watcher exits. A ping is
@@ -461,7 +478,7 @@ shipyard_continuity_remove_owned_state() {
       read -r seen rest <"$path" || true
       [ "${seen:-}" = "$token" ] && rm -f "$path"
     fi
-    rm -f "$path.$token.tmp."* 2>/dev/null || true
+    rm -f "${path%/*}/.${path##*/}.$token.tmp."* 2>/dev/null || true
   done
 }
 
@@ -802,16 +819,21 @@ shipyard_continuity_shq() {
 
 shipyard_continuity_start_agterm_session_locked() {
   local pidfile="$1" heartbeat="$2" control="$3" ack="$4" logfile="$5"
-  local token="$6" lock="$7" lock_token="$8" command="" arg guard_session pid seen n=0
+  local token="$6" lock="$7" lock_token="$8" command="" arg guard_session pid seen n=0 logtmp
   for arg in /bin/bash "$SHIPYARD_CONTINUITY_SCRIPT" watch-foreground \
     "$AGTERM_SESSION_ID" "$AGTERM_SOCKET" "${AGTERM_PANE:-primary}" "$AGTERM_WINDOW_ID" \
     "$pidfile" "$heartbeat" "$control" "$ack" "$token" "$lock" "$lock_token" "$logfile"; do
     command="$command $(shipyard_continuity_shq "$arg")"
   done
-  : >"$logfile" || return 1
-  guard_session=$(agtermctl session new --after "$AGTERM_SESSION_ID" --no-select \
-    --name "shipyard-goal-$(printf '%.8s' "$AGTERM_SESSION_ID")" \
-    --command "${command# }" --socket "$AGTERM_SOCKET" 2>>"$logfile") || return 1
+  # The rename happens before agtermctl runs, while fd 9 holds the file: the watcher replaces the
+  # log with its own the same way once it starts, and a rename of ours landing after that would
+  # leave the watcher writing to an unlinked file.
+  logtmp=$(shipyard_continuity_log_temp "$logfile") || return 1
+  guard_session=$( { mv -f "$logtmp" "$logfile" 2>/dev/null \
+    && agtermctl session new --after "$AGTERM_SESSION_ID" --no-select \
+      --name "shipyard-goal-$(printf '%.8s' "$AGTERM_SESSION_ID")" \
+      --command "${command# }" --socket "$AGTERM_SOCKET" 2>&9 9>&-; } 9>>"$logtmp" ) \
+    || { rm -f "$logtmp"; return 1; }
   while [ "$n" -lt "${_SHIPYARD_CONTINUITY_PUBLICATION_POLLS:-40}" ]; do
     if [ -f "$pidfile" ]; then
       read -r pid seen <"$pidfile" || true
@@ -862,10 +884,11 @@ shipyard_continuity_canary_fifo() {
 shipyard_continuity_start_owner_hold_locked() {
   local pidfile="$1" heartbeat="$2" control="$3" ack="$4" logfile="$5"
   local token="$6" lock="$7" lock_token="$8"
-  local dir="${pidfile%/*}" fifo boot="" cr="" cw="" bash_bin="${BASH:-bash}"
+  local dir="${pidfile%/*}" fifo boot="" cr="" cw="" bash_bin="${BASH:-bash}" logtmp
   SHIPYARD_CONTINUITY_LAUNCHED_PID=""
   SHIPYARD_CONTINUITY_CANARY_WFD=""
-  fifo=$(shipyard_continuity_canary_fifo "$dir") || return 1
+  logtmp=$(shipyard_continuity_log_temp "$logfile") || return 1
+  fifo=$(shipyard_continuity_canary_fifo "$dir") || { rm -f "$logtmp"; return 1; }
   # Chain the three opens with && so a FAILED open never falls through: the `<>` bootstrap gives the
   # read-only `<` open a writer so it does not block; if the bootstrap fails and cr still ran, cr
   # would block FOREVER on a writer-less fifo. cr ends read-only, cw write-only, so once the caller
@@ -877,7 +900,7 @@ shipyard_continuity_start_owner_hold_locked() {
     [ -z "$boot" ] || exec {boot}>&- 2>/dev/null || true
     [ -z "$cr" ] || exec {cr}<&- 2>/dev/null || true
     [ -z "$cw" ] || exec {cw}>&- 2>/dev/null || true
-    rm -f "$fifo"
+    rm -f "$fifo" "$logtmp"
     return 1
   fi
   # Own process group so a signal to the CALLER's group — a Ctrl-C, a closing pane's SIGHUP —
@@ -892,14 +915,22 @@ shipyard_continuity_start_owner_hold_locked() {
   # itself a writer, so EOF would never fire — the exact fd-inheritance footgun #89 hit. Closed for
   # the launch here. `$BASH` (not PATH `bash`) so the watcher runs the same bash the armed caller
   # already proved supports these features.
-  ( exec {cw}>&-
-    export _SHIPYARD_CONTINUITY_CANARY_RFD="$cr"
-    exec "$bash_bin" "$SHIPYARD_CONTINUITY_SCRIPT" watch "$AGTERM_SESSION_ID" \
-      "$AGTERM_SOCKET" "${AGTERM_PANE:-primary}" "$AGTERM_WINDOW_ID" \
-      "$pidfile" "$heartbeat" "$control" "$ack" "$token" "$lock" "$lock_token" "$logfile" \
-      >>"$logfile" 2>&1 </dev/null ) &
-  SHIPYARD_CONTINUITY_LAUNCHED_PID=$!
+  # The log reaches the watcher as fd 9, opened on the fresh temp and renamed over the log name
+  # before the fork, so neither side ever opens the log by name (#256).
+  { mv -f "$logtmp" "$logfile" 2>/dev/null \
+    && { ( exec {cw}>&-
+      export _SHIPYARD_CONTINUITY_CANARY_RFD="$cr"
+      exec "$bash_bin" "$SHIPYARD_CONTINUITY_SCRIPT" watch "$AGTERM_SESSION_ID" \
+        "$AGTERM_SOCKET" "${AGTERM_PANE:-primary}" "$AGTERM_WINDOW_ID" \
+        "$pidfile" "$heartbeat" "$control" "$ack" "$token" "$lock" "$lock_token" "$logfile" \
+        >&9 2>&1 9>&- </dev/null ) &
+      SHIPYARD_CONTINUITY_LAUNCHED_PID=$!; }; } 9>>"$logtmp"
   [ "$had_m" = 1 ] || set +m
+  if [ -z "$SHIPYARD_CONTINUITY_LAUNCHED_PID" ]; then
+    rm -f "$logtmp"
+    exec {cr}<&- {cw}>&-
+    return 1
+  fi
   exec {cr}<&-   # the caller never reads the canary; keep only the write end open here
   SHIPYARD_CONTINUITY_CANARY_WFD="$cw"
 }
@@ -917,7 +948,7 @@ shipyard_continuity_close_canary_wfd() {
 
 shipyard_continuity_start_nohup_locked() {
   local pidfile="$1" heartbeat="$2" control="$3" ack="$4" logfile="$5"
-  local token="$6" lock="$7" lock_token="$8" pid n=0 group=""
+  local token="$6" lock="$7" lock_token="$8" pid="" n=0 group="" logtmp
   if [ -n "${_SHIPYARD_CONTINUITY_OWNER_HOLD:-}" ]; then
     shipyard_continuity_start_owner_hold_locked \
       "$pidfile" "$heartbeat" "$control" "$ack" "$logfile" "$token" "$lock" "$lock_token" \
@@ -925,11 +956,15 @@ shipyard_continuity_start_nohup_locked() {
     pid="$SHIPYARD_CONTINUITY_LAUNCHED_PID"
     group=1
   else
-    nohup bash "$SHIPYARD_CONTINUITY_SCRIPT" watch "$AGTERM_SESSION_ID" \
-      "$AGTERM_SOCKET" "${AGTERM_PANE:-primary}" "$AGTERM_WINDOW_ID" \
-      "$pidfile" "$heartbeat" "$control" "$ack" "$token" "$lock" "$lock_token" "$logfile" \
-      >>"$logfile" 2>&1 </dev/null &
-    pid=$!
+    # As in the owner-hold launch: fd 9 on a fresh temp, renamed over the log before the fork.
+    logtmp=$(shipyard_continuity_log_temp "$logfile") || return 1
+    { mv -f "$logtmp" "$logfile" 2>/dev/null \
+      && { nohup bash "$SHIPYARD_CONTINUITY_SCRIPT" watch "$AGTERM_SESSION_ID" \
+        "$AGTERM_SOCKET" "${AGTERM_PANE:-primary}" "$AGTERM_WINDOW_ID" \
+        "$pidfile" "$heartbeat" "$control" "$ack" "$token" "$lock" "$lock_token" "$logfile" \
+        >&9 2>&1 9>&- </dev/null &
+        pid=$!; }; } 9>>"$logtmp"
+    [ -n "$pid" ] || { rm -f "$logtmp"; return 1; }
   fi
   sleep "${_SHIPYARD_CONTINUITY_PUBLISH_DELAY:-0}"
   shipyard_continuity_write_record "$pidfile" "$pid" "$token" \
@@ -1009,7 +1044,7 @@ shipyard_continuity_start() {
   intent="$state/continuity-start-$intent_token.intent"
   start_generation=$(shipyard_continuity_generation "$state")
   sleep "${_SHIPYARD_CONTINUITY_BEFORE_INTENT_DELAY:-0}"
-  printf '%s %s\n' "$start_generation" "$AGTERM_SESSION_ID" >"$intent" 2>/dev/null || return 1
+  shipyard_continuity_write_record "$intent" "$start_generation" "$AGTERM_SESSION_ID" || return 1
   if shipyard_continuity_stop_in_progress "$state"; then
     rm -f "$intent"
     return 0
@@ -1052,7 +1087,10 @@ shipyard_continuity_stop_all() {
     return 1
   fi
   marker="$state/continuity-stopping"
-  printf '%s %s\n' "$lock_owner_pid" "$lock_token" >"$marker" 2>/dev/null \
+  # By rename, never `>`: this runs while holding the lifecycle lock, on a FIXED name, so a FIFO
+  # planted here used to wedge the stopping parent inside the lock, and every start or stop that
+  # waited on the lock after it (#256).
+  shipyard_continuity_write_record "$marker" "$lock_owner_pid" "$lock_token" \
     || { shipyard_continuity_release_lock "$lock" "$lock_token" "$lock_owner_pid"; return 1; }
   rm -f "$state"/continuity-start-*.intent
   rm -f "$state"/continuity-owner.*
@@ -1105,7 +1143,14 @@ shipyard_continuity_cleanup_last_slot() {
 if [ "${BASH_SOURCE[0]}" = "$0" ]; then
   case "${1:-}" in
     watch) shift; shipyard_continuity_watch "$@" ;;
-    watch-foreground) shift; shipyard_continuity_watch_foreground "$@" >>"${12}" 2>&1 ;;
+    # The watcher's log is its own fresh file renamed over the one the starter made, never an
+    # append by name: a FIFO planted at the log path would block that open (#256). What the
+    # starter wrote there first (agtermctl's stderr from a spawn that succeeded) is replaced.
+    watch-foreground)
+      shift
+      _log_tmp=$(shipyard_continuity_log_temp "${12}") || exit 1
+      { mv -f "$_log_tmp" "${12}" 2>/dev/null || { rm -f "$_log_tmp"; exit 1; }
+        shipyard_continuity_watch_foreground "$@"; } >>"$_log_tmp" 2>&1 ;;
     *) echo 'usage: shipyard-continuity.sh watch <session> <socket> <pane> <window> <pidfile> <heartbeat> <control> <ack> <token> <lock> <lock-token> <log>' >&2; exit 2 ;;
   esac
 fi

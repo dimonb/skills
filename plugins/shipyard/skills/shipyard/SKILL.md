@@ -659,14 +659,16 @@ committed).
 Every child can write that directory, and a FIFO left at a path a writer opens with `>` blocks the
 writer until something reads it. So the report, ask, answer, tell and launch scripts write their
 mailbox files by renaming a fresh `mktemp` file over the target (`policy_mailbox_write`, in
-shared/policy), and the glob readers among them pass only regular files to `jq` (#253). Routes
-known to stay open, named so a quiet monitor is read correctly — the list records what was checked,
-not a guarantee that nothing else exists: a reader checks `[ -f ]` and then opens, and a FIFO
-swapped in between the two still hangs it; the shared driver's container pin (`container-<backend>`)
-is still written with `>`; and `shipyard-continuity.sh` still opens its mailbox files with `>` and
-`>>` — the watcher's log, the fixed-name `continuity-stopping` marker (written by
-`shipyard_continuity_stop_all` while it holds the lifecycle lock), the start intent, and its record
-temp files. Each shows up as a script that stops returning, not as a wrong answer.
+shared/policy), and the glob readers among them pass only regular files to `jq` (#253).
+`shipyard-continuity.sh` does the same for its records, the start intent and the
+`continuity-stopping` marker, and its watcher log is opened once on a fresh temp that is then
+renamed into place, so nothing appends to the log by name; the shared driver writes the container
+pin (`container-<backend>`) by rename as well (#256). Routes known to stay open, named so a quiet
+monitor is read correctly — the list records what was checked, not a guarantee that nothing else
+exists: a reader checks `[ -f ]` and then opens, and a FIFO swapped in between the two still hangs
+it; and each rename-based writer re-opens its random `mktemp` name once, so a watcher that swaps
+that name in the instant between still blocks it. Either shows up as a script that stops
+returning, not as a wrong answer.
 
 When an escalation arrives:
 

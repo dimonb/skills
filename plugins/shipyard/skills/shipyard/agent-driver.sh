@@ -175,10 +175,21 @@ drv_pin() {
 # Idempotent: an already-pinned name is returned unchanged, so a second child of a run joins the
 # first one's container even if the caller has since moved to another workspace. With no pin
 # directory it just returns the derived name.
+#
+# The pin is written by RENAME, never opened with `>`. A caller's pin directory can be writable by
+# the agents it supervises (shipyard's is the shared escalation mailbox), and a FIFO planted at
+# `container-<backend>` would block a `>` in open(2) until something read it, wedging every launch.
+# `mktemp`'s exclusive create cannot be handed an existing file and rename(2) replaces a FIFO
+# without opening it. This is shared/policy's `policy_mailbox_write` written out here because the
+# driver sources nothing: keep the two in step. The same named residual applies: between `mktemp`
+# and the shell re-opening the temp for the write, a watcher could swap that random name.
 drv_container_pin() {
-  local v f
+  local v f tmp
   v=$(drv_container) || return 1
-  if f=$(_drv_pin_file 2>/dev/null); then printf '%s\n' "$v" > "$f" 2>/dev/null || true; fi
+  if f=$(_drv_pin_file 2>/dev/null) && [ ! -d "$f" ] \
+    && tmp=$(mktemp "${f%/*}/.drv-pin.XXXXXXXX" 2>/dev/null); then
+    { printf '%s\n' "$v" >"$tmp" && mv -f "$tmp" "$f"; } 2>/dev/null || rm -f "$tmp" 2>/dev/null
+  fi
   printf '%s' "$v"
 }
 
