@@ -219,3 +219,41 @@ when a finding names several ways to fail; a spend line in the hand-off record),
 round ledger to the state file after every round and read it back on re-entry), #226 (a sizing row
 for a config / manifest / lockfile-only diff). Close #206 with a stated close condition so it stops
 collecting scenarios.
+
+Shipped in #294 (Closes #206 #64 #226; #206's remaining scenarios moved to #293).
+
+## Retro 6 — 2026-09-29, after #294 #292 #295 #296
+
+Batch: 4 PRs, 8 issues closed (#206 #64 #226 #133 #34 #39 #197 #211), open count 40 → 33. A shared
+account usage limit stopped both children at once for ~70 min; both resumed with one directive each.
+
+### Went well
+
+* **The retro-5 ledger and Spend line worked on first use**: #294 reported its own rounds and cost
+  (6/2/2/0 blockers, ~2.0M tokens), which made the next point measurable rather than anecdotal.
+* **Reviews caught a supervisor design error.** Decision C on #132 (two pins always refuse) deadlocked
+  a both-pinned mailbox; the #292 battery found it and the fix (status 4, an explicit down clearing
+  only the resolved backend's own proven-empty pin) went in before merge.
+* **Recovery after the usage limit was one directive per slot**, with no lost work — the limit reads
+  as a pause, not a crash, because the round ledger now survives in the state file.
+
+### Went badly
+
+* **Fix rounds keep generating the next round's blockers.** Three times this batch and once before:
+  #258 (round 2's fix → round 3's blocker → round 4's), #294 (r2 and r3 blockers both `origin: fix`),
+  #296 (round 2's guard change → round 3's regression, reverted). Each time the answer was a
+  supervisor waiver or a revert. The budget counts iterations, not what survives (#293 carries the
+  measurements).
+* **The supervisor's own decisions are not reviewed** before they go to a child. A decision that
+  looked safe (C) was a deadlock; nothing asked "can the operator get out of this state?".
+
+### Change
+
+In `ship` (next PR): work #293 — bound fix rounds by the kind of finding, not only by count:
+a round whose surviving blockers are all `origin: fix` in the change's own prose may take one scoped
+round without escalating, while a behavioural blocker still escalates at the budget; and before a
+fix round lands, a fix that edits a guard or a predicate is reviewed against the round it came from
+(revert to the last clean line when the new blocker sits in the fix itself).
+
+For the supervisor: before answering a design escalation, ask of each option "what state can this
+leave the operator in, and what gets them out of it?" — a refusal with no exit is a deadlock.
