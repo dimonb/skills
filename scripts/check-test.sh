@@ -1219,6 +1219,17 @@ perl -pi -e 's{^(\s*)# A line in column 0 opens a top-level key.*$}{$1) (}' scri
 expect_fail "check 13 reds when its trigger reader cannot run" \
   "could not read the triggers out of"
 cp "$SCRATCH/check13.bak" scripts/check.sh
+# 33h — the two missing-file arms, pinned. Unpinned, each was fully substituted by a neighbour: a
+# missing check-test.sh yields an empty `$GUARDED`, and a missing workflow now fails the trigger
+# reader. Repointed inside check.sh rather than deleted, so this file is never removed while it runs.
+perl -pi -e 's{^CT_FILE=scripts/check-test\.sh$}{CT_FILE=scripts/_no-such-check-test.sh}' scripts/check.sh
+expect_fail "check 13 reds when check-test.sh is missing" \
+  "scripts/check-test.sh is missing"
+cp "$SCRATCH/check13.bak" scripts/check.sh
+perl -pi -e 's{^CT_WF=\.github/workflows/check-test\.yml$}{CT_WF=.github/workflows/_no-such.yml}' scripts/check.sh
+expect_fail "check 13 reds when its workflow is missing" \
+  "is missing — the gate-of-the-gate has no workflow"
+cp "$SCRATCH/check13.bak" scripts/check.sh
 
 # 34 — check 14: a parent-pid lookup with no pattern reds (#265). The fixture is TEXT: the gate
 # only reads it, nothing here or in check.sh executes it, and it opens with `exit 0` besides. The
