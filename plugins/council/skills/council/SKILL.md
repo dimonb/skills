@@ -140,7 +140,7 @@ rather than raised by a participant, and nobody owes it an answer. `c_send` enfo
 | `amend --refs '["<proposal>","<objection>"]'` | a revision; referencing an objection on the proposal it amends **closes** it |
 | `object --refs '["<id>"]'` | must name a specific id, or there is nothing to close |
 | `concede --refs '["<id>"]'` | **the sender yields**: pointing at an objection accepts it, pointing at your own proposal withdraws it in favour of somebody else's |
-| `withdraw` · `support` · `overrule` (**ungated — any participant**) · `msg` · `notice` · `skip` · `decide` | |
+| `withdraw` · `support` · `overrule` (**ungated — any participant**) · `msg` · `notice` · `clarify` · `skip` · `decide` | |
 
 `concede` always means the same thing, and who sends it decides what falls: from the
 objection's author it closes the objection; from the proposal's author it kills the
@@ -154,6 +154,13 @@ one. It was documented as the chair's act for a long time, which was simply not 
 code. Whether a room should have a chair is a question about how a room is *governed* and
 has not been decided — read this as a description of what the code does today, not as a
 gap somebody is on their way to filling.
+
+**Participants are told so.** `protocol/_channel.md`, which every seat's file opens with
+whatever its role, names `overrule` in its act list with that same description — ungated, no
+chair — framed as a repair for an objection answered on the substance whose author has stopped
+engaging, and with its cost: the record shows the objection closed by an overrule from that
+seat rather than conceded. No scenario role block adds anything to that; each seat reads it
+there.
 
 An `amend` belongs to **one** proposal — the first proposal-typed id it references; its
 other refs are objections, and it closes those raised against that proposal. (Referencing two
@@ -1075,6 +1082,7 @@ files, one of which was missed.
 | `⏳ LONG TURN` | `COUNCIL_STALL_SECS`, 900s, **and** the seat's own client reads as mid-turn — which needs an agent kind whose pane has been captured, so it is unreachable for `agy` (see below) | the alarms line: both loops, and it bypasses every filter, exactly as the row below does | yes, one `notice`, keyed `[longturn:<peer>:<turns>]` |
 | `🛑 STALL` | `COUNCIL_STALL_SECS`, 900s, otherwise — and `COUNCIL_STALL_HARD_SECS`, 5400s, **whatever the pane says**. Also **always** on a closed room, at any age | the alarms line: both loops, and it bypasses every filter — in full at an episode's first firing, then as its delta (below) | yes, one `notice`, keyed `[stall:<peer>:<turns>]` |
 | `🛑 STALL: the floor's held time cannot be read` | none: the instant the floor is timed from (the last turn's `sent_ms`, or `created_ms` before a token room's first turn) is stamped more than 60s **in the future**, so there is no held time to hold against a threshold. An unknown held time in a live room is the alarm | the alarms line: both loops, and it bypasses every filter — the whole line on every tick, with no episode delta | yes, one `notice`, keyed `[clock:<peer>:<turns>]` |
+| `🛑 NEVER MOVED` | no turn-consuming message in the log **and** the room older than `COUNCIL_STALL_HARD_SECS` (5400s) — plus, in a `roundtable` room, twice the opening round's deadline, taken as the smaller of the roster's and the 10-minute default. The room's age is the **older** of the roster's `created_ms` and the launch record's copy in the mailbox; either one stamped more than 60s in the future raises it at once, worded as an age that cannot be read. It reads no pane, and it covers an opening round nobody ever posted into, which otherwise stays open for ever. Not added on a tick where a `🛑 STALL` line above already fired, since that line is the alarm about the same room | the alarms line: both loops, and it bypasses every filter — the whole line on every tick | yes, one `notice`, keyed `[never:<floor>:<turns>]` (`[neverclock:…]` for the future stamp) — not on a tick that pushed a `🛑 STALL` instead |
 
 **A `🛑 STALL` is printed in full once per episode, then as what changed.** An episode is one
 unbroken hold of the floor by the same seat at the same turn count, in the same open-or-closed
@@ -1082,7 +1090,6 @@ state; a new turn, a different holder or the room closing starts a new one. Each
 own count, so the ten-minute block still gets the full line even when the fast loop has already
 fired on the same stall, and a plain `status` has no memory and always prints it in full.
 
-| `🛑 NEVER MOVED` | no turn-consuming message in the log **and** the room older than `COUNCIL_STALL_HARD_SECS` (5400s) — plus, in a `roundtable` room, twice the opening round's deadline, taken as the smaller of the roster's and the 10-minute default. The room's age is the **older** of the roster's `created_ms` and the launch record's copy in the mailbox; either one stamped more than 60s in the future raises it at once, worded as an age that cannot be read. It reads no pane, and it covers an opening round nobody ever posted into, which otherwise stays open for ever. Not added on a tick where a `🛑 STALL` line above already fired, since that line is the alarm about the same room | the alarms line: both loops, and it bypasses every filter — the whole line on every tick | yes, one `notice`, keyed `[never:<floor>:<turns>]` (`[neverclock:…]` for the future stamp) — not on a tick that pushed a `🛑 STALL` instead |
 * **first firing** — `🛑 STALL: <seat> has held the floor for <N>s — …`, the remedy included;
 * **later firings** — one line, `🛑 STALL (still): <seat> — now <N>s, firing <k>, first raised <M>
   min ago; …`, ending in `nothing sent` or in what `council.sh say` sent since the first firing:
