@@ -17,8 +17,9 @@ export LC_ALL=C
 ROOM="$COUNCIL_ROOM"
 ME="${COUNCIL_ME:-}"
 C_IDLE="${COUNCIL_IDLE:-2}"        # bell-loss fallback, seconds
-# The fallback for each roster number c_int_field's callers read, from the file `up` writes them
-# from, so the two sides cannot disagree about a default (#151).
+# The fallback for each roster number `up` writes with a default, from the file `up` writes it
+# from, so the two sides cannot disagree about it (#151). `created_ms` and `round_quorum` have no
+# such default; their callers pass a sentinel instead.
 # shellcheck source=roster-defaults.sh
 . "$(dirname "${BASH_SOURCE[0]}")/roster-defaults.sh"
 

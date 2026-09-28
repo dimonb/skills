@@ -163,11 +163,15 @@ jq --argjson c "$WIDE3" '.created_ms = $c' "$R/roster.json" > "$R/roster.next" &
 got=$(COUNCIL_ME=a bash -c '. "'"$SKILL"'/lib/lib.sh"; c_int_field created_ms 0')
 if [ "$got" = 0 ]; then echo "ok   a created_ms too wide for bash fell back to the default"
 else echo "FAIL a created_ms too wide for bash was believed: '$got'"; fail=1; fi
-fresh
-jq '.turn_deadline_ms = 999999999999999999' "$R/roster.json" > "$R/roster.next" && mv "$R/roster.next" "$R/roster.json"
-got=$(bash "$CLI" floor 2>/dev/null | sed -n 's/.*deadline_ms=\([^ ]*\).*/\1/p')
-if [ "$got" = 999999999999999999 ]; then echo "ok   an 18-digit turn_deadline_ms is still read as written"
-else echo "FAIL an 18-digit turn_deadline_ms was refused: deadline_ms='$got'"; fail=1; fi
+# Only where jq keeps the literal (1.7 does; 1.6 prints a double, `1e+18`, which the digits test
+# refuses by design), so an older jq skips this edge rather than reporting a false red.
+if [ "$(jq -n '999999999999999999')" = 999999999999999999 ]; then
+  fresh
+  jq '.turn_deadline_ms = 999999999999999999' "$R/roster.json" > "$R/roster.next" && mv "$R/roster.next" "$R/roster.json"
+  got=$(bash "$CLI" floor 2>/dev/null | sed -n 's/.*deadline_ms=\([^ ]*\).*/\1/p')
+  if [ "$got" = 999999999999999999 ]; then echo "ok   an 18-digit turn_deadline_ms is still read as written"
+  else echo "FAIL an 18-digit turn_deadline_ms was refused: deadline_ms='$got'"; fail=1; fi
+else echo "skip the 18-digit edge: this jq does not keep a wide integer literal"; fi
 
 # --- 5c. a wrong-typed round_quorum leaves no diagnostic on the floor path -------
 # The quorum reaches `[ "$quorum" -lt 2 ]`. `// empty` never fired for a string, because a

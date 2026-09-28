@@ -384,21 +384,26 @@ done
 set --
 
 # Every roster number `up` writes when the scenario names none is the default its reader falls
-# back to (#151): both sides read lib/roster-defaults.sh. Checked by VALUE at the reader, not by
-# the variable, so a reader that goes back to spelling its own number is caught: the field is
-# deleted from the roster `up` wrote and `floor` must still print what `up` had written there.
-# The static half covers the readers the verbs do not print: none may hand c_int_field a literal.
+# back to (#151): both sides read lib/roster-defaults.sh. The field list is DERIVED from that file
+# (`C_DEF_<FIELD>` names the roster field `<field>`), so a default declared there is checked
+# without this test learning its name. Two static halves catch a side that stops reading it, for
+# any field: no roster number in up.sh's jq template may be a numeric literal, and no c_int_field
+# call in lib/ may pass one — `created_ms 0` excepted, a sentinel for "no value" rather than a
+# default `up` writes. The two a verb prints are also checked by VALUE at the reader: the field is
+# deleted from the roster `up` wrote, and `floor` / `verdict` must still print what `up` had
+# written there.
 printf -- '---\nname: %s\nmode: token\nroles: [a, b]\n---\n## role: a\nx\n## role: b\nx\n' \
   "$BADSC" > "$SKILL/scenarios/$BADSC.md"
 ( cd "$REPO" && bash "$CLI" --room defaults up --scenario "$BADSC" --agents claude,codex "x" ) \
   >"$ROOT/defaults.log" 2>&1
 DR="$REPO/.git/council/defaults"
-( . "$SKILL/lib/roster-defaults.sh"
-  for kv in "turns_budget=$C_DEF_TURNS_BUDGET" "turn_deadline_ms=$C_DEF_TURN_DEADLINE_MS" \
-            "round_deadline_ms=$C_DEF_ROUND_DEADLINE_MS"; do
-    [ "$(jq -r ".${kv%%=*}" "$DR/roster.json" 2>/dev/null)" = "${kv#*=}" ] \
-      || { echo "FAIL up wrote ${kv%%=*} other than its default ${kv#*=}"; cat "$ROOT/defaults.log"; exit 1; }
-  done ) || fail=1
+defs=$(sed -n 's/^C_DEF_\([A-Z_]*\)=\([0-9]*\).*/\1=\2/p' "$SKILL/lib/roster-defaults.sh" | tr 'A-Z' 'a-z')
+[ "$(printf '%s\n' "$defs" | grep -c .)" -ge 3 ] \
+  || { echo "FAIL could not read the defaults out of roster-defaults.sh: '$defs'"; fail=1; }
+for kv in $defs; do
+  [ "$(jq -r ".${kv%%=*}" "$DR/roster.json" 2>/dev/null)" = "${kv#*=}" ] \
+    || { echo "FAIL up wrote ${kv%%=*} other than its default ${kv#*=}"; cat "$ROOT/defaults.log"; fail=1; }
+done
 wrote=$(jq -r .turn_deadline_ms "$DR/roster.json" 2>/dev/null)
 wrote_b=$(jq -r .turns_budget "$DR/roster.json" 2>/dev/null)
 jq 'del(.turn_deadline_ms, .turns_budget)' "$DR/roster.json" > "$DR/roster.next" && mv "$DR/roster.next" "$DR/roster.json"
@@ -408,9 +413,10 @@ read_back=$(COUNCIL_ROOM="$DR" bash "$CLI" floor 2>/dev/null | sed -n 's/.*deadl
 read_back=$(COUNCIL_ROOM="$DR" bash "$CLI" verdict --json 2>/dev/null | jq -r .budget)
 [ -n "$wrote_b" ] && [ "$read_back" = "$wrote_b" ] \
   || { echo "FAIL verdict's default turns_budget ($read_back) is not what up writes ($wrote_b)"; fail=1; }
-lits=$(grep -n 'c_int_field \(turns_budget\|turn_deadline_ms\|round_deadline_ms\) [0-9]' \
-         "$SKILL"/lib/*.sh)
+lits=$(grep -nE "c_int_field [a-z_]+ [\"']?[0-9]" "$SKILL"/lib/*.sh | grep -v 'c_int_field created_ms 0)')
 [ -z "$lits" ] || { echo "FAIL a reader spells its own roster default:"; printf '%s\n' "$lits"; fail=1; }
+lits=$(grep -nE '[a-z_]+:[0-9]+[,} ]' "$SKILL/lib/up.sh")
+[ -z "$lits" ] || { echo "FAIL up writes a roster number as a literal:"; printf '%s\n' "$lits"; fail=1; }
 kill_keeper "$DR/state/keeper.pid" -9; rm -rf "$DR"; rm -f "$SKILL/scenarios/$BADSC.md"
 
 # A roster that could not be written launches nothing and says so. Reached through a scenario

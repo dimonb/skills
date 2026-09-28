@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# roster-defaults.sh — the default of each number `up` writes into roster.json. Source only.
+# roster-defaults.sh — the default of each roster number `up` writes with one. Source only.
+# (`created_ms` has none — `up` always writes the clock — and `round_quorum` is not written.)
 #
 # Each of these is read on two sides: `council_up` (lib/up.sh) writes it into a new room's roster
 # unless the scenario's frontmatter (or `up --turns`) gives a value — `turn_deadline_ms` is never
@@ -8,10 +9,9 @@
 # by an older `up`, or one a peer has overwritten (c_int_field). Both sides used to spell the
 # number themselves, with nothing keeping a pair in step (#151).
 #
-# A new roster number with a default goes here, and both its writer and its reader name the
-# variable. tests/t13-relaunch.sh builds a room with `up` from a scenario that sets none of these
-# and checks the roster carries them, that `floor` and `verdict` fall back to what `up` wrote,
-# and that no c_int_field call in lib/ spells one of these three defaults as a literal.
+# A new roster number with a default goes here as `C_DEF_<FIELD>`, and both its writer and its
+# reader name the variable. tests/t13-relaunch.sh reads its field list from this file by that
+# naming, so a default declared here is checked against the roster `up` writes.
 #
 # Council's own, not shared/: nothing in shipyard has a roster. It is not lib.sh because `up`
 # runs before a room exists and lib.sh refuses to load without one.
