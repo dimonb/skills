@@ -80,6 +80,12 @@ if [ "$LIST" = 1 ]; then
   for w in "$ROOT"/.claude/worktrees/ship-*; do
     [ -d "$w" ] || continue
     s=$(basename "$w"); s="${s#ship-}"
+    # Listed, not skipped — the directory is there and the operator should see it — but with its
+    # name quoted and no gate run over it: nothing below would act on it (shipyard_slot_check).
+    if ! shipyard_slot_check "$s" 2>/dev/null; then
+      printf '%-24s %-10s %-9s %s\n' "$(printf '%q' "$s")" "-" "present" "INVALID SLOT NAME (not managed)"
+      continue
+    fi
     t="gone"; shipyard_target "$s" >/dev/null 2>&1 && t="live"
     # The listed state is the GATE's own verdict, not a second opinion computed here: a
     # column that says "clean" where teardown then refuses is how an operator learns to
@@ -110,6 +116,9 @@ fi
 
 rc=0
 for slot in "${SLOTS[@]}"; do
+  # Before any path is built from it: `7/` used to resolve to slot 7's own worktree (#198). Not
+  # overridden by --force, which overrides a gate's verdict about a slot, not what slot is meant.
+  shipyard_slot_check "$slot" || { rc=1; continue; }
   WT=$(wt_of "$slot")
 
   if [ -d "$WT" ] && [ "$FORCE" != 1 ]; then

@@ -101,6 +101,8 @@ if [ -f "$MB/$TARGET.json" ]; then
   s=$(jq -r '.slot // empty' "$MB/$TARGET.json" 2>/dev/null)
   [ -n "$s" ] && { SLOT="$s"; SRC="$TARGET"; }
 fi
+# Checked AFTER that resolution, because a record's `.slot` is written by whoever wrote the record.
+shipyard_slot_check "$SLOT" || exit 2
 
 shipyard_backend_check || exit 1
 # An absence is not a death. `shipyard_where` resolves against the backend THIS process picked, and

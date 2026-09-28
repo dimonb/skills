@@ -94,19 +94,37 @@ check 1 "$(shipyard_agent_prepare_worktree codex "$TMP/repo" "$TMP/not-a-worktre
 # when nobody added the arm. The preamble then fails, and the launcher used to be written anyway
 # with no export and no unset lines in it. The control run on an unmodified copy is what keeps the
 # refusal checks from passing on a launch that fails for some other reason.
+#
+# Three knobs for the dedup and slot-name cases further down, each defaulting to the plain launch:
+#   T5_ARG   the launch argument (default `#42`);
+#   T5_TMUX  `answer` (default): tmux says no server is running, which is an ANSWERED, empty
+#            backend; `down`: it fails saying nothing, which is an unanswered one; `listed`: the
+#            enumeration (`-F '#{window_name}'`) lists ship-42 while the per-slot lookup fails;
+#   T5_PIN   a backend whose container pin to plant first, as a fleet launched there would leave.
 dry_launch() { # <skill-dir> <repo> [mailbox-name-to-plant-a-directory-at] -> output, then "rc=<n>"
   local rc=0 out
   git init -q "$2"
   git -C "$2" -c user.email=shipyard-test -c user.name=shipyard-test commit -q --allow-empty -m fixture
   [ -z "${3:-}" ] || mkdir -p "$2/.git/ship-escalations/$3"
+  [ -z "${T5_PIN:-}" ] || { mkdir -p "$2/.git/ship-escalations"; printf 't5ex' >"$2/.git/ship-escalations/container-$T5_PIN"; }
   out=$( cd "$2" || exit 1
-         # Functions, not binaries on PATH: shipyard-lib.sh prepends the system PATH.
-         tmux() { return 1; }; claude() { :; }; export -f tmux claude
+         # Functions, not binaries on PATH: shipyard-lib.sh prepends the system PATH. The default
+         # fake must ANSWER: the launch dedup refuses a backend that does not (#140), so a fake that
+         # fails silently would be refused before any check below reached what it is about.
+         export T5_TMUX="${T5_TMUX:-answer}"
+         tmux() {
+           case "$T5_TMUX" in
+             down)   return 1 ;;
+             listed) [ "${!#}" = '#{window_name}' ] && { echo ship-42; return 0; }; return 1 ;;
+           esac
+           echo 'no server running on /tmp/t5-fake' >&2; return 1
+         }
+         claude() { :; }; export -f tmux claude
          # The two env knobs replace the per-kind defaults these checks are about.
          unset CLAUDECODE CLAUDE_CODE_SESSION_ID CODEX_SESSION_ID CODEX_THREAD_ID \
            SHIPYARD_ENV_PASS SHIPYARD_ENV_SCRUB
          SHIPYARD_AGENT=claude SHIPYARD_BACKEND=tmux SHIPYARD_SESSION=t5ex SHIPYARD_DRY=1 \
-           bash "$1/shipyard-launch.sh" "#42" 2>&1 ) || rc=$?
+           bash "$1/shipyard-launch.sh" "${T5_ARG:-#42}" 2>&1 ) || rc=$?
   printf '%s\nrc=%s\n' "$out" "$rc"
 }
 cp -R "$SKILL_DIR" "$TMP/skill-ok"
@@ -137,5 +155,55 @@ check no "$left" "...nor a protocol file"
 out=$(dry_launch "$TMP/skill-ok" "$TMP/launch-blocked" launch-42.sh)
 check 1 "$(printf '%s' "$out" | sed -n 's/^rc=//p')" "an unwritable launcher refuses the launch"
 check 1 "$(printf '%s' "$out" | grep -c "cannot write the child's launcher")" "...saying why"
+
+# --- the launch dedup does not read an unanswerable slot as free (#140) -----------------------
+rc_of() { printf '%s' "$1" | sed -n 's/^rc=//p'; }
+has() { [ -e "$1" ] && printf yes || printf no; }
+out=$(T5_TMUX=down dry_launch "$TMP/skill-ok" "$TMP/launch-down")
+check 7 "$(rc_of "$out")" "a backend that does not answer refuses the launch (rc 7)"
+check 1 "$(printf '%s' "$out" | grep -c 'cannot tell whether slot `42` is free')" "...saying it could not tell"
+check no "$(has "$TMP/launch-down/.git/ship-escalations/launch-42.sh")" "...and writes no launcher"
+check no "$(has "$TMP/launch-down/.git/ship-escalations/container-tmux")" "...nor a container pin"
+# Answered, but this fleet was launched on agterm and this process resolved tmux. The pin is the
+# evidence, and the launch used to write its own tmux pin beside it before asking anything.
+out=$(T5_PIN=agterm dry_launch "$TMP/skill-ok" "$TMP/launch-elsewhere")
+check 7 "$(rc_of "$out")" "a fleet pinned on the other backend refuses the launch (rc 7)"
+check 1 "$(printf '%s' "$out" | grep -c 'Launch on the fleet.s backend: SHIPYARD_BACKEND=agterm')" "...naming the backend to pin"
+check 1 "$(printf '%s' "$out" | grep -c 'asked for tmux explicitly')" "...in the words for an explicit backend, not auto's"
+check 1 "$(printf '%s' "$out" | grep -c 'SHIPYARD_BACKEND=agterm bash .*/shipyard-report.sh')" \
+  "...and clearing a stale pin starts from the pinned backend's terminals, not its worktrees"
+check 1 "$(printf '%s' "$out" | grep -c 'Do not remove it')" \
+  "...and a pin the teardown kept is not to be removed by hand"
+check no "$(has "$TMP/launch-elsewhere/.git/ship-escalations/container-tmux")" "...without writing a second pin first"
+out=$(T5_PIN=agterm T5_TMUX=down SHIPYARD_FORCE=1 dry_launch "$TMP/skill-ok" "$TMP/launch-forced")
+check 7 "$(rc_of "$out")" "SHIPYARD_FORCE does not override not knowing"
+# Control: the fleet's own backend pinned, answered and empty, launches.
+out=$(T5_PIN=tmux dry_launch "$TMP/skill-ok" "$TMP/launch-samepin")
+check 0 "$(rc_of "$out")" "control: pinned on this backend, answered and empty -> launches"
+# The narrowest blip: the backend answers the enumeration and still lists the slot, and only the
+# per-slot lookup fails. That slot is taken, not free.
+out=$(T5_TMUX=listed dry_launch "$TMP/skill-ok" "$TMP/launch-listed")
+check 3 "$(rc_of "$out")" "a slot the backend still lists is taken even when its lookup fails (rc 3)"
+check 1 "$(printf '%s' "$out" | grep -c 'lists ship-42, though its terminal lookup failed')" "...saying so"
+check no "$(has "$TMP/launch-listed/.git/ship-escalations/launch-42.sh")" "...and writes no launcher"
+# A dry run writes no container pin: one left behind would name a fleet that never launched, and
+# the dedup would then refuse every launch on the other backend.
+check no "$(has "$TMP/launch-ok/.git/ship-escalations/container-tmux")" "a dry run writes no container pin"
+
+# --- a slot name is validated before anything is made from it (#198) --------------------------
+# Multi-line free text. The old sed slug ran per line, so the newline reached the launcher's
+# comment line and the second line of the text ran as a command.
+out=$(T5_ARG="$(printf 'first line\nsecond; touch pwned')" dry_launch "$TMP/skill-ok" "$TMP/launch-multiline")
+check 0 "$(rc_of "$out")" "multi-line free text still launches"
+check 'SLOT:first-line-second-touch-pwne' "$(printf '%s' "$out" | grep '^SLOT:')" "...as one single-line slug"
+check '# generated by shipyard-launch.sh for slot first-line-second-touch-pwne — re-runnable by hand' \
+  "$(sed -n 2p "$TMP/launch-multiline/.git/ship-escalations/launch-first-line-second-touch-pwne.sh" 2>/dev/null)" \
+  "...whose launcher comment is one line"
+check 1 "$(printf '%s\n' "$out" | grep -c '^SLOT:')" "...and exactly one slot is reported"
+LONGN=$(printf '9%.0s' $(seq 1 60))
+out=$(T5_ARG="#$LONGN" dry_launch "$TMP/skill-ok" "$TMP/launch-long")
+check 2 "$(rc_of "$out")" "a slot past the worktree-name limit is refused (rc 2)"
+check 1 "$(printf '%s' "$out" | grep -c 'refusing the slot name')" "...saying why"
+check no "$(has "$TMP/launch-long/.git/ship-escalations/launch-$LONGN.sh")" "...before any launcher exists"
 
 exit "$failures"

@@ -4,12 +4,13 @@
 # decision and the MEMORY-GATE decision with the detector faked (no real pressure needed),
 # analogous to t8's faked backend.
 #
-# WHAT IS NOT COVERED, so a green run is never read as more than it is: no test DRIVES
-# shipyard-launch.sh, so the gate's runtime effect in the launcher (that it really exits 4/5 on a
-# refusal, that SHIPYARD_DRY really prints the decision and still exits 0) is not exercised end to
-# end. Section 7 guards the WIRE statically instead — the report is evaluated, the enforcing exit
-# exists, and it precedes worktree/terminal creation — mirroring how t7 guards its own wire in the
-# same file. That catches the silent-removal mutation; it does not replace an integration test.
+# WHAT IS NOT COVERED, so a green run is never read as more than it is: t5 drives
+# shipyard-launch.sh as a dry run for its dedup and slot-name refusals, but no test drives the
+# gate's runtime effect in the launcher (that it really exits 4/5/6 on a refusal, that SHIPYARD_DRY
+# really prints the decision and still exits 0) end to end. Section 7 guards the WIRE statically
+# instead — the report is evaluated, the enforcing exit exists, and it precedes worktree/terminal
+# creation — mirroring how t7 guards its own wire in the same file. That catches the
+# silent-removal mutation; it does not replace an integration test.
 #
 # Everything is a PURE read over environment variables and three faked CLIs (git, agtermctl,
 # memory_pressure) FIRST on PATH — NO live terminal, no real repo, no network, and crucially no
@@ -140,6 +141,56 @@ ok "one ship slot -> 1 (non-ship ignored)" 1 \
 ok "two ship slots -> 2" 2 \
   "$( export SHIPYARD_BACKEND=agterm FAKE_AT_TREE="$TREE2"; . "$BACKEND"; . "$ADMISSION"; shipyard_admission_slot_count )"
 
+# A name that is not a valid slot is not counted: the enumeration is the boundary (#198).
+LONG=$(printf 'x%.0s' $(seq 1 60))
+TREEODD="$TMP/todd.json"; tree_of "$TREEODD" ship-5 'ship-7/' 'ship-a|b' 'ship-a b' 'ship--x' "ship-$LONG" ship-
+ok "only the valid slot among odd ship-* names is counted" 1 \
+  "$( export SHIPYARD_BACKEND=agterm FAKE_AT_TREE="$TREEODD"; . "$BACKEND"; . "$ADMISSION"; shipyard_admission_slot_count )"
+ok "...and it is the one the enumeration lists" 5 \
+  "$( export SHIPYARD_BACKEND=agterm FAKE_AT_TREE="$TREEODD"; . "$BACKEND"; shipyard_slots )"
+
+# --- 2b. a count that cannot be taken is not zero (#131) --------------------------------------
+printf '\n── slot count unavailable ──\n'
+# A tree that does not parse is the "answers version, fails tree" shape: drv_sessions reads it as
+# unanswered. The old pipe into `wc -l` counted it as 0 live slots and admitted the launch.
+BADTREE="$TMP/bad.json"; printf 'not a tree\n' >"$BADTREE"
+out=$( export SHIPYARD_BACKEND=agterm FAKE_AT_TREE="$BADTREE"; . "$BACKEND"; . "$ADMISSION"; shipyard_admission_slot_count ); rc=$?
+ok "an unanswered enumeration is not a count (rc 1)" 1 "$rc"
+names "...and it says which verdict it got" "unreachable" "$out"
+out=$( export SHIPYARD_BACKEND=agterm FAKE_AT_TREE="$BADTREE"; . "$BACKEND"; . "$ADMISSION"; shipyard_admission_report ); rc=$?
+ok "unanswered enumeration -> refuse (rc 6)" 6 "$rc"
+names "the refusal names the gate" "slot count unavailable" "$out"
+names "...and what to do" "agtermctl version" "$out"
+rc=0; ( export SHIPYARD_BACKEND=agterm SHIPYARD_MAX_SLOTS=99 FAKE_AT_TREE="$BADTREE"; . "$BACKEND"; . "$ADMISSION"; shipyard_admission_report ) >/dev/null 2>&1 || rc=$?
+ok "a raised cap does not override an uncountable fleet (rc 6)" 6 "$rc"
+# Answered, but about the other backend: the fleet was pinned on tmux and this process resolved
+# agterm, where the repo's container is empty for correct reasons.
+PINS="$TMP/pins"; mkdir -p "$PINS"; : >"$PINS/container-tmux"
+out=$( export SHIPYARD_BACKEND=agterm FAKE_AT_TREE="$TREE0" DRV_CONTAINER_PIN_DIR="$PINS"; . "$BACKEND"; . "$ADMISSION"; shipyard_admission_report ); rc=$?
+ok "a count from another backend's container -> refuse (rc 6)" 6 "$rc"
+names "...naming the backend to pin" "SHIPYARD_BACKEND=tmux" "$out"
+names "...in the words for an explicit backend" "asked for agterm explicitly" "$out"
+# The same refusal when `auto` resolved agterm (the fake socket answers `version`) says so instead.
+out=$( unset SHIPYARD_BACKEND; export FAKE_AT_TREE="$TREE0" DRV_CONTAINER_PIN_DIR="$PINS"; . "$BACKEND"; . "$ADMISSION"; shipyard_admission_report ); rc=$?
+ok "auto resolving the other backend -> refuse (rc 6)" 6 "$rc"
+names "...in auto's words" "SHIPYARD_BACKEND=auto decides per process" "$out"
+# Control: the same pins with this backend's own beside them disagree with nothing, and admit.
+: >"$PINS/container-agterm"
+rc=0; ( export SHIPYARD_BACKEND=agterm FAKE_AT_TREE="$TREE0" DRV_CONTAINER_PIN_DIR="$PINS"; . "$BACKEND"; . "$ADMISSION"; shipyard_admission_report ) >/dev/null 2>&1 || rc=$?
+ok "control: this backend pinned too -> admit (rc 0)" 0 "$rc"
+
+# --- 2c. the slot-name rule itself -----------------------------------------------------------
+printf '\n── slot names ──\n'
+slot_ok() { ( . "$BACKEND" >/dev/null 2>&1; shipyard_slot_check "$1" 2>/dev/null ) && printf yes || printf no; }
+for s in 5 42 add-x-to-y a_b A9 "$(printf 'x%.0s' $(seq 1 59))"; do
+  ok "accepted: $(printf '%q' "$s")" yes "$(slot_ok "$s")"
+done
+for s in '' '7/' '../7' 'a|b' 'a b' "$(printf 'a\nb')" "$(printf 'a\tb')" '-rf' '_x' 'a.b' "$LONG"; do
+  ok "refused: $(printf '%q' "$s")" no "$(slot_ok "$s")"
+done
+names "a refusal quotes the name it refused" 'a\|b' \
+  "$( . "$BACKEND" >/dev/null 2>&1; shipyard_slot_check 'a|b' 2>&1 )"
+
 # --- 3. memory reading parses the detector, fails cleanly when it cannot ----------------------
 printf '\n── memory reading ──\n'
 ok "parses the free-percentage line" 44 \
@@ -225,11 +276,20 @@ LAUNCH="$SKILL/shipyard-launch.sh"
 ok "launch evaluates the admission report" 1 "$(grep -Fc 'shipyard_admission_report' "$LAUNCH")"
 ok "launch enforces the refusal with its exit code" 1 "$(grep -Fc 'exit "$ADMISSION_RC"' "$LAUNCH")"
 enforce_line=$(grep -n 'exit "$ADMISSION_RC"' "$LAUNCH" | head -1 | cut -d: -f1)
-create_line=$(grep -n 'shipyard_agent_prepare_worktree' "$LAUNCH" | head -1 | cut -d: -f1)
+create_line=$(grep -n '^[^#]*shipyard_agent_prepare_worktree' "$LAUNCH" | head -1 | cut -d: -f1)
 if [ -n "$enforce_line" ] && [ -n "$create_line" ] && [ "$enforce_line" -lt "$create_line" ]; then
   ok "the refusal exit precedes worktree/terminal creation" yes yes
 else
   ok "the refusal exit precedes worktree/terminal creation" yes "no: exit@${enforce_line:-?} create@${create_line:-?}"
+fi
+# The container pin is written AFTER the gates: pinned first, a launch that resolved the other
+# backend wrote its own pin beside the fleet's and disarmed the `elsewhere` verdict both gates ask
+# for. t5 drives that case; this catches the block being moved back without a launch.
+pin_line=$(grep -n '^[^#]*CONTAINER=$(shipyard_container_pin)' "$LAUNCH" | head -1 | cut -d: -f1)
+if [ -n "$enforce_line" ] && [ -n "$pin_line" ] && [ "$enforce_line" -lt "$pin_line" ]; then
+  ok "the container pin follows the admission refusal" yes yes
+else
+  ok "the container pin follows the admission refusal" yes "no: exit@${enforce_line:-?} pin@${pin_line:-?}"
 fi
 
 printf '\n'

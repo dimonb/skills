@@ -30,6 +30,7 @@ while [ $# -gt 0 ]; do
   esac
 done
 [ -n "$SLOT" ] || { echo "usage: shipyard-compact.sh <slot> [--resume-file <path>|--resume <text>|--no-resume]" >&2; exit 2; }
+shipyard_slot_check "$SLOT" || exit 2
 
 shipyard_backend_check || exit 1
 # Exit 3 means the backend answered and does not have this slot — the child is gone. Exit 7 means

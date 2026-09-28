@@ -268,11 +268,18 @@ shipyard_peek_hint() {
 # the original down.sh unpinned on `[ -z "$(shipyard_slots)" ]`, i.e. read a failed enumeration as
 # empty, and the proof-of-empty gate arrived later with shipyard_continuity_cleanup_last_slot.)
 #
-# THE THIRD CALLER STILL DISCARDS IT. `shipyard_admission_slot_count` pipes this function into
-# `wc -l`, so a socket that answers `version` and fails `tree` reads as zero live slots and the
-# SHIPYARD_MAX_SLOTS cap is silently bypassed — the same defect one gate over. That is out of this
-# change's scope and filed separately; it is named here so the next reader does not infer from the
-# paragraph above that every caller now branches on the status.
+# `shipyard_admission_slot_count` and the launch dedup in `shipyard-launch.sh` consult it as well:
+# both refuse a launch on a non-zero status rather than read it as an empty fleet (#131, #140).
+#
+# A NAME THAT IS NOT A VALID SLOT IS NOT A SLOT. Every `ship-*` terminal whose remainder fails
+# `shipyard_slot_check` is left out of the list, exactly as a terminal with any other name is. That
+# is the boundary #198 asked for: every consumer builds a path, a glob, a `|`-joined row or a
+# launcher line from what this prints, and each used to resolve an odd name its own way. Leaving
+# one out suppresses no signal that was not already a rename away — a child can rename its terminal
+# to anything, and one not starting `ship-` was never listed. What this cannot see is a NEWLINE
+# inside a terminal name: the driver's enumeration is one name per line, so such a name arrives
+# already split and its first line may look valid. shipyard itself never creates one — launch
+# validates the slot before any terminal exists — so only an out-of-band rename reaches it.
 #
 # The agterm arm used to be a bare pipeline, so its status was `sed`'s, which is 0 whether or not
 # anything upstream survived. It happened to work because both callers that CONSULT the status set
@@ -305,7 +312,44 @@ shipyard_slots() {
   # fleet's. That answer is corroborated by construction, so no classifier can catch it.
   raw=$(drv_sessions "$(shipyard_container)") || rc=$?
   [ "$rc" = 0 ] || return 1
-  printf '%s\n' "$raw" | sed -n -E 's/^ship-(.+)$/\1/p'
+  local s
+  while IFS= read -r s; do
+    case "$s" in ship-?*) s=${s#ship-} ;; *) continue ;; esac
+    shipyard_slot_check "$s" 2>/dev/null && printf '%s\n' "$s"
+  done <<EOF
+$raw
+EOF
+  return 0
+}
+
+# shipyard_slot_check <slot> — may shipyard act on a slot of this name? Silent and 0 when it may;
+# a one-line reason on stderr and 1 when it may not.
+#
+# A slot becomes a terminal name, a worktree `.claude/worktrees/ship-<slot>`, mailbox file names and
+# a line in a generated launcher script, so the rule is the intersection of what all of those
+# accept: letters, digits, `-` and `_`, starting with a letter or a digit, and at most
+# SHIPYARD_SLOT_MAX characters. That excludes `/` and `..` (a path that resolves to another slot's
+# worktree), `|` (the report's row separator), whitespace, and every control character — a newline
+# in a slot once broke out of the launcher's comment line and ran the rest of the launch text as
+# shell commands. The length is Claude Code's worktree-name limit (64, read from the CLI's own
+# refusal) less the `ship-` prefix; it is applied to every agent kind, so a slot name means the same
+# thing whichever one is launched. The characters are spelled out rather than written as a range,
+# because a range in a bracket pattern can follow the locale's collation and match more than ASCII.
+SHIPYARD_SLOT_MAX=59
+shipyard_slot_check() {
+  local s="${1-}" why=""
+  case "$s" in
+    '') why="it is empty" ;;
+    *[!ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789_-]*)
+      why="a slot may contain only letters, digits, '-' and '_'" ;;
+    [!ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789]*)
+      why="a slot must start with a letter or a digit" ;;
+    *) [ "${#s}" -le "$SHIPYARD_SLOT_MAX" ] \
+         || why="it is ${#s} characters long, past the limit of $SHIPYARD_SLOT_MAX" ;;
+  esac
+  [ -z "$why" ] && return 0
+  printf 'error: refusing the slot name %q: %s.\n' "$s" "$why" >&2
+  return 1
 }
 
 # shipyard_backend_pinned_elsewhere — echoes the backend(s) this fleet was actually launched on,
@@ -362,9 +406,12 @@ shipyard_backend_pinned_elsewhere() { drv_pins_elsewhere; }
 # WHY THE STATUS IS A PARAMETER. A caller that has already enumerated must classify the status of
 # the list it ACTED ON, not of a second enumeration that could disagree with it, so it captures
 # the rc once and passes it in. Who actually does what, rather than an absolute: `shipyard-report.sh`
-# passes a status alone (it classifies the list it PRINTED); `shipyard_absence_report` passes all
-# three (it needs the list for the `listed` arm anyway). `shipyard-tell.sh` and
-# `shipyard-compact.sh` reach this only THROUGH `shipyard_absence_report`, so they pass three too.
+# passes a status alone (it classifies the list it PRINTED), and so does
+# `shipyard_admission_slot_count` (it classifies the list it COUNTED); `shipyard_absence_report`
+# passes all three (it needs the list for the `listed` arm anyway), with full session names. The
+# launch dedup in `shipyard-launch.sh` passes all three with BARE slots from `shipyard_slots` on
+# both sides, per the namespace note above. `shipyard-tell.sh` and `shipyard-compact.sh` reach this
+# only THROUGH `shipyard_absence_report`, so they pass three too.
 #
 # So NO caller uses the argument-less mode today. It is kept as a fail-closed default, not for a
 # caller: the driver treats an EMPTY status as `unreachable`, so a status-less call there would
@@ -414,6 +461,37 @@ shipyard_signal_class() {
   esac
   printf '%s' "$sig"
   return "$crc"
+}
+
+# shipyard_elsewhere_remedy — the operator's next move after an `elsewhere` refusal of a LAUNCH, on
+# stdout, one indented line each. The launch dedup and the admission gate both refuse on it, so the
+# words live here once.
+#
+# ONE MAILBOX RUNS ONE BACKEND AT A TIME. Its pins cannot tell two live fleets from one fleet and a
+# failed probe (#132), and a second backend's pin beside the first disarms the `elsewhere`
+# corroboration every reader relies on — so a launch is refused whether the other backend came from
+# `auto` or was asked for explicitly, and the wording says which of the two this was. A stale pin is
+# cleared only in the order below: a pin removed while its fleet is live is #61 again.
+shipyard_elsewhere_remedy() {
+  local pin now d mb
+  pin=$(shipyard_backend_pinned_elsewhere) || pin=""
+  now=$(shipyard_backend)
+  d=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
+  mb=${DRV_CONTAINER_PIN_DIR:-<mailbox>}
+  case "${SHIPYARD_BACKEND:-auto}" in
+    auto) echo "  SHIPYARD_BACKEND=auto decides per process, and this process resolved $now while the fleet is on ${pin:-the other backend}." ;;
+    *)    echo "  This run asked for $now explicitly, but a mailbox runs one backend at a time and this one's fleet is on ${pin:-the other backend}." ;;
+  esac
+  [ -n "$pin" ] || return 0
+  echo "  Launch on the fleet's backend: SHIPYARD_BACKEND=$pin."
+  echo "  If that fleet has really ended, its pin is stale. Clear it in this order, never while that fleet may be live:"
+  echo "    1. SHIPYARD_BACKEND=$pin bash $d/shipyard-report.sh — it must list no ship-* terminal and print no NO SIGNAL"
+  echo "       block (\`shipyard-down.sh --list\` shows worktrees, not terminals, so it cannot confirm this);"
+  echo "    2. SHIPYARD_BACKEND=$pin bash $d/shipyard-down.sh <slot> ... — each worktree still there; with none left,"
+  echo "       any one slot name runs the same last-slot check. It clears the pin once it has proven the fleet empty;"
+  echo "    3. a pin that survives step 2 was KEPT: down could not verify the fleet, or a slot remains (it says the first"
+  echo "       and not the second). Do not remove it — go back to step 1. Remove $mb/container-$pin by hand only when"
+  echo "       step 1 was empty and step 2's one warning was that it could not stop a continuity watcher."
 }
 
 # shipyard_absence_report <slot> — say, on stderr, why that slot has no terminal.

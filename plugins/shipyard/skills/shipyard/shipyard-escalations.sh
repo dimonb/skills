@@ -67,12 +67,15 @@ done
     echo "> $(printf '%s' "$txt" | tr '\n' ' ')"
     [ -n "$ctx" ] && { echo; echo "Context: $(printf '%s' "$ctx" | tr '\n' ' ')"; }
     echo
+    # `id` and `slot` are written by whoever wrote the record, and these lines exist to be pasted
+    # into a shell, so both are shell-quoted here: `%q` leaves a valid name as it is, and a crafted
+    # one (`$(…)`) reaches the script as text, where tell's slot check refuses it (#198).
     if [ "$kind" != notice ]; then
-      echo "Reply: \`bash $DIR/shipyard-answer.sh $id \"<answer>\"\`"
+      echo "Reply: \`bash $DIR/shipyard-answer.sh $(printf '%q' "$id") \"<answer>\"\`"
     else
       # A notice needs no reply and the child does not poll it. If you DO want to
       # say something back, it has to go into the child's window.
-      echo "No reply needed. To send something back anyway: \`bash $DIR/shipyard-tell.sh $slot \"<directive>\"\`"
+      echo "No reply needed. To send something back anyway: \`bash $DIR/shipyard-tell.sh $(printf '%q' "$slot") \"<directive>\"\`"
     fi
   done
 } | cat
