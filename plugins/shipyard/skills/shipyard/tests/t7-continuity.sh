@@ -852,12 +852,28 @@ cleanup_calls=0
 shipyard_continuity_stop_all() { cleanup_calls=$((cleanup_calls + 1)); }
 shipyard_container_prune() { cleanup_calls=$((cleanup_calls + 1)); }
 shipyard_container_unpin() { cleanup_calls=$((cleanup_calls + 1)); }
-shipyard_continuity_cleanup_last_slot 1 "" || true
+# The pin directory is this test's own, so the verdict below never depends on whichever fleet the
+# machine running the suite happens to have pinned in the real mailbox.
+_saved_pin_dir="${DRV_CONTAINER_PIN_DIR:-}"
+DRV_CONTAINER_PIN_DIR="$TMP/pins"; mkdir -p "$DRV_CONTAINER_PIN_DIR"
+cleanup_rc=0
+shipyard_continuity_cleanup_last_slot 1 "" || cleanup_rc=$?
 check 0 "$cleanup_calls" "failed slot enumeration preserves lifecycle state"
+check 2 "$cleanup_rc" "...and says the fleet could not be proven empty"
 shipyard_continuity_cleanup_last_slot 0 remaining || true
 check 0 "$cleanup_calls" "a remaining slot preserves lifecycle state"
+# #139(3): rc 0 and an empty list, but the fleet was launched on the OTHER backend. That answer is
+# true about the wrong container, so it proves nothing about the fleet.
+case "$(drv_backend 2>/dev/null)" in agterm) _other=tmux ;; *) _other=agterm ;; esac
+: >"$DRV_CONTAINER_PIN_DIR/container-$_other"
+cleanup_rc=0
+shipyard_continuity_cleanup_last_slot 0 "" || cleanup_rc=$?
+check 0 "$cleanup_calls" "an empty answer from the backend the fleet is NOT pinned to preserves lifecycle state"
+check 2 "$cleanup_rc" "...and says the fleet could not be proven empty"
+rm -f "$DRV_CONTAINER_PIN_DIR/container-$_other"
 shipyard_continuity_cleanup_last_slot 0 ""
 check 3 "$cleanup_calls" "successful empty enumeration performs last-slot cleanup"
+DRV_CONTAINER_PIN_DIR="$_saved_pin_dir"
 check 1 "$(grep -Fc 'shipyard_continuity_start "$BACKEND"' "$SKILL_DIR/shipyard-launch.sh")" \
   "child launch wires automatic parent continuity from the parent environment"
 report_start_line=$(grep -n 'shipyard_continuity_start "$(shipyard_backend)"' "$SKILL_DIR/shipyard-report.sh" | cut -d: -f1)

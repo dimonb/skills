@@ -181,8 +181,10 @@ EOF
 fi
 
 TAB=$(printf '\t')
-# "May an absence be believed?" is `shipyard_signal_class` in shipyard-backend.sh — same two facts
-# (did enumeration answer; does the pin name another backend), same two classes, one implementation.
+# "May an absence be believed?" is `shipyard_signal_class` in shipyard-backend.sh — same facts
+# (did enumeration answer; does the pin name another backend; does it still list the slot), one
+# implementation. The status-only calls can return `unreachable` or `elsewhere`; the per-slot
+# re-check near the terminal exit can also return `listed`, and `no_signal_block` has an arm for each.
 # This file used to carry its own `fleet_signal` saying exactly that; #137 added the shared one and
 # named this deletion as owed to this branch, because two answers to one question is the defect the
 # shared engine exists to remove.
@@ -218,6 +220,15 @@ no_signal_block() {  # <class> <why>
       echo "- If that fleet really is finished, the pin is stale. \`shipyard-down.sh\` clears only the pin"
       echo "  of the backend IT resolved, so pin \`SHIPYARD_BACKEND=$PINNED_ELSEWHERE\` first and then tear"
       echo "  the slots down; a down run resolved on the other backend leaves this one in place." ;;
+    listed)
+      # No backend remedy: the enumeration answered, so the socket is not what failed.
+      echo "- A transient lookup failure is the likeliest cause, and the next tick usually goes through."
+      echo "  If it keeps happening, open that terminal by hand before concluding anything — the backend"
+      echo "  says the slot is there. Do NOT tear it down or relaunch it on this report." ;;
+    *)
+      # A class this block does not know must still get advice, never a heading with no remedy.
+      echo "- This report does not recognise the class \`$1\`, so it names no specific remedy. Treat the"
+      echo "  fleet as possibly still running: check the backend by hand before tearing anything down." ;;
   esac
 }
 
@@ -1556,18 +1567,17 @@ if [ "$TERMINAL" = 1 ]; then
   # unrelated `ship-*` terminal in the same container would satisfy a bare emptiness test and block
   # the designed termination forever — the opposite-direction bug this change keeps having to
   # defend against.
+  #
+  # The per-slot test is the classifier's `listed` arm (#153), not a second spelling of it here —
+  # the hand-matched copy that used to sit here labelled the verdict `unreachable` and sent the
+  # operator to check a socket that had just answered. BARE slots on both sides: `$RECHECK` is
+  # `shipyard_slots`' output and `$g` a bare slot, and the classifier compares the two for exact
+  # equality, so passing `ship-$g` here would match nothing and turn this guard off silently.
   if [ "$TERMINAL" = 1 ] && [ -n "$GONE" ] && [ -n "$RECHECK" ]; then
     for g in $GONE; do
-      case "
-$RECHECK
-" in
-        *"
-$g
-"*) TERMINAL=0
-            NOSIG_RC=9
-            NOSIG="unreachable${TAB}slot $g is still listed by the backend, but its terminal could not be resolved while this tick was building the table"
-            break ;;
-      esac
+      NOSIG=$(shipyard_signal_class "$ENUM_RC" "$RECHECK" "$g") && continue
+      NOSIG_RC=1; TERMINAL=0
+      break
     done
   fi
 fi

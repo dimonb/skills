@@ -31,6 +31,11 @@
 #      every gate; a guard that could not be overridden would be a new way to be stuck.
 #   A6 a DIRTY worktree is still refused. The content gate is what the automatic path must go
 #      through rather than around, so a regression there is the one that matters most.
+#   A7 `--list` asks the teardown's question (#139(2)): an unresolvable terminal reads `gone` only
+#      when its absence is corroborated, and `?listed` / `?unreachable` otherwise.
+#   A8 `elsewhere` — rc 0 and an empty container on the backend the fleet was NOT launched on:
+#      `--list` reads `?elsewhere`, and the continuity cleanup in the tail refuses to call the
+#      fleet drained (#139(3)) and says which fact failed.
 #
 # PART B — the trigger, inside shipyard-report.sh. The rig is t15's (exported shell functions
 # shadow `git`, `tmux` and `gh`), with one addition: the report runs out of a TEMP DIRECTORY of
@@ -249,6 +254,48 @@ a_run 76
 a6=$(cat "$A_OUT")
 ok "A6: a dirty worktree is still refused"           1 "$(printf '%s' "$a6" | grep -c 'uncommitted or untracked')"
 ok "A6: ...with the worktree kept"                   1 "$(present "$A/repo/.claude/worktrees/ship-76")"
+
+# A7 — `--list` asks the same question as the teardown (#139(2)). Slots 72, 74 and 76 are still
+# registered. 76 resolves (`live`), 72 does not but is enumerated (`?listed`), 74 is neither
+# (`gone`, corroborated). Before the fix every unresolvable row read `gone`, which is advice to
+# run the very teardown A2 and A4 refuse.
+a_row() { awk -v s="$1" '$1 == s { print $2 }' "$A_OUT"; }
+printf '1 ship-79\n2 ship-76\n' >"$A_WINS"
+printf 'ship-79\nship-72\n' >"$A_ENUM"
+printf '0\n' >"$A_ENUM_RC"
+a_run --list; a7_rc=$?
+ok "A7: --list — a resolvable terminal reads live"          live        "$(a_row 76)"
+ok "A7: ...an enumerated-but-unresolvable one reads ?listed" '?listed'  "$(a_row 72)"
+ok "A7: ...a corroborated absence still reads gone"         gone        "$(a_row 74)"
+ok "A7: ...the legend explains the ? rows"                  1 "$(grep -c '^?<class>:' "$A_OUT")"
+ok "A7: ...at exit 0"                                       0 "$a7_rc"
+printf '1\n' >"$A_ENUM_RC"
+a_run --list
+ok "A7: an unreachable backend reads ?unreachable, not gone" '?unreachable' "$(a_row 74)"
+printf '0\n' >"$A_ENUM_RC"
+printf 'ship-79\n' >"$A_ENUM"
+a_run --list
+ok "A7: with every absence corroborated there is no legend" 0 "$(grep -c '^?<class>:' "$A_OUT")"
+
+# A8 — `elsewhere`, on both surfaces that ask without naming a slot to the enumeration: the fleet
+# is pinned to agterm while this run resolves tmux, and tmux answers rc 0 with an EMPTY container
+# — a true answer about the wrong place. `--list` must not read that as `gone`, and the tail's
+# continuity cleanup (#139(3)) must not read it as a drained fleet: before the fix it stopped every
+# watcher and dropped the pin here, with no warning.
+A_MB=$(cd "$A/repo" && git rev-parse --git-common-dir)/ship-escalations
+case "$A_MB" in /*) ;; *) A_MB="$A/repo/$A_MB" ;; esac
+mkdir -p "$A_MB"; : >"$A_MB/container-agterm"
+: >"$A_ENUM"
+a_run --list
+ok "A8: --list — a fleet pinned elsewhere reads ?elsewhere" '?elsewhere' "$(a_row 74)"
+a_run 74; a8_rc=$?
+a8=$(cat "$A_OUT")
+ok "A8: the teardown refuses that slot"                     1 "$(grep -c 'could not be corroborated' <<<"$a8")"
+ok "A8: ...the tail does not call the fleet drained"        1 "$(grep -c 'could not verify that every shipyard slot is gone' <<<"$a8")"
+ok "A8: ...and says which fact failed"                      1 \
+   "$(grep -A1 'could not verify that every shipyard slot is gone' <<<"$a8" | grep -c 'launched on agterm\.$')"
+ok "A8: ...at a non-zero exit"                              1 "$a8_rc"
+rm -f "$A_MB/container-agterm"
 
 unset -f tmux
 
@@ -781,8 +828,11 @@ printf '882\tMERGED\n' >"$B_STATES"
 DOWN_REMOVE=1; export DOWN_REMOVE
 b_tick -- 82 >/dev/null
 b23a=$(b_tick -- 82)
-# The live arm first: the terminal still listed, so autodown_consider is reached and must stop at
-# lock 2 on the missing stage. Then the gone-slot arm, where it is not called at all.
+# The live arm first: the terminal still listed, so autodown_consider is reached and must stop
+# before the teardown. WHICH guard stops it this case cannot say: a reap takes the stage file and
+# the iid with the worktree, so lock 2 and the iid guard behind it both see nothing. It proves the
+# slot is not reaped again; B3 is the case that pins lock 2 on its own. Then the gone-slot arm,
+# where autodown_consider is not called at all.
 b23live=$(b_tick -- 82)
 printf '1 ship-79\n' >"$B_WINS"; printf 'ship-79\n' >"$B_ENUM"   # its terminal is gone too
 b23b=$(b_tick -- 82)
