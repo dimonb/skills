@@ -63,7 +63,8 @@ FLAGS
   no-create          Never create an issue; abort if none is found.
   effort <level>     Review depth: low|medium|high|auto (default: auto — ship
                      picks the level from the shape of the change, §2.9, and says why).
-  max-rounds <n>     Review rounds per stage, round 1 included, before escalating (default: 3).
+  max-rounds <n>     Review rounds per stage, round 1 included, before escalating (default: 3;
+                     §5.7 names the rounds that may still run past it).
   soft-bounds        On hitting max_iterations/deadline, nudge once and keep going
                      instead of stopping. Default is a HARD stop.
 
@@ -82,8 +83,8 @@ BEHAVIOR
     many agents from the effort level. Every blocking finding faces a skeptic that tries
     to refute it.
   - A review stage whose blocking findings survive max-rounds STOPS the run, converts the
-    PR/MR to draft, and reports. That budget is the only thing standing in for a human
-    reviewer — honor it.
+    PR/MR to draft, and reports — save what §5.7 lets run past it. That budget is the
+    only thing standing in for a human reviewer — honor it.
   - Merges only where repo policy or the `merge` flag allows it. A clean self-review is
     never a merge authorization by itself, and ship never self-approves.
   - At hand-off, a close sweep tries to reproduce every open issue that names a file the
@@ -319,7 +320,8 @@ When two rows fit, the higher wins. Record the level in `flags.effort` and the r
 `flags.effort_rationale` — the file §2.8 just wrote — and state both in the first report this run
 makes and in the PR/MR description, so a reader can dispute the judgement instead of discovering
 it. Pick it once. The one revision allowed is upward: a diff that, once it exists, fits a higher
-row than the idea did raises the level before round 1, with the rationale updated in the state
+row than the idea did raises the level — before round 1, or later when code that is not a review
+fix lands (§5.3) — with the rationale updated in the state
 file **and in the PR/MR description** where one already states the old level; a level is never
 lowered mid-run.
 
@@ -407,7 +409,7 @@ clean round, never by anything external:
 | implementation diff, clean impl round, but the recorded sizing is smaller than what `flags.effort` now gives it — an axis, a folded axis split out, or an engine (an upward raise, §5.3) | `impl-review` |
 | implementation diff, clean impl round, archive due and not in the diff | `archive` |
 | implementation diff, clean impl round, archive in the diff or not applicable | `ready-to-merge` |
-| any stage, blockers survived `max-rounds` | `needs-human` |
+| any stage, blockers survived `max-rounds` and the prose round is not available to them (§5.7: not eligible, or already taken) | `needs-human` |
 
 **What invalidates a round is unreviewed CODE landing after it, not the head moving.** The
 archive commit (§7.F) moves the head by design and is exempt; so is a pure fix push, which
@@ -500,12 +502,13 @@ passes it — the absent file does not fail safe, it fails open.)
           "fixed_in": "4f2a1c9", "agents": 4, "verifiers": 3, "tokens": 380000 },
         { "round": 2, "head": "a1b2c3d4...", "axes": ["impl-spec-conformance"],
           "candidates": 1, "deduped": 1, "confirmed": 1, "refuted": [], "fixed_in": "b7c8d9e",
-          "agents": 1, "verifiers": 1, "tokens": "not reported" }
+          "agents": 1, "verifiers": 1, "tokens": "not reported",
+          "void_attempts": 1, "reverted": null, "prose_round": false }
       ],
       "open": [
         { "id": "impl-2", "fp": "sha256(...)", "file": "lib/foo.ts", "line": 42,
           "severity": "blocking", "category": "correctness", "origin": "original",
-          "summary": "…", "failure_scenario": "…",
+          "kind": "behaviour", "summary": "…", "failure_scenario": "…",
           "status": "open|fixed|withdrawn", "note": "why it is still open" }
       ],
       "deferred": [
@@ -540,7 +543,9 @@ however often it is re-run, and `round_in_progress` names one that started and h
 written back.
 `reviewed_at` is the head at which each axis last reviewed, which is the base of its next delta
 read. `round_log` holds one entry per round: what ran, the counts, each refuted finding with its
-reason, the fix sha, and the round's spend, which §5.9's record and `Spend:` line are built from.
+reason, the fix sha, and the round's spend, which §5.9's record and `Spend:` line are built from —
+plus the void attempts, the sha of any revert its fix made, and whether it was the
+prose round (§5.7).
 `open` carries every confirmed finding, raised or carried, each with its `status`. Its `deferred`
 array is the written record §5.11 requires — one entry per finding the ladder placed, carrying the
 rung it landed on, why each rung above it was ruled out, and at rung 1 that it was taken.
@@ -731,6 +736,16 @@ rule:
    secret-in-diff clause (§5.4): it goes into every charter that runs, whatever the axis, so a
    skipped security axis never skips it.
 
+   **A charter that runs is briefed for the diff, not for its axis in general.** Name in it the
+   surfaces the diff's kinds of file can carry and leave out the ones they cannot. Markdown holds
+   no migration, tenant scoping, deserialization or async race, so a security charter on a
+   prose-only diff asks what prose can do: publish a secret or a private identifier, or instruct
+   an agent toward an unsafe act. A mixed diff gets the union, a re-arm (below) re-briefs, and a
+   surface it is unclear whether a kind can carry stays in. Trimming never removes the
+   secret-in-diff clause or the signal-silencing check. Measured: on a three-file markdown diff,
+   every axis returned something, and the worst finding came from a security charter still
+   briefed about migrations and races.
+
 2. **Effort decides how much the axes that run get.** Two rules that never yield to it:
    `impl-correctness` and `impl-spec-conformance` always happen where the diff has any code in it
    (at `low` they may be ONE agent with a merged charter) — and **code here means anything a
@@ -765,22 +780,27 @@ files moved, from the set round 1 chose. One re-arm: a fix diff is a diff, and t
 reads it too. So a fix that newly touches a kind of file the sizing did not admit re-arms, for
 that round, every axis the table calls for there even where round 1 skipped it: `impl-security`
 for a security surface, `impl-correctness` for code in a battery sized for prose. A re-arm moves
-the axis from `skipped` to `axes` and appends the round and its reason to `axes_rationale`, so the record reports the round it ran in and never
-lists one axis as both skipped and run. **A re-entered stage inherits it too**: where the ledger
-already records `axes`, `agents` and `skipped` for the stage, that is the sizing. It is read back
-(§5.10), not re-derived, and it only ever grows, recorded like the re-arm above, in three cases:
+the axis from `skipped` to `axes` and appends the round and its reason to `axes_rationale`, so
+the record reports the round it ran in and never lists one axis as both skipped and run.
+**A re-entered stage inherits it too**: where the ledger already records `axes`, `agents` and
+`skipped` for the stage, that is the sizing. It is read back (§5.10), not re-derived, and it only
+ever grows, recorded like the re-arm above, in three cases:
 - the re-arm above;
 - **an upward effort revision** (§2.9) re-sizes to what the new level gives the recorded axes —
   `impl-security` at `high`, folded axes split out, the engines — and removes nothing. It takes
   effect from the next round, and on a stage that has already cleared it **re-opens the stage**:
   a clearance earned by a smaller battery than the recorded level calls for is not a clearance
-  at that level (§3.3), so the added axes run and the stage clears again only when they return;
+  at that level (§3.3), so the added axes run and the stage clears again only when they return.
+  Set `clean: false` when the raise is recorded, so a re-open interrupted before its round
+  starts still reads as one on resume;
 - **code that is not this stage's own review fix lands after the recorded head** (§3.3). Classify
   that code's substance by the table above and add every axis it calls for that the sizing
   lacks, and read it against §2.9's table too, raising the level where it fits a higher row.
 
 An axis added this way has reviewed nothing yet, so its first round reads the whole branch diff,
-not a delta.
+not a delta — and so does an axis split out of a fold, and `impl-correctness` when it now hosts
+an engine that has not run: their `reviewed_at` records what the smaller battery read, so a delta
+from it would be empty.
 
 ### 5.4 Finding contract and normalization
 
@@ -842,11 +862,14 @@ Verifier charter: *"Here is a claimed defect: `<finding>`. Read the actual code 
 location and its callers. Try to refute it. Construct the concrete failure path — specific
 inputs or state producing the specific wrong result. If you cannot construct one (the guard
 exists elsewhere, the input is impossible, the caller already handles it, the code path is
-dead), the verdict is REFUTED. Read-only: do not edit anything."*
+dead), the verdict is REFUTED. Set `kind`: `prose` only when the defect is prose this change
+wrote disagreeing with other prose and every correct fix edits prose alone, with nothing a program
+parses or executes moving; anything else is `behaviour`, including prose that promises what the
+code does not do. Read-only: do not edit anything."*
 
 ```json
 { "fp": "…", "verdict": "CONFIRMED|REFUTED", "reason": "one sentence",
-  "corrected_severity": "blocking|optional", "corrected_fix": "…" }
+  "corrected_severity": "blocking|optional", "corrected_fix": "…", "kind": "prose|behaviour" }
 ```
 
 - One verifier per finding, all dispatched in ONE message. Above ~8 candidates, batch about
@@ -866,6 +889,27 @@ dead), the verdict is REFUTED. Read-only: do not edit anything."*
   may correct the severity. But a finding it REFUTES is dropped, and no later round re-reads it:
   the carried-finding check (§5.7) covers only findings still in `open`. So a false REFUTED on an
   unnamed failure mode is lost, visible only as the refuted entry and its reason in `round_log`.
+- **The verifier sets `kind`, never the author** — by the criterion in the charter above, which
+  goes to it verbatim. It decides whether a blocker may take §5.7's prose round, and "it is only
+  prose" is exactly the judgement an author gets wrong about their own work. A missing or
+  unrecognised `kind` is `behaviour`. "Nothing a program parses or executes" is §5.3 rule 2's
+  line; prose that promises what the code does not do is `behaviour` because there the correct
+  fix may be the code. Measured: a blocker that read as a stale sentence
+  called an exemption "self-revealing" when the code never revealed it.
+
+**The predicate check — before a fix commit lands.** A fix that edits a guard or a predicate — a
+condition, a filter, a match pattern, a case arm, a classification — goes to one more verifier
+before it is committed, whatever it answers: a blocker, an optional fixed at rung 1 (§5.11), or a
+revert (§5.7). Rung 1's test (§5.11) measures the size of a fix, not its reach through a
+predicate other outputs read. Measured: a guard widened to answer an optional finding, after a
+clean round, passed that test and made a finished slot raise a false stall. Charter: *"Here is a
+fix hunk and the round it came from — the finding it answers and the head that round reviewed.
+List every input or state the new predicate treats differently from the old one, and for each the
+output that reads it, operator-facing outputs first (§5.3's signal-silencing check). Report as a
+finding any that now takes a wrong branch. Read-only: do not edit anything."* One verifier per fix
+commit, covering every predicate hunk in it, counted as a verifier on the `Spend:` line. A hunk it
+confirms a finding against is not committed: it is dropped or reworked from the clean line, as
+§5.7's revert default says.
 
 ### 5.6 Origin classification
 
@@ -903,14 +947,15 @@ round 3: …
   never record `clean` from it, and do not immediately re-fire it — back off, or run the axis's
   own charter and record that instead, still inside the same round. A round does not end while an
   axis it dispatched has reviewed nothing. A round in which **every** axis failed is void: it is
-  re-fired as a re-run of the round `round_in_progress` names (below), so it counts once. Six
+  re-fired as a re-run of the round `round_in_progress` names (below), so it counts once, and each
+  void attempt is counted as `void_attempts` on the entry the round finally writes. Six
   consecutive overload errors minutes apart were once all counted as rounds: half an hour,
   zero diff read. **Judge the body, not the duration** — a fast "no findings" over a
   one-commit range is a legitimate result.
 - **Axes clear individually, and a cleared axis stays cleared until its own files change.**
   Head movement re-opens only the axes whose files it touched, from the set round 1 chose —
-  plus `impl-security` when a fix newly touches a security surface (§5.3, *Sizing the
-  battery*). Without this, every fix push re-arms the whole battery and the stage cannot
+  plus any axis §5.3's re-arm adds (*Sizing the battery*). Without this, every fix push re-arms
+  the whole battery and the stage cannot
   converge.
 - **A re-opened axis reads its own delta, not the branch diff again.** Its input is
   `<reviewed_at sha>..HEAD` restricted to the files that re-opened it, plus its carried findings
@@ -919,7 +964,8 @@ round 3: …
   search scope, a filter, a guard's condition), the charter also asks what the new scope admits
   or excludes that the old one did not, not only whether the defect closed. A widened search that
   sees another repo's terminals is a delta-sized finding that a "did it close?" question never
-  reaches. The whole branch diff is read in round 1, and by an axis added later (§5.3); the final
+  reaches. The whole branch diff is read in round 1, and by an axis added or split out later
+  (§5.3); the final
   archive check reads only the archive commit (§5.10).
 
   **What this gives up** is an interaction between the fix and code it did not touch — the seam
@@ -929,8 +975,8 @@ round 3: …
   1, 2 or 4 event, which is about the change rather than the miss, would sweep it. It also gives
   up **a second look at bytes round 1 already read** — the same engine over the same bytes
   disagrees with itself (round 63 and 64, below) — and after round 1 those bytes are re-read only
-  by a sweep. Both are accepted, named gaps, and the `Spend:` line (§5.9) is how their price is
-  measured against what the narrowing saves.
+  by a sweep or by an axis added later (§5.3). Both are accepted, named gaps, and the `Spend:`
+  line (§5.9) is how their price is measured against what the narrowing saves.
 - **Persist the round, every round — never only at hand-off.**
   - **When a round starts**, before any agent is dispatched:
     - increment `reviews.<stage>.rounds`;
@@ -956,8 +1002,10 @@ round 3: …
   - **`max-rounds` is compared against `rounds`.** A round a crash interrupted is still visible as
     `round_in_progress`, and it is re-run under its own number on re-entry. So it neither
     vanishes nor counts twice, and a restarted or compacted session reads what it already
-    reviewed instead of re-deriving it (§5.10).
-- **The stage clears when a round returns zero confirmed blocking findings.** Record it
+    reviewed instead of re-deriving it (§5.10). Which rounds may still run past `max-rounds`,
+    and what they may fix, is set out under Non-convergence (below).
+- **The stage clears when a round returns zero confirmed blocking findings** and every axis it
+  dispatched returned a body — the write-back's `clean: true` (above). Record it
   against the head sha and move on. A clean round is a snapshot of that round, **not proof
   the diff is clean** — the same engine over the same bytes disagrees with itself at
   multi-thousand-line scale (one measured case: round 63 clean, round 64 four new findings
@@ -967,8 +1015,9 @@ round 3: …
 - **Findings must survive the round they were raised in.** Each round is a fresh-context
   reviewer, so a finding nobody carries forward simply vanishes — round 2's reviewer never
   saw round 1's list, and a stage would clear the moment a reviewer happens not to re-raise
-  something that was never fixed. **Silence is not resolution.** Every finding gets an `id`
-  and a `status` in the ledger, and each later round's brief carries the still-open ones
+  something that was never fixed. **Silence is not resolution.** Every confirmed finding gets an
+  `id` and a `status` in `open` (an unverified optional has no entry there; its `deferred` entry,
+  §5.11, is its record), and each later round's brief carries the still-open ones
   verbatim with this instruction:
 
   > For each carried finding, return exactly one of: **fixed** (and say what fixed it),
@@ -980,8 +1029,20 @@ round 3: …
   rationale in `note`, carry it forward, and let the next round's reviewer rule on it. **Only
   a reviewer withdraws a finding — never the author.**
 - **Fixes are ship's own work**, applied sequentially in the worktree. After fixing, re-run
-  the discovered check commands, commit, and push — that push is the head the next round
-  reviews.
+  the discovered check commands, put any guard or predicate hunk to the predicate check (§5.5),
+  commit, and push — that push is the head the next round reviews.
+- **A blocker that sits in an earlier fix is reverted, not patched.** When a confirmed blocker's
+  lines were written by an earlier round's fix (`origin: fix`, §5.6), the default is to restore
+  those lines to the last head a round read them at clean, not to fix forward. A reverted fix that
+  answered an optional finding is dropped, and the optional goes back to the ladder (§5.11) with
+  the regression noted. One that answered a blocker re-opens it, and it is re-fixed from the clean
+  line with the regression as a failure scenario the new fix must avoid. Fix forward only where no
+  clean line exists to restore, and say why in `round_log`. A revert is a fix like any other: the
+  predicate check where it touches a predicate, its sha named as `reverted` in the round's
+  `round_log` entry, and a scoped round that reads it before the stage clears. At the budget, that
+  round is a review-only round (below). Measured: a round spent on optional fixes made after a
+  clean round found its blocker in one of them, and the fix was to revert that hunk to the
+  reviewed line.
 - **A fix changes the defective lines and nothing more.** It does not add a CI gate, a
   runbook section, or a paragraph of comment explaining itself — that is new machinery, it
   enters the next round's scope, and it is how one measured diff went from 2 970 to 5 900
@@ -1001,12 +1062,38 @@ round 3: …
   actually deployed, and does this break a *repeat* rollout, a rebuild, or onboarding.
   Everything else leaves the change down the ladder of §5.11. On one change, 55 of 85 rounds
   reviewed code that was already live.
-- **Non-convergence** — round `max-rounds` still has confirmed blockers: do **not** hand off
-  as ready, do **not** loosen the bar, do **not** take a fourth round, and never reclassify a
-  finding to get past the gate. Write them to the ledger as open, `record state=needs-human`,
-  post ONE record listing them (file:line, failure scenario, why unfixed), **leave the
-  enforced blocker of §5.9**, stop scheduling re-wakes, and report. Nothing external will
-  change this state, so polling is pointless — a human re-runs `ship` after deciding.
+- **Non-convergence** — a round at or past `max-rounds` ends with a confirmed blocker that the
+  revert default (above) did not remove (a blocker a revert re-opened counts). Then do **not**
+  hand off as ready, and do **not** loosen the bar. Do **not** take another fix round unless the
+  prose round below applies, and never reclassify a finding to get past the gate — `kind` is the
+  verifier's (§5.5), and ship does not change it. Write the blockers to the ledger as open,
+  `record state=needs-human`, and post ONE record listing them (file:line, failure scenario, why
+  unfixed). **Leave the enforced blocker of §5.9**,
+  stop scheduling re-wakes, and report. Nothing external will change this state, so polling is
+  pointless — a human re-runs `ship` after deciding.
+- **The prose round, bounded by the kind of finding.** The stage may take ONE more scoped round
+  instead of escalating when all of the following hold:
+  - at least one blocker survives a round at or past `max-rounds`, judged after the revert
+    default, so a blocker a revert re-opens is a surviving one;
+  - every surviving blocker is `origin: fix` (§5.6) and `kind: prose` (§5.5).
+
+  Its fix is held to the lines those blockers name, with no same-line cleanups, and the round
+  reads that fix delta plus any sweep §5.8 owes. It is logged with `prose_round: true` and stated
+  in the stage record (§5.9). Once per stage: a blocker it confirms, of either kind, goes to
+  `needs-human` as above. A `behaviour` blocker or an `origin: original` one never takes it,
+  including one a revert re-opened; the budget still stops those at `max-rounds`. Measured: one
+  change's behaviour converged in round 1, and its rounds 2 and 3 were each spent on the previous
+  fix's sentence disagreeing with a sibling passage. It needed a human to authorise a fourth round
+  for two blockers of that kind.
+- **Rounds past `max-rounds` that only review.** These rounds still run once `rounds` has
+  reached `max-rounds`, because the budget bounds fixing, never reviewing:
+  - a stage re-opened after it cleared (§5.3);
+  - a fix-only push made after a clean round, which §5.10 says needs a scoped round of its own;
+  - a push whose only fixes are reverts under the default above, removing every blocker the
+    round before it confirmed.
+
+  Such a round counts in `rounds`. What it confirms is handled by Non-convergence and the prose
+  round above.
 - A confirmed blocker ship *chooses* not to fix (a product or architecture call, not a code
   question) takes the same path: `needs-human`.
 
@@ -1131,8 +1218,8 @@ A verdict is bound to a **head sha**.
   as §5.7 says: `{head, clean, rounds, round_in_progress, mode, axes, agents, skipped,
   reviewed_at, round_log, open, deferred}`. An entry counts as **clean** — for §3.3, for §10 and
   here — only when `clean: true` and `round_in_progress` is null. `clean` is set false when a round
-  starts and set true only by a round that confirmed no blocker at the `head` it reviewed, so a
-  round that is running or that found something never reads as a clearance.
+  starts and set true only by §5.7's write-back, so a round that is running or that found
+  something unanswered never reads as a clearance.
 - **On every re-entry, read the ledger back before doing anything the ledger records** — a
   scheduled wake, a resumed or compacted session, a second `ship` invocation. The recorded
   `flags.effort` (§2.9) and the stage's `axes`, `agents` and `skipped` (§5.3) are the run's, not
@@ -1235,7 +1322,8 @@ fix corrected lines that change had just written.
 **A fix taken under this rung is still recorded** — in the ledger's `deferred` entry, with the sha
 in its `outcome`, and in the deferral line of the stage record (§5.9). **`deferred` is the
 authority for where the ladder put a finding, and the finding's own `status` follows it** — a rung-1
-placement sets `status: fixed` on its entry in the findings array, so the two never disagree about
+placement sets `status: fixed` on its entry in `open`, where it has one (an unverified optional has
+none, and its `deferred` entry is then its only record), so the two never disagree about
 whether it was answered. A fixed finding that leaves no trace is how the same defect gets re-found
 in round four by a reviewer with no memory of round two.
 
@@ -1685,7 +1773,8 @@ Threads and comments authored by `$ME` are our own records and never block anyth
 - **Ambiguous bare number** — ask which kind.
 - **Merge** — only per §2.6. A clean self-review is not a go-ahead and must never be treated
   as one. Never self-approve.
-- **Blocking findings surviving `max-rounds`** — stop and report (§5.7); never push past it.
+- **Blocking findings surviving `max-rounds`** — stop and report (§5.7); never push past it,
+  save the prose round §5.7 bounds by the kind of finding.
 - **Production deploys** — never trigger one. Where merging triggers a deployment by
   configuration, that is the repo's pipeline doing its job; do not reach around it by hand,
   and never mutate state a deployment system owns.
@@ -1751,7 +1840,10 @@ change whose run was still in progress. Poll until nothing is pending or running
   phrased differently. Work the ladder once per stage, at the record, not per round.
 - **Bounded, scoped rounds; `max-rounds` is the stop condition, not "until clean"** (§5.7).
   Blocking requires a *live* failure. A fix touches the defective lines and adds no new
-  machinery. Prose gets one pass after the code freezes. A failed round is not a round.
+  machinery; a fix to a guard or predicate is checked before it lands (§5.5), and a blocker in an
+  earlier fix is reverted to the clean line rather than patched. Past the budget a round may still
+  review; what it may still fix is §5.7's to say. Prose gets one pass after the code freezes.
+  A failed round is not a round.
   Findings carry forward by id, and only a reviewer withdraws one. A re-opened axis reads its
   own delta, with §5.8's sweep as the counterpart, and a finding gets one verifier unless it
   names several ways to fail.
