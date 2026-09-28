@@ -1,11 +1,11 @@
 # TESTING — test structure and practices
 
 ## council — `tests/`
-- `run-all.sh`, `_helpers.sh`, and **21** `t*.sh` (t1, t2, t2b, t2c, t3, t4, t5, t6, t7, t8, t9, t9b–t9h, t11, t13, t14).
+- `run-all.sh`, `_helpers.sh`, and the `t*.sh` files `run-all.sh` registers — that list is the authority, and `scripts/check.sh` check 10 asserts it matches disk, so no count is kept here.
 - Runner: fast subset by default, `--full` adds load/latency runs (`run-all.sh:1-3,56-57`); per-test `timeout(1)` ceiling (`:29-31,61-73`), `nice` (`:40-43`), own mktemp root reaped via keeper poll (`:12-21`).
 
 ## shipyard — `tests/`
-- `run-all.sh`, `_helpers.sh`, and **7** `t*.sh` (t1-totals, t2-window, t3-probe, t4-band, t5-agent, t6-codex-ctx, t7-continuity) — `run-all.sh:33-34`.
+- `run-all.sh`, `_helpers.sh`, and the `t*.sh` files `run-all.sh` registers (the same authority and the same check 10; no count is kept here).
 - Runner: plain loop (`run-all.sh:36-40`).
 
 ## The gate DOES run these tests — and gates three ways that a suite could stop running
