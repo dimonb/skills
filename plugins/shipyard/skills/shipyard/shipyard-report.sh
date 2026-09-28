@@ -1380,10 +1380,15 @@ for slot in "${SLOTS[@]}"; do
   # bypasses the filter like STALLED. Its claim is narrower than STALLED's and it says so: the
   # BACKEND READ failed, so nothing is known about the child. A slot unreadable from its first tick
   # has no row to carry, and neither does one whose stored `since` stall_num refused, so each starts
-  # its clock now under the key `unread`, which no readable screen's key can equal. NOT closed, the
-  # route STALLED already has: a child that writes a FUTURE `since` into its own row stays under the
-  # threshold. A dead agent is 💀 NO AGENT's to report, and a stated wait (only a finished slot with
-  # no agent reaches one here) is not a stall of any kind.
+  # its clock now under the key `unread`, which no readable screen's key can equal. The threshold is
+  # measured from that carried `since` — the screen's last observed CHANGE — so a slot already
+  # motionless past it raises the block on its FIRST unreadable tick; the block's own line says
+  # "nothing has seen it move for N min", which is what was measured. NOT closed, the route STALLED
+  # already has: a child that rewrites or deletes its own row (a recent or future `since`) keeps its
+  # clock under the threshold, which removes it from the block outright. A dead agent is 💀 NO
+  # AGENT's to report; a stated wait (only a finished slot with no agent reaches one here) is not a
+  # stall of any kind; and a slot with an open escalation is excluded for STALLED's reason — it is
+  # already asking for you, in its own block, and its clock ages without firing by design.
   unread_now=0
   if [ "$unread" = 1 ] && [ "$GAP" = 0 ]; then
     if [ -n "$prev" ] && [ -n "$prev_epoch" ]; then
@@ -1391,7 +1396,8 @@ for slot in "${SLOTS[@]}"; do
     else
       STALL_ROWS+=("$slot	unread	$now_epoch			0	"); u_since="$now_epoch"
     fi
-    if [ "$noagent" = 0 ] && [ -z "$wait_kind" ] && [ $(( now_epoch - u_since )) -ge "$STALL_SECS" ]; then
+    if [ "$noagent" = 0 ] && [ -z "$wait_kind" ] && [ "$pend" = 0 ] \
+       && [ $(( now_epoch - u_since )) -ge "$STALL_SECS" ]; then
       UNREADABLE+=("$slot|$(( (now_epoch - u_since) / 60 ))|$(shipyard_target "$slot" 2>/dev/null)")
       unread_now=1
     fi
@@ -1807,14 +1813,18 @@ EOF
   fi
   if [ "${#UNREADABLE[@]}" -gt 0 ]; then
     echo
-    echo "### 🛑 UNREADABLE — the report cannot read the screen, and has not for longer than the stall threshold"
+    echo "### 🛑 UNREADABLE — the report cannot read the screen, and nothing has seen it move for longer than the stall threshold"
     for x in "${UNREADABLE[@]}"; do
       IFS='|' read -r sl mins tgt <<EOF
 $x
 EOF
-      [ -n "$tgt" ] || tgt="<target>"
+      # QUOTED, because the operator is told to paste it: a tmux target is `<container>:<index>`, and
+      # the container comes from a pin in the mailbox every child can write.
+      if [ -n "$tgt" ]; then tgt=$(printf '%q' "$tgt"); else tgt="<target>"; fi
+      # The same read drv_read performs, whole — on agterm that includes the jq step, without which
+      # the command prints JSON and an empty `text` looks like an answer.
       case "$(shipyard_backend)" in
-        agterm) cmd="agtermctl session text --target $tgt --json" ;;
+        agterm) cmd="agtermctl session text --target $tgt --json | jq -r '.result.text // \"\"'" ;;
         *)      cmd="tmux capture-pane -p -t $tgt" ;;
       esac
       echo "- \`$sl\` — its captures come back EMPTY, and nothing has seen it move for ${mins} min. What failed"

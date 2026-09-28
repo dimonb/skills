@@ -198,6 +198,15 @@ out=$(FAKE_CAP=blank run_report --only-changed)
 ok "it bypasses --only-changed on every tick it holds" yes "$(has "$(unreadable "$out")" '^- `51`')"
 out=$(run_report)
 ok "readable again: the block is gone"                no  "$(has "$out" '^### 🛑 UNREADABLE')"
+# A slot with an open escalation is excluded, for STALLED's reason: it is already asking for you,
+# and its clock ages without firing by design, so one failed read must not turn it into an alarm.
+fresh
+run_report >/dev/null
+backdate_stall 7200
+printf '%s\n' '{"id":"51-1","slot":"51","kind":"question","text":"which option?","status":"pending"}' >"$MB/51-1.json"
+out=$(FAKE_CAP=blank run_report)
+ok "an escalated slot, unreadable past the threshold: no block" no "$(has "$out" '^### 🛑 UNREADABLE')"
+rm -f "$MB/51-1.json"
 # Under the threshold there is nothing to raise yet.
 fresh
 run_report >/dev/null
