@@ -415,7 +415,7 @@ read_back=$(COUNCIL_ROOM="$DR" bash "$CLI" verdict --json 2>/dev/null | jq -r .b
   || { echo "FAIL verdict's default turns_budget ($read_back) is not what up writes ($wrote_b)"; fail=1; }
 lits=$(grep -nE "c_int_field [a-z_]+ [\"']?[0-9]" "$SKILL"/lib/*.sh | grep -v 'c_int_field created_ms 0)')
 [ -z "$lits" ] || { echo "FAIL a reader spells its own roster default:"; printf '%s\n' "$lits"; fail=1; }
-lits=$(grep -nE '[a-z_]+:[0-9]+[,} ]' "$SKILL/lib/up.sh")
+lits=$(grep -nE "[a-z_]+: *[0-9]|--argjson [a-z_]+ [\"']?[0-9]" "$SKILL/lib/up.sh" | grep -vE '^[0-9]+: *#')
 [ -z "$lits" ] || { echo "FAIL up writes a roster number as a literal:"; printf '%s\n' "$lits"; fail=1; }
 kill_keeper "$DR/state/keeper.pid" -9; rm -rf "$DR"; rm -f "$SKILL/scenarios/$BADSC.md"
 

@@ -158,10 +158,11 @@ ROOM_NAME=""; ARGS=(); VERB=""
 # THE RULE, which is the part worth carrying to the next value-taking arm anyone writes: an
 # arm is safe when an absent operand ABORTS, and unsafe when it is DEFAULTED AWAY. So a
 # value-taking arm checks `[ $# -ge 2 ]` before it reads `"$2"`, and says which option was short
-# (#147) — as these two do, and as `council_up`'s parser (lib/up.sh) does for four at once. Never
-# `${2:-}`: that is precisely how this loop came to spin. A bare `"$2"` with no check aborts under
-# `set -u` and is safe, but only by spelling, and its message names a line number instead of the
-# option. Nothing mechanical enforces this: t13 and t20 test the arms that exist, not the next one.
+# (#147) — as these two do, and as `council_up`'s parser (lib/up.sh) does for its value-taking
+# options. Never `${2:-}`: that is precisely how this loop came to spin. A bare `"$2"` with no
+# check aborts under `set -u` and is safe, but only by spelling, and its message names a line
+# number instead of the option. Nothing mechanical enforces this: t13 and t20 test the arms they
+# name, not the next one.
 while [ $# -gt 0 ]; do
   case "$1" in
     --room) [ $# -ge 2 ] || { echo "council: --room needs a room name" >&2; exit 2; }
