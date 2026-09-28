@@ -170,8 +170,10 @@ out=$(T5_PIN=agterm dry_launch "$TMP/skill-ok" "$TMP/launch-elsewhere")
 check 7 "$(rc_of "$out")" "a fleet pinned on the other backend refuses the launch (rc 7)"
 check 1 "$(printf '%s' "$out" | grep -c 'Launch on the fleet.s backend: SHIPYARD_BACKEND=agterm')" "...naming the backend to pin"
 check 1 "$(printf '%s' "$out" | grep -c 'asked for tmux explicitly')" "...in the words for an explicit backend, not auto's"
-check 1 "$(printf '%s' "$out" | grep -c 'SHIPYARD_BACKEND=agterm bash .*/shipyard-down.sh --list')" \
-  "...and the safe order for clearing a stale pin starts with the listing under the pinned backend"
+check 1 "$(printf '%s' "$out" | grep -c 'SHIPYARD_BACKEND=agterm bash .*/shipyard-report.sh')" \
+  "...and clearing a stale pin starts from the pinned backend's terminals, not its worktrees"
+check 1 "$(printf '%s' "$out" | grep -c 'Do not remove it')" \
+  "...and a pin the teardown kept is not to be removed by hand"
 check no "$(has "$TMP/launch-elsewhere/.git/ship-escalations/container-tmux")" "...without writing a second pin first"
 out=$(T5_PIN=agterm T5_TMUX=down SHIPYARD_FORCE=1 dry_launch "$TMP/skill-ok" "$TMP/launch-forced")
 check 7 "$(rc_of "$out")" "SHIPYARD_FORCE does not override not knowing"

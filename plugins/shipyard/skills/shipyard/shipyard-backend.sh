@@ -479,15 +479,19 @@ shipyard_elsewhere_remedy() {
   d=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
   mb=${DRV_CONTAINER_PIN_DIR:-<mailbox>}
   case "${SHIPYARD_BACKEND:-auto}" in
-    auto) echo "  SHIPYARD_BACKEND=auto decides per process, so one failed probe sent this launch to $now." ;;
+    auto) echo "  SHIPYARD_BACKEND=auto decides per process, and this process resolved $now while the fleet is on ${pin:-the other backend}." ;;
     *)    echo "  This run asked for $now explicitly, but a mailbox runs one backend at a time and this one's fleet is on ${pin:-the other backend}." ;;
   esac
   [ -n "$pin" ] || return 0
   echo "  Launch on the fleet's backend: SHIPYARD_BACKEND=$pin."
   echo "  If that fleet has really ended, its pin is stale. Clear it in this order, never while that fleet may be live:"
-  echo "    1. SHIPYARD_BACKEND=$pin bash $d/shipyard-down.sh --list   — confirm no ship-* terminal is live on $pin;"
-  echo "    2. SHIPYARD_BACKEND=$pin bash $d/shipyard-down.sh <slot> ...  — tear down what is left; the last one clears the pin;"
-  echo "    3. only if the pin is still there after that: remove $mb/container-$pin by hand."
+  echo "    1. SHIPYARD_BACKEND=$pin bash $d/shipyard-report.sh — it must list no ship-* terminal and print no NO SIGNAL"
+  echo "       block (\`shipyard-down.sh --list\` shows worktrees, not terminals, so it cannot confirm this);"
+  echo "    2. SHIPYARD_BACKEND=$pin bash $d/shipyard-down.sh <slot> ... — each worktree still there; with none left,"
+  echo "       any one slot name runs the same last-slot check. It clears the pin once it has proven the fleet empty;"
+  echo "    3. a pin that survives step 2 was KEPT: down could not verify the fleet, or a slot remains (it says the first"
+  echo "       and not the second). Do not remove it — go back to step 1. Remove $mb/container-$pin by hand only when"
+  echo "       step 1 was empty and step 2's one warning was that it could not stop a continuity watcher."
 }
 
 # shipyard_absence_report <slot> — say, on stderr, why that slot has no terminal.

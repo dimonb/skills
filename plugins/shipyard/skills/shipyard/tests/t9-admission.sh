@@ -9,7 +9,8 @@
 # gate's runtime effect in the launcher (that it really exits 4/5/6 on a refusal, that SHIPYARD_DRY
 # really prints the decision and still exits 0) end to end. Section 7 guards the WIRE statically
 # instead — the report is evaluated, the enforcing exit exists, and it precedes worktree/terminal
-# creation — mirroring how t7 guards its own wire in the same file. That catches the silent-removal mutation; it does not replace an integration test.
+# creation — mirroring how t7 guards its own wire in the same file. That catches the
+# silent-removal mutation; it does not replace an integration test.
 #
 # Everything is a PURE read over environment variables and three faked CLIs (git, agtermctl,
 # memory_pressure) FIRST on PATH — NO live terminal, no real repo, no network, and crucially no
