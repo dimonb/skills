@@ -86,7 +86,7 @@ BEHAVIOR
     reviewer — honor it.
   - Merges only where repo policy or the `merge` flag allows it. A clean self-review is
     never a merge authorization by itself, and ship never self-approves.
-  - At hand-off, a close sweep tries to reproduce every open issue in the areas the
+  - At hand-off, a close sweep tries to reproduce every open issue that names a file the
     change touched, and adds a closing line for each one that no longer reproduces —
     never on reasoning alone. Labels are picked by the forge's label descriptions.
   - All human prompts happen at invocation time; scheduled re-wakes run unattended.
@@ -249,15 +249,16 @@ they are combined.
 **The forge's own descriptions are the record — ship keeps no copy.** A copy in the repo would be a
 cache of a forge that can move, and would need a staleness check to be trusted; reading the
 descriptions each run needs neither, and a human corrects the partition by editing a label, where
-every other tool that reads it sees the correction too. The lookup is used at three points:
+every other tool that reads it sees the correction too. The lookup is used at these points:
 
 - **choosing labels** for an issue or a PR/MR (§7.A step 4, §7.B step 5) — pick the area whose
   description covers the paths the change or finding names; the kind from what the change is;
-- **choosing which existing issue a finding belongs to** (§5.11 rung 2) and **which areas a change
-  touched** (the close sweep, §7.G) — the area's path list is the partition to enumerate;
+- **choosing which existing issue a finding belongs to** (§5.11 rung 2) — the area's path list is
+  the partition to enumerate;
 - **answering "is this a new area?"** (§5.11 rung 3) — no area description covers the path.
 
-Where a description does not say what the label covers — a bare name, or prose such as "the X
+(The close sweep, §7.G, is scoped by the files the diff touches, not by area.) Where a description
+does not say what the label covers — a bare name, or prose such as "the X
 skill" — fall back to matching the name and the component, **say so in the record** that used it,
 and treat creating a label as more questionable, not less. Creating one stays a reported event, and
 a label ship creates carries a description in the shape above (an area label: its path list), so
@@ -349,6 +350,14 @@ number. One query alone misses links the other finds.
 Assignment: if the issue is unassigned or already ours, claim it before any local work. If
 it is assigned to **someone else**, STOP and clarify — do not take over another person's
 work.
+
+**Read every issue the change works WITH its comments** — the reference file's intake query,
+never a body-only read. §5.11 rung 2 puts new scenarios onto an open issue *as comments*, so a
+body-only read closes them unread. Each scenario a comment adds is in scope, or it is re-homed
+explicitly: commented onto another open issue that then owns it, and the move stated in the PR/MR
+description. `Closes #N` only when every comment on #N is addressed or re-homed; otherwise
+reference #N without the closing keyword and say what is left. The same holds for every issue the
+close sweep closes (§7.G step 4).
 
 ### 3.3 PR/MR path — read detail and detect the stage
 
@@ -492,7 +501,7 @@ passes it — the absent file does not fail safe, it fails open.)
   "swept": [ { "trigger": 1, "sha": "819f7d74...", "note": "drops a column that encoded authorization" } ],
   "external_threads_grace": { "since": "2026-08-23T10:30:00Z", "thread_ids": ["abc"] },
   "close_sweep": {
-    "head": "a1b2c3d4...", "areas": ["area:<x>"], "examined": [31, 40, 57],
+    "head": "a1b2c3d4...", "files": ["lib/foo.sh"], "examined": [31, 40, 57],
     "gone": [ { "issue": 31, "evidence": "grep on the head: the count it names is no longer in the file" } ],
     "reproduces": [ { "issue": 40, "evidence": "lib/foo.sh:42 still reads the unchecked value" } ],
     "unverified": [ { "issue": 57, "evidence": "needs a live forge to reproduce" } ]
@@ -747,7 +756,7 @@ Normalization ship applies on receipt — deterministic, no judgement needed:
   failing *live*, per the clause above.
 - **optional** = advisory: nitpick, style, naming, "consider…", micro-perf, refactor idea,
   low-confidence note. Optional findings NEVER gate anything and are never fixed under time
-  pressure — batch and post them (§5.9).
+  pressure — batch and post them (§5.9), and place every one not fixed on the ladder (§5.11).
 - **Dedupe across axes** by `(file, line ±3, category)` and by summary similarity. Two axes
   finding one defect is one finding: keep the better failure scenario, union the axes.
   Dedupe is ship's own bookkeeping, not review — doing it in ship's context is fine.
@@ -956,8 +965,10 @@ Deferred: 2 — fixed here 1; scenario onto #123; new issues none.
   - the axis skipped by sizing → `Security: not run — <the recorded reason>`, read from
     `skipped` — a skipped axis never sets `security_engine`. Never `no issues found` for an
     axis that did not look.
-- **Optional findings**: batch them ALL into ONE comment (`file:line` plus one line each),
-  ending "No action required." Never one comment per nit.
+- **Optional findings**: batch them ALL into ONE comment (`file:line` plus one line each), each
+  line ending with where it went — `fixed in <sha>` or the open issue §5.11 placed it on. Never one
+  comment per nit, and never a finding that lives only on this PR/MR: after the merge nobody reads
+  it again.
 - **Deferred findings**: ONE line giving the disposition by rung (§5.11) — how many were fixed
   in the change, which open issues received a scenario, which issues were created. Numbers and
   issue references, never contents: the reasons live in the ledger and in the created issue.
@@ -1013,10 +1024,12 @@ recorded reasons why rungs 1 and 2 did not fit.
 
 **What is on the ladder.** Every finding that leaves a review round without being fixed in that
 round — however it got there. §5.7 sends some away explicitly (answering it would need new
-machinery; the change is already applied and running), and a round may judge an optional finding
-worth more than the batched comment of §5.9. Do not read that as a closed list: the entry
-condition is *leaving the round*, not the reason. The one exclusion is the ordinary optional
-finding — nitpick, style, naming, micro-perf — which goes into that one comment and nowhere else.
+machinery; the change is already applied and running), and every optional finding the change
+does not fix leaves it too. Do not read that as a closed list: the entry condition is *leaving the
+round*, not the reason. **There is no exclusion for the ordinary optional finding** — nitpick,
+style, naming, micro-perf: most pass rung 1 and are fixed in place; the rest go onto an open issue
+like any other, since a finding left only on a merged PR/MR is one nobody reads again. Several with
+no home that share a class share one new issue at rung 3.
 
 **When it is worked.** ONCE per stage, at the point the stage record is posted — not per round.
 Filing mid-stage files findings a later round refutes or a later fix obviates, and it is how one
@@ -1177,6 +1190,12 @@ reuse one fixed id so each call upserts the same one-shot, and set it as early i
 is safe, so a mid-pass crash still leaves a queued continuation. Stop creating it only on a
 terminal state.
 
+**On resume after a crash, do not re-run the interrupted command first.** A session that died
+mid-command may have been killed BY that command, and re-running it repeats the crash. Check first:
+the system log names a signal's sender where the platform records one (on macOS, `exited due to SIGKILL | sent by <proc>[<pid>]`).
+If the sender was the run's own command, read its destructive paths (§7.D step 2) before it runs
+again.
+
 On each wake, in order:
 
 1. **Enforce bounds FIRST.** Load state. If the PR/MR is merged or closed → stop the watch,
@@ -1283,6 +1302,14 @@ mis-read the state.
 1. Ensure the worktree is at the head.
 2. **Read the relevant existing spec and the change's own artifacts before writing code**,
    where they exist. Implement, checking off the task list as you go.
+
+   **Code you did not write** — ported from another branch, pasted from an issue, generated by a
+   tool — gets its destructive paths read before it first runs: every `kill` and signal, every
+   `rm -rf`, every value either is handed. A helper that signals a list of pids refuses pid ≤ 1 and
+   refuses a list longer than it could plausibly own; children are looked up by filtering
+   `ps -A -o pid= -o ppid=` on the parent column, never with `pgrep -P` and no pattern, which on
+   macOS ignores `-P` and lists every process. Measured: one such ported test SIGKILLed the owner's
+   whole desktop session, once per resume of the slot that carried it.
 3. Verify locally before pushing: the discovered check commands (§2.4), plus the test suite
    of every component the diff touches, plus whatever the repo's law demands as evidence. For
    user-visible behaviour, exercise it for real and record the outcome on the PR/MR. Fix
@@ -1353,15 +1380,13 @@ issue still holds — §7.A and §5.11 rung 2 read the backlog only to place new
 this step an issue fixed days ago, by this change or by another, stays open until somebody
 happens to notice. The sweep is what makes the backlog shrink as well as grow.
 
-1. **Scope: the areas the diff touched, leaning WIDE.** Map each touched path to its area through
-   the label descriptions (§2.7); a path no description covers, or one two could cover, takes
-   every area it plausibly belongs to. Where the project has no area labels, the scope is the open
-   issues whose title or body names a touched path, module or script — found by enumerating every
-   open issue and matching, as §5.11 rung 2 does, never by keyword search. **Wide is the default on
-   purpose:** the reproduction attempt in step 2 gates every close, so over-wide scoping costs a few
-   extra attempts and closes nothing it should not, while over-narrow scoping silently misses
-   exactly the issues this step exists to close. List the area's open issues in full (the
-   reference file has the per-forge query) and drop only the ones this PR/MR already closes.
+1. **Scope: the open issues that name a file the diff touches.** Enumerate every open issue with
+   its body (the reference file has the per-forge query) and keep those whose title or body names a
+   touched path — the full path, its file name, or the script or module it defines — matched by
+   you, as §5.11 rung 2 matches, never by keyword search. Drop the ones this PR/MR already closes.
+   **Not the whole area:** an area holds issues about files this change never read, and sizing the
+   sweep by area once re-checked 69 open issues for a docs-only change. An issue that names no file
+   is outside the sweep; it stays for the change that touches what it describes.
 2. **Reproduce each one on the branch head, in subagents.** Every candidate goes to a read-only
    verifier with §5.5's charter pointed at the issue instead of a finding: *here is the issue;
    construct its concrete failure on this head — the input, the state, the wrong result.* Batch
@@ -1389,7 +1414,9 @@ happens to notice. The sweep is what makes the backlog shrink as well as grow.
    tried to reproduce it and could not.
 4. **Close through the change, not around it.** For each GONE issue add its own closing line to the
    PR/MR description — `Closes #N` in the form §7.A settled on — with the one-line evidence beside
-   it and the head sha it was established on. The merge then closes it, so the close happens when a
+   it and the head sha it was established on — and only once its comments are read and addressed,
+   as for the change's own issues (§3.2); a GONE body with an open comment scenario is a reference
+   without the closing keyword. The merge then closes it, so the close happens when a
    person merges and not before, and a change that is never merged closes nothing. Editing the
    description moves no code, so the reviewed head stays the head handed off (§5.10). Where the
    merge will not close it — the repo does not honour closing keywords, or the forge setting is off
@@ -1397,14 +1424,14 @@ happens to notice. The sweep is what makes the backlog shrink as well as grow.
    close-with-evidence query), and only where §2.6 lets ship merge at all; otherwise the hand-off
    record names them for the person who merges.
 5. **Record what was examined, not only what closed** — in the state file's `close_sweep` (§4) and
-   as one line of the hand-off record: the areas swept, how many examined, which close, which still
+   as one line of the hand-off record: the files scoped, how many examined, which close, which still
    reproduce, which are unverified. The issues left open because the reproduction still succeeded
    are the part of the record worth most: they say the sweep looked and was right not to close.
    Every verdict carries its evidence, so the record says why each issue stayed open too. The
    sweep is bound to the head it ran on, like a review verdict: a push after it recomputes step 1's
    scope against the new diff, and re-runs every GONE issue, every newly scoped one, and every other
    issue whose evidence names a file the push changed.
-   An area with no open issue besides the change's own is recorded as swept with nothing to examine.
+   A diff whose files no open issue names is recorded as swept with nothing to examine.
 
 Where the repo tracks work some other way (§7.A, §5.11), the sweep runs over whatever it keeps — an
 umbrella checklist, a file of deferred work — and a GONE item is ticked or struck through in that
@@ -1412,7 +1439,8 @@ repo's own form, with the same evidence. Where it keeps nothing, there is nothin
 
 **Where policy says `no-merge` (the default): STOP here and hand over.** Post a record of the
 end state — what was reviewed, at which heads, how many rounds, checks green, anything
-deliberately deferred, the close sweep's line — and end the loop with
+deliberately deferred and the open issue each unfixed finding went to (§5.9), the close sweep's
+line — and end the loop with
 `record state=ready-to-merge`. That last record is the one a supervisor reads to know the change
 is waiting on a person rather than still working. Say what is *holding*, not that everything is
 fine: "holding for the go-ahead" is the status. Do not phrase it in a
@@ -1554,6 +1582,13 @@ change whose run was still in progress. Poll until nothing is pending or running
 - **Delta review is blind to seams — sweep when a trigger fires, not on a round counter**
   (§5.8), and latch each trigger.
 - **The handed-off head must be a reviewed head** (§5.10).
+- **Read every issue with its comments** (§3.2); `Closes #N` only when each comment scenario is
+  addressed or re-homed onto another open issue, and the move is stated.
+- **No finding lives only on a PR/MR** (§5.9, §5.11): every unfixed one, optional included, is
+  placed on an open issue and the record says where.
+- **Read the kill, signal and `rm -rf` paths of code you did not write before it runs** (§7.D),
+  and on resume after a crash check whether the interrupted command caused it before re-running
+  it (§6).
 - **The close sweep closes only on a reproduction attempt that failed** (§7.G) — never on
   reasoning alone — and through the change's own closing lines, so a merge closes it.
 - **Labels are chosen by the forge's own label descriptions**, not by name similarity (§2.7).

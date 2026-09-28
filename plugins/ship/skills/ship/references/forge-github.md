@@ -65,6 +65,12 @@ unset GITHUB_TOKEN; export REPO=<owner>/<repo>
 # detail
 gh issue view N --repo "$REPO" --json number,state,assignees,title,url
 
+# intake (core §3.2) — the body AND every comment. Rung 2 scenarios live in comments, so a
+# body-only read closes them unread. --paginate: a long thread is more than one page.
+gh issue view N --repo "$REPO" --json number,title,body,labels
+gh api --paginate "repos/$REPO/issues/N/comments" \
+  --jq '.[] | "--- \(.user.login) \(.created_at)\n\(.body)"'
+
 # ENUMERATE the open issues — the duplicate and class check of core §5.11 rung 2, and the
 # near-duplicate check of core §7.A. Raise --limit past the open count and confirm you got
 # them all: the default is 30, and a silently truncated list is the search this replaces.
@@ -80,8 +86,7 @@ gh api "search/issues?q=repo:$REPO+is:issue+is:open&per_page=1" --jq .total_coun
 # so a near-duplicate phrased differently does not come back
 gh issue list --repo "$REPO" --state open --search "<keywords>"
 
-# read a candidate in full before commenting a scenario onto it
-gh issue view N --repo "$REPO" --json number,title,body,labels
+# read a candidate in full — body and comments, as at intake — before commenting a scenario onto it
 
 # rung 2 — add the scenario to an issue that is already open (body via file)
 gh issue comment N --repo "$REPO" --body-file "$BODY"
@@ -93,10 +98,10 @@ gh label list --repo "$REPO" --limit 1000 --json name,description \
 gh label create "<name>" --repo "$REPO" --color RRGGBB --description "<what it covers>"
 gh label edit "<name>" --repo "$REPO" --description "<what it covers>"
 
-# the close sweep (core §7.G) — every open issue in one area, in full
-gh issue list --repo "$REPO" --state open --label "<area>" --limit 1000 \
-  --json number,title,labels \
-  --jq '.[] | [.number, ([.labels[].name] | join(",")), .title] | @tsv'
+# the close sweep (core §7.G) — every open issue WITH its body, to keep the ones naming a file
+# the diff touches. Same --limit rule as the enumeration above; match the paths yourself.
+gh issue list --repo "$REPO" --state open --limit 1000 --json number,title,body \
+  --jq '.[] | "=== #\(.number) \(.title)\n\(.body)"'
 
 # close with the evidence — only where the merge did not close it (core §7.G). The comment
 # first, so an issue is never closed without the reason beside it.

@@ -44,8 +44,8 @@ one.
 explicit go-ahead in the invocation. A clean self-review is a better first pair of eyes, not
 a second one.
 
-**It looks back at the backlog at hand-off.** Every open issue in the areas the change touched
-goes to a verifier that tries to reproduce it on the branch head. Each one that no longer
+**It looks back at the backlog at hand-off.** Every open issue that names a file the change
+touched goes to a verifier that tries to reproduce it on the branch head. Each one that no longer
 reproduces gets its own `Closes #N` line in the PR/MR description, with the evidence, so the
 merge closes it — and nothing is closed on reasoning alone: an issue that only *looks* fixed
 stays open until something tried to reproduce it and could not.

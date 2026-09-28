@@ -80,6 +80,12 @@ change (core §7.A covers that convention). Where issues are used:
 unset OAUTH_TOKEN; export GITLAB_HOST=<host>
 glab api "projects/$PROJECT/issues/N"
 
+# intake (core §3.2) — the description AND every note. Rung 2 scenarios live in notes, so a
+# description-only read closes them unread. System notes (label, assignee changes) dropped.
+glab api "projects/$PROJECT/issues/N" | jq -r '.title, .description'
+glab api --paginate --output ndjson "projects/$PROJECT/issues/N/notes?sort=asc&per_page=100" \
+  | jq -r 'select(.system | not) | "--- \(.author.username) \(.created_at)\n\(.body)"'
+
 # ENUMERATE the open issues — the duplicate and class check of core §5.11 rung 2, and the
 # near-duplicate check of core §7.A. --paginate --output ndjson because `glab api` has no --jq
 # and pages arrays (§3); without both, the list truncates silently and the check becomes
@@ -92,8 +98,7 @@ glab api --paginate --output ndjson \
 # so a near-duplicate phrased differently does not come back
 glab issue list --search "<keywords>"
 
-# read a candidate in full before commenting a scenario onto it
-glab api "projects/$PROJECT/issues/N" | jq -r '.title, .description'
+# read a candidate in full — description and notes, as at intake — before commenting onto it
 
 # rung 2 — add the scenario to an issue that is already open (body through a file)
 glab api --method POST "projects/$PROJECT/issues/N/notes" -f "body=$(cat "$BODY")"
@@ -107,11 +112,10 @@ glab api --method POST "projects/$PROJECT/labels" \
 glab api --method PUT "projects/$PROJECT/labels/<url-encoded name>" \
   -f description="<what it covers>"
 
-# the close sweep (core §7.G) — every open issue in one area, in full. A scoped label
-# (`area::x`) and a plain one (`area:x`) are both passed verbatim, URL-encoded.
-glab api --paginate --output ndjson \
-  "projects/$PROJECT/issues?state=opened&labels=<url-encoded area>&per_page=100" \
-  | jq -r '[.iid, ([.labels[]] | join(",")), .title] | @tsv'
+# the close sweep (core §7.G) — every open issue WITH its description, to keep the ones naming
+# a file the diff touches. Paginated like the enumeration above; match the paths yourself.
+glab api --paginate --output ndjson "projects/$PROJECT/issues?state=opened&per_page=100" \
+  | jq -r '"=== #\(.iid) \(.title)\n\(.description // "")"'
 
 # close with the evidence — only where the merge did not close it (core §7.G). The note
 # first, so an issue is never closed without the reason beside it.
