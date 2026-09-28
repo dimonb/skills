@@ -538,7 +538,7 @@ pass on the archived head (§7.F).
 - **Every subagent, and every probe ship runs itself, reads and copies only from the worktree
   and the session's scratch or temp directory** — never from the agent's own config, transcript
   or tool-result directories. Reads there prompt for approval, and an unattended run stalls on
-  the prompt with nobody to answer it and nothing that reports it. Content a subagent needs from
+  the prompt with nobody to answer it and nothing that reliably reports it. Content a subagent needs from
   there goes into its prompt, never as a path. Measured: a skeptic that copied from its own
   transcript directory held a slot idle on the prompt, unescalated.
 - **Run the axes concurrently** — dispatch the whole battery in ONE message so they run in
@@ -638,7 +638,7 @@ to make it appear now makes it disappear. A path that is quieter by construction
 unless a louder output replaces it, and the input or state that used to raise the output and no
 longer does is the finding's failure scenario. The principle is argued in full in the `AGENTS.md`
 of this skill's own repository, *Untrusted evidence may annotate an operator-facing signal, never
-suppress one*; a repo whose law is stricter wins (§2.7). Measured: a change that turned an
+suppress one*; the target repo's own law still wins (§2.7). Measured: a change that turned an
 unreadable screen from a false stall into "no verdict" passed five axes and a skeptic, and a slot
 that stayed unreadable could then never alarm at all.
 
