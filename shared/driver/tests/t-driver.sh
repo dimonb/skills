@@ -97,7 +97,8 @@ case "$1" in
        new-session|new-window)
          env | sed -n 's/^\(AGTERM_[A-Za-z_]*\)=.*/leak:\1/p' >>"${FAKE_TMUX_LOG:-/dev/null}"
          # `-P -F '#{window_id}'` prints the new window's id; FAKE_TMUX_NEW_ID is what it prints.
-         [ -n "${FAKE_TMUX_NEW_ID:-}" ] && printf '%s\n' "$FAKE_TMUX_NEW_ID" ;;
+         [ -n "${FAKE_TMUX_NEW_ID:-}" ] && printf '%s\n' "$FAKE_TMUX_NEW_ID"
+         exit "${FAKE_TMUX_NEW_RC:-0}" ;;
      esac
      exit 0 ;;
 esac
@@ -569,6 +570,20 @@ ok "agterm: a failed launch writes no pin" no "$([ -e "$LPIN/container-agterm" ]
 ( export FAKE_TMUX_HASSESSION_RC=0 FAKE_TMUX_NEW_ID=@9 _DRV_BE=tmux DRV_CONTAINER_PIN_DIR="$LPIN" DRV_REPO_KEY=lp
   drv_launch_handle sess /work/dir /path/to/launcher >/dev/null 2>&1 )
 ok "tmux: a launch that went through pins the name it used" lp "$(cat "$LPIN/container-tmux" 2>/dev/null)"
+rm -f "$LPIN"/container-*
+( export FAKE_TMUX_HASSESSION_RC=0 FAKE_TMUX_NEW_RC=1 _DRV_BE=tmux DRV_CONTAINER_PIN_DIR="$LPIN" DRV_REPO_KEY=lp
+  drv_launch_handle sess /work/dir /path/to/launcher >/dev/null 2>&1 )
+ok "tmux: a failed launch writes no pin" no "$([ -e "$LPIN/container-tmux" ] && echo yes || echo no)"
+( export FAKE_AT_NEW_OUT='{"ok":true,"result":{"id":"U-2"}}' _DRV_BE=agterm DRV_CONTAINER_PIN_DIR="$LPIN" DRV_REPO_KEY=lp
+  drv_launch_handle sess /work/dir /path/to/launcher >/dev/null 2>&1 )
+ok "agterm: a launch that went through pins the name it used" lp "$(cat "$LPIN/container-agterm" 2>/dev/null)"
+# drv_both_pinned: the resolved backend's pin AND another one.
+rm -f "$LPIN"/container-*; : >"$LPIN/container-agterm"
+ok "drv_both_pinned: only the other pinned -> no" no \
+   "$( _DRV_BE=tmux DRV_CONTAINER_PIN_DIR="$LPIN" drv_both_pinned && echo yes || echo no )"
+: >"$LPIN/container-tmux"
+ok "drv_both_pinned: both pinned -> yes" yes \
+   "$( _DRV_BE=tmux DRV_CONTAINER_PIN_DIR="$LPIN" drv_both_pinned && echo yes || echo no )"
 # ...while drv_launch keeps echoing the NAME, which shipyard relies on, handle or not.
 ok "drv_launch still echoes the name" sess \
    "$( export FAKE_TMUX_HASSESSION_RC=0 FAKE_TMUX_NEW_ID=@7 _DRV_BE=tmux DRV_CONTAINER_OVERRIDE=cont

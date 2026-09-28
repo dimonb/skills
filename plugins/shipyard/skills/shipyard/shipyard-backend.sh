@@ -379,13 +379,8 @@ shipyard_slot_check() {
 # what was wrong was reading "I looked somewhere else and found nothing" as "there is nothing".
 shipyard_backend_pinned_elsewhere() { drv_pins_elsewhere; }
 
-# shipyard_both_pinned — 0 when this mailbox pins the resolved backend AND another one (#132): the
-# state in which every `elsewhere` remedy must say "one pin is stale" rather than "pin the other".
-# "Pinned" is the pin FILE existing, the same test `drv_pins_elsewhere` applies to the other one.
-shipyard_both_pinned() {
-  local f
-  drv_pins_elsewhere >/dev/null && f=$(_drv_pin_file 2>/dev/null) && [ -f "$f" ]
-}
+# shipyard_both_pinned — shipyard's name for `drv_both_pinned` (#132).
+shipyard_both_pinned() { drv_both_pinned; }
 
 # shipyard_signal_class [<enum-rc> [<enum-output> <slot-session-name>]] — MAY AN ABSENCE BE
 # BELIEVED?
@@ -494,11 +489,14 @@ shipyard_signal_class() {
 # worktree was kept reads as not listed there, and raises nothing.
 #
 # PEER-WRITABLE, AND WHY THAT IS ACCEPTABLE HERE. The records live in the mailbox, which the
-# children can write. This function is consulted only after the driver has already decided the
-# absence may be believed, and it can only turn that into a refusal. So a forged or edited record
-# can make the operator's signal LOUDER (a `container` refusal naming the forged container, which
-# is itself the evidence) and can never silence one. Deleting a record removes only this extra
-# refusal, returning to what the pin alone said before this check existed.
+# children can write. It has two consumers. In `shipyard_signal_class` it is consulted only after
+# the driver has already decided the absence may be believed, and it can only turn that into a
+# refusal: a forged or edited record makes the operator's signal LOUDER (a `container` refusal
+# naming the forged container, which is itself the evidence) and never silences one, and deleting
+# a record removes only this extra refusal. In `shipyard_continuity_cleanup_last_slot` it is a
+# guard on the both-pinned pin clear: a record here blocks the clear, so a deleted record can let a
+# teardown under an overridden container clear the pin it resolved. That grants a child nothing
+# new — it can delete that pin in the same mailbox directly.
 shipyard_launched_into_other_container() {
   local mb now be wt slot f rec c cl lrc out="" TAB
   TAB=$(printf '\t')
@@ -556,10 +554,11 @@ shipyard_container_remedy() {
 # ONE MAILBOX RUNS ONE BACKEND AT A TIME. Its pins cannot tell two live fleets from one fleet and a
 # failed probe, so a launch is refused whether the other backend came from `auto` or was asked for
 # explicitly, and the wording says which of the two this was. Both pins present is refused too
-# (#132): one of them is stale and nothing on disk says which, so the wording sends the operator to
-# find the live fleet first. A stale pin is cleared only in the order below: a pin removed while
-# its fleet is live is #61 again. What this still cannot offer is a way out when the pinned backend
-# can no longer answer at all — step 1 needs it to — which #132 keeps open.
+# (#132): one of them is stale and nothing on disk says which, so that branch prints its own order
+# — down under the backend believed stale clears that backend's pin alone — and returns before the
+# single-pin order. Either way a stale pin is cleared only in the order printed: a pin removed
+# while its fleet is live is #61 again. What this still cannot offer is a way out when the pinned
+# backend can no longer answer at all — step 1 needs it to — which #132 keeps open.
 shipyard_elsewhere_remedy() {
   local pin now d mb
   pin=$(shipyard_backend_pinned_elsewhere) || pin=""

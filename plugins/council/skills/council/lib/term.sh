@@ -77,6 +77,7 @@ ct_absence_class() { _ct_pin_dir; drv_absence_class "$1" "${2:-}" "${3:-}"; }
 # would be told the room is pinned elsewhere and then given NO backend to pin, the line omitted
 # entirely rather than printed empty.
 ct_pins_elsewhere() { _ct_pin_dir; drv_pins_elsewhere; }
+ct_both_pinned()    { _ct_pin_dir; drv_both_pinned; }
 ct_pin()            { _ct_pin_dir; drv_pin; }
 ct_handles()        { drv_handles; }
 

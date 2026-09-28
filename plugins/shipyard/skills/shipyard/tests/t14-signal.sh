@@ -615,7 +615,7 @@ ok "6g: no worktree -> the record is not read"                      "|0"        
 # with the watcher sweep replaced by a marker so a call to it is visible.
 printf '\n── 7. both pins, last-slot cleanup ──\n'
 BMB="$T14TMP/both-mb"; mkdir -p "$BMB"
-cleanup_in() { # <resolved backend> <enum rc> <slots> -> "<status>|<pins left>|<stop_all called?>"
+cleanup_in() { # <resolved backend> <enum rc> <slots> [<fake-def>] -> "<status>|<pins left>|<stop_all or prune called?>"
   local st=0
   rm -f "$BMB/stop-called"
   ( cd "$CR" || exit 99
@@ -623,8 +623,9 @@ cleanup_in() { # <resolved backend> <enum rc> <slots> -> "<status>|<pins left>|<
     . "$SKILL_DIR/shipyard-backend.sh" >/dev/null 2>&1
     . "$SKILL_DIR/shipyard-continuity.sh" >/dev/null 2>&1
     DRV_CONTAINER_PIN_DIR="$BMB"
+    eval "${4:-:}"
     shipyard_continuity_stop_all() { : >"$BMB/stop-called"; }
-    shipyard_container_prune() { :; }
+    shipyard_container_prune() { : >"$BMB/stop-called"; }
     shipyard_continuity_cleanup_last_slot "$2" "$3" ) || st=$?
   printf '%s|%s|%s' "$st" "$(ls -1 "$BMB" | grep '^container-' | tr '\n' ' ' | sed 's/ $//')" \
     "$([ -e "$BMB/stop-called" ] && echo yes || echo no)"
@@ -650,6 +651,24 @@ out=$( export SHIPYARD_BACKEND=tmux; . "$SKILL_DIR/shipyard-backend.sh" >/dev/nu
 ok "7f: the both-pinned remedy says one pin is stale"          yes "$(has "$out" 'so one pin is stale')"
 ok "7f: ...names down as the way to clear it"                  yes "$(has "$out" "clears <b>'s pin alone")"
 ok "7f: ...and does not demand a report with no NO SIGNAL"     no  "$(has "$out" 'print no NO SIGNAL')"
+# 7g: the one guard between status 4 and a live fleet under an overridden container — a launch
+# record on this backend naming a container that still lists the slot blocks the clear.
+git -C "$CR" worktree add -q "$CR/.claude/worktrees/ship-c7" c7 2>/dev/null
+jq -n '{id:"launch-c7", slot:"c7", kind:"launch", status:"info", backend:"tmux", container:"old-sess"}' \
+  >"$BMB/launch-c7.json"
+printf 'new-sess\n' >"$BMB/container-tmux"
+ok "7g: both pinned, but a live slot recorded in another container -> nothing cleared" \
+   "2|container-agterm container-tmux|no" "$(cleanup_in tmux 0 "" "$TM_OLD_LISTS")"
+rm -f "$BMB/launch-c7.json"
+git -C "$CR" worktree remove --force "$CR/.claude/worktrees/ship-c7" 2>/dev/null
+# 7h: the per-slot refusal (tell, compact, down) gives the both-pinned order, not "pin the other",
+# which would only move the refusal there.
+out=$( cd "$CR" || exit 99; export SHIPYARD_BACKEND=tmux
+       . "$SKILL_DIR/shipyard-backend.sh" >/dev/null 2>&1; DRV_CONTAINER_PIN_DIR="$BMB"; eval "$TM_OLD_EMPTY"
+       shipyard_absence_report c7 2>&1 ); rc=$?
+ok "7h: both pinned: the per-slot report refuses (rc 1)"   1   "$rc"
+ok "7h: ...with the both-pinned order"                     yes "$(has "$out" 'so one pin is stale')"
+ok "7h: ...and not the looping pin-the-other"              no  "$(has "$out" 'Pin it for this shell')"
 rm -f "$BMB"/container-*
 
 if [ "$FAILURES" -eq 0 ]; then

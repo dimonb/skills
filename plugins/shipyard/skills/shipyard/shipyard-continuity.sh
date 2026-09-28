@@ -1230,6 +1230,9 @@ shipyard_continuity_stop_all() {
 # so a later blip resolving this backend still reads `elsewhere` (#61's guard). Watchers are NOT
 # stopped, because `shipyard_continuity_stop_all` is mailbox-wide and would stop a live fleet's on
 # the other backend, and the container is not pruned: neither is needed to prove the pin stale.
+# The route that bypasses the proof is the one the ordinary cleanup below already has: a child that
+# rewrites this backend's pin to name an empty container and deletes the launch records makes a
+# live fleet's backend read empty. Nothing here closes that; the pin file is peer-writable.
 shipyard_continuity_cleanup_last_slot() {
   local enumeration_status="$1" slots="$2" sig TAB
   TAB=$(printf '\t')

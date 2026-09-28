@@ -222,6 +222,13 @@ verified, or a slot remains — and is never removed by hand; the one exception 
 is a teardown whose only warning was a continuity watcher it could not stop. Never remove a pin
 while its fleet may be live. A dry run writes no pin.
 
+**Both backends pinned is refused too** (#132): one of the two is stale and nothing on disk says
+which, so the report prints `NO SIGNAL` under either backend and the order above cannot complete.
+The refusal then prints its own order instead (`shipyard_elsewhere_remedy`): under the backend you
+believe stale, the report must list no `ship-*` terminal, and `shipyard-down.sh` under it clears
+**that backend's pin alone** once it has answered with no slot — the other pin, every watcher and
+the container are left, and down says so in a notice (its last-slot cleanup's status 4).
+
 **The admission gate — refuse a launch this machine cannot take.** Before it creates any
 worktree or terminal, `shipyard-launch.sh` runs two cheap checks, because an uncapped fleet
 once drove a 16 GB machine into swap until macOS recycled the whole GUI session:
@@ -823,7 +830,7 @@ Three limits, because a guarantee is worth only what it actually covers:
 * **The pin half is a *disagreement* check.** A pin deleted by hand (the escape hatch above)
   leaves nothing to disagree with, and that half is silent; exit 3 then rests on the other two.
   Both pins present is a disagreement whichever backend resolved (#132): a mailbox runs one
-  backend at a time, so one of them is stale, and the refusal says to find the live fleet first.
+  backend at a time, so one of them is stale, and the refusal prints the order that clears it.
   The launch records add a `container` class: a slot whose worktree still exists, launched on
   this backend into a container other than the one this run resolved, and still listed there —
   or unanswerable there — refuses too.
@@ -1333,7 +1340,9 @@ correct follow-up; keep `-d` for a CLOSE, where nothing has been proven containe
 Removing the last slot also asks every token-matched parent continuity watcher to stop itself
 and removes its live mailbox records, but only after a successful, structurally valid backend
 query proves that no slot remains — on the backend the fleet was launched on: an empty answer from
-the other one (the pin names a different backend) proves nothing and preserves everything. A
+the other one (the pin names a different backend) proves nothing and preserves everything — except
+when both backends are pinned, where it proves this backend's own pin stale and clears that pin
+alone, leaving the watchers and the other pin (see *One mailbox runs one backend at a time*). A
 small admission generation remains so a start already in flight cannot publish a watcher after
 teardown returns. An unreadable backend or unacknowledged
 watcher preserves lifecycle state instead of signaling an unverified PID. A later shipyard run

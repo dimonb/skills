@@ -627,8 +627,8 @@ drv_handles() {
 # the other one, #280), so two pins mean one of them is stale and nothing here can say which. The
 # answer is the refusal, naming the other backend. The way out is each caller's: shipyard's
 # last-slot teardown clears the resolved backend's own pin once that backend answered with no slot
-# (`shipyard_continuity_cleanup_last_slot`); council has no pin-clearing verb and its remedy names
-# the stale file to remove by hand. `_drv_launch` pins only after a launch succeeds, so a launch
+# (`shipyard_continuity_cleanup_last_slot`); in council no verb clears a pin while this verdict
+# stands (`down --purge` is refused on it), and its remedy names the stale file to remove by hand. `_drv_launch` pins only after a launch succeeds, so a launch
 # that failed on a backend that was down does not create the second pin.
 drv_pins_elsewhere() {
   local d b now other=""
@@ -642,6 +642,14 @@ drv_pins_elsewhere() {
   done
   [ -n "$other" ] || return 1      # no pin, or only the resolved backend's — no disagreement
   printf '%s' "$other"
+}
+
+# drv_both_pinned — 0 when the pin directory holds the resolved backend's pin AND another one: the
+# state in which each caller's `elsewhere` remedy must say "one pin is stale" rather than "pin the
+# other". "Pinned" is the pin FILE existing, the test `drv_pins_elsewhere` applies to the other.
+drv_both_pinned() {
+  local f
+  drv_pins_elsewhere >/dev/null && f=$(_drv_pin_file 2>/dev/null) && [ -f "$f" ]
 }
 
 # drv_absence_class <enum-rc> [<enum-output> <session-name>] — the verdict.
