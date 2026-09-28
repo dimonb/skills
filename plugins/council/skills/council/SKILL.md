@@ -319,13 +319,14 @@ closing its own terminal. A reap written inline races the process that began it.
 already runs in its own process group, already holds the room's roster, and already closes every
 participant terminal and exits — that is what `up --hold` uses when its owner dies — so this is a
 fourth trigger on machinery that already existed rather than a second teardown path. It is a
-**request**: the keeper polls, so the terminals go within one poll rather than at once. The poll
-period is `COUNCIL_KEEPER_POLL_INTERVAL`; its default is set where `_keeper_ensure` in
+**request**: the keeper polls, so the terminals go within one poll rather than at once. That is
+the right side to err on. The close announcement rings every seat first, so each learns now rather
+than at its own timeout, and closing the terminals ahead of it would leave it ringing nobody.
+
+The poll period is `COUNCIL_KEEPER_POLL_INTERVAL`; its default is set where `_keeper_ensure` in
 `lib/up.sh` reads it, and an unusable value falls back to that default and says so on stderr.
 That read happens when a keeper starts, so setting the knob changes the next keeper to start, not
-one already running. That is the right side to err on. The close announcement rings every seat first, so
-each learns now rather than at its own timeout, and closing the terminals ahead of it would leave
-it ringing nobody.
+one already running.
 
 Three consequences worth knowing:
 
