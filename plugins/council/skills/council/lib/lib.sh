@@ -726,9 +726,16 @@ c_send() {
         --argjson round "$round" \
     '{id:$id,from:$from,lamport:$lam,deps:$deps,act:$act,refs:$refs,to:$to,
       hand:$hand,turn:$turn,round:$round,text:$text,created_at:$at,sent_ms:$ms}' | c_atomic "$f" || return 1
-  # my own counters — only I write them, so no ordering hazard with the message file
-  printf '%s' "$seq" | c_atomic "$ROOM/state/$ME.seq"
-  printf '%s' "$lam" | c_atomic "$ROOM/state/$ME.lamport"
+  # my own counters — only I write them, so no ordering hazard with the message file.
+  # CHECKED, because the message is already on the lane and the seq counter is what numbers the
+  # next one: a counter left behind makes the next send compute this same seq and overwrite this
+  # message with a perfectly valid file, which no reader can detect (#169). No id on stdout then —
+  # a caller reads an id there as a message that will stay.
+  { printf '%s' "$seq" | c_atomic "$ROOM/state/$ME.seq" \
+      && printf '%s' "$lam" | c_atomic "$ROOM/state/$ME.lamport"; } || {
+    echo "council: $id is on the lane, but $ROOM/state/$ME.seq or .lamport could not be written;" >&2
+    echo "         until state/ is writable again, a further send would overwrite $id" >&2
+    return 1; }
   local p
   for p in $(c_peers); do [ "$p" = "$ME" ] || c_ring "$p"; done
   printf '%s\n' "$id"

@@ -34,9 +34,11 @@ fail=0
 # (an interrupted run must not leave an untracked script inside the packaged plugin — `git
 # checkout --` cannot remove one, and `make check-test` then refuses to run at all).
 PLANT_KIND="plausible$$"
+BADSC="badturns$$"
 cleanup() {
   [ -n "${ROOM:-}" ] && kill_keeper "$ROOM/state/keeper.pid" -9
-  rm -f "$SKILL/adapters/$PLANT_KIND.sh" "$SKILL/lib/$PLANT_KIND.sh"
+  rm -f "$SKILL/adapters/$PLANT_KIND.sh" "$SKILL/lib/$PLANT_KIND.sh" "$SKILL/scenarios/$BADSC.md"
+  [ -d "$REPO/.git/council" ] && chmod 755 "$REPO/.git/council"
   rmdir "$SKILL/adapters" 2>/dev/null
   rm -rf "$ROOT"
   # Only reap the root if we made it. A root handed down by a runner is that runner's to
@@ -354,13 +356,77 @@ grep -q 'not a usable participant name' "$ROOT/bad.log" \
   || { echo "FAIL up's refusal does not name the problem; log:"; cat "$ROOT/bad.log"; fail=1; }
 [ -d "$REPO/.git/council/bad" ] && { echo "FAIL up left a room behind after refusing"; fail=1; }
 
+# --- `up` reports only what it established (#169) --------------------------------
+# A `--turns` the roster cannot hold is refused where it was typed, before any room exists.
+for t in abc 0 -3 2.5; do
+  ( cd "$REPO" && bash "$CLI" --room turns up --scenario debate --agents claude,codex --turns "$t" "x" ) \
+    >"$ROOT/turns.log" 2>&1
+  rc=$?
+  [ "$rc" = 2 ] || { echo "FAIL up accepted --turns '$t' (exit $rc)"; cat "$ROOT/turns.log"; fail=1; }
+  [ -d "$REPO/.git/council/turns" ] && { echo "FAIL up left a room behind for --turns '$t'"; fail=1; rm -rf "$REPO/.git/council/turns"; }
+done
+( cd "$REPO" && bash "$CLI" --room turns up --scenario debate --agents claude,codex --turns 007 "x" ) \
+  >"$ROOT/turns.log" 2>&1
+[ "$(jq -r '.turns_budget' "$REPO/.git/council/turns/roster.json" 2>/dev/null)" = 7 ] \
+  || { echo "FAIL up did not record --turns 007 as 7"; cat "$ROOT/turns.log"; fail=1; }
+kill_keeper "$REPO/.git/council/turns/state/keeper.pid" -9; rm -rf "$REPO/.git/council/turns"
+
+# A roster that could not be written launches nothing and says so. Reached through a scenario
+# whose own turn count is not a number; its round_deadline_ms would reach the same write.
+printf -- '---\nname: %s\nmode: token\nturns: many\nroles: [a, b]\n---\n## role: a\nx\n## role: b\nx\n' \
+  "$BADSC" > "$SKILL/scenarios/$BADSC.md"
+( cd "$REPO" && bash "$CLI" --room nroster up --scenario "$BADSC" --agents claude,codex "x" ) \
+  >"$ROOT/nroster.log" 2>&1
+rc=$?
+NR="$REPO/.git/council/nroster"
+[ "$rc" = 1 ] || { echo "FAIL up with an unwritable roster exited $rc, expected 1"; cat "$ROOT/nroster.log"; fail=1; }
+grep -q 'could not write .*roster.json; nothing was launched' "$ROOT/nroster.log" \
+  || { echo "FAIL up did not name the roster failure; log:"; cat "$ROOT/nroster.log"; fail=1; }
+grep -q 'terminals started' "$ROOT/nroster.log" && { echo "FAIL up reported terminals after a failed roster"; fail=1; }
+ls "$NR"/state/launch-*.sh >/dev/null 2>&1 && { echo "FAIL up wrote a launcher after a failed roster"; fail=1; }
+alive=1
+for _ in 1 2 3 4 5 6 7 8 9 10; do
+  ( SKILL="$SKILL"; . "$SKILL/lib/up.sh"; _keeper_live "$NR/state/keeper.pid" >/dev/null ) || { alive=0; break; }
+  sleep 0.2
+done
+[ "$alive" = 0 ] || { echo "FAIL up left the keeper running after a failed roster"; fail=1; }
+kill_keeper "$NR/state/keeper.pid" -9; rm -rf "$NR"; rm -f "$SKILL/scenarios/$BADSC.md"
+
+# A seat whose protocol could not be written is not launched. `sed` is replaced by an exported
+# FUNCTION that fails on the one program rendering claude's protocol and on nothing else — a
+# function, because council.sh prefixes PATH and a PATH shim would never be reached.
+( sed() { case "$*" in *"__ME__#claude#"*) return 1 ;; esac; command sed "$@"; }; export -f sed
+  cd "$REPO" && bash "$CLI" --room nproto up --scenario debate --agents claude,codex "x" ) \
+  >"$ROOT/nproto.log" 2>&1
+NP="$REPO/.git/council/nproto"
+grep -q 'could not write the protocol for claude' "$ROOT/nproto.log" \
+  || { echo "FAIL up did not report the missing protocol; log:"; cat "$ROOT/nproto.log"; fail=1; }
+grep -q 'not launching claude: it has no protocol' "$ROOT/nproto.log" \
+  || { echo "FAIL up did not refuse to launch the seat with no protocol; log:"; cat "$ROOT/nproto.log"; fail=1; }
+[ -e "$NP/state/launch-claude.sh" ] && { echo "FAIL up wrote a launcher for a seat with no protocol"; fail=1; }
+[ -f "$NP/state/launch-codex.sh" ] || { echo "FAIL up skipped the seat whose protocol WAS written"; fail=1; }
+kill_keeper "$NP/state/keeper.pid" -9; rm -rf "$NP"
+
 # --- `down` keeps the launch record, `down --purge` removes it -------------------
 # A plain `down` leaves the room, and the record is the evidence the next read checks that
 # teardown against; `--purge` removes the room, and a record left behind would make a later
 # hand-built room of the same name read as "a record for another room".
 run_capped 20 bash "$CLI" down
 [ -f "$LREC" ] || { echo "FAIL a plain down removed the launch record"; fail=1; }
-run_capped 20 bash "$CLI" down --purge
+# A purge that could not remove the room says so and fails (#169): with the parent read-only
+# `rm -rf` cannot unlink the room itself, and "room deleted" was printed regardless.
+chmod 555 "$REPO/.git/council"
+if [ -w "$REPO/.git/council" ]; then
+  echo "note: this user writes through a read-only dir; the failed-purge case is skipped"
+else
+  want 1 "down --purge whose rm fails" bash "$CLI" down --purge \
+    && says 'could not delete' "the failed purge does not say so"
+  no_say 'room deleted' "a failed purge still printed 'room deleted'"
+  [ -e "$ROOM" ] || { echo "FAIL the fixture did not keep the room"; fail=1; }
+fi
+chmod 755 "$REPO/.git/council"
+want 0 "down --purge" bash "$CLI" down --purge && says 'room deleted' "a purge did not report the deletion"
+[ -e "$ROOM" ] && { echo "FAIL down --purge left the room behind"; fail=1; }
 [ -e "$LREC" ] && { echo "FAIL down --purge left the launch record behind"; fail=1; }
 
 [ "$fail" = 0 ] && echo "t13 PASS" || echo "t13 FAIL"

@@ -585,5 +585,30 @@ else
   echo "ok   lane directory: this filesystem refused the fixture"
 fi
 
+# --- a send whose counters cannot be written (#169) ------------------------------
+# The lane write succeeds and the seq counter does not, so the NEXT send would compute the same
+# seq and overwrite this message with a valid file no reader can tell apart. The send must say
+# so and fail, rather than print an id at rc 0.
+fresh
+# The mode is restored from a trap as well, chained onto the helpers' handler as t26 K does: a
+# kill between the two chmods would otherwise leave a directory the run root's `rm -rf` cannot empty.
+_t9g_restore_state() { local rc=$?; chmod 755 "$R/state" 2>/dev/null; ( exit $rc ); _council_test_cleanup; }
+trap _t9g_restore_state EXIT
+chmod 555 "$R/state"
+if [ -w "$R/state" ]; then
+  echo "ok   send counters: this user writes through a read-only dir, fixture skipped"
+else
+  err="$R/../t9g-send.err"
+  out=$(COUNCIL_ME=a bash "$CLI" send --act propose "first" 2>"$err"); rc=$?
+  if [ "$rc" != 0 ] && [ -z "$out" ] && grep -q 'could not be written' "$err"; then
+    echo "ok   send counters: rc $rc, no id on stdout, the failure named"
+  else
+    echo "FAIL send counters: rc $rc, stdout '$out', stderr: $(cat "$err")"; fail=1
+  fi
+  rm -f "$err"
+fi
+chmod 755 "$R/state"
+trap _council_test_cleanup EXIT
+
 [ "$fail" = 0 ] && echo "t9g PASS" || echo "t9g FAIL"
 exit $fail
