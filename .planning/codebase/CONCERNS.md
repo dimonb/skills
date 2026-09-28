@@ -7,7 +7,7 @@ Two ~130-line agterm|tmux backends (`lib/term.sh` ↔ `shipyard-backend.sh`) are
 necessity**: Codex has no cross-plugin dependency field, so a plugin can't import another's code
 (`term.sh:9-11`, `AGENTS.md:98-102`). The files say "fix a bug here, check the other"
 (`term.sh:13`, `shipyard-backend.sh:17-18`). Drift is a live risk. Parallel functions:
-`ct_backend`↔`shipyard_backend`, `ct_launch`↔`shipyard_launch`, `ct_{type,submit,capture,kill,
+`ct_backend`↔`shipyard_backend`, `ct_launch_record` (was `ct_launch`)↔`shipyard_launch`, `ct_{type,submit,capture,kill,
 focus,target}`↔`shipyard_*`. **Unifying here needs a sharing mechanism the Codex manifest can't
 express** — the central Phase-2 question (MIG-02).
 
