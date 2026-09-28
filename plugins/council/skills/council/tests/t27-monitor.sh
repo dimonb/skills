@@ -535,6 +535,25 @@ ok "...and alarms, saying the roster no longer lists it" 1 "$(printf '%s' "$out"
 mv "$R3/roster.bak" "$R3/roster.json"
 sessions_none
 
+# 9c-quinquies. ANOTHER REPO, THE SAME ROOM NAME. Session names carry no repo, so a room of the same
+#     scenario elsewhere on the backend lists sessions with exactly this room's names, in its own
+#     container. A genuine teardown here must still read gone, and a seat nothing was launched for
+#     must still read never-launched, not unknown because of somebody else's terminals.
+for p in a b c; do printf 'h-other-%s\tother-repo\tcouncil-%s-%s\n' "$p" "$RN" "$p"; done > "$HANDLES"
+printf '0\n' > "$SESSIONS_RC"
+ok "a torn-down room beside another repo's same-named room is 0/3" "0/3" "$(bash "$SCLI" terminals 2>/dev/null)"
+out=$(bash "$SCLI" status --alarms-only 2>/dev/null)
+ok "...and raises no could-not-tell alarm"              0 "$(printf '%s' "$out" | grep -c 'could not be determined')"
+record_launch "$R3" --unlaunched a
+ok "...and a seat nothing was launched for still reads absent" "0/3" "$(bash "$SCLI" terminals 2>/dev/null)"
+record_launch "$R3"
+# Scoping the search to the pin opens nothing: a retargeted pin still reads unknown, because the
+# pin and the recorded container disagree before any name is searched.
+printf 'other-repo\n' > "$R3/state/container-tmux"
+ok "...while a pin retargeted at that other room is still ?" "?" "$(bash "$SCLI" terminals 2>/dev/null)"
+printf 'fake-container\n' > "$R3/state/container-tmux"
+sessions_none
+
 # 9c-quater. CONTROL BYTES IN A QUOTED VALUE. The alarm quotes the pin, and a pin is a file a seat
 #     writes. Cursor-control bytes in it must not reach the one-line alarms output, where they
 #     could erase the line on a terminal, and the alarm must still say what it read.

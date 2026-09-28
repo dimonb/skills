@@ -149,7 +149,7 @@ ct_launch_record() {
 # mismatch is unknown. Trusting the recorded name let ONE write to the record alone make a live seat
 # read gone: rename the entry and give it a handle nobody holds, and nothing matched by handle or by
 # name. It also let a dead seat's entry copy a live seat's handle, container and name and read live.
-# The same-name search that follows runs over the whole backend for the same reason: scoped to the
+# The same-name search that follows is scoped to the PIN for the same reason: scoped to the
 # recorded container, `launched: false` plus another container hid the live session from it.
 # lib/launch-record.sh lists what holds a record edit to `unknown`, and what it does not cover.
 ct_seat_verdicts() {
@@ -169,11 +169,15 @@ ct_seat_verdicts() {
       elif $s.backend != $be then ["unknown", "this seat was launched on \($s.backend), and this run resolved \($be)"]
       elif $s.name != $want then ["unknown", "the launch record names \($s.name) for this seat, and its session is named \($want)"]
       else
-        # The name of the seat is searched across the WHOLE backend, never inside the container the
+        # The name of the seat is searched in the container the ROOM PIN names, never the one the
         # record names: the record alone decides that container, and a `launched: false` entry is
         # not checked against the pin, so scoping this search to it let one record write
-        # (`launched: false` plus any other container) make a live seat read absent.
-        ([$hs[] | select(.n == $want)]) as $byname
+        # (`launched: false` plus any other container) make a live seat read absent. Nor across the
+        # whole backend: session names carry no repo, so another repo running a room of the same
+        # name made a genuine teardown here read unknown. Only with no pin at all is the whole
+        # backend searched. A launched seat with a retargeted pin never reaches this search: the
+        # pin and recorded container disagree first, and that alone reads unknown.
+        ([$hs[] | select(.n == $want and ($pin == "" or .c == $pin))]) as $byname
         | if $s.launched != true then
             (if ($byname | length) > 0
              then ["unknown", "nothing was launched for this seat, yet a session named \($want) is listed"]

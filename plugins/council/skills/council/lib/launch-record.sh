@@ -27,18 +27,25 @@
 # foreign. `down` leaves the record in place, and `down --purge` removes it with the room.
 #
 # ACCIDENT-GRADE, like the rest of #204. The mailbox is as writable by a seat as the room is, so
-# this raises what a forgery costs and does not prevent one. The routes that remain: a coordinated
-# edit of the pin and the record together, and manipulating the backend itself (a session created
-# with a recycled tmux window id AND the recorded container and name). What it does close is the
-# single write: retargeting the pin, deleting it, planting a same-named session, dropping a seat
+# this raises what a forgery costs and does not prevent one. The routes that remain take two
+# coordinated writes, or a write and a backend action, and are listed below. What it does close is
+# the single write: retargeting the pin, deleting it, planting a same-named session, dropping a seat
 # from the roster, or editing the record on its own now reads UNKNOWN rather than healthy. For the
-# record, four things in `ct_seat_verdicts` and `_room_terminals` hold that together, and each was
-# added after a review found the one-write route it closes: a launched entry's container must match
-# the pin; every entry's name must be the peer's own session name; that name is searched across the
-# whole backend, so no field of the record can hide the live session from it; and every seat the
-# record holds must still be in the roster. What a record edit can still do is make a seat read
-# unknown, which alarms. Checked one field at a time; a combination with the pin or the backend is
-# the residual above.
+# record, four things in `ct_seat_verdicts` and `_room_terminals` hold that together, three of them
+# added after a review found the one-write route each closes: a launched entry's container must
+# match the pin; every entry's name must be the peer's own session name; that name is searched in
+# the container the PIN names, so no field of the record can move the search away from the live
+# session; and every seat the record holds must still be in the roster. What a record edit can
+# still do is make a seat read unknown, which alarms. Checked one field at a time.
+#
+# THE TWO-WRITE ROUTES THAT REMAIN, named because a guard whose limits are undocumented gets trusted
+# past them:
+#   * dropping a live seat from the roster AND from the record: it is then neither counted nor
+#     missed, and a closed room whose other seats are gone reads 0 of N and does not alarm;
+#   * retargeting the pin AND the record's container at another container holding a session with
+#     the seat's name (another repo's room of the same name, say): a dead seat can then read live;
+#   * a backend session created with a recycled handle (tmux ids restart with the server) in the
+#     recorded container with the seat's name, which makes a dead seat read live.
 #
 # SCOPE. The readers that use it are `_room_terminals` (the closed-room alarm's count, and the
 # `terminals` verb behind `rooms`' term column) and `_seat_liveness`.

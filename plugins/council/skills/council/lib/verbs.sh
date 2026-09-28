@@ -925,9 +925,9 @@ _term_ensure() {
 #     any launcher remains. With the pin, every launcher AND the record all gone, this is rc 1 and a
 #     block line. That is the residue: it takes three kinds of write, and each is a file a
 #     supervisor can see is missing.
-#   * a coordinated edit of the record and the pin together, or a backend session created with a
-#     recycled handle and the recorded container and name, is not caught. Those are the residual
-#     routes launch-record.sh names.
+#   * the two-write routes launch-record.sh lists are not caught. One of them silences this alarm
+#     outright: dropping a live seat from the roster AND the record. The others make a dead seat
+#     read live.
 #
 # The record is read before term.sh is sourced, so a room with nothing to count never resolves a
 # backend. Once there is a record to check, this sources term.sh in its own subshell, like
@@ -1047,8 +1047,8 @@ v_terminals() {
 # EVIDENCE, NOT A VERDICT, and the strings say so. The record is in the mailbox, which a seat can
 # write as easily as the room, so what this returns is what a live seat and a dead seat LOOK
 # LIKE, for an operator to check, never authority to relaunch on. It is harder to forge than the
-# name it replaced, which took one `tmux new-window`: a record edit on its own now reads unknown,
-# so a forgery needs the record and the pin, or the record and the backend, together.
+# name it replaced, which took one `tmux new-window`: a record edit on its own now reads unknown.
+# The two-write routes that still get past it are listed in lib/launch-record.sh.
 _seat_liveness() { # <peer>
   local peer="${1:-}" rec hl hrc=0 out v w TAB
   [ -n "$peer" ] || return 1
