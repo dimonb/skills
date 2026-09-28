@@ -14,8 +14,9 @@
 # `ct_record_launch` in term.sh, and the verdict is `ct_seat_verdicts` beside it.
 #
 # WHERE: `<mailbox>/council-launch-<room>`, beside `status`' signature (`_status_sigfile`), so it is
-# outside the room and survives `down`. It has no `.json` suffix so the mailbox's escalation
-# readers, which glob `*.json`, never see it. It is written only through `policy_mailbox_write`, so
+# outside the room and survives `down` (for a supervised room; an ad hoc room's mailbox is
+# `<room>/mailbox/`, council.sh #178, so there the record is inside the room). It has no `.json`
+# suffix so the mailbox's escalation readers, which glob `*.json`, never see it. It is written only through `policy_mailbox_write`, so
 # a FIFO planted at the path cannot block `up` or `relaunch`. The READ is `[ -f ]`-gated, with the
 # usual window between the check and the open: the FIFO read residual #204 names.
 #

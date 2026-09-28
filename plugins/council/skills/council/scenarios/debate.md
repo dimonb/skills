@@ -12,9 +12,10 @@ table straight away (`--act propose`) — not a list of options, because options
 room handles through objections. The first lap runs as a barrier: write without waiting for
 your turn, and do not expect to see anyone else's position before everyone has spoken.
 
-After that your job is closing objections: with an amendment (`amend` referencing the
-objection), with an argument (then the objector concedes), or by yielding (`concede` — the
-proposal falls, and that is a normal outcome, not a defeat).
+After that your job is closing objections: with an amendment (`amend` of the proposal the
+objection was raised against, referencing the objection), with an argument (then the objector
+concedes), or by yielding (`concede` — the proposal falls, and that is a normal outcome, not a
+defeat).
 
 Once the round completes there will be one position per participant on the table. Your job is
 then to reduce them to one: take what you recognise as someone else's and better into an

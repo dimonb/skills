@@ -68,6 +68,8 @@ council.sh <verb> [options]
                                                        in an open round: exit 5 = you already
                                                        posted, wait; exit 7 = that act is not a
                                                        position, re-send with --act propose
+                                                       exit 8 = the room is closed, nothing was
+                                                       sent: read `decision` and stop
     floor                                              who holds it, who is next, how long it
                                                        has been held and the room's turn
                                                        deadline (both in milliseconds)
@@ -183,6 +185,55 @@ if [ "$VERB" = rooms ]; then . "$SKILL/lib/up.sh"; council_rooms; exit $?; fi
 COUNCIL_ROOM=$(resolve_room) || exit 1
 export COUNCIL_ROOM
 [ -d "$COUNCIL_ROOM" ] || { echo "council: no such room: $COUNCIL_ROOM" >&2; exit 1; }
+
+# --- where this room's supervision writes go (#178) -----------------------------
+# A room is SUPERVISED when it sits where `up` puts every room: directly inside `council/` in a git
+# dir (room_base). `up` has no way to place a room anywhere else, so that location is the signal
+# that the room was launched as a real one. The test reads the room's own physical path and
+# nothing else: not the caller's cwd, which a supervisor in another checkout would change, and not
+# a roster field, which any seat could delete to take its room's escalations off the supervisor's
+# screen.
+#
+# A supervised room resolves its mailbox EXACTLY as before this check existed, through
+# `policy_mailbox_dir`. So no real room stops pushing, whatever directory the command runs from.
+#
+# Every other room is ad hoc: one a probe or a review subagent built by hand under a scratchpad or
+# a temp dir and reached through COUNCIL_ROOM. Its writes to the mailbox land in the room itself,
+# `<room>/mailbox/`: the unresolved-close notice, the stall pushes, the launch record, `status`'s
+# signature and `say`'s record. Before this, all of them went into the real supervision mailbox of
+# whatever repo the caller stood in. That mailbox showed "closed unresolved, a human should look"
+# for rooms that were test fixtures, and a supervisor had to delete each entry by hand.
+#
+# An explicit POLICY_MAILBOX_DIR still wins in both cases. The suite sets it that way, and it is how
+# an operator who deliberately runs a real room outside `room_base` keeps its escalations reaching
+# a supervisor. It is exported so the processes this one starts (a keeper, a relaunched seat's
+# launcher) inherit the same answer.
+#
+# The git dir is named to git explicitly (`--git-dir`), never discovered from it with `-C`, and
+# with the caller's GIT_* location variables cleared. Discovery is refused for a bare repository
+# under `safe.bareRepository=explicit` (the common dir of a bare-repo-with-worktrees layout), an
+# inherited GIT_DIR answers about some other repository, and a `.git` file planted inside the git
+# dir redirects discovery. Each of those made a room `up` had created read as ad hoc, so its
+# escalations stopped reaching the supervisor. What remains is any write INSIDE the git dir, the
+# same reach that could delete the mailbox outright. Measured examples: replacing `council/` or a
+# room directory with a symlink (the physical path moves, so the room reads ad hoc); a `commondir`
+# file naming another repository (git then reports that as the common dir, and it is not $gd);
+# and breaking the repo's config or HEAD, which also breaks git for everyone and so shows itself.
+_room_is_supervised() {
+  local r parent gd common
+  r=$(cd "$1" 2>/dev/null && pwd -P) || return 1
+  parent=$(dirname "$r")
+  [ "$(basename "$parent")" = council ] || return 1
+  gd=$(dirname "$parent")
+  common=$(env -u GIT_DIR -u GIT_WORK_TREE -u GIT_COMMON_DIR \
+             git --git-dir="$gd" rev-parse --git-common-dir 2>/dev/null) || return 1
+  case "$common" in /*) ;; *) common="$gd/$common" ;; esac
+  [ "$(cd "$common" 2>/dev/null && pwd -P)" = "$gd" ]
+}
+if [ -z "${POLICY_MAILBOX_DIR:-}" ] && ! _room_is_supervised "$COUNCIL_ROOM"; then
+  POLICY_MAILBOX_DIR="$(cd "$COUNCIL_ROOM" && pwd -P)/mailbox"
+  export POLICY_MAILBOX_DIR
+fi
 . "$SKILL/lib/lib.sh"
 
 need_me() { [ -n "${COUNCIL_ME:-}" ] || { echo "council: who are you? set COUNCIL_ME or --me <peer>" >&2; exit 2; }; }
@@ -199,8 +250,9 @@ case "$VERB" in
   claims) . "$SKILL/lib/verbs.sh"; v_claims "$@" ;;
   verdict) . "$SKILL/lib/verbs.sh"; v_verdict "$@" ;;
   # `status` is a reading verb that also WRITES on one path: a floor held past the stall threshold
-  # pushes a de-duplicated notice into the shared escalation mailbox, under the key of whichever
-  # tier it reached (see _stall_escalate). It asks such a seat's terminal what it is doing, through
+  # pushes a de-duplicated notice into the room's escalation mailbox (the shared one for a
+  # supervised room, see #178 above), under the key of whichever tier it reached (see
+  # _stall_escalate). It asks such a seat's terminal what it is doing, through
   # the two shared modules that already answer that for shipyard — lib/policy.sh for the
   # disposition, the operator sentence and the mailbox, lib/agent-adapters.sh for what a client
   # renders, which kinds that read is evidenced for, and whether a turn is in flight.

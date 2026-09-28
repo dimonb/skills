@@ -303,7 +303,11 @@ grep -q "SECRET-B-TEXT" "$R6/board/decision.md" 2>/dev/null \
 # takes: `a`'s own position is not enough, because the barrier counts POSITIONS and b's lane
 # holds a `msg` -- b has to state one. Writing this control is what established that; the first
 # version asserted release after a's post alone and reds, correctly.
-COUNCIL_ME=b bash "$CLI" send --act propose "b's real position" >/dev/null 2>&1
+#
+# The positive control above force-closed this room, and a closed room refuses a position (#176,
+# exit 8). So b's position goes straight onto its lane, as the fixture's first message did. The
+# barrier and `recv` read the lanes and not the record, so this is the same control it always was.
+raw_round0 b 2 6 propose "$(now_ms)" "b's real position"
 [ "$(barrier a)" = closed ] || bad "the control's round did not close, so it proves nothing"
 back=$(COUNCIL_ME=a bash "$CLI" recv --peek 2>/dev/null | grep -c "SECRET-B-TEXT" || true)
 [ "$back" -ge 1 ] && ok "...and once the round closes the same reader does release it" \

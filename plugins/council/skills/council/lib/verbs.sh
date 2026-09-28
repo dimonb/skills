@@ -191,13 +191,33 @@ _render_transcript() {
 
 v_transcript() { c_visible | _render_transcript; }
 
-_graph_of() { jq -s -f "$SKILL/lib/claims.jq"; }
+# _graph_of [<closed-over json>] — the argument graph of the messages on stdin. The argument is the
+# snapshot `decide` wrote (see _closed_over and claims.jq), or `null` for a graph over everything.
+_graph_of() { jq -s --argjson closed "${1:-null}" -f "$SKILL/lib/claims.jq"; }
+# The snapshot of a CLOSED room: the (from, id) pairs its record was written from, `board/closed-over`
+# (#176). It prints `null`, meaning the graph covers the whole log as it always did, in three cases:
+# the room is open; its record predates snapshots; or the file is not the shape `decide` writes.
+# An unreadable snapshot therefore costs the late/in-record split, and nothing else.
+_closed_over() {
+  local v
+  [ -n "$(c_recorded_status)" ] || { printf null; return; }
+  # `.id` may be any JSON value: it is the message's own claim, which nothing normalises
+  # (C_UNTRUSTED leaves it alone), and claims.jq compares it by equality, which is total over JSON.
+  # Demanding a string would let one odd id void the whole snapshot.
+  # Slurped, so a file holding several documents is refused as one value rather than printed as
+  # several, which `--argjson` would reject and take the whole graph down with it.
+  v=$(jq -s -c 'if length == 1 and (.[0] | type) == "array"
+                   and all(.[0][]; type == "object" and (.from | type) == "string" and has("id"))
+                then .[0] else null end' "$ROOM/board/closed-over" 2>/dev/null)
+  printf '%s' "${v:-null}"
+}
 # The whole room. `verdict` reports the room's state and `decide` writes its record, and
-# neither is a function of who is asking.
-_graph() { c_canon | _graph_of; }
+# neither is a function of who is asking. For a closed room it is the graph the record was written
+# from, plus the late claims beside it.
+_graph() { local co; co=$(_closed_over); c_canon | _graph_of "$co"; }
 # What the asker may see. `claims` and the display half of `status` render proposal and
 # objection TEXT, which is precisely what an open barrier round withholds.
-_graph_seen() { c_visible | _graph_of; }
+_graph_seen() { local co; co=$(_closed_over); c_visible | _graph_of "$co"; }
 
 v_claims() {
   local g; g=$(_graph_seen) || return 1
@@ -242,6 +262,14 @@ v_claims() {
             then "  · dropped with its proposal: \(.id) (\(.from)): \(.text)"
             else "  ✗ OPEN \(.id) (\(.from)): \(.text)" end )
       , "" ),
+    # A claim made after the close, or racing it (#176). It is in the log and not in the record,
+    # so it is neither open nor closed, and it is not counted below. It is still PRINTED: this
+    # section is what keeps the snapshot from hiding a claim on the ordinary paths (claims.jq
+    # says which, and names the forgery routes it does not cover).
+    (if (.late|length) > 0
+     then "after the close, or outside the snapshot of the record — in the log, counted nowhere:",
+          (.late[] | "  ⊘ \(.id) (\(.from)) \(.act): \(.text)"), ""
+     else empty end),
     "open objections: \(.open|length)"'
 }
 
@@ -659,7 +687,8 @@ _floor_wait_state() {
 }
 
 # _stall_escalate <peer> <turns> <held-seconds> <tier> [annotation] — push one notice into the
-# shared mailbox for a room whose floor has been held past a tier. Best-effort: it can never fail
+# room's mailbox (the shared one for a supervised room; council.sh, #178) for a room whose floor
+# has been held past a tier. Best-effort: it can never fail
 # the status block that called it.
 #
 # `<tier>` is one of the names the `case` in the body accepts, and it is the SAME event's
@@ -1131,6 +1160,9 @@ _floor_no_agent() { # <peer>
 # buy itself silence on the one display a supervisor is told to watch. It lives in the shared
 # escalation mailbox instead, beside the signature shipyard's own reporter keeps there
 # (`report-sig`), which is in the git common dir and so resolves the same from every worktree.
+# That is a SUPERVISED room. An ad hoc room's mailbox is `<room>/mailbox/` (council.sh, #178), so
+# for it this file IS inside the room. That is accepted: no monitor reads an ad hoc room, and the
+# shared mailbox is no less seat-writable anyway (SKILL.md, "The trust contract").
 # A room whose mailbox cannot be resolved gets no filter at all rather than a forgeable one:
 # `--only-changed` then prints every tick, which is the safe direction.
 _status_sigfile() {
@@ -1886,8 +1918,12 @@ v_status() {
     [ -n "$quiet_line" ] && printf '%s\n' "$quiet_line"
     [ -n "$round_line" ] && printf '%s\n' "$round_line"
     printf '%s' "$g" | jq -r '
-      if (.live|length) == 0 then "on the table: nothing" else (.live[] | "on the table: \(.id) from \(.from) — \(.current_text[0:90])") end,
-      (if (.open|length) > 0 then (.open[] | "  ✗ OPEN \(.id) (\(.from)): \(.text[0:90])") else "  no open objections" end)'
+      if (.live|length) == 0 then "on the table: nothing" else (.live[] | "on the table: \(.id) from \(.from) — \((.current_text | tostring)[0:90])") end,
+      (if (.open|length) > 0 then (.open[] | "  ✗ OPEN \(.id) (\(.from)): \((.text | tostring)[0:90])") else "  no open objections" end),
+      # A closed room lists what is outside the snapshot of its record (#176). The watched output
+      # is this block, not `claims`, so a claim the snapshot leaves out is shown here too, rather
+      # than quietly dropping out of the OPEN lines it would have occupied before.
+      (.late[]? | "  ⊘ not in the record: \(.id) (\(.from)) \(.act): \((.text | tostring)[0:90]) (council.sh claims)")'
     printf 'alarms:%s\n' "${alarms:- —}"
     printf 'last messages:\n'
     v_transcript | tail -3 | sed 's/^/  /'
@@ -2113,7 +2149,13 @@ v_decide() {
     echo "council decide: another seat has round-0 traffic being withheld from you and you have posted nothing — refusing to close a round you have not taken part in, because the record is written from the whole log and would hand you what the barrier is holding back. Post your position first (--act propose); that stands this refusal down at once. Once any position exists the round also closes on its own past its deadline — but with no position anywhere the deadline never starts, so waiting alone will not clear this." >&2
     return 2
   fi
-  g=$(_graph) && [ -n "$g" ] || {
+  # ONE READ OF THE LOG feeds the graph, the transcript and the snapshot below (#176), so all three
+  # describe the same messages. Two reads let a message landing between them appear in the
+  # transcript while the Objections section said there were none. The graph is built over
+  # EVERYTHING (`null`, never this room's old snapshot): `decide --force` on a room already recorded
+  # `unresolved` rewrites the record, and the rewrite takes in whatever arrived after the first close.
+  local canon; canon=$(c_canon)
+  g=$(printf '%s\n' "$canon" | _graph_of null) && [ -n "$g" ] || {
     echo "council decide: this room's argument graph could not be computed — refusing to write a record. The error above says what could not be read." >&2
     return 1
   }
@@ -2202,7 +2244,7 @@ v_decide() {
     # whose strings C_UNTRUSTED type-checks but nothing checks for content (claims.jq only
     # compares them against message ids) -- so a CR in a ref ended the item early and put the
     # rest of it at column zero.
-    c_canon | _render_transcript \
+    printf '%s\n' "$canon" | _render_transcript \
       | awk '{ sub(/\r$/, ""); n = split($0, a, "\r"); if (n == 0) { print "* "; next }
                for (i = 1; i <= n; i++) print "* " a[i] }'
     if [ -f "$ROOM/agenda.md" ] && _agenda_is_long "$ROOM/agenda.md"; then
@@ -2237,6 +2279,20 @@ v_decide() {
   # --force` on an already-unresolved room rewrites the record idempotently; the escalation must
   # be idempotent too, or N re-forces would accrue N notices in the mailbox.
   local prev_status; prev_status=$(cat "$ROOM/board/status" 2>/dev/null || true)
+  # THE SNAPSHOT: which messages this record was written from (#176), as (from, id) pairs taken
+  # from the same read as the record. Readers of a closed room build their graph from these and
+  # list every later claim apart from it, so an objection that raced the close is shown as
+  # "after the close" and is never counted OPEN against a record that does not contain it.
+  #
+  # Written BEFORE board/status, because the status word is what makes a reader consult the
+  # snapshot. The old one is removed first, so a failed rewrite leaves no snapshot rather than a
+  # stale one. With no snapshot a reader counts the whole log, which is how every room behaved
+  # before this file existed. That is why a failure here warns and does not refuse the close: it
+  # costs the late/in-record split and nothing the record depends on.
+  rm -f "$ROOM/board/closed-over" 2>/dev/null
+  printf '%s\n' "$canon" | jq -s -c '[ .[] | {from, id} ]' 2>/dev/null | c_atomic "$ROOM/board/closed-over" \
+    || { rm -f "$ROOM/board/closed-over" 2>/dev/null
+         echo "council decide: could not write $ROOM/board/closed-over; readers will count claims made after this close as if the record held them" >&2; }
   # And board/status is what every OTHER verb reads to know the room closed (c_recorded_status), so
   # a record with no status is a room that reads open to `verdict`, `status`, `claims` and the
   # room graph while its record sits on disk -- the same disagreement, one file over.
@@ -2245,8 +2301,9 @@ v_decide() {
     return 1
   }
   # ESC-04: an unresolved close is council's needs-human signal — the room could not converge, so
-  # a person has to look. Route it to the shared escalation mailbox (the one shipyard's reporter
-  # already reads) as a fire-and-forget notice, so a council escalation surfaces alongside ship's
+  # a person has to look. Route it to the room's escalation mailbox as a fire-and-forget notice.
+  # For a supervised room that is the shared one shipyard's reporter already reads; an ad hoc room
+  # keeps its own (council.sh, #178). So a supervised room's escalation surfaces alongside ship's
   # from any worktree. This is the ONLY push channel council has ever had; the decision record and
   # board/status remain exactly as before, so a supervisor that polls the room still works.
   # Fire only on the FIRST close that lands unresolved (prev_status != unresolved), so re-forcing

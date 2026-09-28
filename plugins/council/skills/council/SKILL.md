@@ -50,6 +50,9 @@ producing polite agreement.
   cursor/<me>/<peer>         ← ONE writer per cursor (me), by protocol
   bell/<peer>.fifo       the doorbell
   board/decision.md      the output; board/status holds decided|unresolved
+  board/closed-over      the messages the record was written from (see "A closed room"
+                         below); readers of a closed room build their graph from it
+  mailbox/               only in an AD HOC room: its escalation writes (see the trust contract)
   state/                 counters, launchers, the pinned terminal container, keeper pid,
                          `teardown` — a decided close's request that the keeper reap — and
                          `reaping`, which the keeper leaves when it starts a reap
@@ -134,7 +137,7 @@ rather than raised by a participant, and nobody owes it an answer. `c_send` enfo
 | act | meaning |
 |---|---|
 | `propose` | put something on the table |
-| `amend --refs '["<proposal>","<objection>"]'` | a revision; referencing an objection **closes** it |
+| `amend --refs '["<proposal>","<objection>"]'` | a revision; referencing an objection on the proposal it amends **closes** it |
 | `object --refs '["<id>"]'` | must name a specific id, or there is nothing to close |
 | `concede --refs '["<id>"]'` | **the sender yields**: pointing at an objection accepts it, pointing at your own proposal withdraws it in favour of somebody else's |
 | `withdraw` · `support` · `overrule` (**ungated — any participant**) · `msg` · `notice` · `skip` · `decide` | |
@@ -142,7 +145,8 @@ rather than raised by a participant, and nobody owes it an answer. `c_send` enfo
 `concede` always means the same thing, and who sends it decides what falls: from the
 objection's author it closes the objection; from the proposal's author it kills the
 proposal — whether it points at an objection or at the proposal itself. An objection also
-closes on `withdraw` by its author, on an `amend` that references it, or on an `overrule`.
+closes on `withdraw` by its author, on an `amend` of its proposal that references it, or on an
+`overrule`.
 
 **`overrule` is gated on nothing.** Any participant can close any objection with it, and
 there is no chair: no roster field names one, no scenario assigns one, and no code checks
@@ -152,10 +156,14 @@ has not been decided — read this as a description of what the code does today,
 gap somebody is on their way to filling.
 
 An `amend` belongs to **one** proposal — the first proposal-typed id it references; its
-other refs are the objections it closes. (Referencing two proposals used to apply the
-amendment to both, so a room displayed two participants proposing the same words.) An
-`amend` that names only an objection belongs to the proposal that objection was raised
-against, so the decision record carries the amendment it closed the objection with.
+other refs are objections, and it closes those raised against that proposal. (Referencing two
+proposals used to apply the amendment to both, so a room displayed two participants proposing the
+same words.) An `amend` that names only an objection belongs to the proposal that objection was raised
+against, so the decision record carries the amendment it closed the objection with. An `amend`
+closes objections **only on the proposal it belongs to** (#176). Before that rule, an amend
+owned by one proposal could close an objection on another. The live proposal was then recorded
+un-amended while its objection read "closed by an amend". A room that relied on this now reads
+`deliberating` or `stuck`, not `ready-to-decide`, which is the honest reading.
 
 A barrier round puts **N proposals** on the table at once, one per participant, and
 `ready-to-decide` wants exactly one. That is the work of the lap after the barrier: yield
@@ -179,6 +187,42 @@ is not.
 * `decided` — the record has been written. Read from `board/status`, which `decide` writes
   once the record is on disk; a `decide` message with no record closes nothing, and the
   room reports whichever of the verdicts above it is really in.
+
+**A closed room takes no more claims, and its answers agree with its record** (#176). Once the
+record is written, `send` without `--hand` is refused with **exit 8**, and nothing is sent. The
+refusal is the same for `decided` and `unresolved`, because the right reaction is the same: read
+`council.sh decision` and stop. `--hand` stays open, because `decide`'s own announcement is a
+`--hand` send made after the record.
+
+The refusal cannot cover everything that reaches the lane after the close. A `--hand` claim still
+lands, and so does a send that passed the check a moment before the record did (measured: an
+objection 11 s after the close). So `decide` also writes `board/closed-over`: the messages the
+record was written from, taken from the same read of the log. For a closed room, `claims`,
+`verdict`, `status` and `rooms` build their graph from those messages. Every later claim is listed
+apart, in its own section of `claims` and as a `⊘ not in the record` line of `status`. It is
+neither open nor closed, and it is never counted OPEN, because the record does not contain it.
+The kept set is closed under its references: a kept claim whose earlier referent was left out (an
+objection whose proposal was dropped) is listed apart as well, rather than printed nowhere. It is
+worked in log positions, not ids, because a message chooses its own id: the readers keep only the
+first message carrying a snapshot pair, and a reference to an id that first appears after the
+claim cannot orphan it.
+
+**What that covers, and what it does not.** It covers the ordinary paths: a claim sent after the
+close, a send that raced it, an emptied or partly emptied snapshot, a copied id, and a reference
+filled after the close. It does not stop a seat that forges room state on purpose. The snapshot
+and the lanes are room state like any other. Three routes were measured and are named in
+`lib/claims.jq`:
+- a lane file with a chosen lamport that takes a kept message's place;
+- a pair appended to the snapshot;
+- a dropped proposal that a forward reference pointed at. That one can leave an objection printed
+  nowhere.
+Each needs a write the lanes or the snapshot show. None is new ground: before this change, one
+legal post-close `send --hand --act overrule` silenced the same OPEN line, and that is now
+refused or listed apart. A pair duplicated in the log before the close is rendered twice in the
+record and kept once by the readers, which then show more than the record, never less. A room with
+no snapshot is read over the whole log, as before. That is a room older than this change, or one whose snapshot write failed, which
+`decide` reports on stderr. `decide --force` on a room already recorded `unresolved` rewrites the
+record over the whole log and takes a new snapshot, so the late claims are then in the record.
 
 `council.sh decide` **refuses** a room that is not ready. `--force` writes an honest
 `unresolved` record listing what is still open — a valid outcome, not a failure to hide.
@@ -337,7 +381,8 @@ one already running.
 Three consequences worth knowing:
 
 * **An `unresolved` close does not tear down — and `--force` is NOT the switch.** A room that did
-  *not* converge is one the same close escalates to the shared mailbox as needs-human, and it is
+  *not* converge is one the same close escalates to the room's mailbox (see *The trust contract*)
+  as needs-human, and it is
   the room a person is most likely to want to walk into, so its seats stay up and the close says
   so, naming `down`. The rule is about a room whose question is answered; it does not reach one
   that failed to answer it. **The gate is the recorded status, not the flag.** `--force` does one
@@ -364,8 +409,8 @@ Three consequences worth knowing:
   that and never as the set. What the room's own bookkeeping cannot report, a backend read can —
   `status`'s closed-room alarm, `council.sh terminals` and `rooms`' `term` column all surface the
   same `_room_terminals` read. That read checks the handles the backend assigned at launch against
-  a launch record in the shared mailbox (#247), which inherits the mailbox's forgeability (below),
-  so it narrows the question rather than closing it.
+  a launch record in the room's mailbox (#247; the shared one for a supervised room), which
+  inherits the mailbox's forgeability (below), so it narrows the question rather than closing it.
 * **`relaunch` cancels a teardown no keeper has taken yet.** Putting a seat back up says the room
   is in use again, and it outranks a close that asked for the seats to go — it has to, or the seat
   it launches is reaped within a poll of starting. That covers the keeper that died before taking
@@ -605,6 +650,21 @@ decided (#204), and this is what was decided:
   launch flags in the table above are what keep a room running unattended; a participant that
   asks before it acts sits on a prompt holding the floor, which is how rooms wedged before (#7,
   #18). Confinement would cost the thing a room is for.
+* **Where a room is decides which mailbox it writes to** (#178). A room directly under `council/`
+  in a git directory, which is where `up` creates every room, is **supervised**. Its notices, stall
+  pushes, launch record, `status` signature and `say` record go to the shared mailbox, resolved
+  exactly as they always were. Any other room is **ad hoc**: one built by hand for a probe or a
+  test and reached through `COUNCIL_ROOM`. For those, `council.sh` points `POLICY_MAILBOX_DIR` at
+  `<room>/mailbox/`, so a throwaway room's "closed unresolved, a human should look" stops landing
+  on a real supervisor's screen. The test reads the room's own physical path. It never reads the
+  caller's cwd or a roster field, so no edit to room state takes a real room off the supervisor's
+  mailbox. It names the git dir to git explicitly rather than letting git discover it, so a bare
+  common dir under `safe.bareRepository=explicit` and an inherited `GIT_DIR` do not change the
+  answer. What does change it is a write inside the git dir itself, the same reach that could
+  delete the mailbox outright. For example, a symlink in place of `council/` or of a room moves the
+  room's physical path, and a `commondir` file naming another repository changes what git reports
+  as the common dir; either makes the room read ad hoc. An explicit `POLICY_MAILBOX_DIR` wins either
+  way. Set it to run a real room outside `up`'s directory and keep it supervised.
 * **The shared mailbox is exactly as seat-writable as the room.** `.git/ship-escalations/` sits in
   the same git directory any participant can reach, so evidence kept "outside the room" there — a
   firing record, a de-duplication key, a launch record — only means a forger needs a **second,
@@ -1031,7 +1091,8 @@ fired on the same stall, and a plain `status` has no memory and always prints it
 
 This changes only how the line **reads**. It prints on every tick the stall holds, under
 `--only-changed` and `--alarms-only` alike, and the push is unchanged. Both new records live in the
-shared mailbox — `council-stall-<alarms|block>-<room>` for the count, one
+room's mailbox (the shared one for a supervised room) — `council-stall-<alarms|block>-<room>`
+for the count, one
 `council-said-<room>.<8 random characters>` file per `say` for what it sent — and, like everything
 else there, a seat can write them: a forged count moves the wording, a forged `say` withholds the
 UNANSWERED form but is **printed** as a message sent, so check that you sent what it says you sent. `STALL_ESCALATE_AT` in `lib/verbs.sh` carries the reasoning.
@@ -1165,7 +1226,9 @@ terminal before relaunching"*, with the matched line printed as evidence.
 
 A `STALL` also **pushes**: one `notice` into the shared escalation mailbox — the same
 fire-and-forget channel an `unresolved` close uses (`.git/ship-escalations/`, which a shipyard
-parent's escalation monitor already polls). What that buys is durability and audience: the alarm
+parent's escalation monitor already polls). That is a supervised room's mailbox. An ad hoc room,
+one built by hand outside `up`'s directory, pushes into `<room>/mailbox/` instead, which no
+monitor reads (see the trust contract). What that buys is durability and audience: the alarm
 stops being a line in a console someone has to be reading, and reaches a supervisor who never
 looked at this room. **It still does not make the room self-reporting** — something has to run
 `council.sh status` for the alarm to be reached at all, which is what the two monitors at the top
