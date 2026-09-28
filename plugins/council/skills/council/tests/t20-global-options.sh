@@ -101,7 +101,7 @@ want 0 "--room <name> --me <peer> together" bash "$CLI" --room pinned-room --me 
 
 # --- the verbs' own value-taking options say what they need, too (#147) -----------
 # These used to read a bare `"$2"`, which aborts under `set -u` but names a line number rather
-# than the option. `up`'s four are in t13, which builds real rooms. A room of our own here,
+# than the option. `up`'s are in t13, which builds real rooms. A room of our own here,
 # because `send` and `recv` resolve one before they parse their arguments.
 RM="$R/room"; mkroom "$RM" a b
 for o in --act --refs --to; do
