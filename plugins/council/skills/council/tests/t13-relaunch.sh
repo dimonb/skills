@@ -15,15 +15,10 @@ set -uo pipefail
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 . "$DIR/_helpers.sh"
 
-# A private root per run. `COUNCIL_TEST_ROOT` is an optional override — nothing in the suite
-# sets it yet — and otherwise we make our own. Never a path built from this test's own name:
-# two concurrent runs then delete each other's rooms, which is what made a red t3 mean nothing
-# for most of a day.
-_own_root=""
-if [ -z "${COUNCIL_TEST_ROOT:-}" ]; then
-  COUNCIL_TEST_ROOT=$(mktemp -d) || { echo "t13 FAIL: no temp dir"; exit 1; }
-  _own_root="$COUNCIL_TEST_ROOT"
-fi
+# The run root is _helpers.sh's: the runner hands one down, and a standalone run gets one the
+# helper makes and its EXIT trap removes. Never a path built from this test's own name: two
+# concurrent runs then delete each other's rooms, which is what made a red t3 mean nothing for
+# most of a day.
 ROOT="$COUNCIL_TEST_ROOT/t13"
 REPO="$ROOT/repo"; mkdir -p "$REPO"
 fail=0
@@ -34,15 +29,18 @@ fail=0
 # (an interrupted run must not leave an untracked script inside the packaged plugin — `git
 # checkout --` cannot remove one, and `make check-test` then refuses to run at all).
 PLANT_KIND="plausible$$"
+# CHAINED onto _helpers.sh's trap, never replacing it, as t23 does: a bare `trap cleanup EXIT`
+# drops _council_test_cleanup, which removes a run root the helper made and stops any keeper and
+# background job the helper tracks. `( exit $rc )` restores $? before delegating, because
+# _council_test_cleanup opens with `local rc=$?` and would otherwise report this function's last
+# status as the test's exit code.
 cleanup() {
+  local rc=$?
   [ -n "${ROOM:-}" ] && kill_keeper "$ROOM/state/keeper.pid" -9
   rm -f "$SKILL/adapters/$PLANT_KIND.sh" "$SKILL/lib/$PLANT_KIND.sh"
   rmdir "$SKILL/adapters" 2>/dev/null
   rm -rf "$ROOT"
-  # Only reap the root if we made it. A root handed down by a runner is that runner's to
-  # remove, and taking it here would delete the other tests' rooms with it.
-  [ -n "$_own_root" ] && rm -rf "$_own_root"
-  return 0
+  ( exit $rc ); _council_test_cleanup
 }
 trap cleanup EXIT
 
