@@ -82,7 +82,7 @@ for bad in '"noDashHere"' '"a-notanumber"' '17' 'null' '["a-1"]'; do
           created_at:"test",sent_ms:0}' > "$R/lane/a/000002.json"
   printf '2' > "$R/state/a.seq"
   out=$(COUNCIL_ME=b bash "$CLI" recv --timeout "$RECV_WAIT" 2>/dev/null)
-  if printf '%s' "$out" | grep -q "an honest later message"; then
+  if grep -q "an honest later message" <<<"$out"; then
     echo "ok   a crafted .id ($bad) did not stop the inbox"
   else
     echo "FAIL a crafted .id ($bad) wedged the lane — the honest message never arrived"; fail=1
@@ -208,7 +208,7 @@ for bad in '42' '"a string"' 'true' '[1,2]' 'null'; do
   printf '2' > "$R/state/a.seq"
   out=$(COUNCIL_ME=b bash "$CLI" recv --timeout "$RECV_WAIT" 2>/dev/null)
   n=$(printf '%s' "$out" | grep -c . || true)
-  if printf '%s' "$out" | grep -q "an honest later message" && [ "$n" = 1 ]; then
+  if grep -q "an honest later message" <<<"$out" && [ "$n" = 1 ]; then
     echo "ok   a non-object document ($bad) cost only its own message"
   else
     echo "FAIL a non-object document ($bad) was not retired cleanly: $n line(s) released"; fail=1
@@ -245,8 +245,8 @@ printf '3' > "$R/state/a.seq"
 err="$R/recv.err"
 out=$(COUNCIL_ME=b bash "$CLI" recv --timeout "$RECV_WAIT" 2>"$err")
 n=$(printf '%s' "$out" | grep -c . || true)
-if printf '%s' "$out" | grep -q "an honest earlier message" \
-   && printf '%s' "$out" | grep -q "an honest later message" && [ "$n" = 2 ]; then
+if grep -q "an honest earlier message" <<<"$out" \
+   && grep -q "an honest later message" <<<"$out" && [ "$n" = 2 ]; then
   echo "ok   an unparseable document cost only its own message"
 else
   echo "FAIL an unparseable document was not retired cleanly: $n line(s) released"; fail=1

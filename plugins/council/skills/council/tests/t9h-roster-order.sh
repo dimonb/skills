@@ -43,7 +43,7 @@ jq -c -n '{id:"x-1",from:"x",lamport:1,deps:{},act:"msg",refs:[],to:["*"],
            created_at:"t",sent_ms:0}' > "$outside/000001.json"
 set_order '["a","b","../../t9h-outside"]'
 out=$(COUNCIL_ME=b bash "$CLI" recv --peek 2>"$R/e"); rc=$?
-if printf '%s' "$out" | grep -q "FROM OUTSIDE THE ROOM"; then
+if grep -q "FROM OUTSIDE THE ROOM" <<<"$out"; then
   echo "FAIL a traversing roster entry delivered a message from outside the room"; fail=1
 else
   echo "ok   a traversing roster entry delivered nothing (recv rc=$rc)"
@@ -213,7 +213,7 @@ fi
 fresh
 jq '.mode = "roundtable"' "$R/roster.json" > "$R/r.tmp" && mv "$R/r.tmp" "$R/roster.json"
 set_order '["a","x/y"]'
-if bash "$CLI" floor 2>/dev/null | grep -q '(barrier)'; then
+if grep -q '(barrier)' <<<"$(bash "$CLI" floor 2>/dev/null)"; then
   echo "ok   an unreadable roster leaves the opening barrier up"
 else
   echo "FAIL the opening barrier dissolved itself on an unreadable roster"; fail=1

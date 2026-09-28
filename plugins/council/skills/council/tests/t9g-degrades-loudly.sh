@@ -412,7 +412,7 @@ case "$vline" in
   *"live proposals "*"open objections "*) echo "ok   a closed room's verdict line still carries both counts" ;;
   *) echo "FAIL a closed room's verdict line lost its counts: $vline"; fail=1 ;;
 esac
-if [ "$srcx" = 0 ] && [ -n "$sblock" ] && printf '%s' "$sblock" | grep -q "turns $(bash "$CLI" verdict --json 2>/dev/null | jq -r .turns)/"; then
+if [ "$srcx" = 0 ] && [ -n "$sblock" ] && grep -q "turns $(bash "$CLI" verdict --json 2>/dev/null | jq -r .turns)/" <<<"$sblock"; then
   echo "ok   a healthy closed room's status block exits 0 and carries its real turn count"
 else
   echo "FAIL a healthy closed room's status block: rc=$srcx"; printf '%s\n' "$sblock" | sed -n '2,3p'; fail=1

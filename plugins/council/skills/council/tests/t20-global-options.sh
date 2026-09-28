@@ -58,7 +58,7 @@ want() { # <exit> <what> <cmd>... ; leaves the output in $OUT
   [ "$rc" = 137 ] && { echo "FAIL $what: HUNG (killed after 5s), expected exit $w"; fail=1; return 1; }
   echo "FAIL $what: expected exit $w, got $rc"; printf '%s\n' "$OUT"; fail=1; return 1
 }
-says() { printf '%s\n' "$OUT" | grep -qi -- "$1" || { echo "FAIL $2; output was:"; printf '%s\n' "$OUT"; fail=1; }; }
+says() { grep -qi -- "$1" <<<"$OUT" || { echo "FAIL $2; output was:"; printf '%s\n' "$OUT"; fail=1; }; }
 
 # --- a dangling value must fail, loudly and fast ---------------------------------
 # The two forms from the report, verbatim. Exit 2 is this script's usage-error code, the same

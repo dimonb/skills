@@ -27,7 +27,7 @@ ok() { # <label> <expected> <actual>
   if [ "$2" = "$3" ]; then printf '  ok   %s\n' "$1"
   else printf '  FAIL %s\n         expected: [%s]\n         actual:   [%s]\n' "$1" "$2" "$3"; FAILURES=$((FAILURES + 1)); fi
 }
-has() { printf '%s' "$1" | grep -q -- "$2" && printf yes || printf no; }
+has() { grep -q -- "$2" <<<"$1" && printf yes || printf no; }
 
 TMP=$(mktemp -d "${TMPDIR:-/tmp}/t18-tell-submit.XXXXXXXX") || exit 1
 trap 'rm -rf "$TMP"' EXIT

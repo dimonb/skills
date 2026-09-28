@@ -186,7 +186,7 @@ ok "notified starts false"          false    "$(jq -r '.notified' "$f")"
 ok "answer starts null"             "null"   "$(jq -r '.answer' "$f" )"
 ok "id is <slot>-<n>"               room-abc-1 "$(jq -r '.id' "$f")"
 ok "created_at is a UTC timestamp"  yes \
-  "$(jq -r '.created_at' "$f" | grep -qE '^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$' && echo yes || echo no)"
+  "$(grep -qE '^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$' <<<"$(jq -r '.created_at' "$f")" && echo yes || echo no)"
 
 # First-free-integer: a second escalation on the same stem does not clobber the first.
 f2=$(cd "$REPO" && policy_escalate notice room-abc "second alarm")

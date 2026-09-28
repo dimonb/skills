@@ -36,7 +36,7 @@ ok() { # <label> <expected> <actual>
   if [ "$2" = "$3" ]; then printf '  ok   %s\n' "$1"
   else printf '  FAIL %s\n         expected: [%s]\n         actual:   [%s]\n' "$1" "$2" "$3"; FAILURES=$((FAILURES + 1)); fi
 }
-has() { printf '%s' "$1" | grep -q -- "$2" && printf yes || printf no; }
+has() { grep -q -- "$2" <<<"$1" && printf yes || printf no; }
 
 TMP=$(mktemp -d "${TMPDIR:-/tmp}/t19-occupant.XXXXXXXX") || exit 1
 trap 'rm -rf "$TMP"' EXIT
@@ -124,10 +124,10 @@ ok "45 (finished, no agent) stays finished"    "✅ finished (no agent)"  "$(row
 ok "the NO AGENT block names 41 and 46 only"    "41 46"          "$(block "$out" '💀 NO AGENT')"
 ok "45 is under WAITING FOR YOU as before"     "45"           "$(block "$out" '🙋 WAITING FOR YOU')"
 ok "...whose action says tell will refuse it"  yes \
-   "$(printf '%s\n' "$out" | sed -n '/^### 🙋 WAITING FOR YOU/,/^###/p' | grep '^- `45`' | grep -q 'refuse it with exit 8' && echo yes || echo no)"
+   "$(grep -q 'refuse it with exit 8' <<<"$(sed -n '/^### 🙋 WAITING FOR YOU/,/^###/p' <<<"$out" | grep '^- `45`')" && echo yes || echo no)"
 ok "46 (needs-human, no agent) is still no agent" "💀 no agent" "$(row "$out" 46)"
 ok "...and prescribes no nudge or compaction"  no \
-   "$(printf '%s\n' "$out" | sed -n '/^### 💀 NO AGENT/,/^###/p' | grep -q 'bash .*shipyard-\(tell\|compact\)\.sh ' && echo yes || echo no)"
+   "$(grep -q 'bash .*shipyard-\(tell\|compact\)\.sh ' <<<"$(sed -n '/^### 💀 NO AGENT/,/^###/p' <<<"$out")" && echo yes || echo no)"
 
 printf '\n── past the stall threshold: no verdict keeps today'"'"'s path ──\n'
 backdate_stall 7200

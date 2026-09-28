@@ -76,7 +76,7 @@ fi
 # Attribution is not cosmetic here: the transcript and the decision record are the room's
 # two durable outputs, and a supervisor reads them to work out what happened.
 line=$(bash "$CLI" transcript 2>/dev/null | grep 'never mind')
-if printf '%s' "$line" | grep -q "^\[$other withdraw"; then
+if grep -q "^\[$other withdraw" <<<"$line"; then
   echo "ok   the transcript named the lane that wrote it, not the name it claimed"
 else
   echo "FAIL the transcript believed the claimed author: $line"; fail=1
@@ -105,8 +105,8 @@ else
 fi
 # The objection must still be attributed to the seat that raised it, and the proposal to
 # its own author — a derivation that got those wrong would also read as "nothing closed".
-if bash "$CLI" claims 2>/dev/null | grep -q "OPEN $oid ($o)" \
-   && bash "$CLI" claims 2>/dev/null | grep -q "proposal $pid from $p"; then
+if grep -q "OPEN $oid ($o)" <<<"$(bash "$CLI" claims 2>/dev/null)" \
+   && grep -q "proposal $pid from $p" <<<"$(bash "$CLI" claims 2>/dev/null)"; then
   echo "ok   the objection and the proposal are still attributed to their real authors"
 else
   echo "FAIL attribution moved: $(bash "$CLI" claims 2>/dev/null | grep -E "OPEN|proposal")"; fail=1
@@ -173,7 +173,7 @@ fi
 fresh a b
 p=$(say_floor propose '[]' "An ordinary proposal.")
 line=$(bash "$CLI" transcript 2>/dev/null | grep 'An ordinary proposal.')
-if [ -n "$p" ] && printf '%s' "$line" | grep -q "^\[$p propose\]"; then
+if [ -n "$p" ] && grep -q "^\[$p propose\]" <<<"$line"; then
   echo "ok   an ordinary room still sends, reads and attributes normally"
 else
   echo "FAIL a normal send or its attribution broke: '$line'"; fail=1
