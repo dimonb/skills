@@ -212,8 +212,8 @@ are "cannot tell", not "full": fix what the message names and re-run — never
 **One mailbox runs one backend at a time.** A launch that resolves a backend other than the one
 the fleet's container pin names is refused (`7`, or `6` from the admission gate), whether it got
 there through `SHIPYARD_BACKEND=auto` or by asking for the other backend explicitly: the pins cannot
-tell two live fleets from one fleet and a failed probe, and a second pin disarms the check that
-would catch the second case. The refusal prints what to do, including the order for clearing a
+tell two live fleets from one fleet and a failed probe, and a second pin would leave nothing to
+say which of the two is stale. The refusal prints what to do, including the order for clearing a
 pin whose fleet has ended: confirm with `shipyard-report.sh` under the pinned backend that it
 lists no `ship-*` terminal and prints no `NO SIGNAL` block (`shipyard-down.sh --list` shows
 worktrees, not terminals), then tear down under that backend, which clears the pin once it has
@@ -226,7 +226,8 @@ while its fleet may be live. A dry run writes no pin.
 which, so the report prints `NO SIGNAL` under either backend and the order above cannot complete.
 The refusal then prints its own order instead (`shipyard_elsewhere_remedy`): under the backend you
 believe stale, the report must list no `ship-*` terminal, and `shipyard-down.sh` under it clears
-**that backend's pin alone** once it has answered with no slot — the other pin, every watcher and
+**that backend's pin alone** once it has answered with no slot and no launch record on it points at
+another container still holding one — the other pin, every watcher and
 the container are left, and down says so in a notice (its last-slot cleanup's status 4).
 
 **The admission gate — refuse a launch this machine cannot take.** Before it creates any

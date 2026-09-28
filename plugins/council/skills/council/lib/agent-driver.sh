@@ -628,8 +628,9 @@ drv_handles() {
 # answer is the refusal, naming the other backend. The way out is each caller's: shipyard's
 # last-slot teardown clears the resolved backend's own pin once that backend answered with no slot
 # (`shipyard_continuity_cleanup_last_slot`); in council no verb clears a pin while this verdict
-# stands (`down --purge` is refused on it), and its remedy names the stale file to remove by hand. `_drv_launch` pins only after a launch succeeds, so a launch
-# that failed on a backend that was down does not create the second pin.
+# stands (`down --purge` is refused on it), and its remedy names the stale file to remove by hand.
+# `_drv_launch` pins only after a launch succeeds, so a launch that failed on a backend that was
+# down does not create the second pin.
 drv_pins_elsewhere() {
   local d b now other=""
   d="${DRV_CONTAINER_PIN_DIR:-}"

@@ -143,8 +143,10 @@ shipyard_backend_check() {
 }
 
 # shipyard_container_unpin — forget the pinned name, so the next launch derives a fresh one. Only
-# correct once nothing is left in the old container, which is why shipyard-down.sh calls it solely
-# after `shipyard_continuity_cleanup_last_slot` has PROVEN the fleet empty.
+# correct once nothing is left in the old container, which is why it is called only from
+# `shipyard_continuity_cleanup_last_slot`, once that has PROVEN the resolved backend's container
+# empty: the whole fleet on the ordinary path, or only this backend's stale pin when both backends
+# are pinned (its status 4).
 #
 # IT CLEARS ONLY THE RESOLVED BACKEND'S PIN, which is the rule that was already here, and the
 # reuse of `_drv_pin_file` that goes with it: unpin removes exactly what `drv_container_pin` wrote.
@@ -547,9 +549,9 @@ shipyard_container_remedy() {
   echo "  with the same variable set; that removes the worktrees this check reads."
 }
 
-# shipyard_elsewhere_remedy — the operator's next move after an `elsewhere` refusal of a LAUNCH, on
-# stdout, one indented line each. The launch dedup and the admission gate both refuse on it, so the
-# words live here once.
+# shipyard_elsewhere_remedy — the operator's next move after an `elsewhere` refusal, on stdout, one
+# indented line each, so the words live here once. Every launch refusal prints it; the report and
+# the per-slot refusal print only its both-pinned branch, having single-pin words of their own.
 #
 # ONE MAILBOX RUNS ONE BACKEND AT A TIME. Its pins cannot tell two live fleets from one fleet and a
 # failed probe, so a launch is refused whether the other backend came from `auto` or was asked for
