@@ -1072,18 +1072,19 @@ two apart, so apply it instead of judging the fix "small":
 3. **Do the discovered check commands (§2.4) stay green?**
 4. **Is it one revert away from undone**, with nothing else to unwind?
 
-All four must hold — for a defect in this change's own code too, below. Three of four is rung 2. **"It is only a few lines" is not one of the four,
-and neither is confidence** — the reason this is a test and not an adjective is that "small" is a
-judgement an author makes about their own work, and the costliest defects measured here were
-one-line diffs their authors were sure of. When it is genuinely unclear whether a fix passes,
-that uncertainty is the answer: go to rung 2.
+All four must hold — for a defect in this change's own code too, below. Three of four is rung 2.
+**"It is only a few lines" is not one of the four, and neither is confidence** — the reason this
+is a test and not an adjective is that "small" is a judgement an author makes about their own
+work, and the costliest defects measured here were one-line diffs their authors were sure of.
+When it is genuinely unclear whether a fix passes, that uncertainty is the answer: go to rung 2.
 
 **A defect in code this change itself adds** (`origin: original` or `fix`, §5.6) **is fixed in this
 change, not filed.** Correcting the defective lines of a mechanism the change introduced is not new
 machinery, so question 2 asks what the *fix* adds, not where the defect sits: a fix that would add a
 further gate, script, config key or harness still fails it, and so does one that fails question 1,
 3 or 4. Such a defect leaves this rung only when the fix fails the test or would widen the change
-beyond its issue, and the hand-off record (§7.G) then names it and says which. Measured: a gate
+beyond its issue, and the hand-off record (§7.G) then names it, which exit it took, and what the
+fix would have added or widened. Measured: a gate
 arm's false negative, found by the review of the change that added the arm, was filed as a new
 issue for being "new tokenizer machinery" when the fix corrected lines that change had just written.
 
