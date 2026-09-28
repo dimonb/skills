@@ -8,7 +8,7 @@
 # covered by nothing — remove `cwd:$cwd` from `up` and every room in the world stops being
 # relaunchable, with a green suite.
 #
-# What it cannot reach is the launch itself: ct_launch spawns a real agent in a real
+# What it cannot reach is the launch itself: ct_launch_record spawns a real agent in a real
 # terminal. Everything in front of that is here, including the regeneration, which happens
 # before the launch is attempted and is therefore fully testable headlessly.
 set -uo pipefail
@@ -113,6 +113,21 @@ grep -q -- "--me codex" "$ROOT/up.log" \
 grep -qi "reads included" "$ROOT/up.log" \
   || { echo "FAIL up did not say that the --me seat needs --me on READS, not only on send"; fail=1; }
 
+# THE LAUNCH RECORD `up` WROTE (#247), from the real `council_up`: every roster seat present, at
+# generation 1, and nothing recorded as launched here, because this backend starts nothing. The
+# `--me` seat is the one the readers must not mistake for "no entry": missing, it reads unknown for
+# good and loses its "waiting on a person" advice.
+LREC="$POLICY_MAILBOX_DIR/council-launch-r"
+[ -f "$LREC" ] || { echo "FAIL up wrote no launch record at $LREC"; fail=1; }
+[ "$(jq -r '.generation' "$LREC" 2>/dev/null)" = 1 ] \
+  || { echo "FAIL the launch record up wrote is not at generation 1"; fail=1; }
+[ "$(jq -r '.seats | keys | join(",")' "$LREC" 2>/dev/null)" = "claude,codex" ] \
+  || { echo "FAIL the launch record does not hold every roster seat: $(jq -c '.seats | keys' "$LREC" 2>/dev/null)"; fail=1; }
+[ "$(jq -r '"\(.seats.codex.launched) \(.seats.codex.handle)"' "$LREC" 2>/dev/null)" = "false null" ] \
+  || { echo "FAIL the --me seat is not recorded as launched with nothing"; fail=1; }
+[ "$(jq -r '.seats.claude.launched' "$LREC" 2>/dev/null)" = false ] \
+  || { echo "FAIL a seat whose launch failed is not recorded as not launched"; fail=1; }
+
 # A relative --cwd resolved under an exported CDPATH, in its own throwaway room. `cd` searches
 # CDPATH for an operand that does not start with `.` or `/`, and then ECHOES the directory it
 # found — so a resolution that forgets `CDPATH=` captures TWO lines naming the WRONG
@@ -161,10 +176,17 @@ fi
 # relaunch must not carry either forward.
 printf '\necho INJECTED-LAUNCHER\n'   >> "$ROOM/state/launch-claude.sh"
 printf '\nINJECTED-PROTOCOL\n'        >> "$ROOM/protocol-claude.md"
-# Reaching ct_launch (exit 1, no backend) is what proves regeneration ran BEFORE the launch
+# Reaching ct_launch_record (exit 1, no backend) is what proves regeneration ran BEFORE the launch
 # rather than not at all.
 want 1 "a room with no terminal backend" bash "$CLI" relaunch claude \
   && says 'backend' "the failure does not blame the backend"
+# A RELAUNCH ADVANCES THE GENERATION, through the shipped verb: the mode it hands the record is
+# `relaunch`, not `up` (which would leave the generation where it was) and not `up-first` (which
+# would wipe every other seat's entry). The launch failed, so the seat is recorded as not launched.
+[ "$(jq -r '.generation' "$LREC" 2>/dev/null)" = 2 ] \
+  || { echo "FAIL relaunch did not advance the launch record's generation"; fail=1; }
+[ "$(jq -r '"\(.seats.codex.launched) \(.seats.codex.generation)"' "$LREC" 2>/dev/null)" = "false 1" ] \
+  || { echo "FAIL relaunch did not leave the other seats' entries as they were"; fail=1; }
 # THE CALL SITE of the absence check (#152), asserted here in the SHIPPED verb because t23 calls
 # `council_relaunch` in-process and so cannot see whether `council.sh` still reaches it. This
 # room's backend cannot answer which terminals exist, which is the `unreachable` class — so the
@@ -331,6 +353,15 @@ rc=$?
 grep -q 'not a usable participant name' "$ROOT/bad.log" \
   || { echo "FAIL up's refusal does not name the problem; log:"; cat "$ROOT/bad.log"; fail=1; }
 [ -d "$REPO/.git/council/bad" ] && { echo "FAIL up left a room behind after refusing"; fail=1; }
+
+# --- `down` keeps the launch record, `down --purge` removes it -------------------
+# A plain `down` leaves the room, and the record is the evidence the next read checks that
+# teardown against; `--purge` removes the room, and a record left behind would make a later
+# hand-built room of the same name read as "a record for another room".
+run_capped 20 bash "$CLI" down
+[ -f "$LREC" ] || { echo "FAIL a plain down removed the launch record"; fail=1; }
+run_capped 20 bash "$CLI" down --purge
+[ -e "$LREC" ] && { echo "FAIL down --purge left the launch record behind"; fail=1; }
 
 [ "$fail" = 0 ] && echo "t13 PASS" || echo "t13 FAIL"
 exit $fail

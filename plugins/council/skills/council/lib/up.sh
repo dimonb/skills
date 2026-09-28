@@ -551,9 +551,9 @@ _keeper_ensure() { # <room-dir> <peer>...
 # daemon inherit every fd open in this shell; a daemon that then holds the canary write end keeps
 # the pipe's write side open forever, so the keeper never sees the owner's death and never reaps.
 # Closing it in a subshell scopes the close to this one launch, leaving the owner's own copy open.
-# Outside `--hold` (_KEEPER_CANARY_WFD unset) this is a plain ct_launch. The subshell is safe:
-# ct_launch's only durable output is the pinned container FILE and the backend session, neither of
-# which is shell state the caller reads back.
+# Outside `--hold` (_KEEPER_CANARY_WFD unset) this is a plain ct_launch_record. The subshell is
+# safe: what the launch leaves behind is the pinned container FILE, the launch record FILE and the
+# backend session, none of which is shell state the caller reads back.
 #
 # It also writes the seat into the launch record (`ct_launch_record`, term.sh), so the record's
 # handle is the one this launch returned. <mode> is that function's: `up-first` for the first seat
@@ -1147,7 +1147,7 @@ _write_protocol() { # <room> <peer> <role> <scenario-file> <peer>...
 # <room>/state/launch-<peer>.sh` — runs it with no login shell, so the agent CLI is not on
 # the resulting PATH, `exec` fails with 127, and the session closes within a second with
 # nothing logged anywhere the caller can see. It reads as the backend silently refusing.
-# ct_launch wraps it the same way the first launch did.
+# ct_launch_record wraps it the same way the first launch did.
 #
 # And the launcher and protocol are REGENERATED rather than re-run. Every participant is
 # handed the room as a writable root (`--add-dir <room>`, every kind), so those two
@@ -1283,7 +1283,7 @@ council_relaunch() {
   # socket, so a single blipped probe sends this run to the other backend, where this room's
   # container is empty for entirely correct reasons. `ct_kill` then finds nothing and prints
   # nothing — which the note below teaches the operator to read as normal — the launcher and
-  # protocol are overwritten under the live seat, and `ct_launch` starts a SECOND agent for the
+  # protocol are overwritten under the live seat, and the launch starts a SECOND agent for the
   # same peer name on the other backend. Both write the same lane and claim the same seat in the
   # turn protocol, and no verb can tell them apart.
   #
@@ -1298,7 +1298,7 @@ council_relaunch() {
   #   unreachable  WARN and continue. The operator named this seat and asked for it to be
   #                restarted; a question the backend would not answer is not authority to refuse a
   #                documented recovery, and a launch that genuinely cannot reach the backend fails
-  #                loudly at `ct_launch` a few lines below rather than duplicating anything.
+  #                loudly at `ct_launch_record` a few lines below rather than duplicating anything.
   #   listed       WARN and continue. The seat is ALIVE — which is an ordinary reason to be here
   #                ("killed to pick up new permissions"), so this states what is about to happen
   #                instead of raising an alarm on the healthy path.
@@ -1361,7 +1361,7 @@ council_relaunch() {
   # Without it every bell rung at this participant is lost while the room looks healthy.
   _keeper_ensure "$ROOM" "${roster[@]}"
   # Close whatever still answers to this peer BEFORE regenerating and starting the
-  # replacement. A terminal is addressed by name, and ct_launch does not check whether that
+  # replacement. A terminal is addressed by name, and the launch does not check whether that
   # name is taken: launching over a live one leaves two sessions called the same thing, of
   # which ct_target keeps the first — quite possibly the one that is already dead. Closing
   # first also means the old process cannot write back over the inputs between the

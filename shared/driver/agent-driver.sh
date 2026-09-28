@@ -229,8 +229,9 @@ drv_launch() {
 # would pick whichever same-named session the backend listed first, which is the confusion this
 # primitive exists to avoid. Exit 1, printing nothing, when the launch failed. Exit 2 when the
 # launch went through but the backend returned no handle: a terminal may be running that nothing
-# can vouch for, so the caller must not treat the result as either a failure or a record. It still
-# prints "<container><TAB>" with the handle empty.
+# can vouch for, so the caller must not treat it as a failure, nor record it as a handle it can
+# check later (council records it as launched with no handle, which reads unknown). It still prints
+# "<container><TAB>" with the handle empty.
 #
 # tmux window ids are unique only for the lifetime of one server: a restarted server numbers from
 # `@0` again. A caller matching a recorded handle must therefore also match the container and name
@@ -544,7 +545,11 @@ drv_handles() {
       return 0 ;;
     tmux)
       # A server that is not running holds no windows, which is an answer. Any other failure is
-      # not. The same split `drv_sessions` makes, on the same captured stderr.
+      # not. This is `drv_sessions`' split with ONE difference: a socket that does not exist
+      # ("error connecting to … No such file or directory") is also an answer here, because a tmux
+      # server that exits with its last session can take its socket with it, and that is the
+      # genuine teardown this read must be able to report. `drv_sessions` still calls it
+      # unanswered; the two disagree on that one state, deliberately.
       if out=$(tmux list-windows -a -F '#{window_id}	#{session_name}	#{window_name}' 2>&1); then
         [ -n "$out" ] && printf '%s\n' "$out"
         return 0

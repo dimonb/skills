@@ -487,7 +487,45 @@ printf 'h-council-%s-a\tfake-container\tsomething-else\n' "$RN" > "$HANDLES"
 ok "a recorded handle on another terminal is ?"        "?" "$(bash "$SCLI" terminals 2>/dev/null)"
 out=$(bash "$SCLI" status --alarms-only 2>/dev/null)
 ok "...and alarms as stale"                            1 "$(printf '%s' "$out" | grep -c 'so it is stale')"
+# ...and the CONTAINER half: the right name, in another container (a recycled tmux id).
+printf 'h-council-%s-a\tanother-session\tcouncil-%s-a\n' "$RN" "$RN" > "$HANDLES"
+ok "a recorded handle in another container is ?"       "?" "$(bash "$SCLI" terminals 2>/dev/null)"
 sessions_none
+
+# 9c-ter. THE RECORD ALONE. A seat that edits only the launch record — renaming its entry and
+#     giving it a handle nobody holds — must not make a live seat read gone, and copying a live
+#     seat's entry into a dead seat's must not make it read live. The recorded name is checked
+#     against the peer, so both read unknown and alarm.
+sessions "council-$RN-a" "council-$RN-b" "council-$RN-c"
+jq '.seats.a.name = "x" | .seats.a.handle = "@999"' "$POLICY_MAILBOX_DIR/council-launch-$RN" > "$R3.lr"
+mv "$R3.lr" "$POLICY_MAILBOX_DIR/council-launch-$RN"
+ok "a renamed record entry does not read a live seat as gone" "?" "$(bash "$SCLI" terminals 2>/dev/null)"
+out=$(bash "$SCLI" status --alarms-only 2>/dev/null)
+ok "...and alarms, saying the record names another session" 1 "$(printf '%s' "$out" | grep -c 'the launch record names x for this seat')"
+record_launch "$R3"
+sessions "council-$RN-a" "council-$RN-b"
+jq '.seats.c = .seats.a' "$POLICY_MAILBOX_DIR/council-launch-$RN" > "$R3.lr"
+mv "$R3.lr" "$POLICY_MAILBOX_DIR/council-launch-$RN"
+ok "a dead seat's entry copied from a live one does not read live" "?" "$(bash "$SCLI" terminals 2>/dev/null)"
+record_launch "$R3"
+# ...while a forged handle with the true name finds the real session by name, which is unknown too.
+sessions "council-$RN-a" "council-$RN-b"
+jq '.seats.a.handle = "@999"' "$POLICY_MAILBOX_DIR/council-launch-$RN" > "$R3.lr"
+mv "$R3.lr" "$POLICY_MAILBOX_DIR/council-launch-$RN"
+ok "a forged handle alone reads ?"                     "?" "$(bash "$SCLI" terminals 2>/dev/null)"
+record_launch "$R3"
+sessions_none
+
+# 9c-quater. CONTROL BYTES IN A QUOTED VALUE. The alarm quotes the pin, and a pin is a file a seat
+#     writes. Cursor-control bytes in it must not reach the one-line alarms output, where they
+#     could erase the line on a terminal, and the alarm must still say what it read.
+printf 'evil\033[2K\033[1Gall clear\033[8m\n' > "$R3/state/container-tmux"
+out=$(bash "$SCLI" status --alarms-only 2>/dev/null)
+ok "an escape-laden pin still alarms"                  1 "$(printf '%s' "$out" | grep -c 'could not be determined')"
+ok "...with no control byte in the output"             0 "$(printf '%s' "$out" | LC_ALL=C tr -d '\n' | LC_ALL=C grep -c '[[:cntrl:]]')"
+err=$(bash "$SCLI" terminals 2>&1 >/dev/null)
+ok "...nor in the terminals verb's reason"             0 "$(printf '%s' "$err" | LC_ALL=C tr -d '\n' | LC_ALL=C grep -c '[[:cntrl:]]')"
+printf 'fake-container\n' > "$R3/state/container-tmux"
 
 # 9d. An unresolvable read must FAIL OPEN — the alarm still fires, worded as "could not tell".
 #     Two routes: a backend that did not answer, and a record naming the other backend.
@@ -536,6 +574,12 @@ record_launch "$R3"
 jq '.created_ms = 1' "$POLICY_MAILBOX_DIR/council-launch-$RN" > "$R3.lr" && mv "$R3.lr" "$POLICY_MAILBOX_DIR/council-launch-$RN"
 out=$(bash "$SCLI" status --alarms-only 2>/dev/null)
 ok "a record for another room alarms"      1 "$(printf '%s' "$out" | grep -c 'belongs to another room')"
+# ...even with the pin and every launcher gone: a record that EXISTS means something was launched
+# here, so it is never read as "never had any".
+mv "$R3/state/container-tmux" "$R3.pin"; mv "$R3/state/launch-a.sh" "$R3.launch"
+out=$(bash "$SCLI" status --alarms-only 2>/dev/null)
+ok "...even with no pin and no launchers"  1 "$(printf '%s' "$out" | grep -c 'belongs to another room')"
+mv "$R3.pin" "$R3/state/container-tmux"; mv "$R3.launch" "$R3/state/launch-a.sh"
 # With the record present, removing the pin AND every launcher no longer gets the silence back —
 # that single-kind route is what the record closes.
 record_launch "$R3"
@@ -654,7 +698,7 @@ ok "...points at the human"                  1 "$(printf '%s' "$out" | grep -c '
 ok "...and prescribes no relaunch"           0 "$(printf '%s' "$out" | grep -c 'before running council.sh relaunch')"
 # The branch is chosen by the record, which a seat can write, so the sentence must name both
 # readings rather than leading with the benign one: a launch that failed at `up` records the same.
-ok "...names the failed-launch reading too"  1 "$(printf '%s' "$out" | grep -c 'its launch failed')"
+ok "...names the failed-launch reading too"  1 "$(printf '%s' "$out" | grep -c 'its last launch failed')"
 ok "...and tells the operator to settle it"  1 "$(printf '%s' "$out" | grep -c 'check how this room was started')"
 # ...and a session with that seat's name, where nothing was launched, is not taken for it.
 sessions "council-$SN-$FLOOR"

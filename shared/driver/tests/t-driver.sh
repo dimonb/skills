@@ -82,7 +82,8 @@ case "$1" in
   # FAKE_TMUX_LIST_ERR unset = the pre-existing behaviour. Set, it makes `list-windows` fail with
   # that text on STDERR, which is the only way to tell an unreachable server from an absent
   # session — the distinction drv_sessions' exit status rests on.
-  list-windows) [ -z "${FAKE_TMUX_LIST_ERR:-}" ] || { printf '%s\n' "$FAKE_TMUX_LIST_ERR" >&2; exit 1; }
+  list-windows) printf '%s\n' "$*" >>"${FAKE_TMUX_LOG:-/dev/null}"
+                [ -z "${FAKE_TMUX_LIST_ERR:-}" ] || { printf '%s\n' "$FAKE_TMUX_LIST_ERR" >&2; exit 1; }
                 cat "${FAKE_TMUX_WINDOWS:-/dev/null}"; exit 0 ;;
   has-session)  exit "${FAKE_TMUX_HASSESSION_RC:-0}" ;;
   capture-pane) cat "${FAKE_TMUX_CAPTURE:-/dev/null}"; exit 0 ;;
@@ -483,11 +484,23 @@ hlog="$TMP/launch-handle.log"
   drv_launch_handle sess /work/dir /path/to/launcher >/dev/null )
 grep -q "new-session -d -s cont -n sess -c /work/dir -P -F #{window_id}" "$hlog" && r=yes || r=no
 ok "tmux: a cold launch asks new-session for the id" yes "$r"
+# The fakes answer whatever flags they get, so the flags themselves are asserted from the log:
+# without them a real backend prints no id, and every seat reads unknown.
+wlog="$TMP/launch-handle-warm.log"
+( export FAKE_TMUX_LOG="$wlog" FAKE_TMUX_HASSESSION_RC=0 FAKE_TMUX_NEW_ID=@3 _DRV_BE=tmux DRV_CONTAINER_OVERRIDE=cont
+  drv_launch_handle sess /work/dir /path/to/launcher >/dev/null )
+grep -q "new-window -t cont -n sess -c /work/dir -P -F #{window_id}" "$wlog" && r=yes || r=no
+ok "tmux: a warm launch asks new-window for the id" yes "$r"
+alog="$TMP/launch-handle-at.log"
+( export FAKE_AT_LOG="$alog" FAKE_AT_NEW_OUT='{"ok":true,"result":{"id":"U-1"}}' _DRV_BE=agterm DRV_CONTAINER_OVERRIDE=cont
+  drv_launch_handle sess /work/dir /path/to/launcher >/dev/null )
+grep -q -- "--json" "$alog" && r=yes || r=no
+ok "agterm: the launch asks for the JSON response that carries the id" yes "$r"
 ok "agterm: the handle is the response's id" "cont${TAB}U-1" \
    "$( export FAKE_AT_NEW_OUT='{"ok":true,"result":{"id":"U-1"}}' _DRV_BE=agterm DRV_CONTAINER_OVERRIDE=cont
        drv_launch_handle sess /work/dir /path/to/launcher )"
 # A launch that went through without a handle is rc 2, not 0 and not 1: a terminal may be running
-# that nothing can vouch for, so a caller must neither record it nor report a failed launch.
+# that nothing can vouch for, so a caller must not report a failed launch, nor record a handle.
 rc=0; out=$( export FAKE_TMUX_HASSESSION_RC=0 _DRV_BE=tmux DRV_CONTAINER_OVERRIDE=cont
              drv_launch_handle sess /work/dir /path/to/launcher ) || rc=$?
 ok "tmux: no id printed -> rc 2" 2 "$rc"
@@ -523,6 +536,13 @@ ok "agterm: an empty tree is an answer"     "|rc=0" "$(handles_of _DRV_BE=agterm
 printf '@1\tcont\tsess\n@4\tother\tx\n' >"$TMP/win-h.txt"
 ok "tmux: every window, verbatim" "@1 cont sess|@4 other x|rc=0" \
    "$(handles_of _DRV_BE=tmux "FAKE_TMUX_WINDOWS=$TMP/win-h.txt")"
+# `-a` is what makes the listing whole-backend: without it a real tmux lists only the current
+# session's windows, and a seat in the council container would read gone. The field order is what
+# the caller splits on.
+llog="$TMP/list-h.log"
+handles_of _DRV_BE=tmux "FAKE_TMUX_WINDOWS=$TMP/win-h.txt" "FAKE_TMUX_LOG=$llog" >/dev/null
+ok "tmux: the listing is whole-backend, handle then container then name" \
+   "list-windows -a -F #{window_id}	#{session_name}	#{window_name}" "$(tail -1 "$llog")"
 # The server exits with its last session, so after a genuine teardown there is nothing to connect
 # to. That is an answer (no windows), and it is the case "verified absent" rests on.
 ok "tmux: no server is an empty answer" "|rc=0" \

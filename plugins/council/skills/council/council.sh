@@ -218,7 +218,7 @@ case "$VERB" in
           . "$SKILL/lib/knobs.sh"
           v_status "$@" ;;
   # Sources term.sh itself, on demand, inside _room_terminals — the same deferral `status` uses,
-  # so a room with no container pin never resolves a terminal backend to be told it has none.
+  # so a room with no launch record never resolves a terminal backend to be told it has none.
   terminals) . "$SKILL/lib/verbs.sh"; v_terminals ;;
   # `decide` closes a room that decided, and a decided room closes its own terminals (#183). It
   # does not do the reaping — the seat running this is `--me`-gated to a participant, so it would

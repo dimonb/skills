@@ -898,12 +898,14 @@ _term_ensure() {
 #
 # Echoes "<live><TAB><total>" and returns 0 when EVERY seat's verdict is `live` or `absent`
 # (`ct_seat_verdicts`, term.sh): the record names what was launched and the backend confirms each
-# one is there or gone. Returns 2 and echoes WHY when any seat is unknown: no record, a record for
-# another room, a backend that did not answer, a pin that is missing or names a container other
-# than the record's, a stale handle, a same-named session where the launched one is gone, or a
-# roster `c_peers` refuses. Returns 1 only when the room has no pin, no launcher and no record, so
-# it was never given terminals and has none to count. (A room whose `up` launched nothing still
-# has a record, so it gets verdicts, not rc 1.)
+# one is there or gone. Returns 2 and echoes WHY when any seat's verdict is anything else, or when
+# the read itself could not be made. `ct_seat_verdicts` says which evidence settles a seat, and
+# its reasons are the list; the ones an operator will meet most are no record, a pin that
+# disagrees with the record, a stale handle and a backend that did not answer. That list is not
+# closed. Returns 1 when the room has no pin and no launcher and no record could be read for it
+# (none exists, or the mailbox cannot be resolved), so as far as this read can tell it was never
+# given terminals. A record that exists but cannot be used is rc 2, whatever else is missing, and
+# a room whose `up` launched nothing still has a record, so it gets verdicts, not rc 1.
 #
 # RC 2 EXISTS SO THAT AN UNANSWERABLE READ FAILS OPEN. Two consumers read it: the closed-room
 # alarm in `v_status`, which must still fire, worded as "could not be determined" and carrying the
@@ -917,6 +919,8 @@ _term_ensure() {
 #   * retargeting or deleting the pin now reads unknown and alarms. It used to be a resolved zero.
 #   * planting a session with a seat's name, where the launched terminal is gone, reads unknown.
 #     It used to count as live.
+#   * editing the record alone reads unknown: its container must match the pin and its name the
+#     peer, so a forged handle leaves the real session found by name.
 #   * deleting the record reads unknown, saying there is no launch record, for as long as a pin or
 #     any launcher remains. With the pin, every launcher AND the record all gone, this is rc 1 and a
 #     block line. That is the residue: it takes three kinds of write, and each is a file a
@@ -1033,7 +1037,8 @@ v_terminals() {
 # EVIDENCE, NOT A VERDICT, and the strings say so. The record is in the mailbox, which a seat can
 # write as easily as the room, so what this returns is what a live seat and a dead seat LOOK
 # LIKE, for an operator to check, never authority to relaunch on. It is harder to forge than the
-# name it replaced: that took one `tmux new-window`, and this takes an edit of the record as well.
+# name it replaced, which took one `tmux new-window`: a record edit on its own now reads unknown,
+# so a forgery needs the record and the pin, or the record and the backend, together.
 _seat_liveness() { # <peer>
   local peer="${1:-}" rec hl hrc=0 out v w TAB
   [ -n "$peer" ] || return 1
@@ -1052,10 +1057,11 @@ _seat_liveness() { # <peer>
       # launches nothing for the seat the human took with `--me`, which still sits in the roster
       # and still takes its turn, so the commonest healthy path in a human-in-the-room scenario (a
       # person thinking for longer than the threshold) must not be told to relaunch. The other
-      # way here is a launch that failed at `up`. Both keep the "terminal is GONE" words and only
-      # the advice differs: withholding the absence would let one record edit silence a dead seat.
+      # way here is a launch that failed, at `up` or at `relaunch`, both of which record it. Both
+      # keep the "terminal is GONE" words and only the advice differs: withholding the absence
+      # would let one record edit silence a dead seat.
       if [ "$w" = never-launched ]; then
-        printf 'its terminal is GONE — nothing is up for this seat, and its launch record says nothing was launched for it: either it is the seat taken with `--me` and the room is waiting on a person, or its launch failed at council.sh up. relaunch refuses the `--me` seat and restarts a failed one, so check how this room was started.'
+        printf 'its terminal is GONE — nothing is up for this seat, and its launch record says nothing was launched for it: either it is the seat taken with `--me` and the room is waiting on a person, or its last launch failed. council.sh relaunch restarts a seat that has a launcher and refuses one that has none (the `--me` seat), so check how this room was started.'
       else
         printf 'its terminal is GONE — the %s backend answered, and the terminal its launch record names is not there, which is what a dead seat looks like. The record is in the mailbox, which a seat can write too, so look at the terminal before running council.sh relaunch %s (it discards everything that seat has read).' \
           "$(ct_backend)" "$peer"
@@ -1462,7 +1468,7 @@ v_status() {
   #
   # IT NEVER REMOVES OR SOFTENS AN ALARM: the stall arm, its tier and its push run exactly as
   # before. `$noagent` does gate two calm, non-alarm outputs that this evidence would contradict —
-  # `_seat_liveness`' "listed, which is what a live seat looks like" in the stall arm, and the
+  # `_seat_liveness`' live-seat sentence in the stall arm, and the
   # block's `quiet:` line ("not a thing that is wrong") — each at its own call site below. No
   # push of its own: the stall push still fires at the stall threshold, and a push for this
   # condition is left to #21. What gates it is the same state that gates the stall alarm — the
@@ -1578,7 +1584,7 @@ v_status() {
       # `_stall_escalate`'s notice for the same event degraded correctly, because that one had the
       # membership test and this did not.
       # Not when the NO AGENT alarm fired: its evidence is the stronger read of the same seat, and
-      # this sentence's "listed, which is what a live seat looks like" would contradict it.
+      # this sentence's live-seat reading would contradict it.
       if [ -z "$(c_recorded_status)" ] && _is_seat "$floor" && [ "$noagent" = 0 ]; then
         live_note=$(_seat_liveness "$floor") || live_note=""
         [ -n "$live_note" ] && alarms="$alarms $live_note"
@@ -1703,7 +1709,7 @@ v_status() {
     # a `$floor` that is not a seat.
     # SKIPPED ENTIRELY IN --alarms-only, because this branch's only output is a block line that
     # mode never prints — and `_seat_liveness` is not free: it sources term.sh (re-resolving the
-    # backend, which on agterm is a control-socket probe) and enumerates the container. Left
+    # backend, which on agterm is a control-socket probe) and lists every terminal on it. Left
     # ungated, the documented 60-second alarm loop paid one backend enumeration a minute, for the
     # whole time a seat was thinking, to compose a sentence it then discarded.
     # Nor when the NO AGENT alarm fired, which replaces this line rather than joining it: "a thing

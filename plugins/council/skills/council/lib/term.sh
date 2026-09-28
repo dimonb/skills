@@ -51,10 +51,8 @@ ct_shq()           { drv_shq "$1"; }
 ct_container()     { _ct_pin_dir; drv_container; }
 ct_container_pin() { _ct_pin_dir; drv_container_pin; }
 ct_target()        { _ct_pin_dir; drv_target "$(ct_name "$1")"; }
-# drv_launch echoes the session name on success; ct_launch never wrote to stdout, and its callers
-# run it uncaptured before council prints its own summary — so swallow that echo here while
-# preserving the exit status the callers branch on.
-ct_launch()        { _ct_pin_dir; drv_launch "$(ct_name "$1")" "$2" "$3" >/dev/null; }
+# Launching is `ct_launch_record` (below, #247): it launches through `drv_launch_handle` and writes
+# what was launched into the room's launch record, so there is no separate ct_launch any more.
 ct_capture()       { _ct_pin_dir; drv_read   "$(ct_name "$1")"; }
 ct_type()          { _ct_pin_dir; drv_tell   "$(ct_name "$1")" "$2"; }
 ct_submit()        { _ct_pin_dir; drv_submit "$(ct_name "$1")"; }
@@ -84,7 +82,7 @@ ct_handles()        { drv_handles; }
 
 # --- the launch record (#247) ----------------------------------------------------------------------
 # What a seat was launched as. Where it lives, its shape, what it is worth against a seat that
-# wants to forge it, and which readers use it are all stated once, in lib/launch-record.sh. What is
+# wants to forge it, and which readers use it are stated first in lib/launch-record.sh. What is
 # here is the part that needs a backend: the write (`ct_record_launch`), the launch that feeds it
 # (`ct_launch_record`), and the per-seat verdict (`ct_seat_verdicts`).
 . "$(dirname "${BASH_SOURCE[0]}")/launch-record.sh"
@@ -141,29 +139,39 @@ ct_launch_record() {
 
 # ct_seat_verdicts <record-json> <handles-rc> <handles> <peer>... — one line per peer:
 #   <peer><TAB>live|absent|unknown<TAB><why>
-# `live` means the recorded handle is listed with the recorded container and name. `absent` means
-# the backend answered and neither the handle nor anything with the seat's name is there. It is the
-# same verdict for a seat that was never launched (`--me`, or a failed launch), which `why` tells
-# apart. `unknown` covers everything the evidence cannot settle. Missing or contradicting evidence
-# is never `live` and never `absent`.
+# `live` means the recorded handle is listed with the recorded container and the seat's name.
+# `absent` means the backend answered and neither the handle nor anything with the seat's name is
+# there. It is the same verdict for a seat that was never launched (`--me`, or a failed launch),
+# which `why` tells apart. `unknown` covers everything the evidence cannot settle. Missing or
+# contradicting evidence is never `live` and never `absent`.
+#
+# THE NAME IS COUNCIL'S, NOT THE RECORD'S. Each entry's `name` must equal `ct_name <peer>`, and a
+# mismatch is unknown. Trusting the recorded name let ONE write to the record alone make a live seat
+# read gone: rename the entry and give it a handle nobody holds, and nothing matched by handle or by
+# name. It also let a dead seat's entry copy a live seat's handle, container and name and read live.
+# The container is tied to the pin and the name to the peer, so the handle is the only field the
+# record alone decides, and a forged handle finds the real session by name and reads unknown.
 ct_seat_verdicts() {
-  local rec="$1" hrc="$2" handles="$3" pin; shift 3
+  local rec="$1" hrc="$2" handles="$3" pin names p; shift 3
   pin=$(ct_pin 2>/dev/null) || pin=""
+  names=$(for p in "$@"; do printf '%s\t%s\n' "$p" "$(ct_name "$p")"; done \
+            | jq -Rn '[inputs | split("\t") | {(.[0]): .[1]}] | add // {}') || return 1
   printf '%s\n' "$@" | jq -rR --argjson rec "$rec" --arg hrc "$hrc" --arg handles "$handles" \
-      --arg be "$(ct_backend)" --arg pin "$pin" '
+      --arg be "$(ct_backend)" --arg pin "$pin" --argjson names "$names" '
     ($handles | split("\n") | map(select(length > 0) | split("\t")
        | {h: .[0], c: (.[1] // ""), n: (.[2] // "")})) as $hs
-    | select(length > 0) | . as $p | $rec.seats[$p] as $s
+    | select(length > 0) | . as $p | $rec.seats[$p] as $s | $names[$p] as $want
     | [$p] + (
       if $s == null then ["unknown", "the launch record has no entry for this seat"]
       elif ($s | type) != "object" then ["unknown", "the launch record entry for this seat is malformed"]
       elif $hrc != "0" then ["unknown", "the \($be) backend did not answer when asked which terminals exist"]
       elif $s.backend != $be then ["unknown", "this seat was launched on \($s.backend), and this run resolved \($be)"]
+      elif $s.name != $want then ["unknown", "the launch record names \($s.name) for this seat, and its session is named \($want)"]
       else
-        ([$hs[] | select(.c == $s.container and .n == $s.name)]) as $byname
+        ([$hs[] | select(.c == $s.container and .n == $want)]) as $byname
         | if $s.launched != true then
             (if ($byname | length) > 0
-             then ["unknown", "nothing was launched for this seat, yet a session named \($s.name) is listed"]
+             then ["unknown", "nothing was launched for this seat, yet a session named \($want) is listed"]
              else ["absent", "never-launched"] end)
           elif $pin == "" then ["unknown", "the room has no container pin, and its launch record names \($s.container)"]
           elif $pin != $s.container then ["unknown", "the room pin names \($pin), and the launch record names \($s.container)"]
@@ -171,15 +179,17 @@ ct_seat_verdicts() {
           else
             ([$hs[] | select(.h == $s.handle)]) as $byh
             | if ($byh | length) > 0 then
-                (if $byh[0].c == $s.container and $byh[0].n == $s.name
+                (if $byh[0].c == $s.container and $byh[0].n == $want
                  then ["live", $s.handle]
                  else ["unknown", "the recorded handle \($s.handle) now belongs to another terminal (\($byh[0].c)/\($byh[0].n)), so it is stale"] end)
               elif ($byname | length) > 0 then
-                ["unknown", "the launched terminal \($s.handle) is gone, yet a session named \($s.name) is listed: a stale record or a planted name"]
+                ["unknown", "the launched terminal \($s.handle) is gone, yet a session named \($want) is listed: a stale record or a planted name"]
               else ["absent", "gone"] end
           end
       end)
-    # The reasons quote record and pin values, which a seat can write: a newline or tab in one
-    # would split this line, and the reason also lands in an operator alarm.
-    | map(tostring | gsub("[\n\t\r]"; " ")) | join("\t")'
+    # The reasons quote pin, record and backend values, which a seat can write, and a reason lands
+    # in the one-line operator alarm. So PRINTABLE ASCII ONLY, the same whitelist lib.sh applies to
+    # lane names: stripping only the characters that split this line let ESC through, and one pin
+    # write of cursor-control bytes could then erase the alarms line on a terminal.
+    | map(tostring | gsub("[^ -~]"; " ")) | join("\t")'
 }

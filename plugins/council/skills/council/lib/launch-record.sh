@@ -30,11 +30,14 @@
 # this raises what a forgery costs and does not prevent one. The routes that remain: a coordinated
 # edit of the pin and the record together, and manipulating the backend itself (a session created
 # with a recycled tmux window id AND the recorded container and name). What it does close is the
-# single write: retargeting the pin, deleting it, or planting a same-named session now reads
-# UNKNOWN rather than healthy.
+# single write: retargeting the pin, deleting it, planting a same-named session, or editing the
+# record on its own now reads UNKNOWN rather than healthy. The last holds because the verdict ties
+# the record's container to the pin and its name to the peer (`ct_seat_verdicts`), which leaves the
+# handle as the only field the record alone decides, and a forged handle finds the real session by
+# name.
 #
-# SCOPE. The readers that use it are the three #247 names: `_room_terminals` (the closed-room
-# alarm's count, and the `terminals` verb behind `rooms`' term column) and `_seat_liveness`.
+# SCOPE. The readers that use it are `_room_terminals` (the closed-room alarm's count, and the
+# `terminals` verb behind `rooms`' term column) and `_seat_liveness`.
 # `say`'s and `relaunch`'s absence checks, and the keeper's reap, still address a seat by name
 # through `ct_*`. That boundary was chosen, and reaching past it is its own change.
 _LR_LIB=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)
