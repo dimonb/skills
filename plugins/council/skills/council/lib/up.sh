@@ -726,8 +726,9 @@ council_up() {
       order_rotate:true, turn_deadline_ms:180000, turns_budget:$turns,
       round_deadline_ms:$rdl, cwd:$cwd, created_at:$at, created_ms:$cms}' \
     > "$room/roster.json" || {
-    # Before anything is launched (#169): every verb refuses a room without a roster, so seats
-    # started around one would spend tokens in a room none of them can read. The keeper goes
+    # Before anything is launched (#169): the verbs that read the peer list refuse a room without
+    # a roster, so seats started around one would spend tokens in a room they cannot take part
+    # in. The keeper goes
     # now; the directory stays for the operator to look at and remove.
     echo "council up: could not write $room/roster.json; nothing was launched" >&2
     local kpid; kpid=$(_keeper_live "$room/state/keeper.pid") && kill "$kpid" 2>/dev/null
@@ -1432,7 +1433,7 @@ council_down() {
     # the teardown against, and once the room is gone nothing reads it.
     lr_forget 2>/dev/null || true
     # Checked (#169), as shipyard-down.sh checks its own removal: a failed `rm -rf` leaves the
-    # whole room, record included, and `rooms` goes on listing it.
+    # room directory, and whatever it could not unlink, for `rooms` to go on listing.
     if rm -rf "$ROOM" && [ ! -e "$ROOM" ]; then echo "room deleted: $ROOM"
     else echo "council down: could not delete $ROOM (rm failed); it still exists" >&2; return 1; fi
   else

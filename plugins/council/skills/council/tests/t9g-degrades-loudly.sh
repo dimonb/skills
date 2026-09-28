@@ -590,6 +590,10 @@ fi
 # seq and overwrite this message with a valid file no reader can tell apart. The send must say
 # so and fail, rather than print an id at rc 0.
 fresh
+# The mode is restored from a trap as well, chained onto the helpers' handler as t26 K does: a
+# kill between the two chmods would otherwise leave a directory the run root's `rm -rf` cannot empty.
+_t9g_restore_state() { local rc=$?; chmod 755 "$R/state" 2>/dev/null; ( exit $rc ); _council_test_cleanup; }
+trap _t9g_restore_state EXIT
 chmod 555 "$R/state"
 if [ -w "$R/state" ]; then
   echo "ok   send counters: this user writes through a read-only dir, fixture skipped"
@@ -604,6 +608,7 @@ else
   rm -f "$err"
 fi
 chmod 755 "$R/state"
+trap _council_test_cleanup EXIT
 
 [ "$fail" = 0 ] && echo "t9g PASS" || echo "t9g FAIL"
 exit $fail

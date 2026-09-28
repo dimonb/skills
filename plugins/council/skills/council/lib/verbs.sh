@@ -2198,7 +2198,7 @@ v_decide() {
   # announcement. Measured, in the round that introduced this message.
   if ! c_send --act decide --hand --text "decision written: $status (council.sh decision)" >/dev/null; then
     printf '%s\n' "$out"
-    echo "council decide: the record is written ($status) but the room was not told — the announcement could not be sent, so no seat was rung. The close stands and 'council.sh decision' serves the record. Do not re-run decide to check: it answers 3 on a decided room and 2 ('not ripe') on an unresolved one, and --force would rewrite the record and announce a second time. Wake a seat with 'council.sh say' if the room should stop sooner. The participants' terminals are still live: 'council.sh down --room $(basename "$ROOM")' closes them and keeps the record." >&2
+    echo "council decide: the record is written ($status) but the room was not told: no seat was rung, and the announcement either could not be sent or, where the line above says it is on the lane, reaches each seat only at its next recv. The close stands and 'council.sh decision' serves the record. Do not re-run decide to check: it answers 3 on a decided room and 2 ('not ripe') on an unresolved one, and --force would rewrite the record and announce a second time. Wake a seat with 'council.sh say' if the room should stop sooner. The participants' terminals are still live: 'council.sh down --room $(basename "$ROOM")' closes them and keeps the record." >&2
     return 4
   fi
   # THE DECISION IS THE DELIVERABLE, SO A DECIDED ROOM CLOSES ITS OWN SEATS (#48). The record,

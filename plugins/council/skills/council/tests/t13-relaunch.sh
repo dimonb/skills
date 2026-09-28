@@ -371,8 +371,8 @@ done
   || { echo "FAIL up did not record --turns 007 as 7"; cat "$ROOT/turns.log"; fail=1; }
 kill_keeper "$REPO/.git/council/turns/state/keeper.pid" -9; rm -rf "$REPO/.git/council/turns"
 
-# A roster that could not be written launches nothing and says so. A scenario whose own turn
-# count is not a number is the one way in from outside, since the flag is now checked.
+# A roster that could not be written launches nothing and says so. Reached through a scenario
+# whose own turn count is not a number; its round_deadline_ms would reach the same write.
 printf -- '---\nname: %s\nmode: token\nturns: many\nroles: [a, b]\n---\n## role: a\nx\n## role: b\nx\n' \
   "$BADSC" > "$SKILL/scenarios/$BADSC.md"
 ( cd "$REPO" && bash "$CLI" --room nroster up --scenario "$BADSC" --agents claude,codex "x" ) \
