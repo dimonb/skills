@@ -719,6 +719,35 @@ c_send() {
       *) echo "c_send: unknown arg $1" >&2; return 2 ;;
     esac
   done
+  # A CLOSED ROOM TAKES NO MORE CLAIMS (#176). Before this, nothing here read the record, so a
+  # message sent after `decide` landed on the lane and stayed there. Measured: an objection
+  # arriving 11 s after the close left the record saying "there were no objections" while
+  # `claims` and `rooms` reported one open, for ever. `c_recorded_status` is the one reader of
+  # "closed", shared with every verb, so this adds no second notion of it.
+  #
+  # `--hand` is exempt, and that is deliberate. `decide`'s own announcement is a `--hand` send made
+  # AFTER the record is written, and it is the wake that tells every seat to stop. A hand raised
+  # after the close is harmless to the record: readers of a closed room list it "after the close"
+  # and count it nowhere (claims.jq, `board/closed-over`). That same listing covers the send that
+  # passed this check a moment before the record landed. So the refusal is the courtesy that tells
+  # a participant at once, and the snapshot is what keeps the room's answers agreeing with its
+  # record. This is not a lock and it adds no quiesce period (the issue asks for neither).
+  #
+  # EXIT 8, one code for both closed states. The correct reaction is the same in both: stop, and
+  # read `council.sh decision`. The words are not lost; they are in the sender's own context. Only
+  # the advice differs, because a seat that disagrees with an `unresolved` close has somewhere to
+  # take it.
+  if [ "$hand" != true ]; then
+    local closed; closed=$(c_recorded_status)
+    if [ -n "$closed" ]; then
+      if [ "$closed" = decided ]; then
+        echo "council: this room is closed — its record is written (decided) — so nothing was sent. Read it with 'council.sh decision' and stop; do not retry." >&2
+      else
+        echo "council: this room is closed — its record is written (unresolved) — so nothing was sent. Read it with 'council.sh decision' and stop; do not retry. An unresolved close is already the room's needs-human signal; an argument it left unsettled belongs in a new room." >&2
+      fi
+      return 8
+    fi
+  fi
   local seq lam id f deps turn round=null
   seq=$(( $(c_seq) + 1 ))
   # My clock must dominate everything I am about to COUNT, not merely everything I have

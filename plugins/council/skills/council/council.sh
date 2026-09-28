@@ -67,7 +67,9 @@ council.sh <verb> [options]
     send    --act <act> [--refs '["id"]'] [--hand] "<text>"
                                                        in an open round: exit 5 = you already
                                                        posted, wait; exit 7 = that act is not a
-                                                       position, re-send with --act propose    floor                                              who holds it, who is next, how long it
+                                                       position, re-send with --act propose
+                                                       exit 8 = the room is closed, nothing was
+                                                       sent: read `decision` and stop    floor                                              who holds it, who is next, how long it
                                                        has been held and the room's turn
                                                        deadline (both in milliseconds)
     protocol                                           your own role and the channel rules

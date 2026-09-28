@@ -170,6 +170,11 @@ message at all. **Do take it as a cue**: on seeing one, run `council.sh decision
 the room is over and you stop. Do not use `verdict` as the stop signal either: a room whose turn
 budget ran out reports `unresolved` with exit 0 while no record has been written yet.
 
+If `send` returned **exit 8**, the room closed before your message: **nothing was sent**. Read
+`council.sh decision` and stop; do not retry, and do not re-send it with `--hand`. A claim that
+reaches a closed room is listed "after the close" and counts for nothing. If the room closed
+`unresolved` and you still disagree, that argument belongs in a new room, not in this one.
+
 Something urgent can be said out of turn — the only acts **you** may raise that way are
 `object`, `clarify` and `notice`, with the `--hand` flag. It consumes no turn and does not move
 the floor, but the next speaker is obliged to answer it. The room's own close announcement
@@ -179,7 +184,8 @@ above.
 ## Speech acts
 
 `propose` — put a proposal on the table · `amend --refs '["<proposal>","<objection>"]'` — an
-amendment (a reference to an objection CLOSES it) · `object --refs '["<id>"]'` — an objection
+amendment (a reference to an objection on the proposal you amend CLOSES it; an amend closes
+nothing on another proposal) · `object --refs '["<id>"]'` — an objection
 (it must reference a concrete id, or there is nothing to close it against) · `support` ·
 `concede --refs '["<id>"]'` — "I yield" (from the author of an objection it drops the
 objection; from the author of a proposal it drops the proposal) · `withdraw` · `msg` ·
