@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # launch-record.sh — where a room's launch record lives, and reading it. Source only.
 #
-# WHAT A SEAT WAS LAUNCHED AS, written at launch and read by every question about whether it is
-# still up (#247). Before this, those reads matched a session NAME (`council-<room>-<peer>`) inside
+# WHAT A SEAT WAS LAUNCHED AS, written at launch and read by the questions about whether a seat is
+# still up that SCOPE below names (#247). Before this, those reads matched a session NAME (`council-<room>-<peer>`) inside
 # a container named by a pin in the room. Retargeting or deleting the pin, or starting a session
 # with that name, made a live seat read gone or a dead one read alive. The record holds the handle
 # the backend ASSIGNED at launch (`drv_launch_handle`), and a read matches on that.
@@ -30,11 +30,15 @@
 # this raises what a forgery costs and does not prevent one. The routes that remain: a coordinated
 # edit of the pin and the record together, and manipulating the backend itself (a session created
 # with a recycled tmux window id AND the recorded container and name). What it does close is the
-# single write: retargeting the pin, deleting it, planting a same-named session, or editing the
-# record on its own now reads UNKNOWN rather than healthy. The last holds because the verdict ties
-# the record's container to the pin and its name to the peer (`ct_seat_verdicts`), which leaves the
-# handle as the only field the record alone decides, and a forged handle finds the real session by
-# name.
+# single write: retargeting the pin, deleting it, planting a same-named session, dropping a seat
+# from the roster, or editing the record on its own now reads UNKNOWN rather than healthy. For the
+# record, four things in `ct_seat_verdicts` and `_room_terminals` hold that together, and each was
+# added after a review found the one-write route it closes: a launched entry's container must match
+# the pin; every entry's name must be the peer's own session name; that name is searched across the
+# whole backend, so no field of the record can hide the live session from it; and every seat the
+# record holds must still be in the roster. What a record edit can still do is make a seat read
+# unknown, which alarms. Checked one field at a time; a combination with the pin or the backend is
+# the residual above.
 #
 # SCOPE. The readers that use it are `_room_terminals` (the closed-room alarm's count, and the
 # `terminals` verb behind `rooms`' term column) and `_seat_liveness`.

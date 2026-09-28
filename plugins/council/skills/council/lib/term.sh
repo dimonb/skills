@@ -149,8 +149,9 @@ ct_launch_record() {
 # mismatch is unknown. Trusting the recorded name let ONE write to the record alone make a live seat
 # read gone: rename the entry and give it a handle nobody holds, and nothing matched by handle or by
 # name. It also let a dead seat's entry copy a live seat's handle, container and name and read live.
-# The container is tied to the pin and the name to the peer, so the handle is the only field the
-# record alone decides, and a forged handle finds the real session by name and reads unknown.
+# The same-name search that follows runs over the whole backend for the same reason: scoped to the
+# recorded container, `launched: false` plus another container hid the live session from it.
+# lib/launch-record.sh lists what holds a record edit to `unknown`, and what it does not cover.
 ct_seat_verdicts() {
   local rec="$1" hrc="$2" handles="$3" pin names p; shift 3
   pin=$(ct_pin 2>/dev/null) || pin=""
@@ -168,7 +169,11 @@ ct_seat_verdicts() {
       elif $s.backend != $be then ["unknown", "this seat was launched on \($s.backend), and this run resolved \($be)"]
       elif $s.name != $want then ["unknown", "the launch record names \($s.name) for this seat, and its session is named \($want)"]
       else
-        ([$hs[] | select(.c == $s.container and .n == $want)]) as $byname
+        # The name of the seat is searched across the WHOLE backend, never inside the container the
+        # record names: the record alone decides that container, and a `launched: false` entry is
+        # not checked against the pin, so scoping this search to it let one record write
+        # (`launched: false` plus any other container) make a live seat read absent.
+        ([$hs[] | select(.n == $want)]) as $byname
         | if $s.launched != true then
             (if ($byname | length) > 0
              then ["unknown", "nothing was launched for this seat, yet a session named \($want) is listed"]

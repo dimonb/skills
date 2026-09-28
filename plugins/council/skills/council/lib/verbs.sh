@@ -919,8 +919,8 @@ _term_ensure() {
 #   * retargeting or deleting the pin now reads unknown and alarms. It used to be a resolved zero.
 #   * planting a session with a seat's name, where the launched terminal is gone, reads unknown.
 #     It used to count as live.
-#   * editing the record alone reads unknown: its container must match the pin and its name the
-#     peer, so a forged handle leaves the real session found by name.
+#   * editing the record alone reads unknown, and so does dropping a live seat from the roster.
+#     lib/launch-record.sh says which checks hold that together.
 #   * deleting the record reads unknown, saying there is no launch record, for as long as a pin or
 #     any launcher remains. With the pin, every launcher AND the record all gone, this is rc 1 and a
 #     block line. That is the residue: it takes three kinds of write, and each is a file a
@@ -975,6 +975,16 @@ $verd
 EOF
   [ "$total" = "${#seats[@]}" ] || { printf 'the launch record check did not answer for every seat'; return 2; }
   [ -z "$why" ] || { printf '%s' "$why"; return 2; }
+  # A SEAT THE RECORD HOLDS AND THE ROSTER DOES NOT. The count walks the roster, which is a file in
+  # the room, so dropping a live seat from `.order` would drop it from the count and could leave
+  # the rest reading 0 of N. `up` records every roster seat, so a recorded seat the roster no
+  # longer lists means the roster shrank, and it is unknown rather than uncounted. Counted, not
+  # named: the key is text a seat can write.
+  local dropped
+  dropped=$(printf '%s\n' "${seats[@]}" | jq -R . | jq -s --argjson rec "$rec" \
+              '($rec.seats | keys) - . | length' 2>/dev/null) || dropped="an unknown number of"
+  [ "$dropped" = 0 ] \
+    || { printf 'the launch record holds %s seat(s) the roster no longer lists' "$dropped"; return 2; }
   printf '%s\t%s' "$live" "$total"
 }
 

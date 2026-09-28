@@ -514,6 +514,25 @@ jq '.seats.a.handle = "@999"' "$POLICY_MAILBOX_DIR/council-launch-$RN" > "$R3.lr
 mv "$R3.lr" "$POLICY_MAILBOX_DIR/council-launch-$RN"
 ok "a forged handle alone reads ?"                     "?" "$(bash "$SCLI" terminals 2>/dev/null)"
 record_launch "$R3"
+# "Nothing was launched here", in some other container: a `launched: false` entry is not checked
+# against the pin, so the search for the live session by name must not be scoped to the
+# container the record names, or this one write reads every live seat as gone.
+sessions "council-$RN-a" "council-$RN-b" "council-$RN-c"
+jq '.seats |= map_values(.launched = false | .handle = null | .container = "nowhere")' \
+  "$POLICY_MAILBOX_DIR/council-launch-$RN" > "$R3.lr"
+mv "$R3.lr" "$POLICY_MAILBOX_DIR/council-launch-$RN"
+ok "a record saying nothing was launched, elsewhere, is ? while seats are up" "?" "$(bash "$SCLI" terminals 2>/dev/null)"
+out=$(bash "$SCLI" status --alarms-only 2>/dev/null)
+ok "...and alarms"                                     1 "$(printf '%s' "$out" | grep -c 'could not be determined')"
+record_launch "$R3"
+# A live seat dropped from the ROSTER is not dropped from the count: the record still holds it.
+sessions "council-$RN-a"
+cp "$R3/roster.json" "$R3/roster.bak"
+jq '.order = ["b","c"]' "$R3/roster.bak" > "$R3/roster.json"
+ok "a live seat dropped from the roster is ? not 0/2"  "?" "$(bash "$SCLI" terminals 2>/dev/null)"
+out=$(bash "$SCLI" status --alarms-only 2>/dev/null)
+ok "...and alarms, saying the roster no longer lists it" 1 "$(printf '%s' "$out" | grep -c 'the roster no longer lists')"
+mv "$R3/roster.bak" "$R3/roster.json"
 sessions_none
 
 # 9c-quater. CONTROL BYTES IN A QUOTED VALUE. The alarm quotes the pin, and a pin is a file a seat

@@ -545,11 +545,11 @@ drv_handles() {
       return 0 ;;
     tmux)
       # A server that is not running holds no windows, which is an answer. Any other failure is
-      # not. This is `drv_sessions`' split with ONE difference: a socket that does not exist
-      # ("error connecting to … No such file or directory") is also an answer here, because a tmux
-      # server that exits with its last session can take its socket with it, and that is the
-      # genuine teardown this read must be able to report. `drv_sessions` still calls it
-      # unanswered; the two disagree on that one state, deliberately.
+      # not. Unlike `drv_sessions`, a socket that does not exist ("error connecting to … No such
+      # file or directory") is an answer here too, because a tmux server that exits with its last
+      # session can take its socket with it, and that is the genuine teardown this read must be
+      # able to report. `drv_sessions` still calls that state unanswered, deliberately; the two
+      # also differ in the container-scoped errors only `drv_sessions` can meet.
       if out=$(tmux list-windows -a -F '#{window_id}	#{session_name}	#{window_name}' 2>&1); then
         [ -n "$out" ] && printf '%s\n' "$out"
         return 0

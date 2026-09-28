@@ -223,8 +223,8 @@ _keeper_teardown_file() { printf '%s/state/teardown' "$1"; }
 # underneath: the seats are still there and (on the first route) the marker stays on disk. What is
 # missing was a verb that reports it; `v_terminals` and `status`'s closed-room alarm are now that
 # read, and `rooms` carries it as a `term` column (#194 tracks what remains). They ask the BACKEND,
-# so they answer a different question from this signal and inherit the container pin's
-# forgeability instead. THIS signal stays trustworthy only about the room's own bookkeeping, not
+# so they answer a different question from this signal, checked against the launch record
+# (lib/launch-record.sh), and inherit that record's forgeability instead. THIS signal stays trustworthy only about the room's own bookkeeping, not
 # about whether a terminal actually closed, and the sentence it prints is worded for that: it says
 # the keeper HAS BEEN ASKED, not that the seats are gone.
 _keeper_teardown() { # <room> -> 0 asked, 1 no live keeper to ask, 2 the request could not be written

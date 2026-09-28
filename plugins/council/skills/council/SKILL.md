@@ -936,7 +936,7 @@ on the first throws away the argument that seat was holding.
 
 | | can it tell? | how |
 |---|---|---|
-| the seat's terminal is **gone** | **partly — evidence, not proof** | the room's **launch record** (`<mailbox>/council-launch-<room>`, written by `up` and `relaunch`) names the handle the backend assigned when the seat was launched. A seat reads gone when the backend answered, the room pin agrees with the container the record names, and neither that handle nor any session with the seat's name is listed. A pin that disagrees with the record, a same-named session where the launched one is gone, a backend that did not answer and no record at all each read as *unknown*, which produces no sentence. The record is in the mailbox, which a seat can write, so a forged gone takes the record and the pin together |
+| the seat's terminal is **gone** | **partly — evidence, not proof** | the room's **launch record** (`<mailbox>/council-launch-<room>`, written by `up` and `relaunch`) names the handle the backend assigned when the seat was launched. A seat reads gone when the backend answered, the room pin agrees with the container the record names, and neither that handle nor any session with the seat's name is listed anywhere on the backend. A pin that disagrees with the record, a same-named session where the launched one is gone, a backend that did not answer and no record at all each read as *unknown*, which produces no sentence. The record is in the mailbox, which a seat can write, but no single edit of it reads gone for a seat whose session is up: a forged gone needs the backend changed as well |
 | the seat's terminal is **up** | **partly — same read, same limit** | the recorded handle is listed with the recorded container and the seat's name. A session that merely carries the name does not count, so creating `council-<room>-<peer>` is no longer enough to make a dead seat read up. It is still a reason not to reach for `relaunch` first, not proof of identity: a backend session planted with the recorded handle and name would pass |
 | a terminal that is up **holds no agent** — the agent exited and left a shell or an exited pane | **yes, one way** | the backend is asked which process owns the pane (`drv_occupant`, shared driver) — process state, so nothing an agent prints can forge it. `none` on two reads raises `🛑 NO AGENT` (below). The converse is not available: an agent that dies leaving another process in the foreground reads as occupied, so the absence of the alarm is not proof of life. This read still finds the pane by the seat's session NAME, outside the launch record |
 | a terminal that is up is **at a prompt** rather than working | **no — and the read it has runs the other way** | `adp_turn_state` (shared adapters) reads running/queued/idle off the pane, and `status` uses it for the `⏳ LONG TURN` tier below: a client that says it is *working* is quoted as such. The converse is not available — `idle` cannot tell a permission prompt from a finished turn, and no committed capture separates them — so the absence of that quote is not a claim that a seat is wedged |
@@ -953,7 +953,8 @@ says nothing rather than guessing. Two things that wording is doing deliberately
   discarding everything that seat has read.
 * **an absence is believed only when the record, the pin and the backend agree.** That rules out
   the accidental misreads (a backend that did not answer, a run resolved to the other backend, a
-  pin that moved), and a single write to the room or to the record on its own now reads unknown.
+  pin that moved), and each single write to the room or to the record that review has tried now
+  reads unknown (the header of `lib/launch-record.sh` lists them).
   It does not rule out a coordinated edit: the record is accident-grade evidence like everything
   else in the mailbox, so it raises the bar to a second, consistent forgery rather than closing
   it.
@@ -1188,7 +1189,8 @@ work landed: its `term` column runs `council.sh terminals` per room, so a decide
 seats reads `term 3/3` where a torn-down one reads `term 0/3`. Prefer that, or `council.sh
 terminals` for one room — both read the backend without touching the seats, checked against the
 room's launch record, and both inherit that record's forgeability (`_room_terminals`' header
-names the routes); a room with no record, or a pin that disagrees with it, reads `term ?`. The per-seat probe is
+names the routes); a launched room with no record, or a pin that disagrees with it, reads
+`term ?`. The per-seat probe is
 [`say`](#what-say-establishes-and-what-each-answer-means), and its cost is in the next sentence,
 so reach for it when you need a single seat's answer rather than the room's: `council.sh say
 <peer> "…"` answers **exit 3** when that seat has no live terminal, and **exit 4** when the room was
