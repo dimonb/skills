@@ -85,6 +85,11 @@ PROBE_FILES=(
 # gone means the run was killed (SIGKILL, which no trap can catch) and what it left is stale.
 # It lives in the worktree's own git directory, so it is never committed, never shows in
 # `git status` (which the end-of-run assertion reads), and each worktree has its own.
+# ONE WINDOW WHERE IT DOES NOT HOLD: section 36 below proves these arms by faking a dead run's
+# marker for a nested run, then letting that run's --recover remove it, and rewrites this run's
+# own marker only when it is done. During those few seconds the file names a dead pid, or is
+# absent, while this run is live — and one of those probes edits the Makefile with no marker at
+# all, so a run SIGKILLed right there leaves an edit --recover will not claim as its own.
 MARKER=$(git rev-parse --git-path check-test.running)
 
 restore() {
@@ -125,6 +130,10 @@ explain_leftovers() {
   if [ "${#left_over[@]}" -gt 0 ]; then
     echo "check-test's own probe fixtures are in the tree, left by a run that did not finish — not a repository violation:" >&2
     printf '  %s\n' "${left_over[@]}" >&2
+  else
+    # A probe's edit to a TRACKED file looks like anybody's edit, so a marker alone does not say
+    # whose the changes are, and --recover would discard them either way.
+    echo "no probe fixture was found, so the changes listed may be that run's probe edits or your own work" >&2
   fi
   echo "inspect them, then 'bash scripts/check-test.sh --recover' restores $GUARDED and removes the probe files (it discards every change listed)" >&2
 }
@@ -134,7 +143,13 @@ explain_leftovers() {
 if [ "${1:-}" = "--recover" ]; then
   # shellcheck disable=SC2086
   dirty=$(git status --porcelain --untracked-files=all -- $GUARDED)
-  if [ -z "$prev" ] && [ "${#left_over[@]}" -eq 0 ] && [ -z "$dirty" ]; then
+  if [ -z "$prev" ] && [ "${#left_over[@]}" -eq 0 ]; then
+    if [ -n "$dirty" ]; then
+      # Nothing marks these as a run's leftovers, so they are treated as the user's work.
+      echo "refusing to recover: no marker of an unfinished run and no probe fixture, so the changes under $GUARDED are not assumed to be check-test's:" >&2
+      printf '%s\n' "$dirty" >&2
+      exit 2
+    fi
     echo "nothing to recover: no marker of an unfinished run, no probe fixture and no change under $GUARDED"
     exit 0
   fi
@@ -1172,9 +1187,9 @@ expect_fail "check 13: a path added to \$GUARDED but not to the filter" \
 git checkout -- scripts/check-test.sh
 
 # 33b2 — check 13's REFUSAL arm. `paths-ignore:` is the same YAML shape as `paths:` with the
-# opposite meaning, and check 13 reads entries without reference to the key they sit under — so
-# without this arm that one-word edit would leave the check reading the identical entries,
-# reporting full coverage, and the job skipped on exactly the paths it was proving were covered.
+# opposite meaning, and check 13 reasons only about an explicit list of the paths that run the
+# job — so without this arm an inverted list would be read as one, reporting full coverage while
+# the job skipped on exactly the paths it was proving were covered.
 perl -pi -e 's/^    paths:$/    paths-ignore:/' .github/workflows/check-test.yml
 expect_fail "check 13: paths-ignore is refused rather than misread" \
   "uses paths-ignore"
@@ -1200,6 +1215,22 @@ perl -0pi -e "s{(\n  push:\n    branches: \\[main\\]\n)}{\$1    paths:\n      - 
 expect_fail "check 13: a path filter under push: is refused" \
   "filters its push: trigger by paths"
 git checkout -- .github/workflows/check-test.yml
+# 33d2 — the same filter in flow style, which a block reader would read as an unfiltered push...
+perl -0pi -e "s{\n  push:\n    branches: \\[main\\]\n}{\n  push: {branches: [main], paths: ['docs/**']}\n}" .github/workflows/check-test.yml
+expect_fail "check 13: a flow-style push: trigger is refused" \
+  "writes its push: trigger in flow style"
+git checkout -- .github/workflows/check-test.yml
+# 33d3 — ...and under a quoted key, which a reader of bare keys would file under `branches:`.
+perl -0pi -e "s{(\n  push:\n    branches: \\[main\\]\n)}{\$1    \"paths\":\n      - 'docs/**'\n}" .github/workflows/check-test.yml
+expect_fail "check 13: a quoted paths key under push: is read as the key it is" \
+  "filters its push: trigger by paths"
+git checkout -- .github/workflows/check-test.yml
+# 33d4 — and the flow mapping moved to the line below its event, where it is neither a key nor an
+# item: a line the reader cannot place reds instead of being skipped.
+perl -0pi -e "s{\n  push:\n    branches: \\[main\\]\n}{\n  push:\n    {branches: [main], paths: ['docs/**']}\n}" .github/workflows/check-test.yml
+expect_fail "check 13: a line under push: that is neither a key nor an item is refused" \
+  "cannot read as a key or a list item"
+git checkout -- .github/workflows/check-test.yml
 # 33e — and the backstop removed outright.
 perl -0pi -e 's{\n  push:\n    branches: \[main\]\n}{\n}' .github/workflows/check-test.yml
 expect_fail "check 13: a workflow with no push: trigger reds" \
@@ -1219,7 +1250,7 @@ perl -pi -e 's{^(\s*)# A line in column 0 opens a top-level key.*$}{$1) (}' scri
 expect_fail "check 13 reds when its trigger reader cannot run" \
   "could not read the triggers out of"
 cp "$SCRATCH/check13.bak" scripts/check.sh
-# 33h — the two missing-file arms, pinned. Unpinned, each was fully substituted by a neighbour: a
+# 33h — the missing-file arms, pinned. Unpinned, each was fully substituted by a neighbour: a
 # missing check-test.sh yields an empty `$GUARDED`, and a missing workflow now fails the trigger
 # reader. Repointed inside check.sh rather than deleted, so this file is never removed while it runs.
 perl -pi -e 's{^CT_FILE=scripts/check-test\.sh$}{CT_FILE=scripts/_no-such-check-test.sh}' scripts/check.sh
@@ -1369,9 +1400,10 @@ git checkout -- "$RUNNER"
 # not gate assertions, so they are proven by running this script a second time, NESTED, and reading
 # how it refuses. Every nested run below must refuse before it arms a trap or mutates anything,
 # because a nested run that got past its entry guards would start a second full run over this
-# tree. So each one is given a leftover that also reds the gate — a non-Latin `docs/_probe.md`,
-# the exact state #136 measured — which makes a broken arm fall to another refusal, or to
-# `BASELINE DIRTY`, and report here as a wrong arm rather than run.
+# tree. So each one without --recover (which never reaches a run) is given a leftover that also
+# reds the gate — a non-Latin `docs/_probe.md`, the exact state #136 measured — which makes a
+# broken arm fall to another refusal, or to `BASELINE DIRTY`, and report here as a wrong arm
+# rather than run.
 # $1 label, $2 the exit status wanted, $3 a fixed string the nested output must contain, then the
 # nested run's arguments.
 expect_nested() {
@@ -1403,15 +1435,39 @@ expect_nested "a killed run's leftover is named as check-test's own" 2 "left by 
 # 36c — the same marker with a probe edit under $GUARDED: the dirty-tree refusal says whose it
 # most likely is.
 printf '# probe\n' >> Makefile
-expect_nested "a killed run's edit under \$GUARDED is attributed to it" 2 "did not finish (pid $dead"
-# 36d — --recover restores both and removes the marker; then, with nothing left, says so.
+# Pinned on the dirty-tree refusal's own line, since the leftover arm prints the attribution too;
+# the attribution is then required of that same output.
+expect_nested "a killed run's edit under \$GUARDED is attributed to it" 2 "uncommitted or untracked changes under"
+if ! grep -qF "did not finish (pid $dead" "$SCRATCH/nested"; then
+  echo "NOT CAUGHT: the dirty-tree refusal does not name the dead run"; nocatch=$((nocatch+1))
+fi
+# 36d — --recover restores both and removes the marker.
 expect_nested "--recover restores what a killed run left" 0 "recovered" --recover
 if [ -e docs/_probe.md ] || [ -e "$MARKER" ] || ! git diff --quiet -- Makefile; then
   echo "NOT CAUGHT: --recover left something behind"; nocatch=$((nocatch+1))
 fi
-expect_nested "--recover with nothing to recover" 0 "nothing to recover" --recover
+# 36e — a marker whose pid is alive but running something else (a reused pid) is a dead run, not a
+# live one: without the command check it would block every run as 'in progress' for ever.
+mkdir -p docs
+printf 'probe \320\226\n' > docs/_probe.md
+( exec sleep 60 ) & other=$!
+# Until the exec lands, the child still shows this script's command line, which reads as live.
+for _ in $(seq 1 100); do
+  ps -p "$other" -o command= 2>/dev/null | grep -q 'check-test\.sh' || break
+done
+printf 'pid=%s\nstarted=probe\n' "$other" > "$MARKER"
+expect_nested "a marker naming a reused pid reads as a dead run" 2 "did not finish (pid $other"
+kill "$other" 2>/dev/null; wait "$other" 2>/dev/null
+rm -f "$MARKER" docs/_probe.md
+# 36f — --recover with no marker and no probe fixture does not treat a change as a leftover: it
+# would otherwise discard the user's own work on request of a stale hint.
+printf '# probe\n' >> Makefile
+expect_nested "--recover refuses changes nothing marks as check-test's" 2 "not assumed to be check-test's" --recover
 git checkout -- Makefile
-rm -f docs/_probe.md
+expect_nested "--recover with nothing to recover" 0 "nothing to recover" --recover
+rmdir docs 2>/dev/null || true
+# Not probed: the `note:` line for a stale marker over a clean tree, since that nested run would
+# pass every guard and start a second full run.
 write_marker
 
 echo

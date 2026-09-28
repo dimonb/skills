@@ -45,7 +45,9 @@ other one. While it runs, its probes are in the tree, and a live probe looks exa
 killed run left behind. So a run holds `check-test.running` in the worktree's git directory
 (`git rev-parse --git-path check-test.running`), with its pid, for as long as it has anything in the
 tree: read that before reverting anything probe-shaped. The file with a dead pid means the run was
-killed, and `bash scripts/check-test.sh --recover` restores what it left.
+killed, and `bash scripts/check-test.sh --recover` restores what it left — except for a few seconds
+near the end of a live run, when the script's own marker probes fake a dead one, so confirm no
+`check-test.sh` process is still running in the worktree first.
 
 ## Planning with GSD, and no per-change spec artifact
 

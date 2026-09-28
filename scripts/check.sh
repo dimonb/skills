@@ -817,11 +817,18 @@ else
   # unconditional backstop and lent its entries to the pull-request filter, which then read as
   # covering paths it did not. This reads the block by indentation and prints one row per event
   # (`event <name>`), per key under an event (`key <event> <name>`), and per QUOTED list item under
-  # such a key (`item <event> <key> <value>`). It reads block-style YAML only: a trigger written in
-  # flow style (`on: [push]`, `push: {paths: [...]}`) is not seen, and an unquoted item is not
-  # read. The first reads as a missing `push:` and the second drops an entry, and both red below,
-  # so that direction is a false red fixed by writing the block style this file already uses.
+  # such a key (`item <event> <key> <value>`), a key quoted or not. It reads block-style YAML only.
+  # For `push:` and `pull_request:`, the two events this check is about, a line it cannot place reds
+  # below rather than passing: `on:` in flow style (`on: [push]`) reads as a missing `push:`; an
+  # event carrying a value on its own line (`push: {paths: [...]}`) prints `inline <event>`; a line
+  # under an event that is neither a key nor a `-` item (a flow mapping on the next line, `paths :`)
+  # prints `unread <event>`. Those reds are false reds, fixed by writing the block style this file
+  # already uses. A `-` item that is not quoted is not read, and that is NOT always a red: under
+  # `pull_request:`'s `paths:` it drops out of the filter, which reds only for an entry `$GUARDED`
+  # derives (an unquoted `- docs/**` vanishes silently); under `push:`'s `paths:` the key has
+  # already red; under any other key it is ignored, as this check reads no other key's items.
   ct_on=$(awk '
+    function name(s) { sub(/:.*/, "", s); gsub(/["\047]/, "", s); return s }
     # A line in column 0 opens a top-level key; only the `on:` block is read.
     /^[^ #]/ { inon = ($0 ~ /^["\047]?on["\047]?:[ ]*(#.*)?$/); next }
     !inon || /^[ ]*(#.*)?$/ { next }
@@ -829,14 +836,18 @@ else
       match($0, /^ */); ind = RLENGTH; line = substr($0, ind + 1)
       if (evind == 0) evind = ind
       if (ind <= evind) {
-        if (line ~ /^[A-Za-z_][A-Za-z0-9_-]*:/) {
-          ev = line; sub(/:.*/, "", ev); key = ""; print "event\t" ev
+        if (line ~ /^["\047]?[A-Za-z_][A-Za-z0-9_-]*["\047]?:/) {
+          ev = name(line); key = ""; print "event\t" ev
+          if (line !~ /^[^:]*:[ ]*(#.*)?$/) print "inline\t" ev
         }
         next
       }
-      if (line ~ /^[A-Za-z_][A-Za-z0-9_-]*:/) {
-        key = line; sub(/:.*/, "", key); print "key\t" ev "\t" key; next
+      if (line ~ /^["\047]?[A-Za-z_][A-Za-z0-9_-]*["\047]?:/) {
+        key = name(line); print "key\t" ev "\t" key; next
       }
+      # Neither a key nor a list item, e.g. a flow mapping on the line below its event, or a key
+      # with a blank before its colon: a shape this reader cannot place.
+      if (line !~ /^-/) { print "unread\t" ev; next }
       if (key == "") next
       if (line ~ /^- *\047[^\047]*\047/) { v = line; sub(/^- *\047/, "", v); sub(/\047.*/, "", v) }
       else if (line ~ /^- *"[^"]*"/) { v = line; sub(/^- *"/, "", v); sub(/".*/, "", v) }
@@ -853,7 +864,7 @@ else
   # sentence just above that names the construct, and the one in the workflow's own header that
   # explains the refusal, which is the natural next edit somebody makes. That red would be
   # permanent, on a correct file, with full coverage intact.
-  if grep -qE '^[[:space:]]*paths-ignore:' "$CT_WF"; then
+  if grep -qE '^[[:space:]]*["'\'']?paths-ignore["'\'']?:' "$CT_WF"; then
     fail "$CT_WF uses paths-ignore, which check 13 does not reason about — it checks an explicit list of the paths that run the job, and an inverted list would read as full coverage"
   fi
   if [ "$ct_rc" -ne 0 ]; then
@@ -869,6 +880,17 @@ else
     if [ -n "$push_filter" ]; then
       fail "$CT_WF filters its push: trigger by $(printf '%s' "$push_filter" | tr '\n' ' ')— the run on main must be unconditional, it is the backstop for the pull-request filter"
     fi
+    # A value on the event's own line is flow style, which the reader above does not look inside:
+    # `push: {branches: [main], paths: [...]}` would otherwise read as an unfiltered push.
+    # A line under the event that is neither a key nor a list item is one it could not place.
+    for ev in push pull_request; do
+      if printf '%s\n' "$ct_on" | grep -qxF "$(printf 'inline\t%s' "$ev")"; then
+        fail "$CT_WF writes its $ev: trigger in flow style, which check 13 does not read inside — write it as a block, as the rest of the file does"
+      fi
+      if printf '%s\n' "$ct_on" | grep -qxF "$(printf 'unread\t%s' "$ev")"; then
+        fail "$CT_WF has a line under its $ev: trigger that check 13 cannot read as a key or a list item — write it as a block, as the rest of the file does"
+      fi
+    done
   fi
   # The pull-request filter is the `paths:` list under `pull_request:` and nothing else, so an entry
   # under another trigger cannot stand in for one missing here.
@@ -920,9 +942,10 @@ fi
 # read one level deep (#272): a quoted span is one word unless it holds the command word. Not
 # unwrapped, so a space inside can still split off a fragment that reads as the pattern: an
 # escaped quote nested in a quoted command (`sh -c "pgrep -P \"$a $b\""`), and a quoted `)`
-# inside a `$(...)` within double quotes, which ends that skip early. A lookup inside a process substitution that is itself another lookup's
-# pattern (`pgrep -P "$x" <(pgrep -f y)`) reds, loudly. The rule it backs is broader and lives in AGENTS.md: a helper that signals a LIST of pids refuses pid 1 and
-# bounds the list, because the list is exactly what a wrong lookup inflates.
+# inside a `$(...)` within double quotes, which ends that skip early. A lookup inside a process
+# substitution that is itself another lookup's pattern (`pgrep -P "$x" <(pgrep -f y)`) reds,
+# loudly. The rule it backs is broader and lives in AGENTS.md: a helper that signals a LIST of
+# pids refuses pid 1 and bounds the list, because the list is exactly what a wrong lookup inflates.
 pg_files=$(git $GIT_Q ls-files --cached --others --exclude-standard '*.sh'); pg_rc=$?
 if [ "$pg_rc" -ne 0 ]; then
   fail "could not list shell files for the parent-pid lookup scan (check 14) (git ls-files rc=$pg_rc)"
