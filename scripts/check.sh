@@ -13,12 +13,14 @@
 # 8. no non-Latin script in any file, untracked included (the checkable half of "English")
 # 9. no council test names the shared temp parent (the pre-run-root shape); see §9 for its limits
 # 10. every test on disk is registered in its suite's run-all.sh, for every suite $GATED_SUITES
-#     declares, so no test silently stops running
+#     declares, so no test silently stops running; and no two tests in one suite share a number
 # 11. every vendored copy of a shared module is byte-identical to its module's one canonical source
 # 12. every test runner on disk under plugins/ or shared/ is invoked by a Makefile recipe AND
 #     declared in $GATED_SUITES, so no whole suite runs nowhere or escapes check 10
 # 13. the check-test CI job's pull-request path filter covers every path check-test.sh guards, so
 #     the gate-of-the-gate cannot be skipped by a change that could break what it proves
+# 14. no pgrep/pkill selects by parent (-P / --parent) without a pattern: on macOS that form
+#     lists every process on the machine
 set -uo pipefail
 cd "$(dirname "$0")/.."
 ROOT_P=$(pwd -P)          # physical repo root; see the symlink containment check below
@@ -596,6 +598,20 @@ for suite_dir in $GATED_SUITES; do
       fi
     fi
   fi
+  # 10b — no two tests in one suite share a number (#149). Two changes developed in parallel both
+  # pick "the next free number" off the same `main`, so they pick the same one; after the rebase
+  # resolves the registration line, both files run and nothing says the number now means nothing.
+  # The number is the whole prefix before the first `-` — `t12`, `t9b` — so the letter-suffix
+  # scheme (`t9`, `t9b`, `t9c`) is distinct numbers by construction, and a suite whose files
+  # carry no digits (`t-driver.sh`) has no number to collide on and is not read.
+  if [ "$suite_rc" -eq 0 ] && [ -n "$suite_tests" ]; then
+    dup_nums=$(printf '%s\n' "$suite_tests" | sed -n 's/^\(t[0-9][0-9]*[a-z]*\)-.*/\1/p' \
+      | sort | uniq -d)
+    for num in $dup_nums; do
+      fail "two tests in $suite_dir share the number $num (renumber one): $(printf '%s\n' "$suite_tests" \
+        | grep "^$num-" | tr '\n' ' ')"
+    done
+  fi
 done
 
 # 11 — every shared/<mod>/ module is one source of truth. Each plugin ships its own copy of a
@@ -834,6 +850,127 @@ else
     # No separate arm for "the filter names the workflow that carries it": `$GUARDED` includes
     # `.github` (check-test's probes mutate this very file), so the loop above already requires
     # `.github/**`, which covers it. If `.github` ever leaves that list, this needs its own arm.
+  fi
+fi
+
+# ------------------ 14. no pgrep/pkill selecting by parent (-P / --parent) without a pattern
+# On macOS, `pgrep -P "$pid"` given NO pattern ignores `-P` and prints every pid on the machine
+# (measured: 680 on one desktop session; with a pattern, `pgrep -P "$pid" sleep` filters
+# correctly). A test fed that list to `kill -9` and killed every process the user owned, the
+# terminal hosting the fleet included, on every resume of the slot that carried it (#265). Reading
+# the code did not find it: every `kill` named a value the code believed was a child pid, and the
+# defect was in the tool's semantics. So the shape is gated, and the safe form is named in the
+# message: `ps -A -o pid= -o ppid=` filtered by awk on the parent column behaves the same on both
+# platforms. `pkill` is matched as well because it shares pgrep's option parser on both platforms
+# and is the direct-kill form of the same lookup; its no-pattern behaviour was not measured here.
+#
+# Scope: the same file set as check 1 — every tracked or untracked `*.sh`, minus an untracked
+# local skill. What it parses: the tokens after a `pgrep`/`pkill` word up to a shell separator
+# (`| ; & ( )` or a backquote) or a `#`, with backslash-continued lines joined first and
+# redirections (`2>/dev/null`, `2>&1`, `> file`) removed with their targets. A `-P` or
+# `--parent` in that span with no non-option word left over after the option arguments are
+# consumed is a hit. The command word is read with its quotes stripped, so a lookup inside
+# `sh -c "…"` counts. Whole-line comments are skipped, so prose about the trap may quote it.
+#
+# What it cannot see, stated because a green gate is otherwise read as coverage: a pid list built
+# any OTHER way — a different tool, a pattern that matches more than intended, a parent lookup in
+# a file that is not `*.sh` (a Makefile recipe, an extensionless script), or `pgrep` reached
+# through a variable or an alias. It also over-reads a quoted string that happens to spell the
+# shape (`echo "pgrep -P x"`); that reds, loudly, which is the direction to err in. Words are
+# split on whitespace with no regard to quoting, so a quoted argument or redirect target holding
+# a space (`-P "$a $b"`, `2>"$d/a b"`) leaves a fragment that reads as the pattern and passes; a
+# process substitution before the pattern (`<(…) sleep`) goes the other way and reds. The rule it
+# backs is broader and lives in AGENTS.md: a helper that signals a LIST of pids refuses pid 1 and
+# bounds the list, because the list is exactly what a wrong lookup inflates.
+pg_files=$(git $GIT_Q ls-files --cached --others --exclude-standard '*.sh'); pg_rc=$?
+if [ "$pg_rc" -ne 0 ]; then
+  fail "could not list shell files for the parent-pid lookup scan (check 14) (git ls-files rc=$pg_rc)"
+else
+  pg_list=()
+  while IFS= read -r f; do
+    [ -n "$f" ] || continue
+    untracked_local_skill "$f" && continue
+    # `./` so awk never reads a name such as `x=y.sh` as a variable assignment.
+    pg_list+=("./$f")
+  done <<< "$pg_files"
+  if [ "${#pg_list[@]}" -eq 0 ]; then
+    fail "the parent-pid lookup scan (check 14) found no shell file to read (moved? renamed?)"
+  else
+    # Option letters that take an argument, from the union of the macOS and procps man pages: the
+    # argument is consumed so it is never mistaken for the pattern.
+    pg_hits=$(awk '
+      # An option argument is the next word, never a separator or a comment: `-P` at the end of
+      # a command has no argument to consume, and swallowing the `#` would read the comment as
+      # the pattern.
+      function optarg(t, j, n) {
+        if (j < n && t[j+1] != ";" && t[j+1] !~ /^#/) return j + 1
+        return j
+      }
+      function scan(s, where,   n, t, i, j, tok, base, hasP, pat, k, c, rest) {
+        if (s ~ /^[ \t]*#/) return
+        # A redirection and its target are not a pattern, and the incident line itself carried
+        # one (`pgrep -P "$cpid" 2>/dev/null`). Removed BEFORE the separators, so the `&` of
+        # `2>&1` and `&>` is still attached to its operator here.
+        gsub(/[0-9]*(&>>|&>|>>|>&|<&|<<<|<<-|<<|<>|>\||>|<)[ \t]*[^ \t|;&()`]*/, " ", s)
+        gsub(/[|;&()`]/, " ; ", s)
+        n = split(s, t, /[ \t]+/)
+        for (i = 1; i <= n; i++) {
+          if (t[i] ~ /^#/) return
+          # Quotes and backslashes off the command word, so `sh -c "pgrep -P $x"` and the
+          # alias-bypassing `\pgrep` are read as the lookup they are.
+          base = t[i]; gsub(/["\047\\]/, "", base); sub(/.*\//, "", base)
+          if (base != "pgrep" && base != "pkill") continue
+          hasP = 0; pat = 0
+          for (j = i + 1; j <= n; j++) {
+            tok = t[j]
+            if (tok == ";" || tok ~ /^#/) break
+            if (tok == "") continue
+            if (tok == "--") { if (j < n && t[j+1] != ";") pat = 1; break }
+            if (tok ~ /^--/) {
+              if (tok ~ /^--parent(=|$)/) hasP = 1
+              if (tok ~ /^--(parent|pgroup|group|session|terminal|euid|uid|pidfile|delimiter|ns|nslist|runstates|cgroup|signal)$/) j = optarg(t, j, n)
+              continue
+            }
+            # A pkill signal name (`-TERM`, `-SIGKILL`) is not an option cluster: read letter by
+            # letter it would consume the next word as an argument and hide a `-P` behind it.
+            # `-P123` is the parent selector with its pid attached, never a signal.
+            if (base == "pkill" && tok ~ /^-(SIG)?[A-Z][A-Z0-9+]+$/ && tok !~ /^-P[0-9]/) continue
+            if (tok ~ /^-./) {
+              for (k = 2; k <= length(tok); k++) {
+                c = substr(tok, k, 1)
+                if (c == "P") hasP = 1
+                if (index("dFgGJMNPrstuU", c)) {
+                  rest = substr(tok, k + 1)
+                  if (rest == "") j = optarg(t, j, n)
+                  break
+                }
+              }
+              continue
+            }
+            pat = 1
+          }
+          if (hasP && !pat) print where ": " s0
+        }
+      }
+      # A file ending on a continued line still has its last command scanned.
+      FNR == 1 && buf != "" { s0 = buf; buf = ""; scan(s0, prev ":" start) }
+      { prev = FILENAME; sub(/^\.\//, "", prev) }
+      {
+        line = $0
+        if (buf == "") start = FNR
+        if (line ~ /\\$/) { buf = buf substr(line, 1, length(line) - 1) " "; next }
+        s0 = buf line; buf = ""
+        scan(s0, prev ":" start)
+      }
+      END { if (buf != "") { s0 = buf; scan(s0, prev ":" start) } }
+    ' "${pg_list[@]}" 2>&1); pg_awk=$?
+    if [ "$pg_awk" -ne 0 ]; then
+      fail "the parent-pid lookup scan (check 14) could not run (awk rc=$pg_awk): $pg_hits"
+    elif [ -n "$pg_hits" ]; then
+      echo "FAIL: pgrep/pkill with -P/--parent and no pattern (on macOS it lists EVERY process;"
+      echo "      use: ps -A -o pid= -o ppid= | awk -v p=\"\$pid\" '\$2 == p { print \$1 }'):"
+      printf '%s\n' "$pg_hits"; rc=1
+    fi
   fi
 fi
 
