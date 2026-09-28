@@ -516,13 +516,10 @@ c_round0_positions() {
 # ONE set rather than of a set and a document stream -- before #179 a stuffed lane showed
 # `posted 3/3` beside a waiting= list still naming seats.
 #
-# THE DEADLINE ANCHOR IS NOT THIS SET. c_barrier's `min_by(.sent_ms)` still reads
-# c_round0_positions, and `sent_ms` IS a claim the message makes, so one position stamped far in
-# the past trips the 2x backstop with one seat in. That is the peer-written-timestamp class of
-# #165, not this count, and it is not fixed here. A floor at the roster's `created_ms` would
-# stop the accidental shapes (a harness writing seconds for milliseconds) inside the room; a
-# seat that also rewrites roster.json defeats that floor. Neither the floor nor anything
-# stronger is done here.
+# THE DEADLINE ANCHOR READS THE SAME SEATS BUT NOT THIS FUNCTION. c_barrier's `min_by(.sent_ms)`
+# takes c_round0_positions filtered to the roster's names, because it needs the documents' stamps
+# rather than their authors, and it floors the result at `created_ms` since `sent_ms` IS a claim
+# the message makes (#165). c_barrier's anchor comment carries what still bypasses that floor.
 c_round0_authors() {
   c_round0_positions \
     | jq -r '.from | select(length > 0 and (test("[^A-Za-z0-9_-]") | not))' \
@@ -575,8 +572,9 @@ c_round0_withheld() { { c_all || true; } | jq -c 'select(.round == 0)'; }
 # prepends it to every seat's file whatever that seat's role.
 c_opens_round() { [ "$1" = "$C_OPENING_ACT" ]; }
 
-# open | closed. Closed for good once everyone has posted, or once the deadline has passed
-# with a quorum — one participant that never starts must not hold the room forever.
+# open | closed. Closed for good once everyone has posted, once the deadline has passed with a
+# quorum, or once twice the deadline has passed with any position in (the backstop, below) — one
+# participant that never starts must not hold the room forever.
 c_barrier() {
   [ "$(c_mode)" = roundtable ] || { printf 'closed'; return; }
   local n posted quorum first deadline
@@ -606,9 +604,47 @@ c_barrier() {
   # deadline close the round, which is the barrier deleting itself. (Raised, blind and
   # independently, by a Codex participant inside the very room deciding this question.)
   quorum=$(c_quorum); [ -n "$quorum" ] || quorum=$(( n - 1 )); [ "$quorum" -lt 2 ] && quorum=2
-  first=$(c_round0_positions | jq -s 'if length == 0 then 0 else (min_by(.sent_ms).sent_ms) end')
-  case "$first" in ''|*[!0-9]*) first=0 ;; esac
+  # THE DEADLINE ANCHOR (#165). The round is timed from its oldest position, and `sent_ms` is a
+  # claim the message makes, so two things bound it before it is believed:
+  #
+  #   * ONLY SEATS ON THE ROSTER COUNT, the same set `posted` counts through c_round0_authors.
+  #     `.from` is the lane directory (c_all), and c_peers' names are shape-checked, so a lane for
+  #     a name outside `.order` — or one whose name carries a newline — anchors nothing. Before
+  #     this, a single old position in `lane/<non-participant>` tripped the backstop in a room
+  #     where no participant had spoken. The names go in as ONE `--arg`, split inside jq, and
+  #     never as `--args` words: a name may start with `-`, and jq parses options after `--args`,
+  #     so a seat called `-n` made the query fail and held the round open past both clocks.
+  #   * THE ROUND CANNOT HAVE STARTED BEFORE THE ROOM EXISTED, so the anchor is floored at the
+  #     roster's `created_ms`. That stops the accidental shapes — a harness stamping seconds for
+  #     milliseconds lands decades back and used to close the round on the backstop with one seat
+  #     in, releasing every withheld position to it. A room with no usable `created_ms` (one
+  #     created before it was recorded) keeps the unfloored anchor, as c_room_age_s does.
+  #
+  # WHAT STILL BYPASSES IT, recorded at the code as #204 decided for room-state residuals:
+  #   * a seat may stamp its own position as far back as it likes, with no roster write; the floor
+  #     clamps that to `created_ms`, so the round can be timed from the room's creation rather
+  #     than from its first real position. The rewind is bounded by that gap, and nothing here
+  #     prevents it;
+  #   * a seat that also rewrites roster.json's `created_ms` backwards defeats the floor, since
+  #     that field is as writable as the message. Nothing here stops that deliberate route either.
+  # The reverse direction — a future `created_ms` or `sent_ms` — only DELAYS the close until the
+  # clock passes it, which is the barrier's safe direction and a freeze no longer than the stamp;
+  # a seat that can write the roster can already hold the round with an 18-digit
+  # `round_deadline_ms`.
+  #
+  # "No position yet" is spelled `none`, not 0, because 0 is also what _untrusted makes of a stamp
+  # that is not an integer — and a zero anchor answers `open` below for ever, so before the floor a
+  # seat's one badly-typed `sent_ms` froze the round past both clocks. With a `created_ms` it is
+  # now timed from the room's creation like any other stamp older than that. Anything that is not
+  # `none` or digits — an empty answer because jq failed, or output that is not a number — holds
+  # the round, the conservative reading.
+  first=$(c_round0_positions | jq -rs --arg p "$(c_peers)" '($p | split("\n")) as $peers
+    | [ .[] | select(.from | IN($peers[])) ]
+    | if length == 0 then "none" else (min_by(.sent_ms).sent_ms) end')
+  case "$first" in none|''|*[!0-9]*) printf 'open'; return ;; esac
   deadline=$(c_int_field round_deadline_ms "$C_DEF_ROUND_DEADLINE_MS")
+  local created; created=$(c_int_field created_ms 0)
+  [ "$first" -lt "$created" ] && first=$created
   [ "$first" = 0 ] && { printf 'open'; return; }
   local age=$(( $(c_ms) - first ))
   if [ "$age" -gt "$deadline" ] && [ "$posted" -ge "$quorum" ]; then

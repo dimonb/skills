@@ -60,7 +60,8 @@ assert_inert "a crafted cursor/<me>/<peer>" "$M"
 
 # --- 4. a crafted roster round_deadline_ms must not run anything ----------------
 # Reached through c_barrier, so the room must be a roundtable one and a position must exist
-# — otherwise `first` is 0 and c_barrier returns before the arithmetic.
+# — otherwise c_barrier answers `open` from its no-position (`none`) short-circuit before the
+# arithmetic.
 fresh
 M="$R/PWNED-deadline"; rm -f "$M"
 jq --arg d "$(payload "$M")" '.mode = "roundtable" | .round_deadline_ms = $d' \

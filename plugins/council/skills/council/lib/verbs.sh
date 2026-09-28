@@ -1925,7 +1925,7 @@ v_decide() {
   #
   # IT REFUSES EXACTLY WHEN THE RECORD WOULD DISCLOSE A POSITION THE CALLER MAY NOT READ, which
   # is why the third test is here rather than only the first two. Without it the gate fired on a
-  # round nobody had posted in at all: `c_barrier` returns `open` from its `[ "$first" = 0 ]`
+  # round nobody had posted in at all: `c_barrier` returns `open` from its no-position (`none`)
   # short-circuit before it ever consults the deadline, so that round never closes on its own,
   # every seat is refused for ever, and no supervisor can run `decide` -- measured, with
   # `round_deadline_ms=1`, and the pre-gate tree wrote an honest `unresolved` record there. It

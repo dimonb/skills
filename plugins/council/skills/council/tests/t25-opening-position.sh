@@ -82,6 +82,13 @@ newroom() { # <dir> <deadline_ms> <quorum> <peer>...
      "$d/roster.json" > "$d/r.tmp" && mv "$d/r.tmp" "$d/roster.json"
 }
 
+# A room created BEFORE <ms>. c_barrier floors its deadline anchor at `created_ms` (#165), so a
+# case that backdates a position must backdate the room too, or the floor — not the rule the case
+# is about — decides it, and a mutant of that rule survives.
+backdate() { # <ms>
+  jq --argjson c "$1" '.created_ms=$c' "$ROOM/roster.json" > "$ROOM/r.tmp" && mv "$ROOM/r.tmp" "$ROOM/roster.json"
+}
+
 # ------------------------------------------------ 1. the refusal, act by act
 echo "--- a non-position is refused, and nothing is written ---"
 R1="$COUNCIL_TEST_ROOT/t25a"; newroom "$R1" 600000 2 a b
@@ -198,6 +205,7 @@ echo "--- the round deadline starts at the first position, not the first message
 # ORDERING of the two, never by how close they are.
 R4="$COUNCIL_TEST_ROOT/t25d"; newroom "$R4" 60000 2 a b c
 old=$(( $(now_ms) - 600000 ))
+backdate $(( old - 1000 ))
 raw_round0 a 1 5 msg "$old" "--help, ten minutes before anybody spoke"
 COUNCIL_ME=b bash "$CLI" send --act propose "position b" >/dev/null
 COUNCIL_ME=c bash "$CLI" send --act propose "position c" >/dev/null
@@ -213,6 +221,7 @@ COUNCIL_ME=c bash "$CLI" send --act propose "position c" >/dev/null
 # one that needed headroom, because there load pushes it the wrong way.
 R5="$COUNCIL_TEST_ROOT/t25e"; newroom "$R5" 1000 2 a b c
 old=$(( $(now_ms) - 10000 ))
+backdate $(( old - 1000 ))
 raw_round0 a 1 5 propose "$old" "a real position, ten seconds ago"
 COUNCIL_ME=b bash "$CLI" send --act propose "position b" >/dev/null
 [ "$(barrier b)" = closed ] && ok "the same stale message as a position DOES anchor the deadline" \
@@ -411,6 +420,7 @@ seen=$(COUNCIL_ME=a bash "$CLI" transcript 2>/dev/null | grep -c "SECRET-B-POSIT
 # enough to stay inside the 2x backstop, so only `posted` decides.
 R8="$COUNCIL_TEST_ROOT/t25i"; newroom "$R8" 600000 2 a b c
 old=$(( $(now_ms) - 700000 ))
+backdate $(( old - 1000 ))
 raw_round0 a 1 5 propose "$old" "position a, once"
 raw_round0 a 2 6 propose "$old" "position a, again"
 [ "$(barrier b)" = open ] && ok "one seat's two positions are not a quorum past the deadline" \

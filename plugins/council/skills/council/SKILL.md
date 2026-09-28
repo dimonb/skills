@@ -817,8 +817,15 @@ Opening positions carry no turn number, so they never compete for one.
 
 A participant that never posts does not hold the room: past `round_deadline_ms` (default
 10 min, from the first position) with a quorum present (default N−1, never below 2) the
-round closes without it. `status` shows `OPEN ROUND: posted k/N, waiting for …` while it is
-open — the one state in which a long-held floor is normal rather than a stall.
+round closes without it, and past twice that it closes with whatever it has — the backstop that
+keeps a two-seat room whose partner never speaks from freezing. "The first position" counts only
+seats on the roster and, in a room that records its `created_ms`, never reads earlier than that:
+a `sent_ms` is the message's own claim, so one stamped decades back must not close the round
+early (#165). A seat
+can still backdate its own stamp as far as the room's creation, so the round may be timed from
+then rather than from the first real position; `c_barrier` names the routes that remain.
+`status` shows `OPEN ROUND: posted k/N, waiting for …` while it is open — the one state in
+which a long-held floor is normal rather than a stall.
 
 The `debate` scenario runs `roundtable`; `review` stays turn-taking, because there the
 author's proposal *is* the subject and a blind first lap would have nothing to be about.
