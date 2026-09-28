@@ -358,7 +358,7 @@ explicitly: commented onto another open issue that then owns it, and the move st
 description. `Closes #N` only when every comment on #N is addressed or re-homed; otherwise
 reference #N without the closing keyword and say what is left. The same holds for every issue the
 close sweep closes (§7.G step 4). Intake is not the last read: a parallel run can comment a
-scenario onto #N after it, so §7.G reads the comments again before handing off.
+scenario onto #N after it, so §7.G reads the comments again before handing off or merging.
 
 ### 3.3 PR/MR path — read detail and detect the stage
 
@@ -1397,7 +1397,8 @@ Only in a spec-engine repo whose law puts the archive in the implementation chan
 
 Run the repo's own final-push checklist, then the close sweep below, then the merge gate (§10).
 
-**Whatever the sweep finds, read the comments again before handing off**, with the intake query,
+**Whatever the sweep finds, read the comments again before handing off or merging**, with the
+intake query,
 for every issue the description closes: the change's own, and any the sweep adds. A parallel run
 may have commented since intake. A comment newer than that read is in scope, or re-homed (§3.2),
 before its closing line stays.
@@ -1447,8 +1448,7 @@ happens to notice. The sweep is what makes the backlog shrink as well as grow.
    it and the head sha it was established on — and only once its comments are read and addressed,
    as for the change's own issues (§3.2); a GONE body with an open comment scenario is a reference
    without the closing keyword. The hand-off re-read above covers it too. The merge then closes it,
-   so the close happens when a
-   person merges and not before, and a change that is never merged closes nothing. Editing the
+   so the close happens when a person merges and not before, and a change that is never merged closes nothing. Editing the
    description moves no code, so the reviewed head stays the head handed off (§5.10). Where the
    merge will not close it — the repo does not honour closing keywords, or the forge setting is off
    — ship closes it after the merge with the evidence as a comment (the reference file has the
