@@ -10,7 +10,8 @@
 # printed report, so a child parked in idle-wait for hours stops generating identical
 # tables. Meaningful = slot, MR iid, terminal present, MR state, pipeline stage, open
 # escalation count, the ctx BAND, the WAIT CLASS, the REAP class, and whether the agent is still
-# in its terminal (`noagent=`, and `fna=` for a finished slot — see drv_occupant) (see the stall section
+# in its terminal (`noagent=`, and `fna=` for a finished slot — see drv_occupant), and whether its
+# screen could be read at all (`unread=`, #155 — an unreadable screen never alarms) (see the stall section
 # below — entering or leaving a stated wait is news, and it is news exactly once, which is what
 # makes suppressing the stall block for it cost the operator nothing).
 # THE REAP CLASSES DO NOT RIDE THE SIGNATURE. A torn-down, held or refused slot bypasses this
@@ -1363,8 +1364,11 @@ for slot in "${SLOTS[@]}"; do
   #
   # An UNREADABLE tick (#155) writes back the row it read, verbatim: its screen hash is not an
   # observation, so storing it would rebase the next readable tick's clock — the #142 disarm again,
-  # through the capture instead of the forge. It cannot fire either (its `run` is not idle, so the
-  # branch above is not taken). A supervision gap still restarts the clock, so a gap tick writes
+  # through the capture instead of the forge. It cannot fire either: its `run` is not idle — except
+  # on the finished-with-no-agent path, which resets `run` to idle, and there `wait_kind` (or the
+  # `pend` guard) keeps the firing branch from being taken. Keeping `since` means the minutes spent
+  # unreadable count once the screen reads again with the same hash; freezing the clock instead
+  # would let a flaky capture disarm the alarm as #142's forge did. A supervision gap still restarts the clock, so a gap tick writes
   # its fresh row as any other tick does — dropping the row instead would leave the stale one in
   # place whenever this is the only slot, since an empty table is not written. What this does NOT
   # do: a screen that stays unreadable never alarms — it is visible only as its ❔ row, and the

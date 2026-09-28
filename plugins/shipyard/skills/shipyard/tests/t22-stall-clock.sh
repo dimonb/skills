@@ -37,15 +37,19 @@ FAKE_ROOT="$TMP/repo"; FAKE_GIT="$TMP/gitdir"; MB="$FAKE_GIT/ship-escalations"
 CAPS="$TMP/caps"
 mkdir -p "$FAKE_ROOT" "$MB"
 : > "$MB/container-tmux"        # pinned where we resolve, so no `elsewhere` refusal
-mkdir -p "$FAKE_ROOT/.claude/worktrees/ship-51/.pipeline-state"
-printf '{"pr_number":951,"state":"impl-review"}\n' >"$FAKE_ROOT/.claude/worktrees/ship-51/.pipeline-state/PR-951.json"
+for s in 51 52; do
+  mkdir -p "$FAKE_ROOT/.claude/worktrees/ship-$s/.pipeline-state"
+  printf '{"pr_number":9%s,"state":"impl-review"}\n' "$s" >"$FAKE_ROOT/.claude/worktrees/ship-$s/.pipeline-state/PR-9$s.json"
+done
 export FAKE_ROOT FAKE_GIT CAPS
 
-# One slot, 51: an idle child at impl-review with its PR open.
+# Slot 51: an idle child at impl-review with its PR open. Slot 52, the same, is visited only by
+# run_pair, to pin that one slot's unreadable tick does not leak into the next slot's.
 #   FAKE_GH=fail    the forge read fails, so the state reads `?`
 #   FAKE_CAP=blank  both captures come back empty — a failed read
 #   FAKE_CAP=first  only the FIRST capture of the tick is empty
 #   FAKE_CAP=second only the SECOND is — the one whose hash the clock stores
+#   FAKE_CAP=only51 slot 51's captures are empty, slot 52's are not
 git() {
   # The report asks `git -C <root> remote get-url origin` to pick the forge; without this arm it
   # read as gitlab, `glab` answered nothing, every tick's state was `?`, and the flicker case below
@@ -61,8 +65,8 @@ git() {
 tmux() {
   case "${1:-}" in
     list-windows) case "$*" in
-                    *window_index*) printf '1 ship-51\n' ;;
-                    *)              printf 'ship-51\n' ;;
+                    *window_index*) printf '1 ship-51\n2 ship-52\n' ;;
+                    *)              printf 'ship-51\nship-52\n' ;;
                   esac; return 0 ;;
     has-session)  return 0 ;;
     display-message) printf '0 claude\n'; return 0 ;;
@@ -72,6 +76,7 @@ tmux() {
         blank) return 0 ;;
         first) [ "$n" = 0 ] && return 0 ;;
         second) [ "$n" = 1 ] && return 0 ;;
+        only51) case "$*" in *t22ex:1*) return 0 ;; esac ;;
       esac
       printf 'some earlier output\n> \n'; return 0 ;;
   esac
@@ -84,6 +89,11 @@ run_report() { # [args...] -> the report
   : > "$CAPS"
   SHIPYARD_MOTION_INTERVAL=0.01 SHIPYARD_STALL_SECS=1800 SHIPYARD_BACKEND=tmux SHIPYARD_SESSION=t22ex \
     bash "$REPORT" "$@" 51 2>/dev/null
+}
+run_pair() { # [args...] -> the report over slots 51 and 52
+  : > "$CAPS"
+  SHIPYARD_MOTION_INTERVAL=0.01 SHIPYARD_STALL_SECS=1800 SHIPYARD_BACKEND=tmux SHIPYARD_SESSION=t22ex \
+    bash "$REPORT" "$@" 51 52 2>/dev/null
 }
 row() { printf '%s\n' "$1" | grep "^| $2 " | cut -d'|' -f5 | sed 's/^ *//; s/ *$//'; }
 stalled() { has "$1" '^### 🛑 STALLED'; }
@@ -153,6 +163,18 @@ printf '%s\n' "$(( $(date +%s) - 7200 ))" >"$MB/report-tick"
 FAKE_CAP=blank run_report >/dev/null
 out=$(run_report)
 ok "after a gap, the unreadable tick carried no clock" no       "$(stalled "$out")"
+
+# The verdict is per slot. 52 is readable, idle and past due while 51 is unreadable, so 52 fires
+# and its firing record must be stored: a verdict leaked from 51 would write 52's old row back, its
+# count would never rise, and every tick would repeat the full first firing.
+fresh
+run_pair >/dev/null
+backdate_stall 7200
+FAKE_CAP=only51 run_pair >/dev/null
+out=$(FAKE_CAP=only51 run_pair)
+ok "beside an unreadable slot, a readable one fires"  yes       "$(has "$out" '^- `52` — STILL motionless')"
+ok "...with its firing count stored"                  2         "$(awk -F'\t' '$1 == "52" { print $6 }' "$MB/report-stall")"
+ok "...while the unreadable one does not fire"        no        "$(has "$out" '^- `51`')"
 
 # A screen that stays unreadable never alarms, so its start and its end must be news.
 fresh
