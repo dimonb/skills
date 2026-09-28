@@ -291,7 +291,8 @@ ENVSUM=$(shipyard_env_summary "$AGENT") \
   echo "If you re-wake yourself via a runtime-specific scheduler (a fresh session with no"
   echo "memory), restate this protocol in the payload, or have the payload read this file:"
   echo "\`$PROTO\`. The mailbox is \`$MB\`; the scripts are in \`$DIR\`."
-} | policy_mailbox_write "$PROTO"
+} | policy_mailbox_write "$PROTO" \
+  || { echo "error: cannot write the child's protocol file $PROTO" >&2; exit 1; }
 # This file, the launcher and the launch record below all sit in the mailbox every child can
 # write, so each is written by rename (policy_mailbox_write) and never opened with `>`: a FIFO a
 # child left at one of these names — a relaunch of a slot reuses them — blocked the launch (#253).
@@ -310,8 +311,8 @@ LAUNCHER="$MB/launch-$SLOT.sh"
   echo
   echo "cd $(shipyard_shq "$CWD") || exit 1"
   printf '%s\n' "$EXECLINE"
-} | policy_mailbox_write "$LAUNCHER"
-chmod +x "$LAUNCHER"
+} | policy_mailbox_write "$LAUNCHER" && chmod +x "$LAUNCHER" \
+  || { echo "error: cannot write the child's launcher $LAUNCHER" >&2; exit 1; }
 
 EFFORTSUM=$(shipyard_child_effort_summary "$AGENT")
 

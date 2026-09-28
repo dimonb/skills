@@ -94,10 +94,11 @@ check 1 "$(shipyard_agent_prepare_worktree codex "$TMP/repo" "$TMP/not-a-worktre
 # when nobody added the arm. The preamble then fails, and the launcher used to be written anyway
 # with no export and no unset lines in it. The control run on an unmodified copy is what keeps the
 # refusal checks from passing on a launch that fails for some other reason.
-dry_launch() { # <skill-dir> <repo> -> stdout+stderr, then "rc=<n>"
+dry_launch() { # <skill-dir> <repo> [mailbox-name-to-plant-a-directory-at] -> output, then "rc=<n>"
   local rc=0 out
   git init -q "$2"
   git -C "$2" -c user.email=shipyard-test -c user.name=shipyard-test commit -q --allow-empty -m fixture
+  [ -z "${3:-}" ] || mkdir -p "$2/.git/ship-escalations/$3"
   out=$( cd "$2" || exit 1
          # Functions, not binaries on PATH: shipyard-lib.sh prepends the system PATH.
          tmux() { return 1; }; claude() { :; }; export -f tmux claude
@@ -130,5 +131,11 @@ if [ -e "$TMP/launch-noarm/.git/ship-escalations/launch-42.sh" ]; then left=yes;
 check no "$left" "...and leaves no launcher behind"
 if [ -e "$TMP/launch-noarm/.git/ship-escalations/protocol-42.md" ]; then left=yes; else left=no; fi
 check no "$left" "...nor a protocol file"
+
+# The launcher's own write is checked too. A directory at its name makes policy_mailbox_write
+# refuse, and the launch used to go on to start a terminal on whatever was, or was not, there.
+out=$(dry_launch "$TMP/skill-ok" "$TMP/launch-blocked" launch-42.sh)
+check 1 "$(printf '%s' "$out" | sed -n 's/^rc=//p')" "an unwritable launcher refuses the launch"
+check 1 "$(printf '%s' "$out" | grep -c "cannot write the child's launcher")" "...saying why"
 
 exit "$failures"
