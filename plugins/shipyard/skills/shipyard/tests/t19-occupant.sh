@@ -275,17 +275,26 @@ ok "one none then agent goes on: it sends, not exit 8"      "4|sent" "$(compact_
 # finished line is lower-case, so the old search never matched it and every compaction there
 # timed out into exit 4.
 PANES="$(cd "$SKILL_DIR/../../../.." && pwd)/shared/adapters/tests/fixtures"
-compact_over() { # <before> [<after>] -> "<rc>|<finished line printed?>"
+# The three runs are independent and each pays the script's fixed sleeps, so they run
+# CONCURRENTLY, each with a keys log of its own — the fake switches screens on its own run's keys.
+compact_over() { # <tag> <before> [<after>] -> writes "<rc>|<finished line printed?>" to $TMP/co-<tag>
   local rc=0 out
-  : > "$KEYS"; : > "$C44"
-  out=$(FAKE_PANE="$PANES/pane-$1.txt" FAKE_PANE_AFTER="${2:+$PANES/pane-$2.txt}" \
+  out=$(KEYS="$TMP/keys-$1" FAKE_PANE="$PANES/pane-$2.txt" FAKE_PANE_AFTER="${3:+$PANES/pane-$3.txt}" \
         SHIPYARD_MOTION_INTERVAL=0.01 SHIPYARD_BACKEND=tmux SHIPYARD_SESSION=t19ex \
         bash "$COMPACT" 42 --no-resume --timeout 1 2>&1) || rc=$?
-  printf '%s|%s' "$rc" "$(has "$out" '^compacted after')"
+  printf '%s|%s' "$rc" "$(has "$out" '^compacted after')" > "$TMP/co-$1"
 }
-ok "an earlier compaction on screen is not this one"        "4|no"  "$(compact_over claude-compacted)"
-ok "first kind: idle, then finished, reads finished"        "0|yes" "$(compact_over claude-idle claude-compacted)"
-ok "second kind: idle, then finished, reads finished"       "0|yes" "$(compact_over codex-idle codex-compacted)"
+: > "$TMP/keys-stale"; : > "$TMP/keys-first"; : > "$TMP/keys-second"
+compact_over stale  claude-compacted &
+co1=$!
+compact_over first  claude-idle claude-compacted &
+co2=$!
+compact_over second codex-idle codex-compacted &
+co3=$!
+wait "$co1" "$co2" "$co3"
+ok "an earlier compaction on screen is not this one"        "4|no"  "$(cat "$TMP/co-stale")"
+ok "first kind: idle, then finished, reads finished"        "0|yes" "$(cat "$TMP/co-first")"
+ok "second kind: idle, then finished, reads finished"       "0|yes" "$(cat "$TMP/co-second")"
 
 printf '\n'
 if [ "$FAILURES" -eq 0 ]; then

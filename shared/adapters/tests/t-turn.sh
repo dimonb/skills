@@ -178,6 +178,14 @@ derived=$(pane claude-compacted)
 derived=${derived/"$ADP_COMPACT_COMMAND"/grep the compact script}
 ok "the result line under any other message is tool output" no \
    "$(if adp_compacted "$derived"; then printf 'yes'; else printf 'no'; fi)"
+# DERIVED the same way: the finished capture with the command typed into its empty composer. That
+# is the frame shipyard-compact.sh reads right after typing, and it must read not-done however
+# stale the screen above it — it is the observation that lets a later "done" be believed.
+typed=$(pane claude-compacted | awk -v g="${ADP_BOX_GLYPHS%% *}" -v c="$ADP_COMPACT_COMMAND" '
+  { l[NR] = $0; if (index($0, g) == 1) last = NR }
+  END { for (i = 1; i <= NR; i++) print (i == last ? g " " c : l[i]) }')
+ok "…and the command typed under a finished one is not done" no \
+   "$(if adp_compacted "$typed"; then printf 'yes'; else printf 'no'; fi)"
 
 # --- 5. the marker is spelled ONCE ------------------------------------------------------------
 # The point of moving this into the shared engine was deduplication: the literal used to be

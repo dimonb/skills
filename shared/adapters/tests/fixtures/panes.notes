@@ -1,11 +1,12 @@
-Pane fixtures for the turn-state read (adp_turn_running / adp_turn_state).
+Pane fixtures for the screen reads in agent-adapters.sh (adp_turn_running / adp_turn_state /
+adp_compacted).
 
 PROVENANCE MATTERS MORE THAN USUAL HERE, because the anchor these pin is a claim about what real
-clients render. Of the first batch of ten, nine are verbatim captures of real client TUIs, taken
-at 100 columns, and one is derived from a capture and says so. A second batch of eight, all
-verbatim, is described further down.
+clients render. Every file here is a verbatim capture of a real client TUI, taken at 100 columns,
+except the one marked DERIVED below, which is built from a capture and says so. They came in two
+batches, described in turn.
 
-Machine- and person-specific text was replaced in all ten — rule zero: checkout and scratch paths,
+Machine- and person-specific text was replaced in every capture — rule zero: checkout and scratch paths,
 usernames, the numeric UID, session identifiers, model identifiers and plan tiers, quota
 percentages, and issue numbers. Nothing else was touched: the leading codepoints, the line
 positions and where each marker sits are as captured, and those are the only properties the anchor
@@ -61,7 +62,7 @@ visible without real renders to measure against.
 
 A SECOND BATCH, taken later from throwaway sessions of both kinds in a detached tmux terminal at
 100x40 (tmux capture-pane), each driven by a trivial prompt in an empty scratch directory. Same
-substitutions as above, plus the model's own announcement tip and the wall-clock times. All eight
+substitutions as above, plus the model's own announcement tip and the wall-clock times. All of them
 are verbatim; the one derived screen built from them lives inline in t-turn.sh and says so.
 
   pane-codex-ran-marker.txt      live, the second kind, IDLE after running a grep for the turn

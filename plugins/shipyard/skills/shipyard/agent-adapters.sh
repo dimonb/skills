@@ -272,8 +272,8 @@ adp_parent_kind() {
 #
 #   * the FOOTER, which is the last non-empty line of the capture;
 #   * a SERVICE LINE, whose first character is the bullet below, in column one — and within it
-#     only the client's live-status tail, since that column also carries transcript headers
-#     (see adp_turn_running);
+#     for the turn marker only the client's live-status tail, since that column also carries
+#     transcript headers (see adp_turn_running);
 #   * the composer PLACEHOLDER, which only renders while the box is empty (see the queued arm).
 #
 # Everything else is ignored, and that is what excludes the three ways the old read was fooled: a
@@ -290,7 +290,7 @@ adp_parent_kind() {
 #
 # RESIDUAL the gate cannot check, stated here because it lives here: the footer arm assumes a
 # footer is rendered, so if a client ever omits it the last non-empty line could be a box line.
-# None of the nine captures showed that.
+# None of the committed captures (tests/fixtures/panes.notes) showed that.
 ADP_TURN_MARKER='esc to interrupt'
 
 # A service line's column-one bullet. One kind puts BOTH its turn marker and its queued header

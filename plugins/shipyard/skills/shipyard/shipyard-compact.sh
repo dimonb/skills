@@ -54,14 +54,19 @@ if [ "$(shipyard_occupant "$SLOT" 2>/dev/null)" = none ]; then
 fi
 
 pane() { shipyard_capture "$SLOT"; }
+# observe_undone <screen> — record that the latest compaction was seen NOT finished (see below).
+observe_undone() { if [ -n "${1:-}" ] && ! adp_compacted "$1"; then seen_undone=1; fi; }
 
 # Submit is not the same key on every client build, and a session AT its ceiling can
 # refuse both — so try one, look, then try the other. Never conclude from one key.
 # (On agterm both are the same real newline, so the second attempt is a harmless retry.)
 submit() {
+  local p
   shipyard_submit "$SLOT"
   sleep 3
-  if ! adp_turn_running "$(pane)"; then
+  p=$(pane)
+  observe_undone "$p"
+  if ! adp_turn_running "$p"; then
     shipyard_submit "$SLOT" alt
     sleep 3
   fi
@@ -90,15 +95,20 @@ done
 # The completion baseline, read BEFORE anything is typed. adp_compacted answers for the latest
 # compaction on screen, and until the command below is echoed the latest can be an earlier one —
 # a child compacted with --no-resume and not touched since still shows it. So "done" is believed
-# only after "not done" has been seen: here, or on any poll below. An unreadable pre-send frame is
-# no observation. (The same absent-then-present rule adp_delivery_verdict states for a send.)
+# only after "not done" has been seen — here, once the command is typed, inside submit(), or on
+# any poll below. Every capture this script takes counts, because a small session can finish
+# compacting inside submit()'s wait; a window with no capture in it is one where a finished
+# compaction is never seen as new and the run ends in exit 4. An unreadable frame is no
+# observation. (The same absent-then-present rule adp_delivery_verdict states for a send.)
 seen_undone=0
-pre=$(pane)
-if [ -n "$pre" ] && ! adp_compacted "$pre"; then seen_undone=1; fi
+observe_undone "$(pane)"
 
 echo "compacting ship-$SLOT ($T)…"
 shipyard_esc "$SLOT"; sleep 1                # Escape CLEARS the box; BSpace restores an older draft
 shipyard_type "$SLOT" "$ADP_COMPACT_COMMAND"; sleep 1
+# The typed-not-submitted command opens a new composer segment on the kind that echoes it, which
+# reads not-done however stale the screen above it is.
+observe_undone "$(pane)"
 submit
 
 # Wait for it to finish — by the client's anchored completion line (adp_compacted, shared/adapters),
@@ -107,7 +117,7 @@ submit
 waited=0
 while [ "$waited" -lt "$TIMEOUT" ]; do
   p=$(pane)
-  if [ -n "$p" ] && ! adp_compacted "$p"; then seen_undone=1; fi
+  observe_undone "$p"
   if [ "$seen_undone" = 1 ] && adp_compacted "$p"; then
     if ! adp_turn_running "$p"; then
       echo "compacted after ${waited}s"
