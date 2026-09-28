@@ -158,6 +158,10 @@ ok "watcher group differs from owner group" yes \
 # select() readiness for FIFO EOF when the owner died as the watcher's first select timed out;
 # shipyard_continuity_sentinel_start says what the watcher waits on instead. The kill still lands
 # straight after `ready`, with no settle pause: a pause would make this pass by hiding exactly that.
+# This case is NOT a practical guard for that fix. Against the old code it redded about 1 run in 400
+# of an instrumented loop on macOS, and it cannot red for this cause on a platform without the edge,
+# such as the Linux runner CI uses. A revert of the sentinel would pass here almost every time; the
+# evidence for the fix is the before/after loop recorded on the change that made it.
 kill -TERM -- "-$opgid_b" 2>/dev/null
 b_reaped=$(wait_gone "$wpid_b" "$REAP_WAIT")
 ok "watcher exited after owner-group SIGTERM (via EOF, not the group signal)" gone "$b_reaped"

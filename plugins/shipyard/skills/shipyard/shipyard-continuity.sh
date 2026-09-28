@@ -335,17 +335,19 @@ shipyard_continuity_control_check() {
 
 # The canary SENTINEL (owner-hold path only): a process substitution, so a child in this watcher's
 # own process group, that blocks in a plain `read` on the canary and writes one `eof` line into an
-# anonymous pipe when that read reaches EOF. Stray bytes on the canary are read and ignored, so
-# only EOF — every writer gone — produces the line. Sets SHIPYARD_CONTINUITY_SENTINEL_FD to the
-# pipe's read end; returns 1, leaving it empty, when the pipe cannot be made.
+# anonymous pipe when that read ends. Stray bytes on the canary are read and ignored, so the line
+# means EOF — every writer gone — or a failed read, which is treated as EOF, as the direct read was
+# before #275. Sets SHIPYARD_CONTINUITY_SENTINEL_FD to the pipe's read end; returns 1, leaving it
+# empty, when the pipe cannot be made. The `2>/dev/null` is scoped by the braces: on a bare `exec`
+# it would stay on the watcher shell and silence its log's stderr from then on.
 #
 # Why the watcher does not simply `read -t` the canary itself (#275). On macOS, select() readiness
 # for EOF on a FIFO can be LOST: when the last writer closes just as a select on the read end
-# times out, that select reports a timeout and every later select reports the fd unreadable,
-# although a plain read() on the same fd returns 0 at once, on every attempt. bash's `read -t` is
-# select-based, so a watcher whose owner died at that instant polled forever. Measured with a perl
-# probe on the watcher's own inherited fd: in the stuck state select saw nothing and a blocking
-# sysread returned EOF immediately, with no writer open anywhere. The sentinel's read is the
+# times out, that select reports a timeout, and in every stuck watcher observed each later `read -t`
+# timed out too, although a plain read() on the same fd returned 0 at once, on every attempt. So a
+# watcher whose owner died at that instant polled forever. Measured with a perl probe on the
+# watcher's own inherited fd, with no writer open anywhere: a select probe saw the fd unreadable
+# from the second poll on, and a blocking sysread returned EOF immediately. The sentinel's read is the
 # blocking kind, and what the watcher selects on is DATA in a pipe, which does not have that edge.
 #
 # THE RESIDUAL: this rests on the blocking read() path seeing FIFO EOF, which was measured on the
@@ -356,9 +358,9 @@ shipyard_continuity_control_check() {
 shipyard_continuity_sentinel_start() {
   local cfd="$1"
   SHIPYARD_CONTINUITY_SENTINEL_FD=""
-  exec {SHIPYARD_CONTINUITY_SENTINEL_FD}< <(
-    while read -r -u "$cfd" _ 2>/dev/null; do :; done
-    printf 'eof\n') 2>/dev/null || { SHIPYARD_CONTINUITY_SENTINEL_FD=""; return 1; }
+  { exec {SHIPYARD_CONTINUITY_SENTINEL_FD}< <(
+      while read -r -u "$cfd" _ 2>/dev/null; do :; done
+      printf 'eof\n'); } 2>/dev/null || { SHIPYARD_CONTINUITY_SENTINEL_FD=""; return 1; }
 }
 
 # The inter-poll wait, doubling as owner-death detection ON THE OWNER-HOLD PATH ONLY. With no
@@ -386,7 +388,7 @@ shipyard_continuity_owner_gone() {
   read -r -t "$interval" -u "$SHIPYARD_CONTINUITY_SENTINEL_FD" line 2>/dev/null; rc=$?
   [ "$rc" -gt 128 ] && return 0
   [ "$rc" -eq 0 ] && [ "$line" = eof ] && return 1
-  exec {SHIPYARD_CONTINUITY_SENTINEL_FD}<&- 2>/dev/null || true
+  { exec {SHIPYARD_CONTINUITY_SENTINEL_FD}<&-; } 2>/dev/null || true
   SHIPYARD_CONTINUITY_SENTINEL_FD=""
   sleep "$interval"
   return 0
@@ -419,8 +421,12 @@ shipyard_continuity_watch() {
   case "$cfd" in ''|*[!0-9]*) cfd="" ;; esac
   printf -v cleanup 'shipyard_continuity_remove_owned_state %q %q "" "" %q' \
     "$pidfile" "$heartbeat" "$token"
-  # On the owner-hold path every exit, not only the owner-death break below, reaps this watcher's
-  # own group, so the canary sentinel it starts next never outlives it.
+  # On the owner-hold path every exit that runs this EXIT trap, not only the owner-death break
+  # below, reaps this watcher's own group, so the canary sentinel it starts next goes with it. A
+  # SIGKILL runs no trap: the external teardown (shipyard_continuity_terminate_pid) KILLs the whole
+  # group, but a KILL of the watcher's pid alone leaves the sentinel blocked on the canary until the
+  # owner's write end closes. It then gets SIGPIPE writing its line. It holds only a read end, so it
+  # cannot keep an owner's death from being seen.
   [ -z "$cfd" ] || cleanup="$cleanup; shipyard_continuity_reap_group"
   trap "$cleanup" EXIT
   trap 'exit 0' INT TERM
@@ -952,9 +958,10 @@ shipyard_continuity_start_owner_hold_locked() {
     exec {boot}>&-
     rm -f "$fifo"
   else
-    [ -z "$boot" ] || exec {boot}>&- 2>/dev/null || true
-    [ -z "$cr" ] || exec {cr}<&- 2>/dev/null || true
-    [ -z "$cw" ] || exec {cw}>&- 2>/dev/null || true
+    # Braced so the `2>/dev/null` is scoped: on a bare `exec` it would stay on the caller's shell.
+    [ -z "$boot" ] || { exec {boot}>&-; } 2>/dev/null || true
+    [ -z "$cr" ] || { exec {cr}<&-; } 2>/dev/null || true
+    [ -z "$cw" ] || { exec {cw}>&-; } 2>/dev/null || true
     rm -f "$fifo" "$logtmp"
     return 1
   fi
@@ -997,7 +1004,7 @@ shipyard_continuity_close_canary_wfd() {
   case "${SHIPYARD_CONTINUITY_CANARY_WFD:-}" in
     ''|*[!0-9]*) return 0 ;;
   esac
-  exec {SHIPYARD_CONTINUITY_CANARY_WFD}>&- 2>/dev/null || true
+  { exec {SHIPYARD_CONTINUITY_CANARY_WFD}>&-; } 2>/dev/null || true   # braced, or 2>/dev/null stays on this shell
   SHIPYARD_CONTINUITY_CANARY_WFD=""
 }
 
