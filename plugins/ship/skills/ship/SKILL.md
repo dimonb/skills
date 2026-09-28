@@ -1084,9 +1084,9 @@ machinery, so question 2 asks what the *fix* adds, not where the defect sits: a 
 further gate, script, config key or harness still fails it, and so does one that fails question 1,
 3 or 4. Such a defect leaves this rung only when the fix fails the test or would widen the change
 beyond its issue, and the hand-off record (§7.G) then names it, which exit it took, and what the
-fix would have added or widened. Measured: a gate
-arm's false negative, found by the review of the change that added the arm, was filed as a new
-issue for being "new tokenizer machinery" when the fix corrected lines that change had just written.
+fix would have added or widened. Measured: a gate arm's false negative, found by the review of the
+change that added the arm, was filed as a new issue for being "new tokenizer machinery" when the
+fix corrected lines that change had just written.
 
 **A fix taken under this rung is still recorded** — in the ledger's `deferred` entry, with the sha
 in its `outcome`, and in the deferral line of the stage record (§5.9). **`deferred` is the
