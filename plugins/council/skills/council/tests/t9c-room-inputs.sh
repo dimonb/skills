@@ -104,8 +104,8 @@ done
 #
 # This section names the two it covers rather than quantifying over the rest, because it does
 # NOT cover every other caller: `turn_deadline_ms` is 5b3 below, and `created_ms` — read by
-# c_room_age_s and by c_floor_held_ms — is asserted nowhere in this file. A reader adding a
-# caller should look, not trust a heading.
+# c_room_age_s and by c_floor_held_ms — is asserted in 5b4 through the helper only, not at either
+# reader. A reader adding a caller should look, not trust a heading.
 fresh
 jq '.mode = "roundtable" | .round_quorum = 1.5' \
   "$R/roster.json" > "$R/roster.next" && mv "$R/roster.next" "$R/roster.json"
@@ -116,13 +116,18 @@ else echo "FAIL a non-integer round_quorum reached the numeric test: $err diagno
 
 # `1e400` renders as 1E+400, which is not digits -- and it would otherwise land in the JSON a
 # supervisor and the decision record read, as the room's budget.
-for bad in '2.5' '1e400'; do
+#
+# The two WIDE values are all digits, so they pass both of c_int_field's type tests, and jq keeps
+# every digit of the literal: without the width bound `$((10#$v))` wraps them at status 0 (#157).
+# 2^63 reads back as -2^63 and 2^64 as 0; neither errors, so only the value can show it.
+WIDE1=9223372036854775808 WIDE2=18446744073709551616 WIDE3=99999999999999999999999999
+for bad in '2.5' '1e400' "$WIDE1" "$WIDE2"; do
   fresh
   jq --argjson b "$bad" '.turns_budget = $b' \
     "$R/roster.json" > "$R/roster.next" && mv "$R/roster.next" "$R/roster.json"
   got=$(bash "$CLI" verdict --json 2>/dev/null | jq -r .budget)
-  if [ "$got" = 30 ]; then echo "ok   a non-integer turns_budget ($bad) fell back to the default"
-  else echo "FAIL a non-integer turns_budget ($bad) was believed: budget=$got"; fail=1; fi
+  if [ "$got" = 30 ]; then echo "ok   an unusable turns_budget ($bad) fell back to the default"
+  else echo "FAIL an unusable turns_budget ($bad) was believed: budget=$got"; fail=1; fi
 done
 
 # --- 5b3. floor's deadline_ms is a roster number too -----------------------------
@@ -139,14 +144,30 @@ got=$(bash "$CLI" floor 2>/dev/null | sed -n 's/.*deadline_ms=\([^ ]*\).*/\1/p')
 if [ "$got" = 3000 ]; then echo "ok   floor reports the room's own turn_deadline_ms"
 else echo "FAIL floor did not read turn_deadline_ms: deadline_ms='$got'"; fail=1; fi
 
-for bad in '"3000"' '0.5' '1e400' '"OPTIND[$(id)]"'; do
+for bad in '"3000"' '0.5' '1e400' '"OPTIND[$(id)]"' "$WIDE1" "$WIDE2" "$WIDE3"; do
   fresh
   jq --argjson d "$bad" '.turn_deadline_ms = $d' \
     "$R/roster.json" > "$R/roster.next" && mv "$R/roster.next" "$R/roster.json"
   got=$(bash "$CLI" floor 2>/dev/null | sed -n 's/.*deadline_ms=\([^ ]*\).*/\1/p')
-  if [ "$got" = 180000 ]; then echo "ok   a non-integer turn_deadline_ms ($bad) fell back to the default"
-  else echo "FAIL a non-integer turn_deadline_ms ($bad) was believed: deadline_ms='$got'"; fail=1; fi
+  if [ "$got" = 180000 ]; then echo "ok   an unusable turn_deadline_ms ($bad) fell back to the default"
+  else echo "FAIL an unusable turn_deadline_ms ($bad) was believed: deadline_ms='$got'"; fail=1; fi
 done
+
+# --- 5b4. the width bound: created_ms, and the widest value that is still believed -
+# created_ms is read by c_room_age_s and c_floor_held_ms, and a wrapped one printed a nonsense
+# duration in status's alarm text (#157). Asked of the helper those readers call, because the
+# alarm needs a stalled room to appear at all. The 18-digit case is the other edge: the bound
+# must not refuse a value that cannot wrap.
+fresh
+jq --argjson c "$WIDE3" '.created_ms = $c' "$R/roster.json" > "$R/roster.next" && mv "$R/roster.next" "$R/roster.json"
+got=$(COUNCIL_ME=a bash -c '. "'"$SKILL"'/lib/lib.sh"; c_int_field created_ms 0')
+if [ "$got" = 0 ]; then echo "ok   a created_ms too wide for bash fell back to the default"
+else echo "FAIL a created_ms too wide for bash was believed: '$got'"; fail=1; fi
+fresh
+jq '.turn_deadline_ms = 999999999999999999' "$R/roster.json" > "$R/roster.next" && mv "$R/roster.next" "$R/roster.json"
+got=$(bash "$CLI" floor 2>/dev/null | sed -n 's/.*deadline_ms=\([^ ]*\).*/\1/p')
+if [ "$got" = 999999999999999999 ]; then echo "ok   an 18-digit turn_deadline_ms is still read as written"
+else echo "FAIL an 18-digit turn_deadline_ms was refused: deadline_ms='$got'"; fail=1; fi
 
 # --- 5c. a wrong-typed round_quorum leaves no diagnostic on the floor path -------
 # The quorum reaches `[ "$quorum" -lt 2 ]`. `// empty` never fired for a string, because a

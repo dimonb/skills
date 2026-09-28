@@ -156,16 +156,13 @@ ROOM_NAME=""; ARGS=(); VERB=""
 # the wedged room it was supposed to be reporting on.
 #
 # THE RULE, which is the part worth carrying to the next value-taking arm anyone writes: an
-# arm is safe when an absent operand ABORTS, and unsafe when it is DEFAULTED AWAY. The other
-# arms in this skill are safe for two different reasons, and THIS change fixes neither —
-# they were already fine:
-#   * `relaunch --cwd` (lib/up.sh) and `flow_node` (lib/flow.sh) carry this same explicit
-#     check, added before this one;
-#   * the arms that read a bare `"$2"` — `council_up`'s in lib/up.sh, `c_send`'s in
-#     lib/lib.sh, `v_recv`'s in lib/verbs.sh — abort under `set -u` before `shift 2` runs.
-# The second group is safe by SPELLING rather than by design: it holds only until someone
-# meets one of those `$2: unbound variable` messages in a log and tidies it away with a
-# default, which is precisely how this loop came to spin.
+# arm is safe when an absent operand ABORTS, and unsafe when it is DEFAULTED AWAY. So every
+# value-taking arm checks `[ $# -ge 2 ]` before it reads `"$2"`, and says which option was short
+# (#147) — these two, `relaunch --cwd` and `council_up`'s (lib/up.sh), `flow_node`'s
+# (lib/flow.sh), `c_send`'s (lib/lib.sh), and `v_send`'s and `v_recv`'s (lib/verbs.sh). Write
+# the next one the same way. Never `${2:-}`: that is precisely how this loop came to spin. A bare
+# `"$2"` with no check aborts under `set -u` and is safe, but only by spelling, and its message
+# names a line number instead of the option.
 while [ $# -gt 0 ]; do
   case "$1" in
     --room) [ $# -ge 2 ] || { echo "council: --room needs a room name" >&2; exit 2; }

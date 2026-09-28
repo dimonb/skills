@@ -356,7 +356,9 @@ grep -q 'not a usable participant name' "$ROOT/bad.log" \
 
 # --- `up` reports only what it established (#169) --------------------------------
 # A `--turns` the roster cannot hold is refused where it was typed, before any room exists.
-for t in abc 0 -3 2.5; do
+# The two wide ones are all digits: before #157 the first wrapped through `$(( ))` into a
+# positive budget nobody typed, and was accepted at status 0.
+for t in abc 0 -3 2.5 18446744073709551617 99999999999999999999; do
   ( cd "$REPO" && bash "$CLI" --room turns up --scenario debate --agents claude,codex --turns "$t" "x" ) \
     >"$ROOT/turns.log" 2>&1
   rc=$?
@@ -368,6 +370,48 @@ done
 [ "$(jq -r '.turns_budget' "$REPO/.git/council/turns/roster.json" 2>/dev/null)" = 7 ] \
   || { echo "FAIL up did not record --turns 007 as 7"; cat "$ROOT/turns.log"; fail=1; }
 kill_keeper "$REPO/.git/council/turns/state/keeper.pid" -9; rm -rf "$REPO/.git/council/turns"
+
+# A value-taking option with no value names the option and exits 2 (#147), before any room
+# exists. Last on the line, which is where a dropped value leaves it.
+for o in --scenario --agents --turns --cwd; do
+  if [ "$o" = --scenario ]; then set -- --agents claude,codex; else set -- --scenario debate; fi
+  if want 2 "up $o with no value" bash -c 'cd "$1" && shift && exec bash "$@"' _ "$REPO" \
+       "$CLI" --room noval up "$@" "$o"; then
+    says "$o needs a value" "up's refusal does not name $o"
+  fi
+  [ -d "$REPO/.git/council/noval" ] && { echo "FAIL up left a room behind for a bare $o"; fail=1; rm -rf "$REPO/.git/council/noval"; }
+done
+set --
+
+# Every roster number `up` writes when the scenario names none is the default its reader falls
+# back to (#151): both sides read lib/roster-defaults.sh. Checked by VALUE at the reader, not by
+# the variable, so a reader that goes back to spelling its own number is caught: the field is
+# deleted from the roster `up` wrote and `floor` must still print what `up` had written there.
+# The static half covers the readers the verbs do not print: none may hand c_int_field a literal.
+printf -- '---\nname: %s\nmode: token\nroles: [a, b]\n---\n## role: a\nx\n## role: b\nx\n' \
+  "$BADSC" > "$SKILL/scenarios/$BADSC.md"
+( cd "$REPO" && bash "$CLI" --room defaults up --scenario "$BADSC" --agents claude,codex "x" ) \
+  >"$ROOT/defaults.log" 2>&1
+DR="$REPO/.git/council/defaults"
+( . "$SKILL/lib/roster-defaults.sh"
+  for kv in "turns_budget=$C_DEF_TURNS_BUDGET" "turn_deadline_ms=$C_DEF_TURN_DEADLINE_MS" \
+            "round_deadline_ms=$C_DEF_ROUND_DEADLINE_MS"; do
+    [ "$(jq -r ".${kv%%=*}" "$DR/roster.json" 2>/dev/null)" = "${kv#*=}" ] \
+      || { echo "FAIL up wrote ${kv%%=*} other than its default ${kv#*=}"; cat "$ROOT/defaults.log"; exit 1; }
+  done ) || fail=1
+wrote=$(jq -r .turn_deadline_ms "$DR/roster.json" 2>/dev/null)
+wrote_b=$(jq -r .turns_budget "$DR/roster.json" 2>/dev/null)
+jq 'del(.turn_deadline_ms, .turns_budget)' "$DR/roster.json" > "$DR/roster.next" && mv "$DR/roster.next" "$DR/roster.json"
+read_back=$(COUNCIL_ROOM="$DR" bash "$CLI" floor 2>/dev/null | sed -n 's/.*deadline_ms=\([^ ]*\).*/\1/p')
+[ -n "$wrote" ] && [ "$read_back" = "$wrote" ] \
+  || { echo "FAIL floor's default turn_deadline_ms ($read_back) is not what up writes ($wrote)"; fail=1; }
+read_back=$(COUNCIL_ROOM="$DR" bash "$CLI" verdict --json 2>/dev/null | jq -r .budget)
+[ -n "$wrote_b" ] && [ "$read_back" = "$wrote_b" ] \
+  || { echo "FAIL verdict's default turns_budget ($read_back) is not what up writes ($wrote_b)"; fail=1; }
+lits=$(grep -n 'c_int_field \(turns_budget\|turn_deadline_ms\|round_deadline_ms\) [0-9]' \
+         "$SKILL"/lib/*.sh)
+[ -z "$lits" ] || { echo "FAIL a reader spells its own roster default:"; printf '%s\n' "$lits"; fail=1; }
+kill_keeper "$DR/state/keeper.pid" -9; rm -rf "$DR"; rm -f "$SKILL/scenarios/$BADSC.md"
 
 # A roster that could not be written launches nothing and says so. Reached through a scenario
 # whose own turn count is not a number; its round_deadline_ms would reach the same write.

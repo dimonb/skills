@@ -59,6 +59,9 @@ v_decision() {
 v_send() { # --act A [--refs J] [--hand] "<text>"
   local -a a=(); local text=""
   while [ $# -gt 0 ]; do
+    case "$1" in  # operand first (#147; the rule is above council.sh's option loop)
+      --act|--refs|--to) [ $# -ge 2 ] || { echo "council send: $1 needs a value" >&2; return 2; } ;;
+    esac
     case "$1" in
       --act|--refs|--to) a+=("$1" "$2"); shift 2 ;;
       --hand) a+=(--hand); shift ;;
@@ -74,7 +77,8 @@ v_recv() { # [--timeout N] [--peek] [--until-floor]
   local timeout=540 peek=0 until_floor=0
   while [ $# -gt 0 ]; do
     case "$1" in
-      --timeout) timeout="$2"; shift 2 ;;
+      --timeout) [ $# -ge 2 ] || { echo "council recv: --timeout needs a number of seconds" >&2; return 2; }
+                 timeout="$2"; shift 2 ;;
       --peek) peek=1; shift ;;
       --until-floor) until_floor=1; shift ;;
       *) echo "council recv: unknown argument $1" >&2; return 2 ;;
@@ -135,9 +139,8 @@ v_recv() { # [--timeout N] [--peek] [--until-floor]
 # command and never by path — so a rule it can only check by opening roster.json is a rule it
 # cannot check at all.
 #
-# The fallback is a second copy of the number `up` writes, kept in step by nothing — the same
-# shape as c_barrier's `round_deadline_ms 600000` and v_verdict's `turns_budget 30`, and filed as
-# a rule rather than three pairs of lines. It is reached by any roster `up` did not write as
+# The fallback is the number `up` writes, read from lib/roster-defaults.sh as c_barrier's and
+# v_verdict's are (#151). It is reached by any roster `up` did not write as
 # written: one assembled by hand, one whose field a peer has since overwritten with something
 # that is not an integer, and one that cannot be read at all (a state `floor` still answers in,
 # at exit 0 — SKILL.md says so).
@@ -151,11 +154,10 @@ v_recv() { # [--timeout N] [--peek] [--until-floor]
 # the field — the restriction is protocol rather than a check (see c_send). What the field does
 # is let an HONEST seat apply the rule.
 #
-# c_int_field keeps a crafted value out of the arithmetic. It does NOT keep every crafted value
-# off this line: an all-digit integer at or above 2^63 passes the digit gate and wraps through
-# `$((10#$v))`, so a peer can still make this field print a negative number and read as "already
-# overdue" to an honest seat. That is c_int_field's to fix, for all of its callers at once, and
-# it is filed rather than patched here.
+# c_int_field keeps a crafted value out of the arithmetic, and since #157 also refuses one wide
+# enough to wrap through `$((10#$v))` — which is what used to let a peer make this field print a
+# negative number and read as "already overdue" to an honest seat. A peer can still write any
+# in-range number here; the field is informative, not a check (above).
 v_floor() {
   local t f age
   if c_round_open; then
@@ -167,7 +169,7 @@ v_floor() {
   fi
   t=$(c_turns); f=$(c_floor_at "$t"); age=$(c_floor_held_ms)
   printf 'turns=%s floor=%s next=%s held_ms=%s deadline_ms=%s conflicts=%s\n' \
-    "$t" "$f" "$(c_floor_at $((t+1)))" "$age" "$(c_int_field turn_deadline_ms 180000)" \
+    "$t" "$f" "$(c_floor_at $((t+1)))" "$age" "$(c_int_field turn_deadline_ms "$C_DEF_TURN_DEADLINE_MS")" \
     "$(c_conflicts)"
 }
 
@@ -277,7 +279,7 @@ v_verdict() {
   # the alternative never fires, and a JSON number is not a bash integer -- `2.5` and `1e400`
   # are numbers, and both make the `[ -ge ]` below error, which silently disables the room's
   # only stop condition and puts the same value into `--argjson`. roster.json is peer-writable.
-  n=$(c_npeers); budget=$(c_int_field turns_budget 30)
+  n=$(c_npeers); budget=$(c_int_field turns_budget "$C_DEF_TURNS_BUDGET")
   # `gok` rather than `[ -z "$g" ]`: an empty room's graph is a perfectly good JSON object, and
   # testing the text would read an empty room as a broken one.
   gok=1; g=$(_graph) && gok=0
