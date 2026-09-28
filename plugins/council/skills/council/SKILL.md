@@ -78,8 +78,8 @@ from the write to a sleeping reader waking), and end-to-end delivery **~60 ms** 
 the wire. A poll loop would be 0–5 s. A keeper process holds every bell open read-write for the life of the room, so a
 bell rung at a participant that is not currently listening is buffered rather than lost,
 and the ring itself is backgrounded so a dead participant can never wedge a sender. The ring
-opens the fifo read-write, so it never blocks and leaves no process behind, even in a room with
-no keeper. There a bell rung while nobody listens is dropped, and that costs latency but never a
+opens the fifo read-write, so it never blocks in open(2) waiting for a reader, even in a room
+with no keeper. There a bell rung while nobody listens is dropped, and that costs latency but never a
 message: `recv` reads the lanes before its first wait on the bell.
 A bell that is no longer a fifo — an archive-and-restore of a room directory, or any copy
 that does not preserve fifos — makes `recv` say so on stderr and fall back to a half-second
@@ -375,7 +375,11 @@ Three consequences worth knowing:
   on a live tmux backend. If a reap is still running after 30 seconds, `relaunch` refuses and
   launches nothing, and saying so is safer than launching a seat that reap may then close. The
   wait depends on the keeper being alive, not on the file, so a keeper killed mid-reap by `down`
-  does not hold the next `relaunch` up.
+  does not hold the next `relaunch` up. Two limits. First, an owner-death reap (`up --hold`) is
+  visible only once the keeper has written the file, so a `relaunch` that looked just before can
+  still race it. Second, both inputs are room state a participant can write, so this guards
+  against accidents, not against a participant. A file planted there makes `relaunch` refuse and
+  name the path, and `down` followed by `relaunch` clears it.
 
 `down` is untouched by this and still the way to close a room by hand: an unresolved one, one whose
 teardown could not happen, or any room at all before it decides. `down --purge` remains the only

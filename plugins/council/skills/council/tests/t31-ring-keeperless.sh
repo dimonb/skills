@@ -66,7 +66,7 @@ kill_keeper "$RA/state/keeper.pid"
 ok "the keeper is gone before the ring" gone "$(wait_gone "$KA" 50)"
 # b is not in `recv`, so with the keeper gone nothing holds b's bell — ONCE THE KEEPER'S `sleep`
 # HAS GONE TOO. That child inherited every bell fd and outlives the keeper by up to one poll
-# period; t26 case F records the same orphan making a keeperless fixture pass on a leaked fd. So
+# period, and a keeperless fixture that rings inside that period passes on a leaked fd. So
 # wait out three periods before ringing. Measured: without this wait the case stays green against
 # the old write-only ring, which is the mutation it exists to catch.
 keeper_orphans_gone() { sleep "$(awk -v p="${COUNCIL_KEEPER_POLL_INTERVAL:-5}" 'BEGIN { print p * 3 }')"; }
@@ -81,8 +81,10 @@ DONEA="$COUNCIL_TEST_ROOT/t31a.done"
 RINGER=$!
 ok "a captured ringing verb returns" yes "$(wait_file "$DONEA" 50)"
 ok "...having sent the message (a holds the opening floor)" 0 "$(cut -d' ' -f1 "$DONEA" 2>/dev/null)"
-sleep 0.3   # let a detached writer that is going to exit, exit
-ok "no process of that ring is still alive" 0 "$(count_token "$TOKA")"
+# Polled, not a fixed sleep: a detached writer that is going to exit may not have been scheduled
+# yet on a loaded box. A parked one never goes, so the mutation still reds after the bound.
+left=1; for _i in $(seq 1 30); do left=$(count_token "$TOKA"); [ "$left" = 0 ] && break; sleep 0.1; done
+ok "no process of that ring is still alive" 0 "$left"
 ok "...and none is parked on the peer's fifo" none "$(drain_parked "$RA/bell/b.fifo")"
 kill "$RINGER" 2>/dev/null; wait "$RINGER" 2>/dev/null
 

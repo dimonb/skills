@@ -236,8 +236,11 @@ errf="$COUNCIL_TEST_ROOT/t26f.err"
 # reader. The ring used to open them WRITE-ONLY, which blocked in open(2) for ever and — having
 # inherited this capture's pipe through the fd bash saves the caller's stdout on — kept the `$( )`
 # below from ever returning. So this case used to hold every bell open itself. `c_ring` now opens
-# read-write, which does not block (#209, and t31 pins the leak directly), so the capture below is
-# the shipped path against a genuinely keeperless room.
+# read-write, which does not block (#209, and t31 case A pins the leak directly), so the capture
+# below is the shipped path against a keeperless room. Genuinely keeperless only once the killed
+# keeper's `sleep` child — which inherited every bell fd — has gone too, so wait out three periods;
+# ringing inside that window would find a reader and prove nothing about the ring.
+sleep "$(awk -v p="${COUNCIL_KEEPER_POLL_INTERVAL:-5}" 'BEGIN { print p * 3 }')"
 outf=$(COUNCIL_ME=a bash "$CLI" decide 2>"$errf"); rc=$?
 ok "the close exits 5, not 0 and not 4" 5 "$rc"
 ok "...still printing the record path, because the record is the output" "$RF/board/decision.md" "$outf"
@@ -676,6 +679,23 @@ hold 2 "$KQ"
 ok "...so the keeper is still there" yes "$(kill -0 "$KQ" 2>/dev/null && echo yes || echo no)"
 ok "...having reaped nothing" no "$([ -e "$T26Q_MARK/reaped-a" ] || [ -e "$T26Q_MARK/reaped-b" ] && echo yes || echo no)"
 ok "...and marked no reap in flight" no "$([ -e "$RQ/state/reaping" ] && echo yes || echo no)"
+
+# ================================================================================================
+echo "--- R. a state/reaping the keeper cannot rename onto does not stop a decided close's reap ---"
+# The take is a rename, so a peer that plants `state/reaping` as a directory holding a `teardown`
+# directory makes that rename fail on every poll. A failed rename is a cancel only when the request
+# has gone; here it still stands, so the keeper must reap anyway — the `rm -f` this replaced never
+# let a plant stop the reap, and a rename must not either.
+RR="$COUNCIL_TEST_ROOT/t26r"
+mkroom_faked "$RR" r a b
+KR=$(kpid_of "$RR/state/keeper.pid")
+mkdir -p "$RR/state/reaping/teardown"
+( . "$SKILL/lib/up.sh"; _keeper_teardown "$RR" ); rc=$?
+ok "the request is made" 0 "$rc"
+ok "the seats still go, whatever sits at state/reaping" yes "$(wait_file "$MARK/r/reaped-a" "$PATIENCE")"
+ok "...both of them" yes "$(wait_file "$MARK/r/reaped-b" "$PATIENCE")"
+ok "the keeper exits" gone "$(wait_gone "$KR" "$PATIENCE")"
+ok "...having consumed the request" no "$([ -e "$RR/state/teardown" ] && echo yes || echo no)"
 
 # ================================================================================================
 printf '\nt26-decide-teardown: %s checks, %s failed\n' "$CHECKS" "$FAILURES"

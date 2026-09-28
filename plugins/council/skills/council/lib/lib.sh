@@ -253,14 +253,14 @@ c_atomic() { local p="$1" t="$1.tmp.$$"; cat > "$t" && mv -f "$t" "$p"; }
 # orphans were counted from one verification run, five days after it), holding every fd it had
 # inherited, including a caller's `$( )` pipe, which then never closed. A read-write open of a fifo
 # does not block — the same behaviour `c_bell_open`'s `exec 3<>` and the keeper's `exec {fd}<>`
-# already rely on — so the writer exits at once in every room shape.
+# already rely on — so the writer never parks in open(2), in any room shape.
 #
 # What it delivers, per shape. A room with a keeper, or a peer inside `recv`: unchanged — one pipe,
 # whoever holds it, and the byte waits there for the peer. No keeper and the peer not listening:
 # the byte is dropped when this writer closes the last open end, where the old write-only open
 # delivered it late, at the peer's next `c_bell_open`. That costs latency, never a message: the
 # bell only wakes a `recv`, and `recv` drains the lanes before its first wait, so the message is
-# read on that next `recv` regardless (t2c pins this).
+# read on that next `recv` regardless (t31 case B pins this).
 #
 # Still backgrounded inside a subshell, so the child is reparented at once and never a zombie, and
 # so a pipe buffer filled by rings nobody drains blocks that child rather than the sender.
