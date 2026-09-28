@@ -866,9 +866,11 @@ fi
 #
 # Scope: the same file set as check 1 — every tracked or untracked `*.sh`, minus an untracked
 # local skill. What it parses: the tokens after a `pgrep`/`pkill` word up to a shell separator
-# (`| ; & ( )` or a backquote) or a `#`, with backslash-continued lines joined first. A `-P` or
+# (`| ; & ( )` or a backquote) or a `#`, with backslash-continued lines joined first and
+# redirections (`2>/dev/null`, `2>&1`, `> file`) removed with their targets. A `-P` or
 # `--parent` in that span with no non-option word left over after the option arguments are
-# consumed is a hit. Whole-line comments are skipped, so prose about the trap may quote it.
+# consumed is a hit. The command word is read with its quotes stripped, so a lookup inside
+# `sh -c "…"` counts. Whole-line comments are skipped, so prose about the trap may quote it.
 #
 # What it cannot see, stated because a green gate is otherwise read as coverage: a pid list built
 # any OTHER way — a different tool, a pattern that matches more than intended, a parent lookup in
@@ -885,7 +887,8 @@ else
   while IFS= read -r f; do
     [ -n "$f" ] || continue
     untracked_local_skill "$f" && continue
-    pg_list+=("$f")
+    # `./` so awk never reads a name such as `x=y.sh` as a variable assignment.
+    pg_list+=("./$f")
   done <<< "$pg_files"
   if [ "${#pg_list[@]}" -eq 0 ]; then
     fail "the parent-pid lookup scan (check 14) found no shell file to read (moved? renamed?)"
@@ -902,11 +905,16 @@ else
       }
       function scan(s, where,   n, t, i, j, tok, base, hasP, pat, k, c, rest) {
         if (s ~ /^[ \t]*#/) return
+        # A redirection and its target are not a pattern, and the incident line itself carried
+        # one (`pgrep -P "$cpid" 2>/dev/null`). Removed BEFORE the separators, so the `&` of
+        # `2>&1` and `&>` is still attached to its operator here.
+        gsub(/[0-9]*(&>>|&>|>>|>&|<&|<<<|<<-|<<|<>|>\||>|<)[ \t]*[^ \t|;&()`]*/, " ", s)
         gsub(/[|;&()`]/, " ; ", s)
         n = split(s, t, /[ \t]+/)
         for (i = 1; i <= n; i++) {
           if (t[i] ~ /^#/) return
-          base = t[i]; sub(/.*\//, "", base)
+          # Quotes off the command word, so `sh -c "pgrep -P $x"` is read as the lookup it is.
+          base = t[i]; gsub(/["\047]/, "", base); sub(/.*\//, "", base)
           if (base != "pgrep" && base != "pkill") continue
           hasP = 0; pat = 0
           for (j = i + 1; j <= n; j++) {
@@ -921,7 +929,8 @@ else
             }
             # A pkill signal name (`-TERM`, `-SIGKILL`) is not an option cluster: read letter by
             # letter it would consume the next word as an argument and hide a `-P` behind it.
-            if (base == "pkill" && tok ~ /^-(SIG)?[A-Z][A-Z0-9+]+$/) continue
+            # `-P123` is the parent selector with its pid attached, never a signal.
+            if (base == "pkill" && tok ~ /^-(SIG)?[A-Z][A-Z0-9+]+$/ && tok !~ /^-P[0-9]/) continue
             if (tok ~ /^-./) {
               for (k = 2; k <= length(tok); k++) {
                 c = substr(tok, k, 1)
@@ -941,13 +950,13 @@ else
       }
       # A file ending on a continued line still has its last command scanned.
       FNR == 1 && buf != "" { s0 = buf; buf = ""; scan(s0, prev ":" start) }
-      { prev = FILENAME }
+      { prev = FILENAME; sub(/^\.\//, "", prev) }
       {
         line = $0
         if (buf == "") start = FNR
         if (line ~ /\\$/) { buf = buf substr(line, 1, length(line) - 1) " "; next }
         s0 = buf line; buf = ""
-        scan(s0, FILENAME ":" start)
+        scan(s0, prev ":" start)
       }
       END { if (buf != "") { s0 = buf; scan(s0, prev ":" start) } }
     ' "${pg_list[@]}" 2>&1); pg_awk=$?

@@ -31,7 +31,7 @@ packaged skills without a second copy in git. `make check` enforces this.
 rule above over **committed** content: a tracked entry there must be a symlink into `plugins/`,
 and a packaged skill's own two link paths are asserted staged or not, because those paths are the
 repo's. Anything else you keep there untracked — a scratch directory, a local skill of your own,
-whatever another tool left behind — is your business: **checks 1, 2 and 5 ignore it**, so its
+whatever another tool left behind — is your business: **checks 1, 2, 5 and 14 ignore it**, so its
 frontmatter, its name and its scripts are not the gate's concern, and it draws a note rather than
 a failure. The two repo-wide scans still read it, deliberately: a leak or a non-Latin script reds
 the gate wherever it sits, including in a file you never meant to commit.
@@ -336,14 +336,14 @@ The gate cannot see any of this.
 ## A helper that signals a list of pids bounds the list
 
 A test cleanup built "the child's children" with a parent-pid `pgrep` and no pattern, which on macOS
-ignores the parent filter and prints every pid on the machine; the helper passed the list to
-`kill -9` and killed every process the user owned, on every resume of the slot that carried it. So
-**a helper that signals a LIST of pids refuses pid 1 and refuses a list longer than the handful it
-could plausibly own** — the list is exactly what a wrong lookup inflates, and a guard that only
-rejects empty, `0` and non-numeric entries passes every one of those 680 values. Look children up
-with `ps -A -o pid= -o ppid=` filtered by awk on the parent column, which behaves the same on both
-platforms. `make check` (check 14) reds the no-pattern `pgrep`/`pkill -P` shape in any `*.sh`; a
-list built any other way it cannot see, so the bound is carried by judgement.
+ignores the parent filter and prints every pid on the machine (680 where it was measured); the
+helper passed the list to `kill -9` and killed every process the user owned, on every resume of the
+slot that carried it. So **a helper that signals a LIST of pids refuses pid 1 and refuses a list
+longer than the handful it could plausibly own** — the list is exactly what a wrong lookup inflates,
+and a guard that only rejects empty, `0` and non-numeric entries passes every one of them. Look
+children up with `ps -A -o pid= -o ppid=` filtered by awk on the parent column, which behaves the
+same on both platforms. `make check` (check 14) reds the no-pattern `pgrep`/`pkill -P` shape in the
+shell files it scans; a list built any other way it cannot see, so the bound is carried by judgement.
 
 ## How to verify a change for real
 

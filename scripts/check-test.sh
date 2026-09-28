@@ -1124,7 +1124,35 @@ expect_fail "check 14: the --parent spelling with no pattern" \
 # check must stay green on it. Without this, an arm that fired on every `-P` would read as caught.
 printf '#!/usr/bin/env bash\nexit 0\nkids=$(%s -P "$x" sleep)\n' "$PG" > "$SH_PROBE"
 expect_pass "check 14: a parent-pid pgrep WITH a pattern stays green"
+# 34d — the incident's own line: a redirection after the options is not a pattern. The first
+# draft of check 14 read `2>/dev/null` as one and passed exactly this line.
+printf '#!/usr/bin/env bash\nexit 0\norphans=$(%s -P "$cpid" 2>/dev/null | tr x y)\n' "$PG" > "$SH_PROBE"
+expect_fail "check 14: the incident line, with a redirection after the options" \
+  "pgrep/pkill with -P/--parent and no pattern"
+# 34e — the lookup inside a quoted `sh -c` string: the command word carries the quote.
+printf '#!/usr/bin/env bash\nexit 0\nkids=$(sh -c "%s -P $x")\n' "$PG" > "$SH_PROBE"
+expect_fail "check 14: a no-pattern lookup inside sh -c \"...\"" \
+  "pgrep/pkill with -P/--parent and no pattern"
 rm -f "$SH_PROBE"
+
+# 34f — check 14's fail-closed arms, in the shapes 14a and 14b use. The listing errors with its
+# output intact, so the empty-list arm cannot explain the red...
+cp scripts/check.sh "$SCRATCH/check14.bak"
+perl -pi -e "s{^(pg_files=\\\$\\(git .*'\\*\\.sh')\\)}{\$1; exit 128)}" scripts/check.sh
+expect_fail "check 14 reds when its shell-file listing errors" \
+  "could not list shell files for the parent-pid lookup scan"
+cp "$SCRATCH/check14.bak" scripts/check.sh
+# 34g — ...the listing succeeds and matches nothing: awk handed no file would read stdin and
+# report no hit, so this arm is what stops an empty scan reading as a clean one...
+perl -pi -e "s{^(pg_files=\\\$\\(git .*)'\\*\\.sh'\\)}{\$1'*.no-such-ext')}" scripts/check.sh
+expect_fail "check 14 reds when it finds no shell file to scan" \
+  "found no shell file to read"
+cp "$SCRATCH/check14.bak" scripts/check.sh
+# 34h — ...and the matcher itself fails: an awk error is never read as "no hits".
+perl -pi -e 's{^(\s*function optarg\(t, j, n\) \{)$}{$1 ) (}' scripts/check.sh
+expect_fail "check 14 reds when its matcher cannot run" \
+  "parent-pid lookup scan (check 14) could not run"
+cp "$SCRATCH/check14.bak" scripts/check.sh
 
 # 35 — check 10b: two tests in one suite sharing a number red (#149). Registered, so that check
 # 10's unregistered arm cannot fire and claim the catch, and in the SHIPYARD suite so the arm is
