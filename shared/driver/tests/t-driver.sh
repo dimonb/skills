@@ -200,6 +200,24 @@ ok "drv_pin with no pin for this backend -> rc 1, no derivation" 1 "$rc"
 rc=0; ( _DRV_BE=tmux DRV_REPO_KEY=myrepo drv_pin >/dev/null ) || rc=$?
 ok "drv_pin with no pin dir -> rc 1" 1 "$rc"
 
+# A FIFO planted at the pin file must not block the write (#256): shipyard's pin dir is the shared
+# mailbox, which every child can write, and a `>` onto a FIFO blocks in open(2) until something
+# reads it. Bounded by hand (stock macOS has no timeout(1)); a hung call is unblocked by opening the
+# FIFO read-write once, so it does not outlive the suite. Mutation: put back `> "$f"` and this reds.
+PINF="$TMP/pinfifo"; mkdir -p "$PINF"; mkfifo "$PINF/container-tmux"
+( _DRV_BE=tmux DRV_CONTAINER_PIN_DIR="$PINF" DRV_REPO_KEY=fifo drv_container_pin >"$TMP/pinfifo.out" 2>&1 ) &
+pin_pid=$!; i=0
+while kill -0 "$pin_pid" 2>/dev/null && [ "$i" -lt 100 ]; do sleep 0.1; i=$((i + 1)); done
+if kill -0 "$pin_pid" 2>/dev/null; then
+  pin_ret=no; kill "$pin_pid" 2>/dev/null; [ -p "$PINF/container-tmux" ] && : <>"$PINF/container-tmux"
+else pin_ret=yes; fi
+wait "$pin_pid" 2>/dev/null
+ok "a FIFO at the pin file: drv_container_pin returns" yes "$pin_ret"
+ok "...and prints the name" fifo "$(cat "$TMP/pinfifo.out")"
+ok "...and the pin is a regular file holding it" fifo \
+  "$([ -f "$PINF/container-tmux" ] && [ ! -p "$PINF/container-tmux" ] && cat "$PINF/container-tmux")"
+ok "...leaving no temp file behind" 0 "$(ls -A "$PINF" | grep -c 'drv-pin')"
+
 # --- 4. drv_target: handle construction ------------------------------------------------------
 printf '\n── drv_target ──\n'
 # agterm: the session UUID for a name inside the container workspace; exit 1 for an absent name.
