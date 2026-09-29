@@ -96,9 +96,8 @@ tmux() {
     # WHERE the not-done observations are taken: FAKE_PANE_TYPED while the command is typed and
     # not yet submitted (no Enter or KPEnter logged after it), and FAKE_PANE_UNDONE for
     # FAKE_UNDONE_READS captures after the submit, once FAKE_UNDONE_SKIP of them have gone by,
-    # counted in FAKE_UNDONE_FILE. With either set, a
-    # typed-but-unsent capture that has no frame of its own serves FAKE_PANE, so the count starts at
-    # the submit and not at the typing.
+    # counted in FAKE_UNDONE_FILE. With either set, a typed-but-unsent capture that has no frame of
+    # its own serves FAKE_PANE, so the count starts at the submit and not at the typing.
     capture-pane)
       if [ -z "${FAKE_PANE:-}" ]; then printf 'some earlier output\n> \n'
       elif [ -n "${FAKE_PANE_AFTER:-}" ] && grep -qF -- '/compact' "$KEYS" 2>/dev/null; then

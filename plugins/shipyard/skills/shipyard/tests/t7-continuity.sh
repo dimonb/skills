@@ -48,7 +48,7 @@ reap_job() {
   return 124
 }
 
-# HANDSHAKES FOR THE ORDERED RACE CASES (#240). Three cases below need a start and a stop to
+# HANDSHAKES FOR THE ORDERED RACE CASES (#240). The race cases below need two lifecycle jobs to
 # interleave at one exact point, and the lifecycle code already has a delay knob at each point
 # (`sleep "${_SHIPYARD_CONTINUITY_..._DELAY:-0}"`). They used to set the knob to 0.4s and race it
 # with a 0.02s poll or a bare `sleep 0.1`, which orders nothing on a loaded runner: one red CI run
@@ -581,9 +581,11 @@ check yes "$([ -z "$(find "$_SHIPYARD_CONTINUITY_DIR" -name 'continuity-*.log' -
   "...and the watcher gives up on the publication"
 if [ -L "$_SHIPYARD_CONTINUITY_DIR/continuity-lifecycle.lock" ]; then live_lock=yes; else live_lock=no; fi
 check yes "$live_lock" "unpublished watcher cannot release a live starter lock"
-release_hold interrupted-publish
+# Killed while still held, and released only after: a release first could let a preempted test
+# see the starter publish before its kill landed.
 kill "$interrupted_starter" 2>/dev/null || true
 reap_job "$interrupted_starter" 2>/dev/null || true
+release_hold interrupted-publish
 interrupted_pidfiles=$(find "$_SHIPYARD_CONTINUITY_DIR" -name 'continuity-*.pid' -print)
 check "" "$interrupted_pidfiles" "interrupted unpublished start leaves no published watcher"
 unset _SHIPYARD_CONTINUITY_PUBLISH_DELAY

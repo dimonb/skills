@@ -89,6 +89,8 @@ leftover() { ls -A "$STATE" | grep -c '\.tmp\.\|continuity-log\.' ; }
 # bound separates them: it costs its full length only on a real hang. 20 s was once exceeded, in
 # t20-mailbox-fifo.sh by a case that passed alone, under a full parallel run, so it is sized for a
 # loaded box, not a quiet one.
+# What a real hang costs is the bound once per bounded call, so a regression that hangs every
+# opener takes this file minutes, not seconds, to red. It still reds.
 SECS=60
 
 # A fake agtermctl just capable enough for a watcher to start and stay healthy: `session new` runs

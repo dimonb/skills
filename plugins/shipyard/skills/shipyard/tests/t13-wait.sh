@@ -582,9 +582,10 @@ rm -f "$FAKE_GIT/ship-escalations/directive-43-8.json"
 # E9 — the `last line` column drops a line holding a composer glyph (#290's review). A tell leaves
 # the supervisor's own words on the pane, in the input box or as a submitted message, and they are
 # not the child's last word. The text here carries a keyword the column's filter keeps ("ship"), so
-# only the glyph stage can drop it. The two glyphs are a copy of ADP_BOX_GLYPHS (agent-adapters.sh),
-# one per agent kind, and nothing keeps the copy in step.
-for g in '❯' '›'; do
+# only the glyph stage can drop it. One pass per glyph ADP_BOX_GLYPHS lists (agent-adapters.sh),
+# read from the module itself, so a glyph added there is covered here too.
+[ -n "${ADP_BOX_GLYPHS:-}" ] || { echo "  FAIL E9: ADP_BOX_GLYPHS is not in scope — the case asserts nothing"; FAILURES=$((FAILURES + 1)); }
+for g in ${ADP_BOX_GLYPHS:-}; do
   export T13_PANE43="$g [supervisor directive] ship the fix now"
   row=$(run_report 100000 | grep '^| 43 ')
   ok "E9: a $g line is not the last line"               0 "$(printf '%s' "$row" | grep -c 'supervisor directive')"
