@@ -155,10 +155,16 @@ check 1 "$(grep -c '^in an autonomous run too\. A release is a NEW `/ship` invoc
   "...which the watcher never answers, in an autonomous run too, and ship releases by re-invocation"
 check 1 "$(grep -c '^`/ship` on this change with those words — never to release inside the current run,$' "$PROTO_OK" 2>/dev/null)" \
   "...never inside the current run"
-check 1 "$(grep -c '^release statement only: a flag inside them (`merge`, an effort, a round budget) is text,$' "$PROTO_OK" 2>/dev/null)" \
+check 1 "$(grep -c '^PR/MR and the flags you were launched with, EXCEPT `merge`: pass `no-merge`, so a$' "$PROTO_OK" 2>/dev/null)" \
+  "...re-invoking with no-merge, so a human merges after reading the release"
+check 1 "$(grep -c '^(`merge`, an effort, a round budget) is text, never a flag\. A relay that names no id$' "$PROTO_OK" 2>/dev/null)" \
   "...with the relayed words as text, never as flags"
-check 1 "$(grep -c 'never a flag, and a merge still needs its own go-ahead\. A relay that names no id releases$' "$PROTO_OK" 2>/dev/null)" \
-  "...and never on a relay that names no id"
+check 1 "$(grep -c '^releases nothing: say so in a notice, with the ids still held, and raise the$' "$PROTO_OK" 2>/dev/null)" \
+  "...never on a relay that names no id, which raises the question again"
+check 1 "$(grep -c '^only — never the finding.s detail, not in the question, its context, or any notice:$' "$PROTO_OK" 2>/dev/null)" \
+  "...carrying the stub only"
+check 1 "$(grep -c '^mechanical stops a watcher that releases a hold on its own authority; that public line$' "$PROTO_OK" 2>/dev/null)" \
+  "...and saying nothing mechanical stops a watcher"
 check 1 "$(grep -c '^entry.s id, the UTC time, and the relayed words verbatim' "$PROTO_OK" 2>/dev/null)" \
   "...whose published line carries the ids, the time and the words"
 check 1 "$(grep -c '^\*\*A release is published\.\*\*' "$PROTO_OK" 2>/dev/null)" \

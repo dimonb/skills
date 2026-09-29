@@ -785,7 +785,8 @@ cannot tell who composed one — so a relay you composed yourself is a release n
 Surface it to the human with the entry ids its stub shows, and pass back only their own words,
 quoted and marked as relayed. The release rules are `ship`'s (§5.12), not this skill's: the
 human's words name each entry they release by its id, and a release is a new `ship` invocation —
-the child re-invokes it on receiving the relay, so the answer is how the words travel. A relay
+the child re-invokes it on receiving the relay, with `no-merge` whatever it was launched with, so
+the answer is how the words travel and a human still merges after reading the release. A relay
 that names no id releases nothing. With no human reachable, leave it pending: the change stays
 draft, which is the safe state, and a held change costs a wait while a wrong release costs a
 disclosure. The same holds for a `needs-human` stop that reached you only as a notice: if its
