@@ -37,10 +37,9 @@
 # NOT COVERED, so a green run is never read as more than it is: a live terminal on either backend;
 # the residual `adp_delivery_verdict` documents — a turn that starts AND finishes between two
 # samples still reads `unconfirmed`, which no test over a scripted screen sequence can
-# distinguish; and the shipped OP verbs this file shadows (`ct_capture`, `ct_type`, `ct_submit`),
-# which no council test drives. t15 covers the naming, container and ABSENCE verbs against the
-# real `lib/term.sh` — that much and no more, which is worth saying precisely, because the version
-# of this sentence that said "t15 owns that" implied the whole `ct_*` surface.
+# distinguish; and the BODIES of the OP verbs this file shadows (`ct_capture`, `ct_type`,
+# `ct_submit`, `ct_occupant`, `ct_sessions`). What those bodies hand the driver is asserted in t15,
+# against the real `lib/term.sh` (#248).
 #
 # up.sh's baseline is bash >= 5 (it sources the shared modules), so re-exec into one if a stock
 # bash 3.2 started us — the guard council.sh, t15 and t-driver all use.
@@ -89,21 +88,28 @@ PANES="$ROOT/panes"; mkdir -p "$PANES"      # PANES/pre before the send; then PA
 NCALLS="$ROOT/capture-n"                    # how many captures have been taken
 TYPED="$ROOT/typed"                         # what ct_type was handed
 SUBMITTED="$ROOT/submitted"                 # one line per ct_submit that succeeded
-PINS="$ROOT/pins"; mkdir -p "$PINS"         # the container pins drv_pins_elsewhere reads
+PINS="$ROOM/state"                          # the container pins drv_pins_elsewhere reads
 SESSIONS="$ROOT/sessions"                   # what ct_sessions prints
 SESSIONS_RC="$ROOT/sessions-rc"             # ...and the status it exits with
 OCC="$ROOT/occupant"                        # one ct_occupant answer per line: agent|none|- (no verdict)
 OCC_N="$ROOT/occupant-n"                    # how many occupant reads have been taken
 
+# The rest of the shipped skill, linked in, so `council.sh say` itself can run over this shadow
+# (case 5f). Only lib/term.sh is replaced.
+for e in "$REAL_SKILL"/*; do
+  case "${e##*/}" in lib|tests) ;; *) ln -s "$e" "$SHADOW/${e##*/}" ;; esac
+done
+for e in "$REAL_SKILL"/lib/*; do
+  case "${e##*/}" in term.sh) ;; *) ln -s "$e" "$SHADOW/lib/${e##*/}" ;; esac
+done
 cat >"$SHADOW/lib/term.sh" <<SHADOWEOF
-# A fake council terminal. The DRIVER is real — sourced here exactly as the shipped term.sh does
-# it — so \`ct_absence_class\` and \`ct_pins_elsewhere\` run the real \`drv_*\` code over a faked
-# pin directory. Only the four verbs that would touch a live backend are stubs.
-DRV_BACKEND=tmux
-. "$REAL_SKILL/lib/agent-driver.sh"
-_ct_pin_dir() { DRV_CONTAINER_PIN_DIR="$PINS"; }
-ct_name()    { printf 'council-demo-%s' "\$1"; }
-ct_backend() { printf 'tmux'; }
+# A fake council terminal. The SHIPPED term.sh is sourced first, so \`ct_name\`, \`ct_backend\`,
+# \`ct_absence_class\`, \`ct_pins_elsewhere\` and \`ct_both_pinned\` are production code over the
+# real driver and the room's own pin directory. Only the verbs that would touch a live backend are
+# replaced below. (They used to be copies of the shipped bodies, so deleting \`ct_both_pinned\` from
+# term.sh left this file green while \`say\`'s remedy line hit command-not-found, #248.)
+COUNCIL_BACKEND=tmux
+. "$REAL_SKILL/lib/term.sh"
 # PHASE-AWARE, and that is the whole point of the marker file. Before anything is typed this
 # serves PANES/pre; afterwards it walks PANES/1, PANES/2, … and then stays on PANES/last. A
 # call-index-only version could not see the pre-send sample at all: deleting that sample merely
@@ -135,9 +141,6 @@ ct_occupant() {
   printf '%s' "\$v"
 }
 ct_sessions() { cat "$SESSIONS" 2>/dev/null; return "\$(cat "$SESSIONS_RC" 2>/dev/null || printf 0)"; }
-ct_absence_class()  { _ct_pin_dir; drv_absence_class "\$1" "\${2:-}" "\${3:-}"; }
-ct_pins_elsewhere() { _ct_pin_dir; drv_pins_elsewhere; }
-ct_both_pinned()    { _ct_pin_dir; drv_both_pinned; }
 SHADOWEOF
 
 # --- the real code under test -----------------------------------------------------------------
@@ -484,6 +487,16 @@ ok "5b: typed but unsubmitted is still recorded, in a file of its own" 2 "$(said
 reset; : >"$PINS/container-tmux"
 FAKE_TYPE_RC=1 run_say codex 'third' >/dev/null
 ok "5c: a send that reached no terminal is not" 2 "$(said_files)"
+# 5f. THROUGH council.sh, whose `say` arm is what sources lib/policy.sh for this record. Every case
+#     here runs in this file's shell, which sourced policy.sh itself just before 5a, so dropping
+#     that source from the arm left them all green while every real `say` recorded nothing, and the
+#     STALL line then read `nothing sent` after the operator had sent. A fresh process inherits
+#     none of this file's functions. Its own mailbox, so the counts the cases below assert hold.
+reset; : >"$PINS/container-tmux"; pane "$IDLE" pre; pane "$RUNNING" last
+rc=0; COUNCIL_ROOM="$ROOM" POLICY_MAILBOX_DIR="$ROOT/mailbox-cli" \
+  bash "$SHADOW/council.sh" say codex 'through the cli' >/dev/null 2>&1 || rc=$?
+ok "5f: council.sh say delivers"               0   "$rc"
+ok "5f: ...and records what it sent"           1   "$(ls "$ROOT/mailbox-cli"/council-said-demo.???????? 2>/dev/null | wc -l | tr -d ' ')"
 
 # A FIFO in the mailbox must not stand between the text and its submit (#246). The old record was
 # one predictable path appended with `>>` between ct_type and ct_submit, so a FIFO planted there
