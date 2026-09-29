@@ -998,11 +998,13 @@ _council_elsewhere_remedy() { # <pad>
   # differs from the pin, both are printed and no backend is offered. A room with no readable
   # record keeps the old sentence: there is nothing to check the pin against, so it says the same
   # as before. The record is as writable as the pin, so this catches one stray write, not two
-  # coordinated ones.
+  # coordinated ones. Each recorded backend is flattened to printable ASCII before it is printed,
+  # as lib/term.sh flattens the same record's values for its operator lines: `.backend` is any
+  # string a seat wrote, and these lines reach the terminal of whoever ran `say`, `relaunch` or `down`.
   local rec recorded=""
   if [ -n "$pin" ] && command -v lr_read >/dev/null 2>&1 && rec=$(lr_read 2>/dev/null); then
     recorded=$(printf '%s' "$rec" | jq -r '[ .seats[]? | select(type == "object" and .launched == true)
-                 | .backend | select(type == "string") ] | unique | join(" and ")' 2>/dev/null) \
+                 | .backend | select(type == "string") | gsub("[^ -~]"; "?") ] | unique | join(" and ")' 2>/dev/null) \
       || recorded=""
   fi
   if [ -n "$recorded" ] && [ "$recorded" != "$pin" ]; then

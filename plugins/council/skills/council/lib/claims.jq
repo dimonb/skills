@@ -85,7 +85,10 @@
 #     after the claim. Without this rule, one such send moved a claim of an unedited record to
 #     `late`.
 ($closed // null) as $co
-| def _pair_in_snapshot: . as $x | any($co[]; .from == $x.from and .id == $x.id);
+| # The snapshot's `.from` is flattened the way c_all flattens a lane name (#67), so a snapshot written
+# before that change still matches a lane whose name held a byte outside printable ASCII.
+def _pair_in_snapshot: . as $x
+  | any($co[]; ((.from | tostring) | gsub("[^ -~]"; "?")) == $x.from and .id == $x.id);
 . as $all
 | ($all | length) as $n
 | def _closed_under: . as $kept
@@ -188,12 +191,19 @@
 # A kept objection that references NO kept proposal, and a kept amend that owns none, attach to
 # nothing above, so without this list they were printed nowhere and counted nowhere (#67): a typo'd
 # ref (`send` does not check refs) and a snapshot that dropped a forward referent both made an
-# objection vanish from every reader. They are listed here and printed by `claims`, `status` and the
-# record as an annotation. They are NOT `open` and not counted: an objection to nothing blocks no
+# objection vanish from every reader. They are listed here and printed by `claims` and `status` as an
+# annotation, and a dangling OBJECTION by the record's Objections section too (an amend is not an
+# objection, and the record's transcript carries it). They are NOT `open` and not counted: an objection to nothing blocks no
 # proposal, and counting it would let one typo hold every room. Log order, like everything else.
-| ( [ $m[] | . as $x
+| ( [ $m[]
       | select( (.act == "object" and (((.refs // []) | any(IN($props[].id))) | not))
-             or (.act == "amend" and any($owners[]; .id == $x.id and .from == $x.from and .owner == null)) )
+             # The amend's owner is recomputed from THIS message, the $owners rule applied to it,
+             # rather than looked up by (id, from): nothing makes that pair unique, and a lookup
+             # listed an attached amend as dangling when another amend reused its id.
+             or (.act == "amend"
+                 and ([ (.refs // [])[] | select(IN($props[].id)) ] | length) == 0
+                 and ([ (.refs // [])[] as $r | $objs[] | select(.id == $r)
+                        | (.refs // [])[] | select(IN($props[].id)) ] | length) == 0) )
       | { id, from, act, text, refs: (.refs // []) } ] ) as $dangling
 | { turns: $turns, last_claim_turn: ($last_claim // -1), decide_msg: $decide_msg,
     dangling: $dangling,

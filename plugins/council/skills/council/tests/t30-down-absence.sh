@@ -124,7 +124,7 @@ ok "2: ...and the keeper up"                      yes  "$(keeper_up)"
 ok "2: ...saying what the purge would have cost"  yes  "$(has "$out" 'only records of which backend')"
 ok "2: ...and that nothing was deleted"           yes  "$(has "$out" 'nothing was deleted')"
 
-# ====================================================== 2c. A PIN THE LAUNCH RECORD CONTRADICTS (#67)
+# ====================================================== 2b. A PIN THE LAUNCH RECORD CONTRADICTS (#67)
 # The seats were launched on tmux, and the pin was changed to agterm by a stray write. Offering
 # `COUNCIL_BACKEND=agterm` as the way out sends the next `down --purge` to an empty container, which
 # closes nothing and deletes the record and the room under the running seats. The refusal stands;
@@ -137,11 +137,21 @@ jq -n --arg room "$(lr_room_path)" --arg cms "$(lr_room_created)" \
     seats: {claude: {backend: "tmux", container: "c", name: "n", handle: "%1", launched: true, generation: 1},
             codex:  {backend: "tmux", container: "c", name: "n", handle: null, launched: false, generation: 1}}}' > "$LRF"
 out=$(run_down --purge)
-ok "2c: still refused"                             4    "$(rc_of "$out")"
-ok "2c: ...leaving the room"                       yes  "$(present "$ROOM/roster.json")"
-ok "2c: ...saying the pin and the record disagree" yes  "$(has "$out" 'pin and its launch record disagree')"
-ok "2c: ...naming the recorded backend"            yes  "$(has "$out" 'launched on tmux')"
-ok "2c: ...and NOT offering the pin's backend"     no   "$(has "$out" 'COUNCIL_BACKEND=agterm')"
+ok "2b: still refused"                             4    "$(rc_of "$out")"
+ok "2b: ...leaving the room"                       yes  "$(present "$ROOM/roster.json")"
+ok "2b: ...saying the pin and the record disagree" yes  "$(has "$out" 'pin and its launch record disagree')"
+ok "2b: ...naming the recorded backend"            yes  "$(has "$out" 'launched on tmux')"
+ok "2b: ...and NOT offering the pin's backend"     no   "$(has "$out" 'COUNCIL_BACKEND=agterm')"
+# The recorded backend is a string a seat wrote, and it is printed on this refusal: a control byte in
+# it must not reach the operator's terminal.
+seed; : >"$ROOM/state/container-agterm"; : >"$SESSIONS"; printf '0\n' >"$SESSIONS_RC"
+jq -n --arg room "$(lr_room_path)" --arg cms "$(lr_room_created)" --arg be $'tm\n\033[2Kux' \
+  '{room: $room, created_ms: ($cms | tonumber), generation: 1,
+    seats: {claude: {backend: $be, container: "c", name: "n", handle: "%1", launched: true, generation: 1}}}' > "$LRF"
+out=$(run_down --purge)
+ok "2b: a recorded backend with control bytes is flattened" 0 \
+  "$(printf '%s' "$out" | LC_ALL=C tr -cd '\000-\011\013-\037\177' | wc -c | tr -d ' ')"
+ok "2b: ...and still named"                        yes  "$(has "$out" 'launched on tm??\[2Kux')"
 cp "$LRF_SAVED" "$LRF"
 
 # ====================================================== 3. UNREACHABLE: WARN AND CONTINUE

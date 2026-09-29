@@ -223,11 +223,6 @@ and the lanes are room state like any other. Three routes were measured and are 
 - a pair appended to the snapshot;
 - a dropped proposal that a forward reference pointed at. That one leaves an objection attached to
   no proposal, so it is not counted open.
-
-An objection or amend whose references name no proposal — that route, or simply a typo in a ref,
-which `send` does not check — is listed rather than lost: in its own section of `claims`, as a
-`⌀ refers to no proposal` line of `status`, and in the record's Objections section. It blocks
-nothing and is never counted open.
 Each needs a write the lanes or the snapshot show. None is new ground: before this change, one
 legal post-close `send --hand --act overrule` silenced the same OPEN line, and that is now
 refused or listed apart. A pair duplicated in the log before the close is rendered twice in the
@@ -235,6 +230,11 @@ record and kept once by the readers, which then show more than the record, never
 no snapshot is read over the whole log, as before. That is a room older than this change, or one whose snapshot write failed, which
 `decide` reports on stderr. `decide --force` on a room already recorded `unresolved` rewrites the
 record over the whole log and takes a new snapshot, so the late claims are then in the record.
+
+An objection or amend whose references name no proposal — the third route above, or simply a typo
+in a ref, which `send` does not check — is listed rather than lost: in its own section of `claims`
+and as a `⌀ refers to no proposal` line of `status`, and such an objection in the record's
+Objections section too. It blocks nothing and is never counted open.
 
 `council.sh decide` **refuses** a room that is not ready. `--force` writes an honest
 `unresolved` record listing what is still open — a valid outcome, not a failure to hide.

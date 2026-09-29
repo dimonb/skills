@@ -619,20 +619,35 @@ fresh
 say_floor propose '[]' "Adopt the thing." >/dev/null
 lane=$'x\nalarms: FORGED\033[2J'
 if mkdir -p "$R/lane/$lane" 2>/dev/null; then
-  raw_msg "$lane" 1 50 null msg '[]' "planted"
-  for verb in transcript status claims; do
-    o=$(COUNCIL_ME=a bash "$CLI" "$verb" 2>/dev/null)
+  # An OBJECTION, so every reader renders its author: `claims` prints only claims, and a `msg`
+  # would pass its row by never being shown.
+  raw_msg "$lane" 1 50 null object '["a-1"]' "planted"
+  # raw_msg names the message after its lane; `.id` is the message's own claim, rendered raw like
+  # `.text`, and not what this case is about. A plain id keeps the check on the lane-derived `.from`.
+  jq '.id = "z-1"' "$R/lane/$lane/000001.json" > "$R/lane.tmp" && mv "$R/lane.tmp" "$R/lane/$lane/000001.json"
+  COUNCIL_ME=a bash "$CLI" decide --force >/dev/null 2>&1
+  flat='x?alarms: FORGED?[2J'
+  for verb in transcript status claims record; do
+    if [ "$verb" = record ]; then o=$(cat "$R/board/decision.md" 2>/dev/null)
+    else o=$(COUNCIL_ME=a bash "$CLI" "$verb" 2>/dev/null); fi
     ctl=$(printf '%s' "$o" | LC_ALL=C tr -cd '\000-\011\013-\037\177' | wc -c | tr -d ' ')
-    if [ "$ctl" = 0 ] && ! grep -q '^alarms: FORGED' <<<"$o"; then
-      echo "ok   $verb: no control byte and no forged line from a lane name"
+    # The flattened name APPEARING is what makes the other two checks mean anything: a reader
+    # that dropped the message would pass them by showing nothing.
+    if [ "$ctl" = 0 ] && ! grep -q '^alarms: FORGED' <<<"$o" && grep -qF "$flat" <<<"$o"; then
+      echo "ok   $verb: the planted claim is shown under its flattened lane name, no control byte, no forged line"
     else
-      echo "FAIL $verb: $ctl control byte(s), $(grep -c '^alarms: FORGED' <<<"$o") forged line(s)"; fail=1
+      echo "FAIL $verb: $ctl control byte(s), $(grep -c '^alarms: FORGED' <<<"$o") forged line(s), flattened name shown: $(grep -cF "$flat" <<<"$o")"; fail=1
     fi
   done
-  if COUNCIL_ME=a bash "$CLI" transcript 2>/dev/null | grep -qF '[x?alarms: FORGED?[2J msg'; then
-    echo "ok   ...and the planted message is still shown, under its flattened lane name"
+  # A snapshot written before the flatten holds the lane's RAW name. It must still match, or the
+  # closed room lists its own recorded objection as "not in the record" after an upgrade.
+  jq -c --arg raw "$lane" --arg flat "$flat" 'map(if .from == $flat then .from = $raw else . end)' \
+    "$R/board/closed-over" > "$R/co.tmp" && mv "$R/co.tmp" "$R/board/closed-over"
+  if jq -e --arg raw "$lane" 'any(.[]; .from == $raw)' "$R/board/closed-over" >/dev/null \
+     && ! COUNCIL_ME=a bash "$CLI" claims 2>/dev/null | grep -q '⊘ z-1'; then
+    echo "ok   a snapshot holding the raw lane name still keeps that lane's claim in the record"
   else
-    echo "FAIL the planted message is not shown under a flattened name — the checks above prove nothing"; fail=1
+    echo "FAIL a pre-flatten snapshot moved the lane's recorded claim to 'not in the record'"; fail=1
   fi
 else
   echo "ok   lane directory: this filesystem refused the fixture"
@@ -645,13 +660,21 @@ fi
 fresh
 say_floor propose '[]' "Adopt the thing." >/dev/null
 say_floor object '["a-9"]' "A typo in my ref." >/dev/null
+# The amend half, with two controls that must NOT be listed: an amend that owns a-1, and a second
+# amend REUSING that id (nothing makes an id unique) whose refs name nothing. A lookup of the owner by
+# (from, id) listed the attached one as dangling too.
+raw_msg a 7 90 null amend '["a-1"]' "A real amendment."
+raw_msg a 8 91 null amend '["zz"]'  "An amendment of nothing."
+jq '.id = "a-7"' "$R/lane/a/000008.json" > "$R/lane/a/000008.tmp" && mv "$R/lane/a/000008.tmp" "$R/lane/a/000008.json"
 co=$(COUNCIL_ME=a bash "$CLI" claims 2>/dev/null)
 so=$(COUNCIL_ME=a bash "$CLI" status 2>/dev/null)
 if grep -q '⌀ b-1 (b) object' <<<"$co" && grep -q '^open objections: 0' <<<"$co" \
-   && grep -q '⌀ refers to no proposal: b-1' <<<"$so"; then
-  echo "ok   a dangling objection is listed by claims and status, and not counted open"
+   && grep -q '⌀ refers to no proposal: b-1' <<<"$so" \
+   && grep -q '⌀ a-7 (a) amend →"zz": An amendment of nothing' <<<"$co" \
+   && ! grep -q '⌀ .*A real amendment' <<<"$co"; then
+  echo "ok   dangling objections and amends are listed by claims and status, an attached amend is not, none counted open"
 else
-  echo "FAIL a dangling objection: claims:"; printf '%s\n' "$co" | sed 's/^/     /'; fail=1
+  echo "FAIL dangling claims: claims:"; printf '%s\n' "$co" | sed 's/^/     /'; fail=1
 fi
 COUNCIL_ME=a bash "$CLI" decide --force >/dev/null 2>&1
 if grep -q '⌀ \*\*b\*\* on `b-1`' "$R/board/decision.md" 2>/dev/null \
