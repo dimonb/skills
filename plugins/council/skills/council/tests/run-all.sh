@@ -1,6 +1,10 @@
 #!/usr/bin/env bash
 # run-all.sh — the council test suite. Fast ones by default; `--full` adds the load and
-# latency runs, which take minutes and are sensitive to what else is on the machine.
+# latency runs, which take minutes and are sensitive to what else is on the machine. t2c-bell is a
+# latency file that runs by default all the same: it times a bare fifo byte against a 250 ms bar,
+# which is generous for that and does not need a quiet box. It was measured green in the default
+# concurrent run on macOS before it moved here; if it reds on a loaded runner, run it after the
+# concurrent batch rather than raising the bar.
 #
 # `make test` runs this suite's fast subset (no `--full`), alongside the driver, flow, adapter,
 # policy and shipyard suites. Two things are gated, both in scripts/check.sh: check 10 requires
@@ -64,8 +68,8 @@ fi
 # while the current test keeps going — but only until this same ceiling group-kills it. Turning it
 # on means processes that outlive everyone, which is the failure the ceiling exists to prevent.
 
-tests=(t4-conflict.sh t7-roundtable.sh t8-graph.sh t11-decision.sh t14-verbs.sh t5-converge.sh t6-stuck.sh t9-lap.sh t9b-untrusted.sh t9c-room-inputs.sh t9d-lane-provenance.sh t9e-author-identity.sh t9f-decided-needs-record.sh t9g-degrades-loudly.sh t9h-roster-order.sh t3-token.sh t13-relaunch.sh t15-term-adapter.sh t16-keeper-canary.sh t17-esc-mailbox.sh t18-flow-admission.sh t19-keeper-rebuild.sh t20-global-options.sh t21-say.sh t22-blocked.sh t23-decide-announces.sh t24-relaunch-absence.sh t25-opening-position.sh t26-decide-teardown.sh t27-monitor.sh t28-stall-episode.sh t29-mailbox-fifo.sh t30-down-absence.sh t31-ring-keeperless.sh t32-adhoc-mailbox.sh t33-closed-room.sh t34-never-moved.sh t35-rooms-term.sh t12-cleanup.sh)
-[ "$FULL" = 1 ] && tests+=(t1-order.sh t2-latency.sh t2b-wake.sh t2c-bell.sh)
+tests=(t4-conflict.sh t7-roundtable.sh t8-graph.sh t11-decision.sh t14-verbs.sh t5-converge.sh t6-stuck.sh t9-lap.sh t9b-untrusted.sh t9c-room-inputs.sh t9d-lane-provenance.sh t9e-author-identity.sh t9f-decided-needs-record.sh t9g-degrades-loudly.sh t9h-roster-order.sh t3-token.sh t13-relaunch.sh t15-term-adapter.sh t16-keeper-canary.sh t17-esc-mailbox.sh t18-flow-admission.sh t19-keeper-rebuild.sh t20-global-options.sh t21-say.sh t22-blocked.sh t23-decide-announces.sh t24-relaunch-absence.sh t25-opening-position.sh t26-decide-teardown.sh t27-monitor.sh t28-stall-episode.sh t29-mailbox-fifo.sh t30-down-absence.sh t31-ring-keeperless.sh t32-adhoc-mailbox.sh t33-closed-room.sh t34-never-moved.sh t35-rooms-term.sh t12-cleanup.sh t2c-bell.sh)
+[ "$FULL" = 1 ] && tests+=(t1-order.sh t2-latency.sh t2b-wake.sh)
 # --- the files run CONCURRENTLY -----------------------------------------------------------------
 # What makes this safe is the per-test root above plus the fact that each file builds its own
 # rooms, fifos and fake binaries and names its own terminal sessions. That is the property to

@@ -107,6 +107,26 @@ else echo "FAIL a fresh keeper.pid was not vouched for (file '$(cat "$kfile" 2>/
 ( export TZ=AAA-9; SKILL="$SKILL"; . "$SKILL/lib/up.sh"; _keeper_record "$k0" ) > "$kfile"
 live=$( export TZ=BBB+5; SKILL="$SKILL"; . "$SKILL/lib/up.sh"; _keeper_live "$kfile" )
 expect "a record written in one TZ is vouched for from another" "$k0" "$live"
+# The locale half of the same pin: `lstart` is rendered in the caller's language too, and this
+# suite runs under LC_ALL=C (_helpers.sh), so varying only TZ never exercises it. The other
+# locale is picked at run time, the first installed one whose rendering actually differs; a box
+# with none (a bare CI image often has only C and POSIX) says so rather than passing silently.
+c_start=$(LC_ALL=C ps -o lstart= -p $$ 2>/dev/null)
+other=""
+for l in fr_FR.UTF-8 de_DE.UTF-8 fr_FR de_DE; do
+  o=$(LC_ALL=$l ps -o lstart= -p $$ 2>/dev/null)
+  if [ -n "$o" ] && [ "$o" != "$c_start" ]; then other=$l; break; fi
+done
+if [ -n "$other" ]; then
+  ( export LC_ALL="$other"; SKILL="$SKILL"; . "$SKILL/lib/up.sh"; _keeper_record "$k0" ) > "$kfile"
+  live=$( SKILL="$SKILL"; . "$SKILL/lib/up.sh"; _keeper_live "$kfile" )
+  expect "a record written under $other is vouched for under C" "$k0" "$live"
+  ( SKILL="$SKILL"; . "$SKILL/lib/up.sh"; _keeper_record "$k0" ) > "$kfile"
+  live=$( export LC_ALL="$other"; SKILL="$SKILL"; . "$SKILL/lib/up.sh"; _keeper_live "$kfile" )
+  expect "a record written under C is vouched for under $other" "$k0" "$live"
+else
+  echo "note: no installed locale renders lstart differently from C here; the LC_ALL half of the pin is unmeasured on this box"
+fi
 kill_keeper "$kfile"
 for i in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20; do kill -0 "$k0" 2>/dev/null || break; sleep 0.1; done
 sleep 30 & stranger=$!
@@ -116,6 +136,12 @@ expect "a recycled pid with a stale start time is not vouched for" "" "$live"
 printf '%s\n' "$stranger" > "$kfile"
 live=$( SKILL="$SKILL"; . "$SKILL/lib/up.sh"; _keeper_live "$kfile" )
 expect "a pid-only file naming a live process is not vouched for" "" "$live"
+# The writer's side of that row: a `ps` that cannot answer makes `_keeper_record` write the pid
+# alone, which is the file the row above refuses.
+psdir="$R/ps-cannot-answer"; mkdir -p "$psdir"
+printf '#!/bin/sh\nexit 1\n' > "$psdir/ps"; chmod +x "$psdir/ps"
+rec=$( PATH="$psdir:$PATH"; SKILL="$SKILL"; . "$SKILL/lib/up.sh"; _keeper_record "$stranger" )
+expect "a record written when ps cannot answer holds the pid alone" "$stranger " "$rec"
 printf '%s %s\n' "$stranger" "$stale" > "$kfile"
 ( SKILL="$SKILL"; . "$SKILL/lib/up.sh"; _keeper_teardown "$R" ) >/dev/null 2>&1; trc=$?
 expect "decide's teardown over a recycled pid finds no live keeper" 1 "$trc"
