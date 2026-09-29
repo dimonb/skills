@@ -227,11 +227,13 @@ remote-tracking ref this clone has simply not seen yet. Set it to `0` to keep te
 
 `SHIPYARD_AUTODOWN` (default `1`) lets the monitor finish a slot off for you: once its PR/MR has
 read `merged` on `SHIPYARD_AUTODOWN_TICKS` consecutive ticks (default and minimum `2`), ship's own
-stage is terminal, nobody is at the terminal and no escalation is open, the report calls
-`shipyard-down.sh` — unchanged, with no flags and never `--force` — which closes the terminal and
-removes the worktree. **The branch is never touched**, so the work is recoverable from it either
-way. Anything the gate declines is named in its own block with the exact command; a slot held by an
-open question gets its own block naming the records that hold it. Set it to `0` to keep teardown entirely manual; that also makes a
+stage is terminal, its terminal is gone (and the backend corroborates that) and no escalation is
+open, the report calls `shipyard-down.sh` — unchanged, with no flags and never `--force` — which
+removes the worktree. A slot whose terminal is still up is never torn down automatically, whatever
+its screen shows; `shipyard-down.sh <slot>` stays the way to finish it. **The branch is never
+touched**, so the work is recoverable from it either way. Anything the gate declines is named in
+its own block with the exact command; a slot held by an open question gets its own block naming
+the records that hold it. Set it to `0` to keep teardown entirely manual; that also makes a
 no-argument `/shipyard` run non-destructive — though not inert: the report still writes its
 mailbox bookkeeping (truncating the consecutive-merged counts — with the teardown off, all of
 them), repaints sidebar glyphs, closes pending notices, and re-arms the Codex parent continuity

@@ -44,7 +44,7 @@
 # exactly that).
 
 # A version marker, bumped when the body changes, so sync + the drift gate stay easy to prove.
-_FLOW_VERSION=2
+_FLOW_VERSION=3
 
 # --- the graph, as data --------------------------------------------------------
 # One associative array per node field, keyed by node name; `_FLOW_NODES` is the registration
@@ -157,8 +157,15 @@ _flow_stalled() { case "$1" in *idle*|*dead*|*timeout*) return 0 ;; *) return 1 
 flow_sleep() { sleep "${FLOW_POLL_INTERVAL:-1}"; }
 
 # flow_emit <path> — write the node's completion artifact. Kept minimal and generic; the caller
-# owns the directory. Overridable for a caller that wants richer contents.
-flow_emit() { printf 'flow-emit\n' > "$1" 2>/dev/null || echo "flow: could not emit artifact: $1" >&2; }
+# owns the directory. Overridable for a caller that wants richer contents. Returns non-zero when
+# the artifact could not be written, and `flow_run` then does not report a clean close: a node
+# whose promised artifact does not exist has not completed the way the graph says it did. An
+# override must keep that contract.
+flow_emit() {
+  printf 'flow-emit\n' > "$1" 2>/dev/null && return 0
+  echo "flow: could not emit artifact: $1" >&2
+  return 1
+}
 
 # flow_park <node> <signal> — record a needs-human hand-off. The interpreter has reached a block
 # the policy did not resolve. Generic on purpose: append to FLOW_PARK_FILE if set, always say so
@@ -186,7 +193,19 @@ fi
 _flow_drive_node() {
   local session=$1 node=$2 enter poll blocks sig disp
   enter=${_FLOW_ENTER[$node]:-}
-  if [ -n "$enter" ]; then drv_tell "$session" "$enter" && drv_submit "$session"; fi
+  # A send that FAILED is a block at once, never something to poll through (#156). Both statuses
+  # count: a failed type used to skip the submit silently, and a failed submit was discarded, so a
+  # node whose text never landed polled for FLOW_MAX_POLLS and only then blocked, as a timeout.
+  # The token names what happened. Liveness is `unknown` because a failed send does not say
+  # whether the session is alive. What this does NOT establish is that a send which succeeded was
+  # delivered: both calls succeed while the text sits unsent in the box. That is
+  # `adp_delivery_verdict`'s question, and this interpreter does not ask it yet. The policy is not
+  # consulted: its one remedy, `resume`, re-polls without re-sending, which cannot bring back a
+  # send that failed. So a `policy` on_block parks, and a goto/close on_block runs as declared.
+  if [ -n "$enter" ] && { ! drv_tell "$session" "$enter" || ! drv_submit "$session"; }; then
+    _FLOW_OUTCOME=block; _FLOW_SIG="unknown|undelivered"
+    return 0
+  fi
   blocks=0
   while : ; do
     poll=0
@@ -202,7 +221,11 @@ _flow_drive_node() {
       # Fail CLOSED on a non-numeric FLOW_MAX_POLLS: `! [ poll -lt MAX ]` reads the comparison
       # error as "budget reached" (block now), never as "keep polling forever" the way a plain
       # `-ge` that errored would — the same fail-closed stance FLOW_MAX_NODES takes.
-      if ! [ "$poll" -lt "${FLOW_MAX_POLLS:-600}" ] 2>/dev/null; then sig="live|timeout"; break; fi
+      # The liveness half is the last sample's, so a budget spent on `unknown` samples does not
+      # record a liveness nobody observed.
+      if ! [ "$poll" -lt "${FLOW_MAX_POLLS:-600}" ] 2>/dev/null; then
+        sig=${sig%%|*}; sig="${sig:-unknown}|timeout"; break
+      fi
       flow_sleep
     done
     # The node has blocked (stalled or timed out). If its on_block is not `policy`, hand the block
@@ -225,7 +248,8 @@ _flow_drive_node() {
 # transitions on _flow_drive_node's outcome, never on a model's say-so, and it names no skill.
 # Exit status: 0 a node closed cleanly; 10 parked (needs human); 64 no FLOW_SESSION; 65 node
 # budget exceeded (a cycle); 66 a missing or unknown node; 67 a malformed transition action
-# (a bad on_done/on_block, or an empty goto target).
+# (a bad on_done/on_block, or an empty goto target); 68 a completed node's `emit` artifact could
+# not be written, so the run stops there rather than transitioning as if it had been.
 flow_run() {
   local node=${1:-} guard=0 act emit
   [ -n "$node" ] || { echo "flow_run: missing start node" >&2; return 66; }
@@ -240,7 +264,10 @@ flow_run() {
 
     if [ "$_FLOW_OUTCOME" = done ]; then
       emit=${_FLOW_EMIT[$node]:-}
-      [ -n "$emit" ] && flow_emit "$emit"
+      if [ -n "$emit" ] && ! flow_emit "$emit"; then
+        echo "flow_run: node '$node' completed but its artifact was not written: $emit" >&2
+        return 68
+      fi
       act=${_FLOW_ON_DONE[$node]:-close}
     else
       act=${_FLOW_ON_BLOCK[$node]:-policy}

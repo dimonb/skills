@@ -1651,20 +1651,19 @@ c_said_stem() {
 
 # c_seat_no_agent <peer> — succeeds only when the backend reports, on two reads a second apart,
 # that no agent owns this seat's terminal: a shell prompt, or a pane held open after its command
-# exited (#235). The reading is the driver's `drv_occupant`, through term.sh's `ct_occupant`,
-# which the caller must already have sourced; without it this has no verdict and fails.
+# exited (#235). The reading and the two-read rule are the driver's, `drv_occupant` and
+# `drv_no_agent`, through term.sh's `ct_no_agent`, which the caller must already have sourced;
+# without it this has no verdict and fails. The one-second spacing is council's own.
 #
 # WHY TWO READS: one `none` can be a launch caught before its `exec`, which the driver measures at
 # under 0.3s — so the second read is spaced wider than that, and paid only on the rare path where
-# the first said `none`. shipyard's `tell` and `compact` apply the same rule to the same reading.
+# the first said `none`. shipyard's `tell` and `compact` run the same helper with their own spacing.
 #
 # WHAT A FAILURE HERE MEANS is "no evidence the agent is gone", never "the agent is alive": no
 # verdict fails, and so does `agent`, which a dead agent that left another process in the
 # foreground still reads. A caller may therefore ADD a refusal or an alarm on success and must
 # never remove one on failure.
 c_seat_no_agent() {
-  command -v ct_occupant >/dev/null 2>&1 || return 1
-  [ "$(ct_occupant "$1" 2>/dev/null)" = none ] || return 1
-  sleep 1
-  [ "$(ct_occupant "$1" 2>/dev/null)" = none ]
+  command -v ct_no_agent >/dev/null 2>&1 || return 1
+  ct_no_agent "$1" 1
 }

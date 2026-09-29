@@ -55,7 +55,7 @@ auto-covered). One generalized shared-module drift gate now covers driver + flow
 
 Open follow-ups: **DRV-02** adapter unification — now in flight as issue **#104**; **`flow_run` has
 no production caller** now that both skills use `flow_phase` — remove it (YAGNI) or justify it as a
-general primitive. CI, DRV-03 dispositions and shipyard-side LIFE-03 all shipped.
+general primitive (what keeping it still costs is in STATE.md and on #156). CI, DRV-03 dispositions and shipyard-side LIFE-03 all shipped.
 
 **Post-phase cleanup (the two stale worktrees) — done, and it paid.** `ship-3` was empty and went;
 `ship-41` held unpushed and uncommitted work, which was committed and pushed to

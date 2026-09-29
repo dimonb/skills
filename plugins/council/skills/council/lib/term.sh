@@ -58,10 +58,11 @@ ct_type()          { _ct_pin_dir; drv_tell   "$(ct_name "$1")" "$2"; }
 ct_submit()        { _ct_pin_dir; drv_submit "$(ct_name "$1")"; }
 ct_kill()          { _ct_pin_dir; drv_kill   "$(ct_name "$1")"; }
 ct_focus()         { _ct_pin_dir; drv_focus  "$(ct_name "$1")"; }
-# Whether the agent launched into a seat's terminal is still what owns it (#235): `agent`, `none`,
-# or no verdict (exit 1). The reading and both directions it can be wrong in are the driver's, at
-# `drv_occupant`; the two-read rule council applies to it is `c_seat_no_agent` in lib.sh.
-ct_occupant()      { _ct_pin_dir; drv_occupant "$(ct_name "$1")"; }
+# `ct_no_agent <peer> <interval>`: 0 only when the agent launched into a seat's terminal is not
+# what owns it, on two reads <interval> apart (#235). The reading, the two-read rule and both
+# directions each can be wrong in are the driver's, at `drv_occupant` and `drv_no_agent`; the
+# spacing council applies is `c_seat_no_agent`'s, in lib.sh.
+ct_no_agent()      { _ct_pin_dir; drv_no_agent "$(ct_name "$1")" "$2"; }
 # The absence verbs, added when `council say` had to stop reporting a live participant as
 # having no terminal (#141). `ct_sessions` enumerates the room's container — its EXIT STATUS is
 # the fact that matters, "the backend answered", which an empty list does not settle — and

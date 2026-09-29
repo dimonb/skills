@@ -40,7 +40,7 @@
 
 # A version marker, bumped when the body changes, so sync + the drift gate stay easy to prove
 # end to end.
-_DRV_VERSION=1
+_DRV_VERSION=2
 
 # --- backend selection ---------------------------------------------------------
 # agterm when its control socket answers, else tmux; `none` when neither is reachable and
@@ -357,19 +357,32 @@ drv_focus() {
 }
 
 # drv_signal <session-name> — one normalized status token "<liveness>|<capacity>":
-#   liveness = live|dead
-#   capacity = idle|busy|unknown for a live session, gone for a dead one
+#   liveness = live|dead|unknown
+#   capacity = idle|busy|unknown for a live session, gone for a dead one, unknown for an unknown one
 # This is the MINIMAL foundation a later phase grows into the full
 # liveness|capacity|blocking|resume-at|payload escalation vocabulary. The capacity read is
 # deliberately coarse and agent-agnostic — a visible input prompt at the foot of the screen means
 # the session is waiting for input (idle), anything else is treated as busy. Telling "working"
-# from "blocked" from "at capacity" apart is per-kind and is not here yet. Exit 1 when dead, 0
-# when live, so a caller can branch on the status without parsing.
+# from "blocked" from "at capacity" apart is per-kind and is not here yet. Exit 0 when live, 1 when
+# dead, 2 when unknown, so a caller can branch on the status without parsing.
+#
+# A MISSED LOOKUP IS NOT A DEATH (#156). `drv_target` failing says only that one backend call
+# produced no handle. It used to print `dead|gone` at once, so a blip became the engine's own
+# statement that the session had ended. `dead` is now printed only when `drv_absence_class` believes
+# the absence: the backend answered the enumeration, this caller's pins do not name another
+# backend, and the answer does not list the session. Every refusal reads `unknown|unknown`, which
+# is no evidence either way: a caller that polls keeps looking, and one that gates an act on it
+# treats it as not established.
 drv_signal() {
-  local name="$1" screen last
+  local name="$1" screen last list rc=0
   if ! drv_target "$name" >/dev/null 2>&1; then
-    printf 'dead|gone'
-    return 1
+    list=$(drv_sessions 2>/dev/null) || rc=$?
+    if drv_absence_class "$rc" "$list" "$name" >/dev/null 2>&1; then
+      printf 'dead|gone'
+      return 1
+    fi
+    printf 'unknown|unknown'
+    return 2
   fi
   screen=$(drv_read "$name" 2>/dev/null)
   [ -n "$screen" ] || { printf 'live|unknown'; return 0; }
@@ -421,6 +434,7 @@ drv_signal() {
 #     so that shell must hand off to it too (measured for zsh only). Measured for a real launcher
 #     with a zsh login profile, the pre-exec `none` lasts under 0.3s on both backends; a caller
 #     that alarms on `none` should still require it on more than one read, spaced wider than that.
+#     `drv_no_agent` below is that rule for a caller with nothing else to do between the reads.
 drv_occupant() {
   local name="$1" tree v t out dead cmd
   case "$(drv_backend)" in
@@ -456,6 +470,32 @@ drv_occupant() {
     *) _drv_no_backend; return 1 ;;
   esac
   case "$v" in agent|none) printf '%s' "$v" ;; *) return 1 ;; esac
+}
+
+# drv_no_agent <session-name> <interval> — exit 0 only when `drv_occupant` reads `none` twice,
+# <interval> seconds apart: the terminal is up and the agent launched into it is not. Prints
+# nothing. The second read, and the pause before it, happen only when the first says `none`.
+#
+# The two-read rule stated at `drv_occupant`, in one place (#163): `shipyard tell`, `shipyard
+# compact` and `council say` each carried a copy, with different spacing. The spacing stays each
+# caller's, since it is a per-skill knob. It must be wider than the pre-exec window measured above.
+# The defaults are (shipyard's 3s, council's fixed 1s), but nothing here enforces a floor: a caller
+# knob set below the window, such as SHIPYARD_MOTION_INTERVAL=0.1, is passed through as set. Only
+# an unusable value — empty, zero, non-numeric — falls back, to one second rather than to no
+# pause, since without the pause two reads inside one launch's pre-exec window would call a
+# healthy launch agentless. (A caller that interleaves the reads with other work, as shipyard's
+# report does, calls `drv_occupant` itself.)
+#
+# EXIT 1 IS "NO EVIDENCE THE AGENT IS GONE", never "the agent is alive": no verdict fails, and so
+# does `agent`, which a dead agent that left another process in the foreground still reads. So a
+# caller may ADD a refusal or an alarm when this succeeds and must never remove one when it fails.
+drv_no_agent() {
+  local gap="${2:-}"
+  # A positive decimal: digits and at most one dot, with a non-zero digit somewhere.
+  case "$gap" in ''|*[!0-9.]*|*.*.*) gap=1 ;; *[1-9]*) ;; *) gap=1 ;; esac
+  [ "$(drv_occupant "$1" 2>/dev/null)" = none ] || return 1
+  sleep "$gap"
+  [ "$(drv_occupant "$1" 2>/dev/null)" = none ]
 }
 
 # --- MAY AN ABSENCE BE BELIEVED? -----------------------------------------------

@@ -1156,10 +1156,10 @@ _floor_no_agent() { # <peer>
   [ -n "$peer" ] || return 1
   for f in "$ROOM"/state/container-*; do [ -f "$f" ] && pinned=1; done
   [ "$pinned" = 1 ] || return 1
-  if ! command -v ct_occupant >/dev/null 2>&1; then
+  if ! command -v ct_no_agent >/dev/null 2>&1; then
     [ -n "${SKILL:-}" ] && [ -f "$SKILL/lib/term.sh" ] || return 1
     . "$SKILL/lib/term.sh" || return 1
-    command -v ct_occupant >/dev/null 2>&1 || return 1
+    command -v ct_no_agent >/dev/null 2>&1 || return 1
   fi
   c_seat_no_agent "$peer" || return 1
   ct_backend

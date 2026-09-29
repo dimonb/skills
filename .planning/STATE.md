@@ -1030,7 +1030,16 @@ conversation rather than a bug fix.
 ## Open follow-ups from the plan
 
 - `flow_run` has no production caller — both skills turned out monitor/authority, not driven. Remove
-  it (YAGNI) or justify it as a general primitive.
+  it (YAGNI) or justify it as a general primitive. #156 fixed what was cheap while it stays: a
+  failed enter send now blocks at once, and an emit that cannot be written is exit 68 rather than a
+  clean close. Keeping it still costs two things, tracked on #156: its enter send does not fold in
+  `adp_delivery_verdict`, so a send that succeeded but sat unsent in the box polls until it times
+  out; and its `signal idle` predicate rests on `drv_signal`'s glyph read, which matches no real
+  client's pane. Removing `flow_run` settles both; keeping it means fixing both.
+- Deferred on #156 and NOT tied to `flow_run`: autodown lock 3 reading `adp_turn_state` so a
+  merged, finished slot with a live idle terminal is torn down (the intended design). #156 now
+  refuses every live terminal; turning that path on needs the owner's go-ahead, and the #156
+  comment lists what it would need. Whoever closes #156 must move this to its own issue first.
 - **#111 IN FLIGHT (slot `ship-111`, PR #115)** — `shared/policy/tests` runs in NO automated invocation:
   absent from check 10's list, from both Makefile targets and from CI (verified independently; it
   still passes by hand at 92 checks). #97's generalization landed by halves — check 11 (drift) does

@@ -197,6 +197,12 @@ shipyard_target()  { drv_target "ship-$1"; }
 # anyone acts on it; `drv_occupant` in shared/driver says why each can be wrong.
 shipyard_occupant() { drv_occupant "ship-$1"; }
 
+# shipyard_no_agent <slot> — exit 0 only when two occupant reads, SHIPYARD_MOTION_INTERVAL apart,
+# both say `none`: the terminal is up and the agent is not. The rule and what a failure does NOT
+# mean are `drv_no_agent`'s, in shared/driver. The report interleaves its two reads with its
+# captures, so it reads `shipyard_occupant` itself.
+shipyard_no_agent() { drv_no_agent "ship-$1" "$(knob_interval "${SHIPYARD_MOTION_INTERVAL:-}" 3)"; }
+
 # shipyard_capture <slot> — the child's visible screen as plain text.
 shipyard_capture() { drv_read "ship-$1"; }
 

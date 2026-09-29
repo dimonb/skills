@@ -50,7 +50,8 @@
 #   B3 lock 2 — a non-terminal ship stage never fires, however merged the PR is. `merged` is
 #      not "child done": the forge says one PR ended while the child is still posting its
 #      record and writing its state file.
-#   B4 lock 3 — a BUSY terminal never fires. Somebody (or the child) is using it.
+#   B4 lock 3 — a LIVE terminal never fires, busy or "idle". Every other B case runs with the
+#      terminal gone, which is the only shape lock 3 passes (#156).
 #   B5 `closed` never fires. A closed PR's content is not in the base branch, so the content
 #      gate would refuse by construction; it is left out on purpose, and this case pins that
 #      decision so a later reader does not add it back as an obvious omission.
@@ -348,9 +349,9 @@ B_ROOT="$T17TMP/b/repo"; B_GIT="$T17TMP/b/gitdir"
 B_STATES="$T17TMP/b/forge-states"   # <iid> TAB OPEN|MERGED|CLOSED, rewritten per tick
 B_WINS="$T17TMP/b/wins"             # drv_target's window list
 B_ENUM="$T17TMP/b/enum"             # drv_sessions' answer
-B_SCREEN="$T17TMP/b/screen"         # what capture-pane returns; its LAST line decides idle/busy
+B_SCREEN="$T17TMP/b/screen"         # what capture-pane returns, read only while a terminal is up
 mkdir -p "$B_ROOT" "$B_GIT/ship-escalations" "$T17TMP/b"
-printf '\xe2\x9d\xaf \n' >"$B_SCREEN"   # an input prompt at the foot of the screen = idle
+printf '\xe2\x9d\xaf \n' >"$B_SCREEN"   # a composer glyph on the last line, the shape the old idle read wanted
 export B_ROOT B_GIT B_STATES B_WINS B_ENUM B_SCREEN
 
 git() {
@@ -433,12 +434,12 @@ b_tick() { # [<VAR=value> ...] -- <slot> ...
 # --- B1/B2: one tick is not enough, two are; and the argv carries no flags ------------------
 b_reset
 b_slot 61 861 ready-to-merge
-printf '1 ship-61\n' >"$B_WINS"; printf 'ship-61\n' >"$B_ENUM"
+printf '1 ship-79\n' >"$B_WINS"; printf 'ship-79\n' >"$B_ENUM"
 printf '861\tMERGED\n' >"$B_STATES"
 
 t1out=$(b_tick -- 61)
 ok "B1: one merged tick tears nothing down"          0 "$(grep -c . "$DOWN_CALLS")"
-ok "B1: ...and the row is the ordinary merged row"   1 "$(printf '%s' "$t1out" | grep -c '^| 61 | !861 .*merged /')"
+ok "B1: ...and the row is the ordinary gone row"     1 "$(printf '%s' "$t1out" | grep -c '^| 61 | !861 .*no terminal')"
 
 t2out=$(b_tick -- 61)
 ok "B2: the second consecutive merged tick fires"    1 "$(grep -c '^61$' "$DOWN_CALLS")"
@@ -450,28 +451,37 @@ ok "B2: ...and the row shows it"                     1 "$(printf '%s' "$t2out" |
 # --- B3: lock 2 — a non-terminal ship stage never fires ------------------------------------
 b_reset
 b_slot 62 862 impl-review
-printf '1 ship-62\n' >"$B_WINS"; printf 'ship-62\n' >"$B_ENUM"
+printf '1 ship-79\n' >"$B_WINS"; printf 'ship-79\n' >"$B_ENUM"
 printf '862\tMERGED\n' >"$B_STATES"
 b_tick -- 62 >/dev/null
 b3out=$(b_tick -- 62)
 ok "B3: merged but mid-review is never torn down"    0 "$(grep -c . "$DOWN_CALLS")"
-ok "B3: ...and stays in the table as a live slot"    1 "$(printf '%s' "$b3out" | grep -c '^| 62 | !862 .*merged / impl-review')"
+ok "B3: ...and stays in the table"                  1 "$(printf '%s' "$b3out" | grep -c '^| 62 | !862 .*no terminal')"
 
-# --- B4: lock 3 — a busy terminal never fires ----------------------------------------------
+# --- B4: lock 3 — a LIVE terminal never fires, whatever its screen shows (#156) --------------
+# Every other case here runs on the no-terminal arm, because that is now the only arm that can
+# pass. This one keeps the terminal up. The screen used to decide: a composer glyph on the last
+# line read as idle and passed. That is a shape no client renders (its last line is the footer),
+# so the case that exercised it proved nothing about a real child. It is kept here as the
+# strongest screen for the refusal: the one that used to pass.
 b_reset
 b_slot 63 863 ready-to-merge
 printf '1 ship-63\n' >"$B_WINS"; printf 'ship-63\n' >"$B_ENUM"
 printf '863\tMERGED\n' >"$B_STATES"
-printf 'thinking about it\n' >"$B_SCREEN"     # no input prompt on the last line = busy
+printf 'thinking about it\n' >"$B_SCREEN"     # no input prompt on the last line
 b_tick -- 63 >/dev/null
 b_tick -- 63 >/dev/null
-ok "B4: a busy terminal is never torn down"          0 "$(grep -c . "$DOWN_CALLS")"
-printf '\xe2\x9d\xaf \n' >"$B_SCREEN"
+ok "B4: a busy live terminal is never torn down"     0 "$(grep -c . "$DOWN_CALLS")"
+printf '\xe2\x9d\xaf \n' >"$B_SCREEN"          # the glyph line the old idle read passed on
+b_tick -- 63 >/dev/null
+b4out=$(b_tick -- 63)
+ok "B4: ...nor an 'idle' one, the screen that used to pass" 0 "$(grep -c . "$DOWN_CALLS")"
+ok "B4: ...and it stays in the table as a live slot" 1 "$(printf '%s' "$b4out" | grep -c '^| 63 | !863 .*merged / ready-to-merge')"
 
 # --- B5: `closed` is not a trigger ---------------------------------------------------------
 b_reset
 b_slot 64 864 ready-to-merge
-printf '1 ship-64\n' >"$B_WINS"; printf 'ship-64\n' >"$B_ENUM"
+printf '1 ship-79\n' >"$B_WINS"; printf 'ship-79\n' >"$B_ENUM"
 printf '864\tCLOSED\n' >"$B_STATES"
 b_tick -- 64 >/dev/null
 b_tick -- 64 >/dev/null
@@ -480,7 +490,7 @@ ok "B5: a closed PR is never torn down"              0 "$(grep -c . "$DOWN_CALLS
 # --- B6: the flicker. merged -> ? -> merged must still be ONE consecutive run ---------------
 b_reset
 b_slot 65 865 ready-to-merge
-printf '1 ship-65\n' >"$B_WINS"; printf 'ship-65\n' >"$B_ENUM"
+printf '1 ship-79\n' >"$B_WINS"; printf 'ship-79\n' >"$B_ENUM"
 printf '865\tMERGED\n' >"$B_STATES"
 b_tick -- 65 >/dev/null
 printf '865\tWHAT\n' >"$B_STATES"          # an unresolvable answer: mr_state renders `?`
@@ -495,7 +505,7 @@ ok "B6: ...and two consecutive ticks after it still fire"    1 "$(grep -c '^65$'
 # --- B7: a refusal is rendered, with the exact command, and claims nothing ------------------
 b_reset; printf '1\n' >"$DOWN_RC_FILE"
 b_slot 66 866 done
-printf '1 ship-66\n' >"$B_WINS"; printf 'ship-66\n' >"$B_ENUM"
+printf '1 ship-79\n' >"$B_WINS"; printf 'ship-79\n' >"$B_ENUM"
 printf '866\tMERGED\n' >"$B_STATES"
 b_tick -- 66 >/dev/null
 b7=$(b_tick -- 66)
@@ -509,7 +519,7 @@ printf '0\n' >"$DOWN_RC_FILE"
 # --- B8/B9: the knobs -----------------------------------------------------------------------
 b_reset
 b_slot 67 867 ready-to-merge
-printf '1 ship-67\n' >"$B_WINS"; printf 'ship-67\n' >"$B_ENUM"
+printf '1 ship-79\n' >"$B_WINS"; printf 'ship-79\n' >"$B_ENUM"
 printf '867\tMERGED\n' >"$B_STATES"
 b_tick SHIPYARD_AUTODOWN=0 -- 67 >/dev/null
 b_tick SHIPYARD_AUTODOWN=0 -- 67 >/dev/null
@@ -517,7 +527,7 @@ ok "B8: SHIPYARD_AUTODOWN=0 tears nothing down"      0 "$(grep -c . "$DOWN_CALLS
 
 b_reset
 b_slot 68 868 ready-to-merge
-printf '1 ship-68\n' >"$B_WINS"; printf 'ship-68\n' >"$B_ENUM"
+printf '1 ship-79\n' >"$B_WINS"; printf 'ship-79\n' >"$B_ENUM"
 printf '868\tMERGED\n' >"$B_STATES"
 printf '%s\n' "$(date +%s)" >"$B_GIT/ship-escalations/report-tick"
 b9err=$( env SHIPYARD_MOTION_INTERVAL="${SHIPYARD_MOTION_INTERVAL:-0.01}" SHIPYARD_STALL_SECS=100000 SHIPYARD_BACKEND=tmux SHIPYARD_SESSION=t17b \
@@ -527,8 +537,8 @@ ok "B9: ...and one tick still tears nothing down"    0 "$(grep -c . "$DOWN_CALLS
 
 # --- B10: the no-terminal arm ---------------------------------------------------------------
 # The shape that accumulates: no terminal, a worktree still on disk, the work merged and the
-# child finished. The backend ANSWERS and does not list it, which is the corroboration the
-# idle read is replaced by here.
+# child finished. The backend ANSWERS and does not list it, which is the corroboration lock 3
+# needs, and the only shape it passes.
 b_reset
 b_slot 69 869 done
 printf '1 ship-79\n' >"$B_WINS"; printf 'ship-79\n' >"$B_ENUM"
@@ -549,7 +559,7 @@ ok "B10: ...and says so"                             1 "$(printf '%s' "$b10b" | 
 # seed exactly what a completed reap leaves, then run ONE tick with a different PR number.
 b_reset
 b_slot 70 870 ready-to-merge
-printf '1 ship-70\n' >"$B_WINS"; printf 'ship-70\n' >"$B_ENUM"
+printf '1 ship-79\n' >"$B_WINS"; printf 'ship-79\n' >"$B_ENUM"
 printf '870\tMERGED\n' >"$B_STATES"
 printf '70\t999\t2\n' >"$B_GIT/ship-escalations/report-merged"
 b_tick -- 70 >/dev/null
@@ -558,14 +568,15 @@ ok "B11: ...and the row is rewritten for the new PR"      1 \
    "$(grep -c '^70	870	1$' "$B_GIT/ship-escalations/report-merged")"
 
 # --- B12: an open escalation HOLDS the teardown --------------------------------------------
-# The slot is finished by every other measure — merged, stage terminal, terminal idle — and is
-# idle only BECAUSE it asked the operator something. Tearing it down destroys the session that
-# asked; worse, `shipyard-answer.sh` then exits 0 and claims the child will pick the answer up,
-# because its fallback to `shipyard-tell.sh` is gated on `kind = notice`. Every other B case
+# The slot is finished by every other measure — merged, stage terminal, terminal gone — and is
+# stopped only BECAUSE it asked the operator something. Tearing it down removes the worktree that
+# a relaunch resumes in to take the answer; worse, `shipyard-answer.sh` then exits 0 and claims
+# the child will pick the answer up, because its fallback to `shipyard-tell.sh` is gated on
+# `kind = notice`. Every other B case
 # runs with an empty mailbox, so nothing pinned this until now.
 b_reset
 b_slot 71 871 ready-to-merge
-printf '1 ship-71\n' >"$B_WINS"; printf 'ship-71\n' >"$B_ENUM"
+printf '1 ship-79\n' >"$B_WINS"; printf 'ship-79\n' >"$B_ENUM"
 printf '871\tMERGED\n' >"$B_STATES"
 printf '{"kind":"question","status":"pending","slot":"71","text":"migrate or defer?"}\n' \
   >"$B_GIT/ship-escalations/71-1.json"
@@ -602,7 +613,7 @@ ok "B12: ...while an ANSWERED one does not hold it"  1 "$(grep -c '^71$' "$DOWN_
 # the teardown must not happen, AND the operator must be told on every tick it is held, not once.
 b_reset
 b_slot 72 872 ready-to-merge
-printf '1 ship-72\n' >"$B_WINS"; printf 'ship-72\n' >"$B_ENUM"
+printf '1 ship-79\n' >"$B_WINS"; printf 'ship-79\n' >"$B_ENUM"
 printf '872\tMERGED\n' >"$B_STATES"
 printf '{"kind":"question","status":"pending"' >"$B_GIT/ship-escalations/72-1.json"   # truncated
 b13a=$(b_tick -- 72)
@@ -638,7 +649,7 @@ ok "B13: ...and does not promise the escalation block" 0 \
 # silence on EVERY tick, like STALLED — news once is not enough for a state that needs an action.
 b_reset
 b_slot 73 873 ready-to-merge
-printf '1 ship-73\n' >"$B_WINS"; printf 'ship-73\n' >"$B_ENUM"
+printf '1 ship-79\n' >"$B_WINS"; printf 'ship-79\n' >"$B_ENUM"
 printf '873\tMERGED\n' >"$B_STATES"
 printf '{"kind":"question","status":"pending"}\n' >"$B_GIT/ship-escalations/73-1.json"
 b_tick -- --only-changed 73 >/dev/null
@@ -659,7 +670,7 @@ ok "B14: ...and still tears nothing down"            0 "$(grep -c . "$DOWN_CALLS
 b_reset
 b_slot 74 874 ready-to-merge
 mkdir -p "$B_ROOT/.claude/worktrees/ship-74"
-printf '1 ship-74\n' >"$B_WINS"; printf 'ship-74\n' >"$B_ENUM"
+printf '1 ship-79\n' >"$B_WINS"; printf 'ship-79\n' >"$B_ENUM"
 printf '874\tMERGED\n' >"$B_STATES"
 printf '1\n' >"$DOWN_RC_FILE"; DOWN_REMOVE=1; export DOWN_REMOVE
 b_tick -- 74 >/dev/null
@@ -686,7 +697,7 @@ DOWN_REMOVE=0; export DOWN_REMOVE; printf '0\n' >"$DOWN_RC_FILE"
 b_reset
 b_slot 7 907 ready-to-merge
 b_slot 50 917 ready-to-merge
-printf '1 ship-50\n2 ship-7\n' >"$B_WINS"; printf 'ship-50\nship-7\n' >"$B_ENUM"
+printf '1 ship-79\n' >"$B_WINS"; printf 'ship-79\n' >"$B_ENUM"
 printf '907\tMERGED\n917\tMERGED\n' >"$B_STATES"
 printf '{"kind":"question","status":"pending","slot":"50"}\n' >"$B_GIT/ship-escalations/50-1.json"
 # argv order puts slot 50's row first in the file, which is where a substring match finds it.
@@ -725,7 +736,7 @@ ok "B17: ...and it is never torn down"               0 "$(grep -c . "$DOWN_CALLS
 # question open.
 b_reset
 b_slot 76 876 ready-to-merge
-printf '1 ship-76\n' >"$B_WINS"; printf 'ship-76\n' >"$B_ENUM"
+printf '1 ship-79\n' >"$B_WINS"; printf 'ship-79\n' >"$B_ENUM"
 printf '876\tMERGED\n' >"$B_STATES"
 printf '{"kind":"question","status":"pending"}\n' >"$B_GIT/ship-escalations/76-1.json"
 chmod 311 "$B_GIT/ship-escalations"
@@ -769,7 +780,7 @@ ok "B19: a teardown prints even against a matching signature" 1 \
 # worktree test and shipyard-down.sh's wt_of all collapse the path onto slot 7's real worktree.
 b_reset
 b_slot 7 907 ready-to-merge
-printf '1 ship-7/\n2 ship-7\n' >"$B_WINS"; printf 'ship-7/\nship-7\n' >"$B_ENUM"
+printf '1 ship-79\n' >"$B_WINS"; printf 'ship-79\n' >"$B_ENUM"
 printf '907\tMERGED\n' >"$B_STATES"
 b_tick -- "7/" >/dev/null
 b_tick -- "7/" >/dev/null
@@ -780,7 +791,7 @@ ok "B20: a slot name with a slash tears nothing down" 0 "$(grep -c . "$DOWN_CALL
 # news, so it prints in full again. Every tick still prints the block under --only-changed.
 b_reset; rm -f "$B_GIT/ship-escalations/report-episodes"
 b_slot 80 880 ready-to-merge
-printf '1 ship-80\n' >"$B_WINS"; printf 'ship-80\n' >"$B_ENUM"
+printf '1 ship-79\n' >"$B_WINS"; printf 'ship-79\n' >"$B_ENUM"
 printf '880\tMERGED\n' >"$B_STATES"
 printf '{"kind":"question","status":"pending","slot":"80"}\n' >"$B_GIT/ship-escalations/80-1.json"
 b_tick -- --only-changed 80 >/dev/null
@@ -806,7 +817,7 @@ rm -f "$B_GIT/ship-escalations/80-2.json" "$B_GIT/ship-escalations/80-3.json"
 # --- B22: AWAITING REMOVAL is an episode, keyed on the refusal's text (#239) ------------------
 b_reset; rm -f "$B_GIT/ship-escalations/report-episodes"; printf '1\n' >"$DOWN_RC_FILE"
 b_slot 81 881 done
-printf '1 ship-81\n' >"$B_WINS"; printf 'ship-81\n' >"$B_ENUM"
+printf '1 ship-79\n' >"$B_WINS"; printf 'ship-79\n' >"$B_ENUM"
 printf '881\tMERGED\n' >"$B_STATES"
 b_tick -- --only-changed 81 >/dev/null
 b22a=$(b_tick -- --only-changed 81)
@@ -826,18 +837,19 @@ printf '0\n' >"$DOWN_RC_FILE"
 # again neither calls the teardown nor reports one.
 b_reset
 b_slot 82 882 ready-to-merge
-printf '1 ship-82\n' >"$B_WINS"; printf 'ship-82\n' >"$B_ENUM"
+printf '1 ship-79\n' >"$B_WINS"; printf 'ship-79\n' >"$B_ENUM"
 printf '882\tMERGED\n' >"$B_STATES"
 DOWN_REMOVE=1; export DOWN_REMOVE
 b_tick -- 82 >/dev/null
 b23a=$(b_tick -- 82)
-# The live arm first: the terminal still listed, so autodown_consider is reached and must stop
+# Then a terminal under the slot's name appears: autodown_consider is reached and must stop
 # before the teardown. WHICH guard stops it this case cannot say: a reap takes the stage file and
-# the iid with the worktree, so lock 2 and the iid guard behind it both see nothing. It proves the
-# slot is not reaped again; B3 is the case that pins lock 2 on its own. Then the gone-slot arm,
-# where autodown_consider is not called at all.
+# the iid with the worktree, so lock 2 and the iid guard behind it both see nothing, and lock 3
+# refuses a live terminal as well. It proves the slot is not reaped again; B3 is the case that
+# pins lock 2 on its own. Then the gone-slot arm, where autodown_consider is not called at all.
+printf '1 ship-82\n' >"$B_WINS"; printf 'ship-82\n' >"$B_ENUM"
 b23live=$(b_tick -- 82)
-printf '1 ship-79\n' >"$B_WINS"; printf 'ship-79\n' >"$B_ENUM"   # its terminal is gone too
+printf '1 ship-79\n' >"$B_WINS"; printf 'ship-79\n' >"$B_ENUM"   # its terminal is gone again
 b23b=$(b_tick -- 82)
 b23c=$(b_tick -- 82)
 DOWN_REMOVE=0; export DOWN_REMOVE
@@ -851,7 +863,7 @@ ok "B23: ...nor call the teardown again"               1 "$(grep -c '^82$' "$DOW
 # that arm the "answer it" remedy is false, so the short entry must point at the file instead.
 b_reset; rm -f "$B_GIT/ship-escalations/report-episodes"
 b_slot 83 883 ready-to-merge
-printf '1 ship-83\n' >"$B_WINS"; printf 'ship-83\n' >"$B_ENUM"
+printf '1 ship-79\n' >"$B_WINS"; printf 'ship-79\n' >"$B_ENUM"
 printf '883\tMERGED\n' >"$B_STATES"
 printf 'not json at all\n' >"$B_GIT/ship-escalations/83-1.json"
 b_tick -- --only-changed 83 >/dev/null

@@ -38,7 +38,7 @@
 # sourcing anything, so it constrains nothing; shipyard is the binding caller.
 
 # A version marker, bumped when the body changes, so sync + the drift gate stay easy to prove.
-_ADP_VERSION=4
+_ADP_VERSION=5
 
 # --- the kinds -----------------------------------------------------------------
 # One per line, sorted, so a caller can `paste -sd, -` them into a message.
@@ -555,6 +555,72 @@ adp_delivery_verdict() {
     esac
   done
   printf 'unconfirmed'
+}
+
+# --- the sampling loop both send verbs run --------------------------------------
+# `shipyard tell` and `council say` ask the same question after a send: did a turn start, or did
+# the client queue it? Each used to carry its own copy of the loop below and of the census, with
+# the same algorithm and different spacing (#163). The rule is `adp_delivery_verdict` above; the
+# functions below only sample and summarise it. Each caller keeps its own knobs, the warnings that
+# name them, its exit codes and its sentences, because those are its own vocabulary: a slot and a
+# child, a seat and a participant.
+
+# adp_turn_sample <capture-command> [<arg>...] — one `adp_turn_state` reading of what the command
+# prints. Its stderr is dropped: a capture that fails prints nothing and reads `unknown`, which is
+# already how an unreadable frame is counted.
+adp_turn_sample() { adp_turn_state "$("$@" 2>/dev/null)"; }
+
+# adp_delivery_census <state>... — a run-length summary of what was ACTUALLY sampled, in order,
+# e.g. `idle x3,running`. It names the evidence instead of listing the causes `unconfirmed` could
+# have had: such a list goes stale the moment the rule changes, and one did, leaving out the
+# commonest cause (a child mid-turn all window with no queued hint).
+adp_delivery_census() {
+  local out="" prev="" run=0 s
+  for s in "$@"; do
+    if [ "$run" -gt 0 ] && [ "$s" = "$prev" ]; then run=$((run + 1)); continue; fi
+    if [ "$run" -gt 1 ]; then out="$out,$prev x$run"; elif [ "$run" = 1 ]; then out="$out,$prev"; fi
+    prev="$s"; run=1
+  done
+  if [ "$run" -gt 1 ]; then out="$out,$prev x$run"; elif [ "$run" = 1 ]; then out="$out,$prev"; fi
+  printf '%s' "${out#,}"
+}
+
+# adp_delivery_poll <secs> <interval> <pre-send-state> <capture-command> [<arg>...]
+#   -> "<verdict><TAB><census>", exit 0
+#
+# Samples the capture until `adp_delivery_verdict` over the whole series (the pre-send state first)
+# is no longer `unconfirmed`, or <secs> have passed, sleeping <interval> between samples. It always
+# takes at least one post-send sample. The pre-send state is the caller's, read with
+# `adp_turn_sample` BEFORE it types anything: that sample is what lets a turn seen later count as
+# one this send started, and what stops a queued hint from an earlier send being read as this one.
+#
+# It POLLS because the sampling rate alone sets how often a real delivery still reads
+# `unconfirmed`: the residual is a turn that starts and finishes between two samples, and a single
+# sleep misses a short turn completely. The whole series is re-folded on each sample so the rule
+# stays in one place; over one window that is a few hundred string comparisons.
+#
+# BAD NUMBERS PRINT NOTHING AND EXIT 2. The callers validate both through `shared/knobs` and warn
+# in their own words, so this is a backstop, and the direction is chosen: an empty verdict is the
+# arm each caller already reports as "no verdict" with a failing exit, never as success. The
+# alternatives are worse. A non-numeric window makes the deadline arithmetic fail and the loop stop
+# after one sample, and a zero or unparseable interval turns a bounded poll into a fork storm.
+adp_delivery_poll() {
+  local secs="${1:-}" interval="${2:-}" deadline verdict
+  local -a states
+  case "$secs" in ''|*[!0-9]*) return 2 ;; esac
+  case "$interval" in ''|*[!0-9.]*|*.*.*) return 2 ;; esac
+  case "$interval" in *[1-9]*) ;; *) return 2 ;; esac
+  [ "$#" -ge 4 ] || return 2
+  states=("$3"); shift 3
+  deadline=$(( $(date +%s) + 10#$secs ))
+  while :; do
+    states+=("$(adp_turn_sample "$@")")
+    verdict=$(adp_delivery_verdict "${states[@]}")
+    [ "$verdict" = unconfirmed ] || break
+    [ "$(date +%s)" -lt "$deadline" ] || break
+    sleep "$interval"
+  done
+  printf '%s\t%s' "$verdict" "$(adp_delivery_census "${states[@]}")"
 }
 
 # --- WHY a child is not moving: the waits and faults a client ANNOUNCES ---------

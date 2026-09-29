@@ -54,8 +54,8 @@ ok() {
 TELLLOG="$TMP/tell.log"
 : > "$TELLLOG"
 FAKE_SIG="live|busy"
-drv_tell()   { printf 'TELL %s :: %s\n' "$1" "$2" >> "$TELLLOG"; }
-drv_submit() { printf 'SUBMIT %s\n' "$1" >> "$TELLLOG"; }
+drv_tell()   { printf 'TELL %s :: %s\n' "$1" "$2" >> "$TELLLOG"; return "${FAKE_TELL_RC:-0}"; }
+drv_submit() { printf 'SUBMIT %s\n' "$1" >> "$TELLLOG"; return "${FAKE_SUBMIT_RC:-0}"; }
 drv_signal() { printf '%s' "$FAKE_SIG"; case "$FAKE_SIG" in *dead*) return 1 ;; *) return 0 ;; esac; }
 
 # A file-backed counter, so a `check` predicate can model "becomes true after N polls" — the check
@@ -246,6 +246,56 @@ ok "a non-numeric FLOW_MAX_POLLS fails closed (blocks, no infinite loop)" 0 "$fa
 # A cycle is caught by the node budget rather than looping forever.
 cycle_rc=0; ( flow_reset; flow_node loop --done-when 'budget 0' --on-done goto:loop; FLOW_SESSION=s FLOW_MAX_NODES=5 flow_run loop ) 2>/dev/null || cycle_rc=$?
 ok "a cycle trips the node budget"              65 "$cycle_rc"
+
+# --- 7a. a failed send, a failed emit, a missed lookup (#156) --------------------------------
+# A send that failed is a block at once. It used to be polled through: a failed type skipped the
+# submit silently and a failed submit was discarded, so the node waited out FLOW_MAX_POLLS and then
+# blocked as a timeout. The poll count is asserted through a `check` predicate's counter, which
+# every poll bumps, so zero means the node never polled.
+printf '\n── a failed send, a failed emit, a missed lookup ──\n'
+send_case() { # <VAR=VAL>... -> "<rc>|<polls>|<park line>"
+  local rc=0; reset_counter; : > "$PARK"; : > "$TELLLOG"
+  ( for kv in "$@"; do export "${kv?}"; done
+    flow_reset
+    flow_node n --enter "go" --done-when 'check _probe_after 999' --on-block policy
+    FAKE_SIG="live|busy" FLOW_SESSION=s FLOW_PARK_FILE="$PARK" FLOW_MAX_POLLS=50 flow_run n ) 2>/dev/null || rc=$?
+  printf '%s|%s|%s' "$rc" "$(cat "$CNT")" "$(grep -c 'signal: unknown|undelivered' "$PARK")"
+}
+ok "a failed type parks at once, naming the failed send"   "10|0|1" "$(send_case FAKE_TELL_RC=1)"
+ok "...and is never followed by a submit"                  0 "$(grep -c '^SUBMIT' "$TELLLOG")"
+ok "a failed submit parks at once too"                     "10|0|1" "$(send_case FAKE_SUBMIT_RC=1)"
+ok "a send that went through still polls (control)"        "10|50|0" "$(send_case)"
+gotofail_rc=0
+( flow_reset
+  flow_node n --enter "go" --done-when 'check false' --on-block goto:alt
+  flow_node alt --done-when 'budget 0' --emit "$TMP/alt-ran" --on-done close
+  rm -f "$TMP/alt-ran"
+  FAKE_TELL_RC=1 FLOW_SESSION=s flow_run n ) 2>/dev/null || gotofail_rc=$?
+ok "a failed send follows a declared goto on_block"        "0|0" "$gotofail_rc|$([ -f "$TMP/alt-ran" ]; echo $?)"
+# An emit that cannot be written stops the run: a clean close would claim an artifact that does
+# not exist.
+emitfail_rc=0
+( flow_reset
+  flow_node n --done-when 'budget 0' --emit "$TMP/no-such-dir/artifact" --on-done goto:after
+  flow_node after --done-when 'budget 0' --emit "$TMP/after-ran" --on-done close
+  rm -f "$TMP/after-ran"
+  FLOW_SESSION=s flow_run n ) 2>/dev/null || emitfail_rc=$?
+ok "an emit that cannot be written is not a clean close"   68 "$emitfail_rc"
+ok "...and the run does not transition past it"            1 "$([ -f "$TMP/after-ran" ]; echo $?)"
+# The driver now reads a missed lookup it cannot corroborate as `unknown|unknown`, never `dead`.
+# The interpreter must treat that as no evidence and keep polling, not as a stop. The polls are
+# counted, since an immediate block and a budget-exhausted one both end in the same park, and the
+# timeout token must not claim a liveness no sample observed.
+ok "an unknown signal is not a stall"                       1 "$(_flow_stalled 'unknown|unknown'; echo $?)"
+unk_case() { # <signal> -> "<rc>|<polls>|<park token>"
+  local rc=0; reset_counter; : > "$PARK"
+  ( flow_reset
+    flow_node n --done-when 'check _probe_after 999' --on-block policy
+    FAKE_SIG="$1" FLOW_SESSION=s FLOW_PARK_FILE="$PARK" FLOW_MAX_POLLS=4 flow_run n ) 2>/dev/null || rc=$?
+  printf '%s|%s|%s' "$rc" "$(cat "$CNT")" "$(sed -n 's/.*(signal: \(.*\)).*/\1/p' "$PARK")"
+}
+ok "...so the node polls its whole budget, then parks"      "10|4|unknown|timeout" "$(unk_case 'unknown|unknown')"
+ok "a busy node's timeout still says live"                  "10|4|live|timeout"    "$(unk_case 'live|busy')"
 
 # --- 7b. flow_phase: session-less graph evaluation (the authority mode, FLOW-04) --------------
 # The complement of flow_run: no session, no agent, no side effect — walk the declared graph and

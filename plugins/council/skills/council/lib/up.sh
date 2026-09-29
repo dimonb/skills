@@ -1124,7 +1124,7 @@ council_say() {
   #
   # The pre-send sample is what lets a turn seen LATER count as one our submit started, and what
   # stops a queued hint left over from an earlier `say` being read as being about this one.
-  local -a states=("$(adp_turn_state "$(ct_capture "$peer" 2>/dev/null)")")
+  local pre; pre=$(adp_turn_sample ct_capture "$peer")
 
   ct_type "$peer" "$one" || { _council_say_absence "$peer"; return $?; }
   # RECORDED ONCE THE TEXT IS IN THE SEAT'S TERMINAL, before the submit and whatever the delivery
@@ -1154,9 +1154,9 @@ council_say() {
     return 6
   }
 
-  # POLLED, not slept once: the residual case is a turn that starts AND finishes between two
-  # samples, and the sampling rate is the only thing that sets how often a real delivery still
-  # reads `unconfirmed`. A single `sleep 1.5` misses a one-second turn completely.
+  # The poll and the census of what it sampled are `adp_delivery_poll` in shared/adapters, which
+  # `shipyard tell` runs too; it says why it polls rather than sleeping once. An empty answer lands
+  # in the `*)` arm below, never in success.
   #
   # Both knobs are VALIDATED rather than just defaulted, because an unusable value fails open in
   # the worst way: it either aborts this shell after the message has already gone, or turns the
@@ -1164,33 +1164,15 @@ council_say() {
   # `shipyard tell` asks the identical question and had the identical two defects, which is why
   # the answer is one module rather than two copies. What stays HERE is the wording, because
   # naming the operator's own variable is this skill's business and not the module's.
-  local secs interval deadline verdict
+  local secs interval polled verdict sampled TAB
+  TAB=$(printf '\t')
   secs=$(knob_uint "${COUNCIL_SAY_CONFIRM_SECS:-}" 10) \
     || echo "council say: COUNCIL_SAY_CONFIRM_SECS is not a usable whole number — using 10" >&2
   interval=$(knob_interval "${COUNCIL_SAY_CONFIRM_INTERVAL:-}" 0.5) \
     || echo "council say: COUNCIL_SAY_CONFIRM_INTERVAL is not a usable positive number — using 0.5" >&2
 
-  deadline=$(( $(date +%s) + secs ))
-  while :; do
-    states+=("$(adp_turn_state "$(ct_capture "$peer" 2>/dev/null)")")
-    verdict=$(adp_delivery_verdict "${states[@]}")
-    [ "$verdict" = unconfirmed ] || break
-    [ "$(date +%s)" -lt "$deadline" ] || break
-    sleep "$interval"
-  done
-
-  # A run-length census of what was ACTUALLY sampled, pre-send state first. Naming the evidence
-  # cannot go stale the way an enumeration of possible causes does.
-  local sampled="" _prev="" _run=0 _s
-  for _s in "${states[@]}"; do
-    if [ "$_s" = "$_prev" ]; then _run=$((_run + 1)); continue; fi
-    if [ -n "$_prev" ]; then
-      if [ "$_run" -gt 1 ]; then sampled="$sampled,$_prev x$_run"; else sampled="$sampled,$_prev"; fi
-    fi
-    _prev="$_s"; _run=1
-  done
-  if [ "$_run" -gt 1 ]; then sampled="$sampled,$_prev x$_run"; else sampled="$sampled,$_prev"; fi
-  sampled=${sampled#,}
+  polled=$(adp_delivery_poll "$secs" "$interval" "$pre" ct_capture "$peer") || polled=""
+  verdict=${polled%%"$TAB"*}; sampled=${polled#*"$TAB"}
 
   case "$verdict" in
     delivered) echo "delivered"; return 0 ;;

@@ -61,12 +61,12 @@
 #  * open escalations are appended, so a question raised between fast-monitor
 #    ticks still shows up here;
 #  * a slot whose PR/MR has read `merged` on $SHIPYARD_AUTODOWN_TICKS consecutive ticks, whose
-#    ship stage is terminal and whose terminal nobody is at, is torn down by calling
-#    `shipyard-down.sh` — unchanged, with no flags and never `--force`, so every gate that
-#    protects a worktree is the one that runs. An open escalation HOLDS it: a child that stopped
-#    to ask is idle because it is waiting for you, and destroying it makes the answer
-#    undeliverable. See the block where SHIPYARD_AUTODOWN is read for every lock and why
-#    `closed` is not a trigger. It is the one thing here that REMOVES A SLOT rather than
+#    ship stage is terminal and whose terminal is gone (the backend corroborates it), is torn
+#    down by calling `shipyard-down.sh` — unchanged, with no flags and never `--force`, so every
+#    gate that protects a worktree is the one that runs. A live terminal is never torn down here.
+#    An open escalation HOLDS it: a child that stopped to ask is still owed the answer, and
+#    removing its worktree makes the answer undeliverable. See the block where SHIPYARD_AUTODOWN
+#    is read for every lock and why `closed` is not a trigger. It is the one thing here that REMOVES A SLOT rather than
 #    observing it; the script's other side effects are its own mailbox bookkeeping
 #    (report-sig / -stall / -tick / -merged / -episodes), the agterm sidebar glyphs it repaints, the pending
 #    notices its escalation tail closes, and the Codex parent continuity watcher it re-arms. What it removed, refused or held each get their
@@ -91,7 +91,7 @@
 #   SHIPYARD_STALL_SECS motionless seconds before the stall block fires (default: 1800)
 #   SHIPYARD_AUTODOWN   1 (default) tears a finished slot down through shipyard-down.sh once
 #                       its PR/MR has read `merged` on enough consecutive ticks, ship's stage
-#                       is terminal and nobody is at the terminal; 0 leaves teardown entirely
+#                       is terminal and its terminal is gone (corroborated); 0 leaves teardown entirely
 #                       manual. See the block where this is read for every lock
 #   SHIPYARD_AUTODOWN_TICKS
 #                       consecutive `merged` ticks required (default and minimum: 2)
@@ -298,13 +298,17 @@ fi
 #      down automatically. That is the conservative direction, and the manual path is
 #      unchanged for it.
 #
-#   3. NOBODY IS AT THE TERMINAL — `drv_signal` reports `idle` (an input prompt at the foot of
-#      the screen), or there is no terminal and `shipyard_absence_report` CORROBORATES that:
-#      the backend answered and does not list the slot. The second half is the same question
-#      shipyard-down.sh now asks before it removes anything, so a blip refuses in both places
-#      rather than in one. `drv_signal` is called directly rather than through a
-#      `shipyard_*` wrapper: `shipyard_signal_class` already owns that name for a different
-#      question, and one caller does not earn a second one next to it.
+#   3. THERE IS NO TERMINAL, and `shipyard_absence_report` CORROBORATES that: the backend
+#      answered and does not list the slot. It is the same question shipyard-down.sh asks before
+#      it removes anything, so a blip refuses in both places rather than in one. A LIVE TERMINAL
+#      IS NEVER TORN DOWN AUTOMATICALLY, whatever its screen shows: that stays the manual path.
+#      This arm used to pass on `drv_signal` reading `idle`, meaning a composer glyph on the last
+#      non-empty line. No client renders that: on every committed pane capture the last line is
+#      the footer, so the arm never passed for a real child, and the only case that exercised it
+#      fed a screen no client draws (#156). A real idle read exists, `adp_turn_state`, but
+#      adopting it would switch on a teardown path that has never run against a live child, and
+#      it reads `idle` for any render it does not recognise. That is its own change, made with
+#      the owner's go-ahead, not a side effect of fixing a read.
 #
 #   4. THE CONTENT GATE, inside shipyard-down.sh. It refuses unless the worktree is clean AND
 #      its content is proven to be in the base branch. A genuinely merged slot passes by
@@ -360,7 +364,7 @@ REAP_HELD=()     # slots held back by an open escalation — finished, but someb
 # `shipyard_absence_report` arm is for.
 autodown_consider() {
   local slot="$1" iid="$2" state="$3" stage="$4" addr="$5" pending="$6"
-  local prev_m prev_iid prev_n seen=1 sig out down_rc=0
+  local prev_m prev_iid prev_n seen=1 out down_rc=0
   [ "$AUTODOWN" = 1 ] || return 1
   [ -n "$MERGEDFILE" ] || return 1
   # A slot containing `/` reaches the locks and the removal target DIFFERENTLY: the mailbox glob
@@ -409,19 +413,12 @@ autodown_consider() {
   MERGED_ROWS+=("$slot	$iid	$seen")
   [ "$seen" -ge "$AUTODOWN_TICKS" ] || return 1
 
-  # Lock 3. A live terminal must be IDLE; an absent one must be corroborated absent. Both
-  # diagnostics are captured rather than printed: this whole report is buffered into one
-  # block, and `shipyard_absence_report`'s rc-0 wording is written for a caller that did not
-  # expect the absence.
-  if [ -n "$addr" ]; then
-    sig=$(drv_signal "ship-$slot" 2>/dev/null)
-    case "$sig" in
-      *'|idle') ;;
-      *) return 1 ;;
-    esac
-  else
-    shipyard_absence_report "$slot" >/dev/null 2>&1 || return 1
-  fi
+  # Lock 3. A live terminal refuses outright; an absent one must be corroborated absent. The
+  # diagnostic is captured rather than printed: this whole report is buffered into one block, and
+  # `shipyard_absence_report`'s rc-0 wording is written for a caller that did not expect the
+  # absence.
+  [ -z "$addr" ] || return 1
+  shipyard_absence_report "$slot" >/dev/null 2>&1 || return 1
 
   # AN OPEN ESCALATION IS A HOLD, and it is passed in rather than read out of the caller's own
   # variables, which merely happen to be in scope at both call sites.
@@ -430,10 +427,11 @@ autodown_consider() {
   # stall clock, the sidebar badge and the in-flight test — treats a pending escalation as
   # "blocked on a human, do not conclude" — the stall clock exempts such a slot BECAUSE ITS
   # IDLENESS IS EXPECTED, and the in-flight test refuses to call the fleet drained over it. This
-  # was very nearly the only one to get it wrong. Lock 3, just above, reads that same expected
-  # idleness through `drv_signal` as "nobody is at the terminal" — so without this a
-  # child that stopped to ask a question, and was then merged by the operator, is destroyed
-  # BECAUSE it was waiting for them.
+  # was very nearly the only one to get it wrong. Lock 3 used to read that same expected idleness
+  # through `drv_signal` as "nobody is at the terminal", so a child that stopped to ask a question,
+  # and was then merged by the operator, was destroyed BECAUSE it was waiting for them. Lock 3 now
+  # passes only a slot whose terminal is gone, and the hold still matters there: the question is
+  # still owed an answer, and the worktree is what a relaunch would resume in to take it.
   #
   # Measured, on a rig driving this script: the same tick printed `🧹 TORN DOWN — terminal and
   # worktree removed` and, four lines below it, `Reply: shipyard-answer.sh <id> "<answer>"` for
@@ -1068,8 +1066,8 @@ for slot in "${SLOTS[@]}"; do
   if [ -z "$addr" ]; then
     # A slot with no terminal but a worktree still on disk is the shape that ACCUMULATES: it
     # is not enumerated in discovery mode, so only a named-slot monitor ever sees it again.
-    # Ask the locks about it before writing it off — the answer is the same teardown,
-    # and lock 3 takes its absence arm here rather than its idle one. The stage is read first
+    # Ask the locks about it before writing it off — the answer is the same teardown, and this
+    # is the one shape lock 3 can pass: a corroborated absence. The stage is read first
     # and the forge only if it is terminal, so a gone slot whose child never finished costs no
     # query. The row itself is unchanged: this branch reports a missing terminal, and saying
     # more about a slot the backend could not resolve is what #139 is about.
@@ -1080,7 +1078,7 @@ for slot in "${SLOTS[@]}"; do
         gone_state="no MR yet"
         [ -n "$iid" ] && gone_state=$(mr_state "$iid")
         if autodown_consider "$slot" "$iid" "$gone_state" "$gone_stage" "" "$unsettled"; then
-          ROWS+=("| $slot | $mr_label | — | 🧹 torn down | $gone_state / $gone_stage | $esc | — | terminal and worktree removed |")
+          ROWS+=("| $slot | $mr_label | — | 🧹 torn down | $gone_state / $gone_stage | $esc | — | worktree removed (terminal already gone) |")
           SIG+=("$slot|$mr_label|term=0|$gone_state|$gone_stage|$pend/$badrec|reaped")
           continue
         fi
@@ -1163,6 +1161,11 @@ for slot in "${SLOTS[@]}"; do
   # Cleared every iteration, not just assigned: these are plain shell variables in one long
   # loop, so a value left over from the previous slot would otherwise decide this one's row.
   reap_note=""; before_refused=${#REAP_REFUSED[@]}; before_held=${#REAP_HELD[@]}
+  # A slot reaching here has a terminal, so lock 3 refuses it, and this call only keeps the
+  # consecutive-merged count current: lock 3 returns before the escalation check, so a live slot
+  # is never in the HELD block (its question still shows in the escalation block). The success
+  # branch is kept so the row and the SIG stay right if lock 3 ever passes a live terminal again
+  # (#156 carries that design); until then it cannot run.
   if autodown_consider "$slot" "$iid" "$state" "$stage" "$addr" "$unsettled"; then
     # The row says what happened to a terminal that WAS live when this tick began, so the
     # teardown is never silent, and the SIG carries `term=0` — a teardown is news, and it is
@@ -1966,8 +1969,8 @@ EOF
     echo "### 🧹 TORN DOWN — merged, finished, and gate clear"
     for x in "${REAPED[@]}"; do
       sl=${x%%|*}; rest=${x#*|}; mr=${rest%%|*}; rest=${rest#*|}; n=${rest%%|*}; drc=${rest#*|}
-      echo "- \`$sl\` ($mr) — \`merged\` on $n consecutive ticks, ship's stage terminal, nobody at the terminal,"
-      echo "  and the content gate proved the branch's content is in the base branch. Terminal and worktree are gone."
+      echo "- \`$sl\` ($mr) — \`merged\` on $n consecutive ticks, ship's stage terminal, its terminal already gone,"
+      echo "  and the content gate proved the branch's content is in the base branch. The worktree is gone."
       echo "  The BRANCH is untouched: \`git branch -D\` it when you are done with it (see SKILL.md on why not \`-d\`)."
       # A teardown that removed the slot and THEN failed its fleet-level bookkeeping is reported
       # as what it is. The slot is gone either way — the worktree test in autodown_consider

@@ -30,8 +30,9 @@
 #
 # WHAT IS NOT COVERED, so a green run is never read as more than it is:
 #   * NOTHING ANYWHERE ASSERTS WHAT THE CALLERS DO WITH THESE FUNCTIONS. Specifically unguarded:
-#     the `unconfirmed` -> exit 6 mapping, the knob validation, the sampled census, the
-#     empty-verdict arm, the reply path's closing message, and the three-state mid-turn guard.
+#     the `unconfirmed` -> exit 6 mapping, the knob validation, the empty-verdict arm, the reply
+#     path's closing message, and the three-state mid-turn guard. (The loop and census those
+#     callers share are covered, in section 4a.)
 #     Stated as the property rather than as a list of script names on purpose — the list version
 #     said no test referenced those scripts at all, and went stale twice without anything saying
 #     so. The rig it called deferred now exists: the shipyard suite drives whole caller scripts
@@ -155,6 +156,52 @@ ok "…but a hint that APPEARS after one does"       queued      "$(adp_delivery
 ok "a pre-send hint that then clears"              unconfirmed "$(adp_delivery_verdict queued idle)"
 ok "the first decisive sample wins"                delivered   "$(adp_delivery_verdict idle running queued)"
 
+# --- 4a. the sampling loop and its census (#163) -----------------------------------------------
+# What `shipyard tell` and `council say` each used to carry a copy of. The capture is a function
+# that walks a scripted list of states, one per call, and stays on the last one. The list's place
+# is kept in a file because the loop reads the capture inside `$( )`.
+printf '\n── sampling loop and census ──\n'
+TT=$(mktemp -d "${TMPDIR:-/tmp}/t-turn.XXXXXXXX") || exit 1
+trap 'rm -rf "$TT"' EXIT
+screen_of() { # <state> — a minimal screen that `adp_turn_state` reads as that state
+  case "$1" in
+    running) printf '  %s\n' "Working (3s • $ADP_TURN_MARKER)" ;;
+    unknown) printf '' ;;
+    *)       printf 'some transcript line\n' ;;
+  esac
+}
+fake_capture() { # <tag> — prints the next scripted screen, and warns on stderr like a real miss
+  local n; n=$(cat "$TT/n"); printf '%s' "$((n + 1))" >"$TT/n"
+  echo "fake capture $1 #$n" >&2
+  screen_of "$(sed -n "$((n + 1))p" "$TT/seq" | grep . || tail -1 "$TT/seq")"
+}
+poll_of() { # <secs> <interval> <pre> <post-state>... -> "<verdict>|<census>|<rc>"
+  local secs="$1" gap="$2" pre="$3" out rc=0 TAB; shift 3; TAB=$(printf '\t')
+  printf '0' >"$TT/n"; printf '%s\n' "$@" >"$TT/seq"
+  out=$(adp_delivery_poll "$secs" "$gap" "$pre" fake_capture tag 2>"$TT/err") || rc=$?
+  printf '%s|%s|%s' "${out%%"$TAB"*}" "${out#*"$TAB"}" "$rc"
+}
+ok "census: one state"                         'idle'                "$(adp_delivery_census idle)"
+ok "census: runs are counted"                  'idle x3,running'     "$(adp_delivery_census idle idle idle running)"
+ok "census: a state that returns is a new run" 'idle,running x2,idle' "$(adp_delivery_census idle running running idle)"
+ok "sample: an empty capture reads unknown"    unknown "$(adp_turn_sample printf '')"
+ok "sample: a running screen reads running"    running "$(adp_turn_sample screen_of running)"
+ok "idle, then a turn -> delivered, and it stops sampling there" \
+   'delivered|idle x2,running|0'    "$(poll_of 5 0.01 idle idle running)"
+ok "the census starts with the pre-send state" \
+   'delivered|running,idle,running|0' "$(poll_of 5 0.01 running idle running)"
+ok "a window of 0 still takes one post-send sample" \
+   'unconfirmed|idle x2|0'          "$(poll_of 0 0.01 idle idle)"
+ok "mid-turn, no hint -> unconfirmed, and the census says so" \
+   'unconfirmed|running x2|0'       "$(poll_of 0 0.01 running running running)"
+ok "the capture's stderr does not reach the caller" 0 "$(wc -l <"$TT/err" | tr -d ' ')"
+# The backstop for a value the callers' knobs should never pass: no verdict, which each caller
+# reports as a failure. Never a verdict built on a broken window or interval.
+ok "a non-numeric window gives no verdict"     '||2' "$(poll_of x 0.5 idle running)"
+ok "a zero interval gives no verdict"          '||2' "$(poll_of 5 0 idle running)"
+ok "an unparseable interval gives no verdict"  '||2' "$(poll_of 5 1.2.3 idle running)"
+ok "no capture command gives no verdict"       2 "$(adp_delivery_poll 5 0.5 idle >/dev/null; echo $?)"
+
 # --- 4b. has the latest compaction finished? ---------------------------------------------------
 # #154. Every screen is a live capture except the one built inline below, which says so. The stale
 # pair is the case the old whole-capture search got wrong without any adversary: a compaction from
@@ -240,8 +287,10 @@ ok "…and each of them spells it exactly once" \
 # The composer glyphs, the same two assertions per glyph (#121). One exemption, and it is a module
 # boundary rather than a copy: the terminal backend's own coarse idle read (`drv_signal` in
 # shared/driver) spells both glyphs, because that module deliberately does not source this one.
-# Whether it should read them at all is #156's question; exempting it here is what keeps this
-# assertion from settling that by accident. Its vendored copies are exempt with it.
+# #156 took its one skill caller off it (autodown's lock 3, which now refuses any live terminal),
+# so its capacity half is read only by `flow_run`, which has no production caller. Whether the
+# driver keeps reading glyphs goes with whether `flow_run` is kept, which is still open. Exempting
+# it here keeps this assertion from settling that by accident. Its vendored copies are exempt too.
 glyph_expected="$expected
 shared/driver/agent-driver.sh"
 while IFS= read -r t; do
