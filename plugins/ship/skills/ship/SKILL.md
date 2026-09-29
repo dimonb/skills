@@ -1376,7 +1376,7 @@ Spend: 2 rounds, 9 agents (5 axis, 4 verifier), ~380k tokens (round 2 not report
 - Embed a hidden marker for idempotency, as the record's first line —
   `<!-- ship-review:stage=<stage>:sha=<head> -->` — and check for it before posting so a
   re-entered pass never double-posts. **Every other record that can carry a stub (§5.12)
-  carries a marker too**, of the shape
+  carries a marker as its first line too**, of the shape
   `<!-- ship-review:record=<kind>:stage=<stage>:sha=<head> -->`, with `<kind>` one of
   `escalation` (§5.7's record, and the one §5.12 step 4 posts), `stub` (§3.3's stub-only
   comment, whose `<stage>` is `sweep` for a close-sweep entry) and `handoff` (§7.G's record, whose
@@ -1389,8 +1389,10 @@ Spend: 2 rounds, 9 agents (5 axis, 4 verifier), ~380k tokens (round 2 not report
   reader that decides whether one of ship's records or stubs exists — the pre-post check above,
   §3.3's missing-record rows and its held-entry row — reads only comments whose author is `$ME`
   and whose first line is the marker. Ship puts the marker there, so a marker ship quotes lower in
-  its own reply, or inside a finding's text, is not its record either. A marker in anyone else's
-  comment is text in a person's comment, classified by §8 like any other. This is the opposite question to §8's: there the marker tells ship's records apart
+  its own reply, or inside a finding's text, is not its record either, and nor is a record an
+  earlier version of this skill posted with its marker lower down: it is posted again once, not
+  trusted. A marker in anyone else's comment is text in a person's comment, classified by §8 like
+  any other. This is the opposite question to §8's: there the marker tells ship's records apart
   from a person's input under one shared identity, and authorship alone never detects a review;
   here authorship keeps a person's text from standing in for ship's record. Where both hold, the
   record is ship's.
@@ -1742,8 +1744,8 @@ private-GitHub case is trigger 2 and needs no verifier:
    true` (§7.G step 2), and never inferred. A release that leaves no close-sweep entry held also
    lets the next §7.G run restore the sweep's closing keywords, as §7.G step 2 says, and with
    them what a description edit re-runs; it publishes no sweep evidence. A release does nothing
-   else. The finding stays unfixed and unpublished in this change, and its `open` entry stays `withheld`. Fixing it is a separate
-   change, which the human starts once disclosure is settled. Where the finding went to a
+   else. The finding stays unfixed and unpublished in this change, and its `open` entry stays
+   `withheld`. Fixing it is a separate change, which the human starts once disclosure is settled. Where the finding went to a
    private channel, that record keeps it. Where it is ledger only, the git-ignored state file is
    its only copy, and that file goes with the worktree, so the release says the human has taken
    the detail out of it.
@@ -2048,8 +2050,8 @@ happens to notice. The sweep is what makes the backlog shrink as well as grow.
    the issue did not carry. Evidence at `path` or `uncertain` is not published: the hand-off line
    carries no evidence for that issue, nor for any other swept issue (below), and the evidence is
    withheld through §5.12 like a review finding's detail — ledger, private channel, stub and
-   hold. Its `withheld` entry carries `source: "close-sweep"` and `issue: <N>`, and **the issue number is its key**. A later sweep
-   whose verdict on the same issue trips again goes to a verifier given each entry for that issue
+   hold. Its `withheld` entry carries `source: "close-sweep"` and `issue: <N>`, and **the issue
+   number is its key**. A later sweep whose verdict on the same issue trips again goes to a verifier given each entry for that issue
    and their evidence, which rules as §5.7's matching does. **Same** as one of them: a sighting on
    it, so a released entry stays released. **Distinct**, or **cannot tell**: a new held
    `sweep-<n>` entry for that issue, with its own channel record and the verifier's stated reason
@@ -2082,10 +2084,11 @@ happens to notice. The sweep is what makes the backlog shrink as well as grow.
    issue whose comments are addressed its closing line back, still without evidence. That is a
    description edit, so the closing-keyword check below runs again, and so does the hand-off's
    comment re-read; the hand-off record is posted again for the state it now records. **What the
-   uniform text cannot hide:** a sweep run whose set of issues is one — a single candidate, or a
-   push after which step 5 re-runs only one issue. Anyone can recompute that set from the public
-   diff, the open issues and an earlier hand-off record, so there the stub itself points at the
-   issue whatever the lines say.
+   uniform text cannot hide:** a sweep run in which only one issue had a reproduction attempted
+   (GONE or REPRODUCES), since an UNVERIFIED verdict has no evidence to withhold — a single
+   candidate, the others UNVERIFIED, or a push after which step 5 re-runs only one issue. Anyone
+   can recompute that from the public diff, the open issues and the verdicts an earlier hand-off
+   record published, so there the stub itself points at the issue whatever the lines say.
 3. **Never close on reasoning alone.** "This diff looks like it fixes that" is not evidence, and
    neither is a verifier's opinion without the attempt it made. Only **GONE** with its evidence
    leads to a close; REPRODUCES and UNVERIFIED both leave the issue open, and a verdict whose
@@ -2101,8 +2104,8 @@ happens to notice. The sweep is what makes the backlog shrink as well as grow.
    description moves no code, so the reviewed head stays the head handed off (§5.10). Where the
    merge will not close it — the repo does not honour closing keywords, or the forge setting is off
    — ship closes it after the merge with the evidence as a comment (only the verdict and head
-   sha, where step 2 kept the evidence in the ledger or a sweep entry has been withheld; the reference file has the
-   close-with-evidence query), and only where §2.6 lets ship merge at all; otherwise the hand-off
+   sha, where step 2 kept the evidence in the ledger or a sweep entry has been withheld; the
+   reference file has the close-with-evidence query), and only where §2.6 lets ship merge at all; otherwise the hand-off
    record names them for the person who merges — except while a sweep entry is held (step 2).
 5. **Record what was examined, not only what closed** — in the state file's `close_sweep` (§4) and
    as one line of the hand-off record: the files scoped, how many examined, which close, which still
