@@ -975,8 +975,8 @@ else
       if (line !~ /^-/) { print "unread\t" ev; next }
       if (key == "") next
       print "raw\t" ev "\t" key
-      if (line ~ /^- *\047[^\047]*\047[ \t]*(#.*)?$/) { v = line; sub(/^- *\047/, "", v); sub(/\047.*/, "", v) }
-      else if (line ~ /^- *"[^"\\]*"[ \t]*(#.*)?$/) { v = line; sub(/^- *"/, "", v); sub(/".*/, "", v) }
+      if (line ~ /^- *\047[^\047\t]*\047[ \t]*(#.*)?$/) { v = line; sub(/^- *\047/, "", v); sub(/\047.*/, "", v) }
+      else if (line ~ /^- *"[^"\\\t]*"[ \t]*(#.*)?$/) { v = line; sub(/^- *"/, "", v); sub(/".*/, "", v) }
       else next
       print "item\t" ev "\t" key "\t" v
     }
@@ -992,6 +992,11 @@ else
   # permanent, on a correct file, with full coverage intact.
   if grep -qE '^[[:space:]]*["'\'']?paths-ignore["'\'']?:' "$CT_WF"; then
     fail "$CT_WF uses paths-ignore, which check 13 does not reason about — it checks an explicit list of the paths that run the job, and an inverted list would read as full coverage"
+  fi
+  # The reader splits lines on LF alone, and YAML also breaks a line at CR, NEL, LS and PS: a key or
+  # an entry after one of those, behind a comment, is a line to a YAML parser and none to awk.
+  if LC_ALL=C grep -qE "$(printf '\r|\302\205|\342\200\250|\342\200\251')" "$CT_WF"; then
+    fail "$CT_WF contains a line break other than LF (CR, NEL, LS or PS), which check 13 does not read — a YAML parser may split a line there that check 13 reads as one"
   fi
   if [ "$ct_rc" -ne 0 ]; then
     fail "could not read the triggers out of $CT_WF (check 13, awk rc=$ct_rc): $ct_on"
@@ -1040,6 +1045,14 @@ else
       fail "$CT_WF's push: trigger does not name 'main' under branches: (as a quoted block item) — check-test's unconditional run on main, the backstop for its pull-request filter, is gone"
     elif [ "$push_raw" -ne "$push_main" ]; then
       fail "$CT_WF's push: branches: carries an entry other than 'main' — check 13 accepts exactly 'main' there, since a negated, aliased or unquoted entry could exclude main again"
+    fi
+    # A key written twice under one of the two events, or either event written twice: YAML parsers
+    # disagree on which copy wins, so the copy this reader credits need not be the one that runs.
+    dup=$(printf '%s\n' "$ct_on" | awk -F'\t' '
+      $1 == "event" && ($2 == "push" || $2 == "pull_request") { print "on." $2 }
+      $1 == "key" && ($2 == "push" || $2 == "pull_request") { print $2 "." $3 }' | sort | uniq -d)
+    if [ -n "$dup" ]; then
+      fail "$CT_WF repeats $(printf '%s\n' "$dup" | tr '\n' ' ')under on: — YAML parsers disagree on which copy wins, so check 13 refuses a repeated key there"
     fi
     # A line at event level it could not name reds whatever event it is, since the lines under it
     # would otherwise be credited to the event before it.

@@ -1350,6 +1350,30 @@ perl -0pi -e "s{(\n *- 'docs/\\*\\*'\n)}{\$1      - '!scripts/**'\n}" .github/wo
 expect_fail "check 13: a negated pull_request: paths: entry is refused" \
   "pull_request: paths: carries a negated pattern"
 git checkout -- .github/workflows/check-test.yml
+# 33l3 — the same negation spelt as a double-quoted escape (`\x21` is `!`), which a reader that read
+# a backslash inside double quotes would take for a plain entry.
+perl -0pi -e "s{(\n *- 'docs/\\*\\*'\n)}{\$1      - \"\\\\x21scripts/**\"\n}" .github/workflows/check-test.yml
+expect_fail "check 13: an escaped double-quoted pull_request: paths: entry is not read" \
+  "has an entry check 13 cannot read"
+git checkout -- .github/workflows/check-test.yml
+# 33l4 — a tab inside the quotes is part of the value, but the reader's rows are tab-separated, so a
+# reader that kept it would split `scripts/**` back off it and read a path the filter does not hold.
+perl -0pi -e "s{(\n *- 'docs/\\*\\*'\n)}{\$1      - 'scripts/**\t'\n}" .github/workflows/check-test.yml
+expect_fail "check 13: a tab inside a quoted pull_request: paths: entry is not read" \
+  "has an entry check 13 cannot read"
+git checkout -- .github/workflows/check-test.yml
+# 33n — a line break awk does not split on (a lone CR) hides a second entry behind a comment.
+perl -0pi -e "s{(\n  push:\n    branches:\n      - 'main')\n}{\$1 #\r      - '!main'\n}" .github/workflows/check-test.yml
+expect_fail "check 13: a line break other than LF is refused" \
+  "contains a line break other than LF"
+git checkout -- .github/workflows/check-test.yml
+# 33o — a key written twice under one event: parsers disagree on which copy wins, and one that keeps
+# the last would run check-test on `docs/**` alone. This reader credits both lists, so the coverage
+# loop stays green and nothing else reds.
+perl -0pi -e "s{(\n *- 'docs/\\*\\*'\n)}{\$1    paths:\n      - 'docs/**'\n}" .github/workflows/check-test.yml
+expect_fail "check 13: a repeated key under pull_request: is refused" \
+  "repeats pull_request.paths"
+git checkout -- .github/workflows/check-test.yml
 # 33f — an entry under ANOTHER trigger cannot stand in for one missing from the pull-request
 # filter. Under the flat scrape this line was read as coverage, so dropping `shared/**` from
 # `pull_request:` passed green. `pull_request_target:` rather than `push:`, so the push arm above
