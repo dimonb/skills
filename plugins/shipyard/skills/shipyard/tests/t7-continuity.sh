@@ -732,10 +732,17 @@ while [ "$claims" -lt 2 ] && [ "$n" -lt $((HOLD_SECS * 20)) ]; do
   n=$((n + 1))
 done
 check 2 "$claims" "stop is waiting on the lock the publishing start holds"
-# Held past the start's default lock wait (100 polls, measured at about 8 s on an idle box) before
-# release, so the stop's own longer wait is what this case proves: with the stop back on the default
-# it gives up while the start still holds the lock, and the checks below red.
-command sleep 10
+# Held until the stop gives up (it removes its own claim) or for 15 s, below the 20 s of sleep alone
+# that the stop's own wait takes, so that longer wait is what this case proves: a stop back on a
+# start's default lock wait (shipyard_continuity_acquire_lock's default) gives up while the start
+# still holds the lock, however slow the box, and the checks below red.
+n=0
+while [ "$claims" -ge 2 ] && [ "$n" -lt 300 ]; do
+  command sleep 0.05
+  claims=$(find "$_SHIPYARD_CONTINUITY_DIR" -maxdepth 1 -type d -name 'continuity-lifecycle.lock.claim.*' \
+    | wc -l | tr -d ' ')
+  n=$((n + 1))
+done
 release_hold publish
 racing_start_rc=0; reap_job "$racing_start" || racing_start_rc=$?
 racing_stop_rc=0; reap_job "$racing_stop" || racing_stop_rc=$?

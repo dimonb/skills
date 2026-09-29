@@ -1227,8 +1227,9 @@ shipyard_continuity_stop_all() {
   # returned 1 with the start's freshly published watcher left running (#270: t7's synchronized-stop
   # case, reproduced by holding a start's publication past the default wait the stop then shared).
   # The failure was never silent: shipyard-down.sh reports a watcher it could not stop. Four hundred
-  # waits, about 20 s, outlasts the ping at those defaults with margin. A holder that outlasts even
-  # this, such as a hung `agtermctl session new`, still fails the stop that same way.
+  # waits, 20 s of sleep alone, outlasts the ping at those defaults with margin; every figure here is
+  # a sleep total, and each poll's forks add wall-clock time to both sides. A holder that outlasts
+  # even this, such as a hung `agtermctl session new`, still fails the stop that same way.
   shipyard_continuity_acquire_lock "$lock" 400 || return 1
   lock_token="$SHIPYARD_CONTINUITY_LOCK_TOKEN"
   lock_owner_pid="$SHIPYARD_CONTINUITY_LOCK_OWNER_PID"
