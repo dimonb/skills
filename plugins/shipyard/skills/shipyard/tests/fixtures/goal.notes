@@ -1,0 +1,35 @@
+Pane fixtures for shipyard_continuity_goal_state (shipyard-continuity.sh), which reads a Codex
+parent's goal state to decide whether the continuity watcher types `/goal resume`.
+
+Each file is a verbatim capture of the last 40 lines of a real Codex TUI at 100x40, taken with
+tmux capture-pane from a throwaway session in an empty scratch directory. Machine- and
+person-specific text was replaced: the scratch paths (including a hyphen-encoded home directory in
+the footer), the numeric UID and the model identifier. The leading codepoints, the line positions
+and where each marker sits are as captured; the directory line inside the banner box lost its
+right-hand alignment in the substitution, which nothing reads.
+
+  pane-codex-goal-active.txt  live, mid-turn with a goal set by `/goal <objective>`. The goal
+                              renders twice: a column-one `• Goal active Objective: ...` service
+                              line in the transcript, and `Pursuing goal (15s)` at the right of
+                              the footer, the last non-empty line, directly below the composer.
+  pane-codex-goal-paused.txt  live, the same session after Esc interrupted the turn. A column-one
+                              `• Goal paused Objective: ... Time: 16s.` service line, and the
+                              footer ends `Goal paused (/goal resume)`. The footer's path is
+                              truncated to keep the goal marker.
+  pane-codex-goal-forged.txt  live, the same session after one more turn that asked the model to
+                              reply with a paragraph opening `Goal paused Objective:` and closing
+                              `Goal stalled (/goal resume)`. ADVERSARIAL: the reply renders as
+                              `• Goal paused Objective: ...` in column one, the same bytes the
+                              service line opens with, and its wrapped continuation is a
+                              two-space-indented line carrying a footer's words. The goal was
+                              still paused, so the footer still says so; t7 derives the screen
+                              with the footer's goal marker removed, marked DERIVED there.
+
+What the captures show about telling the two apart: nothing on the bullet line itself. The real
+service line's wrapped continuation starts in column one while prose wraps into a two-space
+indent, but a line too short to wrap has no continuation, so that is no anchor. The footer's
+position is: nothing the assistant writes lands below the composer.
+
+NOT ASSERTED: the footer's shape for a stalled goal (no capture has one; t7 keeps a synthetic
+line), and whether a narrow terminal drops the goal marker from the footer. Either reads `none`,
+which withholds the action rather than taking it.

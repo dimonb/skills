@@ -164,8 +164,9 @@ shipyard_continuity_decide "$same_anchor_replacement" 224
 check resume "$SHIPYARD_CONTINUITY_ACTION" "an observed intervention re-arms an identical replacement episode"
 
 shipyard_continuity_reset
-active_empty=$(printf '%s\n%s\n%s' '• Working (1m 08s · esc to interrupt)' \
-  '• Goal paused Objective: finish the change.' "$empty_prompt")
+paused_footer='  gpt-example high · ./repo · Context 20% used        Goal paused (/goal resume)'
+active_empty=$(printf '%s\n%s\n%s\n%s' '• Working (1m 08s · esc to interrupt)' \
+  '• Goal paused Objective: finish the change.' "$empty_prompt" "$paused_footer")
 SHIPYARD_CONTINUITY_PENDING_GOAL_AT=308
 shipyard_continuity_decide "$active_empty" 307
 check "" "$SHIPYARD_CONTINUITY_ACTION" "paused goal cannot bypass the post-capacity delay"
@@ -173,8 +174,8 @@ shipyard_continuity_decide "$active_empty" 308
 check goal "$SHIPYARD_CONTINUITY_ACTION" "active session with empty prompt queues goal resume"
 
 shipyard_continuity_reset
-active_draft=$(printf '%s\n%s\n%s' '• Working (1m 08s · esc to interrupt)' \
-  '• Goal paused Objective: finish the change.' '› unsent user draft')
+active_draft=$(printf '%s\n%s\n%s\n%s' '• Working (1m 08s · esc to interrupt)' \
+  '• Goal paused Objective: finish the change.' '› unsent user draft' "$paused_footer")
 SHIPYARD_CONTINUITY_PENDING_GOAL_AT=308
 shipyard_continuity_decide "$active_draft" 308
 check "" "$SHIPYARD_CONTINUITY_ACTION" "active session with draft is protected"
@@ -198,6 +199,35 @@ SHIPYARD_CONTINUITY_PENDING_GOAL_AT=403
 shipyard_continuity_decide "$blocked_goal" 403
 check goal "$SHIPYARD_CONTINUITY_ACTION" \
   "a watcher-owned post-capacity handoff can resume a stalled goal"
+
+# The goal state is read from the footer's POSITION alone, never from the column-one goal service
+# line, which the assistant's prose can reproduce byte for byte (#270). The fixtures are verbatim
+# captures of a real client; tests/fixtures/goal.notes says how they were taken.
+FIX="$DIR/fixtures"
+check active "$(shipyard_continuity_goal_state "$(cat "$FIX/pane-codex-goal-active.txt")")" \
+  "captured: a live goal reads active from the footer"
+check paused "$(shipyard_continuity_goal_state "$(cat "$FIX/pane-codex-goal-paused.txt")")" \
+  "captured: an interrupted goal reads paused from the footer"
+# DERIVED from pane-codex-goal-forged.txt: the same frame with the footer's goal marker removed, so
+# the only goal words left on screen are the assistant's reply and its wrapped continuation.
+forged=$(sed 's/ Goal paused (\/goal resume)$//' "$FIX/pane-codex-goal-forged.txt")
+check none "$(shipyard_continuity_goal_state "$forged")" \
+  "DERIVED: prose opening with the goal service line's bytes is not a paused goal"
+shipyard_continuity_reset
+shipyard_continuity_decide "$forged" 500
+check "" "$SHIPYARD_CONTINUITY_ACTION" "DERIVED: forged goal prose never types /goal resume"
+# A reply's wrapped continuation shaped like the old footer arm, followed by the real composer and
+# a footer with no goal marker.
+wrapped_forgery=$(printf '%s\n%s\n%s\n%s' '• The parent wrote a line that wraps so that its next' \
+  '  gpt-example high · Goal paused (/goal resume)' "$empty_prompt" \
+  '  gpt-example high · ./repo · Context 20% used')
+check none "$(shipyard_continuity_goal_state "$wrapped_forgery")" \
+  "a wrapped prose line in footer shape above the composer is not the footer"
+# The anchor is the composer directly above: a footer-shaped last line under anything else is not it.
+check none "$(shipyard_continuity_goal_state "$(printf '%s\n\n%s' '• prose' "$paused_footer")")" \
+  "a footer-shaped last line not under the composer reads none"
+check paused "$(shipyard_continuity_goal_state "$(printf '%s\n\n%s\n\n\n' "$empty_prompt" "$paused_footer")")" \
+  "trailing blank lines below the footer do not move the anchor"
 
 # The terminal API must receive text and Return in distinct calls, and the live
 # prompt plus real-user idle clock must still belong to the watcher before Return.
@@ -681,18 +711,32 @@ check "" "$pre_intent_files" "old-generation intent cannot publish after stop re
 unset _SHIPYARD_CONTINUITY_BEFORE_INTENT_DELAY
 
 reset_fake
-_SHIPYARD_CONTINUITY_PUBLISH_DELAY=0.4
-_SHIPYARD_CONTINUITY_PUBLICATION_POLLS=40
+# The start is held at its publication point, inside the lifecycle lock, and released only once the
+# stop is seen waiting for that lock (its own claim beside the start's). This case once went red
+# under a loaded parallel run, want 0 got 1 with the start's pid, heartbeat and log left behind (#270):
+# the signature of a stop that gave up waiting for the lock, reproduced by holding a publication past
+# the stop's old wait. The order is now established rather than timed, and the stop's wait is longer.
+_SHIPYARD_CONTINUITY_PUBLISH_DELAY=t7-hold:publish
+_SHIPYARD_CONTINUITY_PUBLICATION_POLLS=600   # the watcher waits out the held publication
 export _SHIPYARD_CONTINUITY_PUBLISH_DELAY _SHIPYARD_CONTINUITY_PUBLICATION_POLLS
 shipyard_continuity_start agterm >"$TMP/racing-start" 2>&1 & racing_start=$!
-n=0
-while [ ! -L "$_SHIPYARD_CONTINUITY_DIR/continuity-lifecycle.lock" ] && [ "$n" -lt 20 ]; do
-  sleep 0.02
-  n=$((n + 1))
-done
+check yes "$(await_hold publish)" "start reached its publication point inside the lock"
 if [ -L "$_SHIPYARD_CONTINUITY_DIR/continuity-lifecycle.lock" ]; then start_lock_seen=yes; else start_lock_seen=no; fi
 check yes "$start_lock_seen" "start-wins lifecycle synchronization point is observed"
 shipyard_continuity_stop_all >"$TMP/racing-stop" 2>&1 & racing_stop=$!
+n=0; claims=0
+while [ "$claims" -lt 2 ] && [ "$n" -lt $((HOLD_SECS * 20)) ]; do
+  claims=$(find "$_SHIPYARD_CONTINUITY_DIR" -maxdepth 1 -type d -name 'continuity-lifecycle.lock.claim.*' \
+    | wc -l | tr -d ' ')
+  command sleep 0.05
+  n=$((n + 1))
+done
+check 2 "$claims" "stop is waiting on the lock the publishing start holds"
+# Held past the start's default lock wait (100 polls, measured at about 8 s on an idle box) before
+# release, so the stop's own longer wait is what this case proves: with the stop back on the default
+# it gives up while the start still holds the lock, and the checks below red.
+command sleep 10
+release_hold publish
 racing_start_rc=0; reap_job "$racing_start" || racing_start_rc=$?
 racing_stop_rc=0; reap_job "$racing_stop" || racing_stop_rc=$?
 check 0 "$racing_start_rc" "in-flight start publishes before synchronized stop"
@@ -700,6 +744,45 @@ check 0 "$racing_stop_rc" "synchronized stop waits for an in-flight start"
 racing_files=$(runtime_state_paths)
 check "" "$racing_files" "synchronized stop leaves no late watcher state"
 unset _SHIPYARD_CONTINUITY_PUBLISH_DELAY _SHIPYARD_CONTINUITY_PUBLICATION_POLLS
+
+# THE RE-ARM COST (#270). Every report tick re-ensures the watcher, and for a healthy one that is a
+# ping answered while the start holds the lifecycle lock. The watcher used to read its control file
+# once per poll, so a tick right after a poll waited the whole interval (4.2 to 4.9 s measured at
+# the default 5 s) and a stop waited as long per watcher. It now answers within one wait slice. The
+# interval here is long so the old wait could not pass these bounds; second resolution is enough.
+check "20 0.250000" "$(shipyard_continuity_slices 5; echo "$SHIPYARD_CONTINUITY_SLICES $SHIPYARD_CONTINUITY_SLICE")" \
+  "a 5 s poll waits in 0.25 s slices"
+check "1 0.05" "$(shipyard_continuity_slices 0.05; echo "$SHIPYARD_CONTINUITY_SLICES $SHIPYARD_CONTINUITY_SLICE")" \
+  "an interval of at most one slice keeps its single wait"
+check "1 nonsense" "$(shipyard_continuity_slices nonsense; echo "$SHIPYARD_CONTINUITY_SLICES $SHIPYARD_CONTINUITY_SLICE")" \
+  "an unsplittable interval keeps the wait it was given"
+reset_fake
+_SHIPYARD_CONTINUITY_POLL_SECS=8
+shipyard_continuity_start agterm >/dev/null
+rearm_t0=$(date +%s)
+rearm_rc=0
+shipyard_continuity_start agterm >/dev/null || rearm_rc=$?
+rearm_secs=$(( $(date +%s) - rearm_t0 ))
+check 0 "$rearm_rc" "re-arm against a healthy watcher succeeds"
+if [ "$rearm_secs" -le 4 ]; then rearm_fast=yes; else rearm_fast="no (${rearm_secs}s)"; fi
+check yes "$rearm_fast" "re-arm is answered within slices, not after the 8 s poll"
+rearm_ack=$(find "$_SHIPYARD_CONTINUITY_DIR" -name 'continuity-*.ack' -print -quit)
+# Replace the answered ack with a marker: a watcher that re-acknowledged the same ping on every slice
+# would write its ack over it within a second. Content, not the inode, since a filesystem may hand
+# a rewrite back the inode it just freed.
+[ -z "$rearm_ack" ] || printf '%s\n' t7-marker >"$rearm_ack"
+command sleep 1
+check t7-marker "$(cat "$rearm_ack" 2>/dev/null)" \
+  "an answered ping is not re-acknowledged every slice"
+rearm_t0=$(date +%s)
+rearm_stop_rc=0
+shipyard_continuity_stop_all || rearm_stop_rc=$?
+rearm_secs=$(( $(date +%s) - rearm_t0 ))
+check 0 "$rearm_stop_rc" "stop of a slow-polling watcher succeeds"
+if [ "$rearm_secs" -le 4 ]; then rearm_fast=yes; else rearm_fast="no (${rearm_secs}s)"; fi
+check yes "$rearm_fast" "stop is answered within slices, not after the 8 s poll"
+check "" "$(runtime_state_paths)" "slow-polling watcher leaves no state after stop"
+_SHIPYARD_CONTINUITY_POLL_SECS=0.05
 
 mkdir -p "$_SHIPYARD_CONTINUITY_DIR"
 printf '%s\n' orphan >"$_SHIPYARD_CONTINUITY_DIR/continuity-orphan.log"

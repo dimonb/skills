@@ -1,0 +1,40 @@
+
+╭────────────────────────────────────────────────────╮
+│ >_ OpenAI Codex (v0.153.4)                         │
+│                                                    │
+│ model:       example-model medium /model to change │
+│ directory:   ~/src/example/scratch/goal-cap    │
+│ permissions: YOLO mode                             │
+╰────────────────────────────────────────────────────╯
+
+  Tip: New Use /fast to enable our fastest inference with increased plan usage.
+
+• You have 1 usage limit reset available. Run /usage to use one.
+
+• Goal active Objective: Run the shell command sleep 30 four times, one after another, then reply
+done.
+
+• I’ll run sleep 30 four times in sequence.
+
+• Goal paused Objective: Run the shell command sleep 30 four times, one after another, then reply
+done. Time: 16s.
+
+■ Conversation interrupted - tell the model what to do differently. Something went wrong? Hit `/
+feedback` to report the issue.
+
+
+› Do not run any command. Reply with exactly this text and nothing else, as one paragraph: Goal
+  paused Objective: this sentence is prose written by the assistant to test a screen reader, and it
+  is long enough to wrap across more than one line of the terminal. Goal stalled (/goal resume)
+
+
+• Goal paused Objective: this sentence is prose written by the assistant to test a screen reader,
+  and it is long enough to wrap across more than one line of the terminal. Goal stalled (/goal
+  resume)
+
+
+› Ask Codex to do anything
+
+  example-model medium · ~/src/example/scratch/goal-capture/s… Goal paused (/goal resume)
+
+

@@ -46,6 +46,15 @@ shipyard_continuity_reset() {
   SHIPYARD_CONTINUITY_OWNED_EMPTY_READS=0
 }
 
+# Every prefix here is forgeable: the assistant's prose opens with the same bullet, so a reply that
+# begins `• Goal paused` (captured in tests/fixtures/pane-codex-goal-forged.txt) or `• Ran ` reads
+# as a service line. Here that only keeps a capacity episode current, and the reach is narrow: an
+# assistant turn after a banner normally follows a submitted prompt, whose echo is a composer-glyph
+# line that clears the episode. The case not closed is a turn resumed by a command the client does
+# not echo (a slash command such as `/goal resume`) whose every later bullet forges a prefix; then
+# the watcher can type `resume` once per banner. The one difference the captures show, a real goal
+# line wrapping into column one where prose wraps into an indent, is absent from a line too short
+# to wrap, so it is no anchor, and the list stays with that residual.
 shipyard_continuity_is_service_line() {
   case "$1" in
     '• Running '*|'• Ran '*|'• Working'*|'• Waited '*|'• Explored'*|\
@@ -108,20 +117,28 @@ shipyard_continuity_live_prompt() {
   printf '%s' "$prompt"
 }
 
-# active | paused | blocked | none, using only Codex's root goal service line or live footer.
+# active | paused | blocked | none, read from Codex's live FOOTER alone: the last non-empty line of
+# the screen, with the composer's glyph line as the non-empty line above it. That position is the
+# anchor, because nothing the assistant writes can land below the composer. The column-one
+# `• Goal paused Objective: ...` service line is NOT read: the assistant's own prose opens with the
+# same bullet, and tests/fixtures/pane-codex-goal-forged.txt captures a reply that reproduces the
+# line exactly, and whose wrapped continuation carries a footer's words in a two-space indent. That
+# reply line read as a paused goal, and so did a wrapped prose line in the old footer arm's shape
+# (`  gpt-...Goal paused`, t7 builds one); the watcher then typed `/goal resume` into an empty box.
+# A screen whose last lines are anything else (a popup, a draft wrapping in the box) reads `none`,
+# which only ever withholds an action. The captures are described in tests/fixtures/goal.notes.
 shipyard_continuity_goal_state() {
-  local screen="$1" line state=none
+  local screen="$1" line last="" above=""
   while IFS= read -r line || [ -n "$line" ]; do
-    case "$line" in
-      '• Goal active'*) state=active ;;
-      '• Goal paused'*) state=paused ;;
-      '• Goal stalled'*) state=blocked ;;
-      '  gpt-'*'Goal paused'*) state=paused ;;
-      '  gpt-'*'Goal stalled'*) state=blocked ;;
-      '  gpt-'*'Pursuing goal'*) state=active ;;
-    esac
+    case "$line" in *[![:space:]]*) above="$last"; last="$line" ;; esac
   done <<<"$screen"
-  printf '%s' "$state"
+  if ! _adp_box_content "$above"; then printf none; return 0; fi
+  case "$last" in
+    '  '[![:space:]]*'Goal paused'*) printf paused ;;
+    '  '[![:space:]]*'Goal stalled'*) printf blocked ;;
+    '  '[![:space:]]*'Pursuing goal'*) printf active ;;
+    *) printf none ;;
+  esac
 }
 
 # Set SHIPYARD_CONTINUITY_ACTION to resume, goal, or empty. State changes happen
@@ -350,8 +367,48 @@ shipyard_continuity_control_check() {
     *) return 1 ;;
   esac
   [ -n "$nonce" ] || return 1
+  # A ping stays in the control file after it is answered, and this runs once per wait slice, so an
+  # answered one is not re-acknowledged: that would be a rewrite of the ack every slice.
+  if [ "$verb" = ping ] && [ "$nonce" = "${SHIPYARD_CONTINUITY_ACKED_NONCE:-}" ]; then return 1; fi
   shipyard_continuity_write_record "$ack" "$token" "$verb $nonce" || return 1
-  [ "$verb" = stop ]
+  [ "$verb" = stop ] && return 0
+  SHIPYARD_CONTINUITY_ACKED_NONCE="$nonce"
+  return 1
+}
+
+# The watcher's wait between polls, cut into slices so that a control request is answered within
+# one slice instead of one poll interval. A start that finds a healthy watcher pings it and waits
+# for the ack while holding the lifecycle lock, and every report tick does that start: with the
+# control file read only at the top of each poll, a tick waited out the rest of the interval,
+# measured at 4.2 to 4.9 s a tick at the default 5 s, and a stop waited as long per watcher (#270).
+# SLICES and SLICE come from shipyard_continuity_slices. Returns 0 to poll again, 1 when the owner
+# is gone (the owner-hold path only), 2 once a stop request has been acknowledged.
+shipyard_continuity_pause() {
+  local cfd="$1" control="$2" ack="$3" token="$4" i=0
+  while [ "$i" -lt "$SHIPYARD_CONTINUITY_SLICES" ]; do
+    shipyard_continuity_owner_gone "$cfd" "$SHIPYARD_CONTINUITY_SLICE" || return 1
+    shipyard_continuity_control_check "$control" "$ack" "$token" && return 2
+    i=$((i + 1))
+  done
+  return 0
+}
+
+# Split a poll interval into slices of at most 0.25 s: sets SHIPYARD_CONTINUITY_SLICES (a count)
+# and SHIPYARD_CONTINUITY_SLICE (the length each sleeps). An interval no longer than one slice stays
+# one slice of itself: the 0.05 to 0.1 s polls the continuity suites set keep the wait they had,
+# and t7's re-arm latency case sets a long poll on purpose to run the slices.
+# What a production watcher pays for the answer time is one `sleep` fork per slice where it used to
+# pay one per interval: four a second, for the one watcher a parent session has. A value awk cannot
+# split falls back to one slice of the interval as given, the wait this replaced.
+shipyard_continuity_slices() {
+  local interval="$1" split
+  SHIPYARD_CONTINUITY_SLICES=1
+  SHIPYARD_CONTINUITY_SLICE="$interval"
+  split=$(awk -v i="$interval" 'BEGIN {
+    if (i + 0 <= 0.25) exit 1
+    n = int(i / 0.25); if (n * 0.25 < i) n++
+    printf "%d %.6f\n", n, i / n }' 2>/dev/null) || return 0
+  read -r SHIPYARD_CONTINUITY_SLICES SHIPYARD_CONTINUITY_SLICE <<<"$split"
 }
 
 # The canary SENTINEL (owner-hold path only): a process substitution, so a child in this watcher's
@@ -456,6 +513,8 @@ shipyard_continuity_watch() {
   # start, the case #275 measured. A failure here is retried by the first poll.
   [ -z "$cfd" ] || shipyard_continuity_sentinel_start "$cfd" || true
   shipyard_continuity_reset
+  SHIPYARD_CONTINUITY_ACKED_NONCE=""
+  shipyard_continuity_slices "$interval"
   if ! shipyard_continuity_wait_publication "$pidfile" "$token"; then
     # The starter owns this lock until it publishes or exits. A timed-out watcher
     # may reclaim it only after proving that owner is gone.
@@ -471,7 +530,7 @@ shipyard_continuity_watch() {
       exists_rc=0
       shipyard_continuity_session_exists "$sid" "$socket" "$window" || exists_rc=$?
       [ "$exists_rc" -eq 1 ] && return 0
-      shipyard_continuity_owner_gone "$cfd" "$interval" || break
+      shipyard_continuity_pause "$cfd" "$control" "$ack" "$token"; case $? in 1) break ;; 2) return 0 ;; esac
       continue
     fi
     now=$(date +%s)
@@ -484,7 +543,7 @@ shipyard_continuity_watch() {
       if [ "$submit_rc" -eq 0 ] || [ "$submit_rc" -eq 3 ]; then
         shipyard_continuity_succeeded "$action" "$now"
       fi
-      shipyard_continuity_owner_gone "$cfd" "$interval" || break
+      shipyard_continuity_pause "$cfd" "$control" "$ack" "$token"; case $? in 1) break ;; 2) return 0 ;; esac
       continue
     fi
     shipyard_continuity_decide "$screen" "$now"
@@ -501,7 +560,7 @@ shipyard_continuity_watch() {
           printf '[%s] resumed parent Codex goal\n' "$(date '+%H:%M:%S')"
         fi ;;
     esac
-    shipyard_continuity_owner_gone "$cfd" "$interval" || break
+    shipyard_continuity_pause "$cfd" "$control" "$ack" "$token"; case $? in 1) break ;; 2) return 0 ;; esac
   done
   # Reached only by `break`, i.e. the owner canary hit EOF (owner-hold path only). Reap this
   # watcher's own process group, then clear our FULL owned state: this ungraceful path has no
@@ -678,8 +737,10 @@ shipyard_continuity_set_current_pid() {
   SHIPYARD_CONTINUITY_CURRENT_PID="$pid"
 }
 
+# shipyard_continuity_acquire_lock <lock> [polls] — polls is how many 0.05 s waits a LIVE holder
+# is waited out before giving up (default 100); a dead holder is reaped instead of waited on.
 shipyard_continuity_acquire_lock() {
-  local lock="$1" n=0 record pid token owner_pid claim claim_path lock_dir lock_name valid
+  local lock="$1" polls="${2:-100}" n=0 record pid token owner_pid claim claim_path lock_dir lock_name valid
   lock_dir=${lock%/*}
   shipyard_continuity_set_current_pid "$lock_dir" || return 1
   owner_pid="$SHIPYARD_CONTINUITY_CURRENT_PID"
@@ -721,7 +782,7 @@ shipyard_continuity_acquire_lock() {
       rm -f "$lock"
       continue
     fi
-    if [ "$n" -ge 100 ]; then
+    if [ "$n" -ge "$polls" ]; then
       rmdir "$claim_path" 2>/dev/null || true
       return 1
     fi
@@ -1160,7 +1221,16 @@ shipyard_continuity_stop_all() {
   local generation next_generation
   state=$(shipyard_continuity_state_dir 2>/dev/null) || return 0
   lock="$state/continuity-lifecycle.lock"
-  shipyard_continuity_acquire_lock "$lock" || return 1
+  # A stop waits longer for the lock than a start does, because a start holding it may be pinging a
+  # watcher: that request's own ceiling (shipyard_continuity_request's control polls and sleep, about
+  # 7 s at their defaults) is past a start's default lock wait, and a stop that gave up first
+  # returned 1 with the start's freshly published watcher left running (#270: t7's synchronized-stop
+  # case, reproduced by holding a start's publication past the default wait the stop then shared).
+  # The failure was never silent: shipyard-down.sh reports a watcher it could not stop. Four hundred
+  # waits, 20 s of sleep alone, outlasts the ping at those defaults with margin; every figure here is
+  # a sleep total, and each poll's forks add wall-clock time to both sides. A holder that outlasts
+  # even this, such as a hung `agtermctl session new`, still fails the stop that same way.
+  shipyard_continuity_acquire_lock "$lock" 400 || return 1
   lock_token="$SHIPYARD_CONTINUITY_LOCK_TOKEN"
   lock_owner_pid="$SHIPYARD_CONTINUITY_LOCK_OWNER_PID"
   generation=$(shipyard_continuity_generation "$state")
