@@ -576,7 +576,12 @@ passes it — the absent file does not fail safe, it fails open.)
           "rung_1": "would need a new gate — machinery",
           "rung_2": "third instance of the class #123 names",
           "rung_3": null,
-          "outcome": "scenario commented on #123" }
+          "outcome": "scenario commented on #123" },
+        { "id": "impl-8", "fp": "sha256(...)", "rung": "known-limit",
+          "rung_1": "the fix would add a guard to a file this diff does not touch",
+          "ordinary_use": "fails — needs a hand-edited state file, out of contract",
+          "rung_2": null, "rung_3": null,
+          "outcome": "known-limit: plugins/<plugin>/skills/<skill>/SKILL.md#KL-3" }
       ]
     }
   },
@@ -618,7 +623,9 @@ plus the void attempts, the sha of any revert its fix made, and whether it was t
 prose round (§5.7).
 `open` carries every confirmed finding, raised or carried, each with its `status`. Its `deferred`
 array is the written record §5.11 requires — one entry per finding the ladder placed, carrying the
-rung it landed on, why each rung above it was ruled out, and at rung 1 that it was taken.
+rung it landed on, why each rung above it was ruled out, and at rung 1 that it was taken. A
+residual (§5.11) also carries its `ordinary_use` judgement, and one that failed it lands on
+`known-limit`, a completed disposition, with its entry in `outcome`.
 `close_sweep` is §7.G's record of which open issues were examined on which head, and what each
 verdict was. `withheld` is §5.12's record: each finding the disclosure screen held — or, with
 `source: "close-sweep"`, each sweep verdict whose evidence it held (§7.G step 2) — with its
@@ -685,8 +692,9 @@ engine result cites a URL from the wrong forge, rewrite it before it goes anywhe
 ### 5.2 Spec-stage battery (up to 4 axes, parallel)
 
 Only where a spec stage exists (§2.5). Context every axis gets: the change slug, the
-artifact paths, the branch diff against the base branch, the originating issue, and the
-**current** spec the change modifies. Give the reviewer the paths, not your summary of them
+artifact paths, the branch diff against the base branch, the originating issue, the
+**current** spec the change modifies, and the Known limits entries with the instruction §5.3
+gives for them. Give the reviewer the paths, not your summary of them
 — a summary is the thing being reviewed.
 
 | Axis | Charter |
@@ -719,7 +727,15 @@ what the round budget is paying for.
 Context every axis gets: the diff against the base branch (in round 1; a later round reads each
 re-opened axis's own delta, §5.7), the spec artifacts if any, the PR/MR title and description, the
 effort level, the findings already confirmed in earlier rounds so it does not re-report them,
-and **the head's verification run** — see the rule immediately below.
+the `## Known limits` entries (§5.11) of every component whose files the diff touches, and **the
+head's verification run** — see the rule immediately below.
+
+Give each charter that runs the Known limits entries verbatim, with this instruction: *a finding
+that is the same evidence as a listed entry is reported with `known` set to its `<doc>#KL-<n>`, and
+ship files it nowhere. Set `known` only for the same evidence: where the finding shows impact,
+reachability or a remedy the entry does not name, leave `known` null and say what is new. A
+security finding is reported in full whatever it matches.* Where no touched component has the
+section, the list is empty and the charter says so.
 
 The five below are the whole battery, not the battery every change gets:
 *Sizing the battery*, at the end of this section, picks which of them run and as how many
@@ -903,7 +919,8 @@ Instruct every axis to emit a single JSON array as the last thing in its report:
     "suggested_fix": "one or two sentences",
     "confidence": 0,
     "disclosure": "none|path|uncertain",
-    "disclosure_reason": ["not-on-base", "no-untrusted-input", "public:<source>"]
+    "disclosure_reason": ["not-on-base", "no-untrusted-input", "public:<source>"],
+    "known": "<doc>#KL-<n>, or null (§5.3, §5.11)"
   }
 ]
 ```
@@ -951,6 +968,10 @@ Normalization ship applies on receipt — deterministic, no judgement needed:
   pressure — batch and post them (§5.9), and place every one not fixed on the ladder (§5.11).
   Except that a finding the disclosure screen withholds (§5.12) holds the change
   whatever its severity, and it is neither batched nor placed.
+- **`known` counts only on a residual** (§5.11): an optional, `origin: pre-existing` finding that
+  is not a security finding. On any other finding it is ignored, and the finding is handled as if
+  it were null. Where it counts, the finding goes nowhere but its `known:` line in the optional
+  batch (§5.9).
 - **Dedupe across axes** by `(file, line ±3, category)` and by summary similarity. Two axes
   finding one defect is one finding: keep the better failure scenario, union the axes.
   Dedupe is ship's own bookkeeping, not review — doing it in ship's context is fine.
@@ -970,7 +991,7 @@ Normalization ship applies on receipt — deterministic, no judgement needed:
   branch. So on every route that publishes a finding unfixed, ship strikes `not-on-base` from its
   reasons. A `none` with another reason left stays `none`. One with none left is `uncertain`,
   and goes back to the disclosure-only verifier on the two remaining conditions before §5.12
-  screens it. That covers ladder rungs 2 and 3, the optional batch,
+  screens it. That covers ladder rungs 2 and 3, a Known limits entry (§5.11), the optional batch,
   §5.7's escalation record and the hand-off record.
 
 ### 5.5 Adversarial verification (a skeptic per blocking finding)
@@ -1056,8 +1077,11 @@ Classify each finding **at the moment it is confirmed** — cheap now, unreconst
 
 - `origin: original` — the defect sat in code the change itself wrote.
 - `origin: fix` — the defect sat in code written during an earlier review round.
+- `origin: pre-existing` — the defect sat in code the change did not write: it is on the base
+  branch, next to what the change touched.
 
-§5.8 trigger 3 is computed from this.
+An optional finding no verifier sees is classified on receipt, the same way. §5.8 trigger 3 is
+computed from this, and §5.11's ordinary-use test reads it.
 
 ### 5.7 Rounds, convergence, and escalation
 
@@ -1328,7 +1352,7 @@ Skipped: gates — no suite covers the touched script; the check command is its 
 Round 1: 7 candidates -> 3 confirmed, fixed in 4f2a1c9. Round 2: clean.
 Security (engine): no issues found in this diff.
 Optional (non-blocking): 4 — listed below, each with where it went.
-Deferred: 2 — fixed here 1; scenario onto #123; new issues none.
+Deferred: 2 — fixed here 1; scenario onto #123; new issues none; known limits none.
 Withheld: none.
 Spend: 2 rounds, 9 agents (5 axis, 4 verifier), ~380k tokens (round 2 not reported).
 ```
@@ -1358,8 +1382,10 @@ Spend: 2 rounds, 9 agents (5 axis, 4 verifier), ~380k tokens (round 2 not report
     `skipped` — a skipped axis never sets `security_engine`. Never `no issues found` for an
     axis that did not look.
 - **Optional findings**: batch them ALL into ONE comment (`file:line` plus one line each), each
-  line ending with where it went — `fixed in <sha>`, the open issue §5.11 placed it on, or
-  `unfiled — <reason>` where rung 3 is barred (§5.11). Never one comment per nit, and never a
+  line ending with where it went — `fixed in <sha>`, the open issue §5.11 placed it on,
+  `known-limit: <doc>#KL-<n>` for a residual that failed the ordinary-use test, `known:
+  <doc>#KL-<n>` for one that matched an entry already listed, or `unfiled — <reason>` where rung 3
+  is barred (§5.11). Never one comment per nit, and never a
   finding that lives only on this PR/MR: after the merge nobody reads it again. A finding the
   disclosure screen withholds (§5.12) is not in this batch at all, not even as `file:line`. It is
   counted on the `Withheld:` line.
@@ -1367,8 +1393,9 @@ Spend: 2 rounds, 9 agents (5 axis, 4 verifier), ~380k tokens (round 2 not report
   status, and nothing else. A stage that withheld nothing says `Withheld: none`, for the same
   reason as the `Deferred:` line.
 - **Deferred findings**: ONE line giving the disposition by rung (§5.11) — how many were fixed
-  in the change, which open issues received a scenario, which issues were created. Numbers and
-  issue references, never contents: the reasons live in the ledger and in the created issue.
+  in the change, which open issues received a scenario, which issues were created, how many went
+  to Known limits and in which doc. Numbers and issue references, never contents: the reasons live
+  in the ledger, the created issue and the Known limits entry.
   A stage that deferred nothing says `Deferred: none`, because an absent line and a stage that
   never worked the ladder look the same.
 - **Escalated blockers**: one comment listing each with `file:line`, the failure scenario, and
@@ -1460,20 +1487,25 @@ round — however it got there. §5.7 sends some away explicitly (answering it w
 machinery; the change is already applied and running), and every optional finding the change
 does not fix leaves it too. Do not read that as a closed list: the entry condition is *leaving the
 round*, not the reason. **There is no exclusion for the ordinary optional finding** — nitpick,
-style, naming, micro-perf: most pass rung 1 and are fixed in place; the rest go onto an open issue
-like any other, since a finding left only on a merged PR/MR is one nobody reads again. Several with
-no home that share a class share one new issue at rung 3.
+style, naming, micro-perf: most pass rung 1 and are fixed in place, since a finding left only on a
+merged PR/MR is one nobody reads again. Of the rest, a finding in the change's own code goes onto
+an open issue like any other. A **residual** — an optional finding in code the change did not write
+— first faces the ordinary-use test below rung 1: one that passes goes to rungs 2 and 3, one that
+fails goes to the component's Known limits. Several with no home that share a class share one new
+issue at rung 3.
 
 **What is NOT on the ladder: a finding the disclosure screen withholds (§5.12).** Every rung
-publishes: rung 1 through the push, rungs 2 and 3 through the tracker. So the screen runs first,
+publishes: rung 1 and a Known limits entry through the push, rungs 2 and 3 through the tracker.
+So the screen runs first,
 and a withheld finding is placed by §5.12 instead, at every rung. It is not fixed here, and it is
 not commented or filed.
 
 **When it is worked.** ONCE per stage, at the point the stage record is posted — not per round.
 Filing mid-stage files findings a later round refutes or a later fix obviates, and it is how one
 change produces several tickets for a defect it went on to fix itself. Rung 1 is the exception by
-nature: a fix happens in the round that confirmed the finding, so by the time the record is
-written only rungs 2 and 3 remain to work.
+nature: a fix happens in the round that confirmed the finding. A Known limits entry (below) is the
+same kind of exception, because it lands through a push. So by the time the record is written only
+rungs 2 and 3 remain to work.
 
 **A stage that escalates does not work the ladder.** At `max-rounds` the stage posts §5.7's
 escalation record, which is not a stage record, and stops — so rungs 2 and 3 are not worked and no
@@ -1531,6 +1563,82 @@ placement sets `status: fixed` on its entry in `open`, where it has one (an unve
 none, and its `deferred` entry is then its only record), so the two never disagree about
 whether it was answered. A fixed finding that leaves no trace is how the same defect gets re-found
 in round four by a reviewer with no memory of round two.
+
+#### Before rung 2 — the ordinary-use test for a residual
+
+A **residual** is an optional finding with `origin: pre-existing` (§5.6) that rung 1 did not fix.
+It gets tracker work, rung 2 or rung 3, only if it states an **ordinary-use failure**: the
+documented user or agent, doing the work the component documents, reaches it, and the outcome is
+wrong in a way they can observe, such as a merge over a hold, a lost finding, or a false alarm or
+a silence. A residual that needs adversarial or out-of-contract input, restates a limit the
+component already names, or is an edge case of an edge case fails the test. It goes to the
+component's Known limits (below) instead of the tracker. **When it is unclear whether a residual
+passes, it passes**: doubt goes to the tracker, where a person sees it.
+
+Record the judgement in the finding's `deferred` entry (§4) as `ordinary_use`: the failure path in
+one line where it passes, and which of the failing shapes it has where it does not.
+
+**What the test does not touch.** A blocking finding (§5.7). A finding the security axis raised,
+of category `security`, or held by the disclosure screen (§5.12). A defect in the change's own
+code (`origin: original` or `fix`), which rung 1 fixes here and does not file. None of these is a
+residual, and each takes the path it took before this test existed.
+
+**No depth or rate veto.** A residual that passes the test is worked through rungs 2 and 3 however
+far down a chain of follow-up issues it sits, and however many others the stage has placed. A
+rung-3 issue may record `Follow-up of: #N` as provenance. That line never bars a filing, and a
+parent that cannot be established is never taken as proof of depth. What the test bounds is the
+chain of low-impact edges, not the open count: a backlog of real ordinary-use failures stays as
+large as it is.
+
+**What it gives up.** An edge reachable only by an adversary in code with no security surface gets
+a line in a doc, not a ticket. A real defect misjudged as an edge sits in that doc until someone
+hits it, and the entry's promotion trigger names what would move it.
+
+#### Known limits — where a residual that fails the test goes
+
+The record is a `## Known limits` section in the **owning component's own doc**, the one an agent
+reads when it uses the component: its SKILL.md, or its README. Where the component has no doc, it
+is the repo's stated convention for such a list, else `docs/known-limits.md`. One entry per
+residual, each line carrying:
+
+- a stable id, `KL-<n>`, one more than the highest id the section holds, tombstones included, and
+  never an id this change has already cited, so an id that reached the base branch is never
+  reused. An entry that has reached the base branch leaves its id behind, once removed, as a
+  one-line tombstone naming the issue it was promoted to or the change that removed it. One added
+  and taken out within the same change is deleted outright;
+- the **shape** of the limit, one sentence;
+- the path as `file:line`;
+- the PR/MR whose review found it;
+- the **promotion trigger**: what would make it an ordinary-use failure, and so fileable.
+
+**The entry is written in the round that raised the residual, as a rung-1 fix is,** and it goes
+out with that round's fix push, so the next scoped round reviews it (§5.10, *fix-only head
+advance*). A clean round that raises one pushes it the way it pushes an optional fixed at rung 1
+after a clean round, and §5.7 lets that scoped round run past `max-rounds`. **A scoped round whose
+delta is only Known limits entries reviews those lines alone**: that each carries the shape,
+`file:line`, source and promotion trigger it claims, and the disclosure screen. What it finds is
+fixed in place and never placed on the ladder, as the `final-archive` check works (§7.F), so it
+defers nothing and cannot raise another entry. An entry whose residual a later round refutes, or a
+later fix removes, is taken out in the same change before the stage record is posted.
+
+The entry publishes through the push, so the disclosure screen (§5.12) runs on it first. It is
+prose in a component doc, not machinery, so rung 1's question 1 does not bar it where the doc is a
+file this diff does not otherwise touch; questions 3 and 4 still apply. An entry that fails either
+is reworded until it passes. One that still fails stays in the ledger's `deferred` entry with the
+reason, as an unreached rung that §7.C step 5 / §7.E step 6 collect. Where the section does not
+exist yet, the first entry creates it. An absent section is an empty list, and nothing requires
+the section to exist before it has an entry.
+
+**It is a completed disposition, not unfiled work.** The finding's `deferred` entry records
+`outcome: known-limit: <doc>#KL-<n>`, and §7.C step 5 / §7.E step 6 do not collect it again. The
+doc is read every run and briefed to every review axis (§5.3), and a merged PR/MR is not, which is
+why this answers "a finding left only on a merged PR/MR is one nobody reads again".
+
+**Matching a known limit dedupes the same evidence only.** A reviewer that finds a listed limit
+reports it as `known: <doc>#KL-<n>` and ship places it nowhere. A finding that matches an entry
+but shows new ordinary-use impact, new reachability, or a remedy that has become feasible is not
+that entry: it faces the test again, and may be filed. Where it is, the entry is removed in the
+same change and the issue names it. A security finding is never suppressed by a match.
 
 #### Rung 2 — a comment on an issue that is already open
 
@@ -1603,8 +1711,8 @@ finding's detail from a tracker the finding would otherwise reach, and only on i
 
 #### Rung 3 — a new issue
 
-Only a class no open issue names, a class whose only home is full (rung 2), or an area none
-covers — an area no label's description covers (§2.7), where the project keeps area labels. The
+For a residual, only one that passed the ordinary-use test (above). Then only a class no open
+issue names, a class whose only home is full (rung 2), or an area none covers — an area no label's description covers (§2.7), where the project keeps area labels. The
 issue states its own close condition, as rung 2 requires of a home. Record in the issue body why
 rungs 1 and 2 did not fit — one line each — so the next reader can check that judgement instead of
 repeating the work behind it.
@@ -1638,7 +1746,7 @@ tracker or the branch has, and on a public repo that is everyone:
 - §5.7's non-convergence record;
 - §5.9's stage record, its optional batch and its escalated-blocker comment;
 - §5.11 rungs 2 and 3;
-- a fix or test push (§5.7);
+- a fix or test push (§5.7), and a Known limits entry (§5.11), which publishes through the push;
 - the PR/MR description and the hand-off record (§7.G).
 
 **Every one of those routes runs this screen first, for every finding, whatever its axis, category,
@@ -2332,7 +2440,9 @@ change whose run was still in progress. Poll until nothing is pending or running
 - **Verify before fixing** (§5.5). Refuted means dropped — never "fix it anyway to be safe".
 - **A finding that leaves the change works the ladder** (§5.11): fix it here if it passes the
   four-question test, else a scenario on an issue that is already open, else a new issue — and
-  each rejected rung is written down. Find the existing issue by **enumerating every open issue
+  each rejected rung is written down. A residual (an optional finding in code the change did not
+  write) reaches rungs 2 and 3 only by passing the ordinary-use test, and otherwise goes to its
+  component's Known limits; depth and rate never veto one that passes. Find the existing issue by **enumerating every open issue
   and matching the component**, never by the forge's text search, which misses a near-duplicate
   phrased differently. Work the ladder once per stage, at the record, not per round.
 - **Bounded, scoped rounds; `max-rounds` is the stop condition, not "until clean"** (§5.7).
@@ -2356,8 +2466,9 @@ change whose run was still in progress. Poll until nothing is pending or running
 - **Read every issue with its comments** (§3.2); `Closes #N` only when each comment scenario is
   addressed or re-homed onto another open issue, and the move is stated.
 - **No finding lives only on a PR/MR** (§5.9, §5.11): every unfixed one, optional included, is
-  placed on an open issue, or held in the ledger with the reason its rung was not reached (§5.11:
-  rung 3 barred, or the stage escalated), and the record says which.
+  placed on an open issue, entered in its component's Known limits (§5.11), or held in the ledger
+  with the reason its rung was not reached (§5.11: rung 3 barred, or the stage escalated), and the
+  record says which.
 - **Read the kill, signal and `rm -rf` paths of code you did not write before it runs** (§7.D),
   and on resume after a crash check whether the interrupted command caused it before re-running
   it (§6).
