@@ -162,8 +162,12 @@ EOF
 # question on another line (#172), so the call alone is no longer unique to this site.
 ok "report.sh asks why before the clock" 1 \
    "$(grep -Fc 'wait_line=$(shipyard_wait_state "$b" "$phase" "$stage" 2>/dev/null) || wait_line=""' "$REPORT")"
-ok "...only of a motionless child with nothing pending" 1 \
-   "$(grep -Fc 'if [ "$run" = "⏸ idle/wait" ] && [ "$pend" = 0 ]; then' "$REPORT")"
+ok "...only of a motionless child" 1 \
+   "$(grep -Fc 'if [ "$run" = "⏸ idle/wait" ]; then' "$REPORT")"
+# ...and an open escalation holds back every class, an unreadable record only a `wait` (#270, #296).
+# Executed in run G below and in t19; this pins the one line both rest on.
+ok "...holding back what an open question must hold back" 1 \
+   "$(grep -Fc 'if [ "$pend" != 0 ] || { [ "$wait_kind" = wait ] && [ "$badrec" != 0 ]; }; then' "$REPORT")"
 # ...and the stall guard does NOT carry the unreadable count: an unreadable record must not be what
 # silences a stall alarm (#197).
 ok "the stall guard is not silenced by an unreadable record" 0 \
@@ -204,6 +208,24 @@ ok "...and from the skill's text" 0 \
 # The loud block itself survives, which is the point of note 4: rarer and right, not quieter.
 ok "the STALLED block still exists" 1 "$(grep -Fc '### 🛑 STALLED' "$REPORT")"
 ok "...and still bypasses --only-changed" 1 "$(grep -Fc '[ "${#STALLED[@]}" -eq 0 ]' "$REPORT")"
+
+# THE FINGERPRINT WITH NEITHER MD5 TOOL (#249, homed on #270). `ep_fp` is what `slot_sig` hashes a
+# screen with and what a held or refused episode compares its text by; with `md5` and `md5sum` both
+# unusable the old chain exited 0 with an empty hash, so every text fingerprinted alike. Extracted
+# and run with both shadowed by failing stubs: `command -v` finds a function, so each stub is tried
+# and fails, which is the harder case for the chain than a tool that is simply absent.
+EP_FP_SRC=$(awk '/^ep_fp\(\) \{/,/^\}/' "$REPORT")
+ok "ep_fp was located in the report" yes "$([ -n "$EP_FP_SRC" ] && echo yes || echo no)"
+ep_fp_nomd5() { # <text>
+  ( md5() { return 1; }; md5sum() { return 1; }; eval "$EP_FP_SRC"; ep_fp "$1" )
+}
+fp_a=$(ep_fp_nomd5 'held: waiting on a record'); fp_b=$(ep_fp_nomd5 'held: waiting on two records')
+ok "with no md5 tool, a fingerprint is still non-empty" yes "$([ -n "$fp_a" ] && [ -n "$fp_b" ] && echo yes || echo no)"
+ok "...and two texts still fingerprint apart"          yes "$([ "$fp_a" != "$fp_b" ] && echo yes || echo no)"
+ok "...and one text fingerprints alike twice"          "$fp_a" "$(ep_fp_nomd5 'held: waiting on a record')"
+ok "...as one token, for a row split on | and tabs"    0 "$(printf '%s' "$fp_a" | grep -c '[|	 ]')"
+ok "the screen hash in slot_sig is that fingerprint"   1 \
+   "$(grep -Fc 'slot_sig="$stage|$pend|$(ep_fp "$b")"' "$REPORT")"
 
 # --------------------------------------------- 6. THE REPORT, EXECUTED
 # WHY THIS SECTION EXISTS, and it is the most important one in the file. Section 5 above pins the
@@ -586,6 +608,43 @@ outD5=$(run_report 100000 --only-changed)
 ok "D: crossing the crit threshold inside \`unknown\` still breaks silence" yes \
    "$([ -n "$outD5" ] && echo yes || echo no)"
 unset T13_CTX_TOKENS
+
+# --- run G: an UNREADABLE record holds back a stated wait, and nothing else (#296) ----------------
+# A mailbox record jq cannot read may be exactly the question the child waits on, so a slot holding
+# one must never be listed under "a stated, self-healing wait ... Do not nudge": it falls through to
+# the stall clock. The shape that was tried and reverted dropped EVERY class instead, so a finished
+# slot with one lost its ✅ line and raised a false 🛑 STALLED whose remedy includes compaction — G1
+# pins that the attention classes keep classifying. G2c is the control that makes G2 mean something:
+# the same banner on the same slot, with no bad record, IS a wait in this rig.
+g_pipeline() { printf '{"pr_number":903,"state":"%s"}\n' "$1" \
+  >"$FAKE_ROOT/.claude/worktrees/ship-43/.pipeline-state/PR-903.json"; }
+wait_43()  { printf '%s' "$1" | sed -n '/^### ⏳ WAITING/,/^###/p' | grep -c '^- `43`'; }
+attn_43()  { printf '%s' "$1" | sed -n '/^### 🙋 WAITING FOR YOU/,/^###/p' | grep -c '^- `43`'; }
+anystall_43() { printf '%s' "$1" | sed -n '/^### 🛑 STALL/,/^###/p' | grep -c '^- `43`'; }
+g_run() { tick_now; run_report "$STALL_T" >/dev/null; backdate_stall "$STALL_BACK"; tick_now; run_report "$STALL_T"; }
+BAD43="$FAKE_GIT/ship-escalations/43-1.json"
+
+g_pipeline ready-to-merge
+printf '{"id":"43-1","slot":"43","kind":"quest' >"$BAD43"
+outG1=$(g_run)
+ok "G1: a finished slot with an unreadable record reads finished"  1 \
+   "$(printf '%s' "$outG1" | grep -c '^| 43 .*✅ finished')"
+ok "G1: ...is listed under WAITING FOR YOU"                         1 "$(attn_43 "$outG1")"
+ok "G1: ...and is never STALLED"                                    0 "$(anystall_43 "$outG1")"
+ok "G1: ...while its row shows the unreadable record"               1 \
+   "$(printf '%s' "$outG1" | grep -c '^| 43 .*❓ 1')"
+
+g_pipeline impl-review
+rm -f "$BAD43"
+outG2c=$(T13_PANE43='⚠ Usage limit reached · continuing automatically at 2am' g_run)
+ok "G2c: control — the banner alone is a stated wait here"          1 "$(wait_43 "$outG2c")"
+printf '{"id":"43-1","slot":"43","kind":"quest' >"$BAD43"
+outG2=$(T13_PANE43='⚠ Usage limit reached · continuing automatically at 2am' g_run)
+ok "G2: the same wait with an unreadable record is NOT a wait"      0 "$(wait_43 "$outG2")"
+ok "G2: ...its row does not claim one"                              0 \
+   "$(printf '%s' "$outG2" | grep -c '^| 43 .*⏳')"
+ok "G2: ...and its clock runs: motionless past the threshold, it stalls" 1 "$(anystall_43 "$outG2")"
+rm -f "$BAD43"
 
 # THE INTERPRETER FLOOR FOR THE REPORT ITSELF (#232), EXECUTED, and it lives HERE, inside the rig,
 # on purpose: with the faked `git` gone the report resolves the REAL common dir, and from any
