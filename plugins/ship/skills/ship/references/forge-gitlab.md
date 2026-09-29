@@ -231,14 +231,20 @@ unset OAUTH_TOKEN; export GITLAB_HOST=<host>
 glab api --method POST "projects/$PROJECT/merge_requests/IID/notes" \
   -f "body=$(cat "$BODY")"
 
-# every discussion, flattened: who opened it, resolvable, resolved
+# every discussion, flattened: who opened it, resolvable, resolved. Drops system notes and
+# ship's own records only — a note from $ME whose first line is a ship marker (core §5.9, §8).
+# A note from $ME WITHOUT one is a person's input and stays: authorship alone never drops it.
 glab api --paginate "projects/$PROJECT/merge_requests/IID/discussions?per_page=100" \
   | jq -r --arg me "$ME" '
       .[] as $d | $d.notes[]
-      | select(.system != true and .author.username != $me)
+      | select(.system != true)
+      | select((.author.username == $me
+                and ((.body // "") | (split("\n")[0] // "")
+                     | test("^<!-- ship-review:.* -->\\s*$")))
+               | not)
       | [.created_at, $d.id, .id, .author.username,
          (.resolvable|tostring), (.resolved|tostring),
-         (.body|gsub("\n";" ")|.[0:700])] | @tsv'
+         ((.body // "")|gsub("\n";" ")|.[0:700])] | @tsv'
 
 # reply INTO someone else's discussion (never resolve it)
 glab api --method POST \
