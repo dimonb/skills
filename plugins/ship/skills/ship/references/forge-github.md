@@ -170,7 +170,49 @@ Pick the merge strategy the repo actually uses — read its merged history
 
 Use a **closing keyword** (`Closes #N`) in the PR body from the start where this change really
 closes the issue. Where an issue spans several changes, reference it without the keyword so
-the merge does not close it early.
+the merge does not close it early. Commit messages never carry the keyword (core §3.2).
+
+### Closing keywords — the description and every commit (core §7.G)
+
+GitHub closes an issue from the PR body on merge **and** from any commit message that lands on the
+default branch — including the message a squash merge writes. A squash's subject defaults to the
+PR title, or to the commit's own subject for a one-commit PR (unless `squash_merge_commit_title` is
+`PR_TITLE`), and its body to what `squash_merge_commit_message` says. The PR's own commits are not
+read on a squash — only commits that land close anything. Measured, as far as it goes: a merged PR
+whose body only referenced an issue, while one of its commits said `Closes` for it, showed only the
+body's issue in `closingIssuesReferences`, and the issue closed because the squash folded the
+commit messages into its body. So that field is no substitute for reading the commits, and a squash
+whose subject is the PR title and whose body is the PR body is the merge that keeps a commit's
+keyword from closing anything (core §7.G step 5). Its keywords are `close`, `closes`, `closed`, `fix`, `fixes`, `fixed`, `resolve`,
+`resolves`, `resolved` — any case, an optional colon — followed by `#N`, `<owner>/<repo>#N`, or the
+issue's URL. Each keyword names one issue.
+
+```bash
+unset GITHUB_TOKEN; export REPO=<owner>/<repo>
+
+# the texts the merge reads: the PR title and body, and every commit the PR carries as pushed
+gh pr view N --repo "$REPO" --json title,body --jq '.title, .body'
+gh api --paginate "repos/$REPO/pulls/N/commits" \
+  --jq '.[] | "=== \(.sha)\n\(.commit.message)"'
+
+# the closing keywords in a text on stdin, each with the issue reference it names
+grep -oiE '(^|[^[:alnum:]_])(close[sd]?|fix(e[sd])?|resolve[sd]?):?[[:space:]]+([[:alnum:]_.-]+/[[:alnum:]_.-]+#[0-9]+|#[0-9]+|https://[^/[:space:]]+/[^/[:space:]]+/[^/[:space:]]+/issues/[0-9]+)'
+
+# what a squash merge would write: PR_BODY takes the description, COMMIT_MESSAGES folds in
+# every commit message, BLANK writes none; the title field sets the subject. The allow_* flags
+# say which strategies exist.
+gh api "repos/$REPO" --jq '{squash_merge_commit_title, squash_merge_commit_message,
+  allow_squash_merge, allow_merge_commit, allow_rebase_merge}'
+```
+
+The commits endpoint lists at most 250 commits; past that, read `git log --format='=== %H%n%B'
+origin/<base>..<branch>` on a freshly fetched branch instead.
+
+Where step 5 of the core check asks for a squash with the description, the merge that honours it is
+`gh pr merge N --repo "$REPO" --squash --subject "<PR title> (#N)" --body-file "$BODY"`, with
+`$BODY` holding the PR body; it needs `allow_squash_merge`, and without it no such merge exists.
+A reworded pushed commit (core §7.G step 4) goes up with `--force-with-lease` added to the push
+of §3 — only where that step allows a rewrite at all.
 
 ## 6. Comments, threads and replies
 

@@ -176,6 +176,42 @@ After the MR exists, `.diff_refs.base_sha` should equal the base tip as of branc
 base has since moved and the MR shows conflicts, **rebase onto the new base** rather than
 merging the base into the branch.
 
+### Closing patterns — the description and every commit (core §7.G)
+
+GitLab closes an issue from any commit message pushed to the default branch, and on an MR merge
+from the MR's title, its description **and every commit message in the MR** — the source-branch
+commits as pushed, whatever the merge method and whatever the squash commit message says — while
+`autoclose_referenced_issues` is on (§9); while it is off none of this closes anything (core §7.G
+step 5, the *nothing will close it* case). So, with it on, no merge method keeps a commit's keyword
+from closing its issue, and the fix is to change the message — by rewording the commit where step 4
+allows it (core §7.G step 5, the *none exists* case). Its default pattern takes
+`close`, `closes`, `closed`, `closing`, `fix`, `fixes`, `fixed`, `fixing`, `resolve`, `resolves`,
+`resolved`, `resolving`, `implement`, `implements`, `implemented`, `implementing` — any case, an
+optional colon, an optional `issue` or `issues` — and then a **list** of references (`#N`,
+`group/project#N`, the issue's URL) joined by commas or `and`, so one keyword can close several
+issues. An instance administrator can replace the pattern; a project whose issues close on words
+not listed here has one, and its administrator is the only source for it.
+
+```bash
+unset OAUTH_TOKEN; export GITLAB_HOST=<host>
+
+# the texts the merge reads: the MR title and description, and every commit the MR carries
+glab api "projects/$PROJECT/merge_requests/IID" | jq -r '.title, .description'
+glab api --paginate "projects/$PROJECT/merge_requests/IID/commits" \
+  | jq -r '.[] | "=== \(.id)\n\(.message)"'
+
+# the closing patterns in a text on stdin, each with the whole reference list it names
+REF='([[:alnum:]_./-]*#[0-9]+|https?://[^[:space:]]+/-/issues/[0-9]+)'
+grep -oiE "(^|[^[:alnum:]_])(clos(e[sd]?|ing)|fix(e[sd]|ing)?|resolv(e[sd]?|ing)|implement(s|ed|ing)?):?[[:space:]]+(issues?[[:space:]]+)?$REF([[:space:]]*,?[[:space:]]*(and[[:space:]]+)?$REF)*"
+
+# the setting that decides whether any of it closes, for a merge into the default branch
+glab api "projects/$PROJECT" | jq .autoclose_referenced_issues
+```
+
+A reworded pushed commit (core §7.G step 4) goes up with `--force-with-lease` added to the push —
+only where that step allows a rewrite at all. After the push, re-read the MR's commits to confirm
+the old message is gone from the MR, not only from the branch.
+
 ## 7. Notes, discussions and replies
 
 GitLab splits these two ways, and the split matters for the merge gate.
