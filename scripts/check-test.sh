@@ -1410,6 +1410,11 @@ printf '...\n' >> .github/workflows/check-test.yml
 expect_fail "check 13: a document end marker is refused" \
   "carries a YAML document marker"
 git checkout -- .github/workflows/check-test.yml
+# ...and a line-1 marker carrying content: `--- |` makes the whole document one string to YAML.
+perl -0pi -e 's{\A}{--- |\n}' .github/workflows/check-test.yml
+expect_fail "check 13: a line-1 document marker with content after it is refused" \
+  "carries a YAML document marker"
+git checkout -- .github/workflows/check-test.yml
 # 33p4 — the top-level allowlist: `true:` is the key `on:` is to a YAML 1.1 parser, so a block under
 # it is a second trigger key the on-count arm cannot see...
 printf 'true:\n  workflow_dispatch:\n' >> .github/workflows/check-test.yml

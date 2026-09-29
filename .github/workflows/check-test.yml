@@ -27,7 +27,7 @@ name: check-test
 # pull requests by branch or type, is a red, not a gap. It also reds the file outside the one shape
 # it reads: one YAML document, one block-style top-level `on:` carrying only `push:` and
 # `pull_request:`, and top-level keys from the fixed list check 13 names. Adding another trigger,
-# `workflow_dispatch:` included, means extending that list in check 13 first.
+# `workflow_dispatch:` included, means adding it to check 13's event allowlist first.
 #
 # THE FILTER IS DERIVED, NOT GUESSED. It is `$GUARDED` from scripts/check-test.sh with each
 # directory spelt `<dir>/**`, PLUS `docs/**`. `scripts/check.sh` check 13 asserts the `$GUARDED`

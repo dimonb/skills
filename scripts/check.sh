@@ -947,10 +947,11 @@ else
   #
   # FAIL CLOSED ON THE FILE'S SHAPE (#314). The reader does not understand YAML; it understands one
   # shape, so it also reports every column-0 line, and the arms below red anything outside that
-  # shape rather than letting it be read wrongly: a document marker (`---` anywhere but line 1, or
-  # `...`) prints `docmark`, since a parser may read another document than this one; a column-0 line
-  # that is not a `key:` prints `topunread`; every top-level key prints `top <name>`, and one with a
-  # value on its own line `topval <name>`. Only the one block-style `on:` is read below it.
+  # shape rather than letting it be read wrongly: a document marker (any `---` but a bare one on
+  # line 1, or `...`) prints `docmark`, since a parser may read another document than this one, or
+  # read this one as a string (`--- |`); a column-0 line that is not a `key:` prints `topunread`;
+  # every top-level key prints `top <name>`, and one with a value on its own line `topval <name>`.
+  # The block under every block-style `on:` is read, and the count arm refuses more than one.
   ct_on=$(awk '
     function name(s) { sub(/:.*/, "", s); gsub(/["\047]/, "", s); return s }
     /^[ \t]*$/ { next }
@@ -958,7 +959,7 @@ else
     # is `on:` with nothing after its colon but a comment.
     /^[^ #]/ {
       inon = 0
-      if ($0 ~ /^(---|\.\.\.)([ \t]|$)/) { if (NR != 1 || $0 !~ /^---/) print "docmark\t" NR; next }
+      if ($0 ~ /^(---|\.\.\.)([ \t]|$)/) { if (NR != 1 || $0 !~ /^---[ \t]*(#.*)?$/) print "docmark\t" NR; next }
       if ($0 !~ /^["\047]?[A-Za-z_][A-Za-z0-9_-]*["\047]?:([ \t]|$)/) { print "topunread\t" NR; next }
       t = name($0); print "top\t" t
       if ($0 !~ /^[^:]*:[ \t]*(#.*)?$/) print "topval\t" t
@@ -1029,7 +1030,7 @@ else
     # about. Extending either list is a deliberate edit here, never an event read past in silence.
     ct_docmark=$(printf '%s\n' "$ct_on" | awk -F'\t' '$1 == "docmark" { print $2 }' | tr '\n' ' ')
     if [ -n "$ct_docmark" ]; then
-      fail "$CT_WF carries a YAML document marker (--- after line 1, or ...) at line ${ct_docmark}— check 13 reads one document, and a parser may run the triggers of another"
+      fail "$CT_WF carries a YAML document marker (a --- other than a bare one on line 1, or ...) at line ${ct_docmark}— check 13 reads one document, and a parser may run the triggers of another"
     fi
     ct_topunread=$(printf '%s\n' "$ct_on" | awk -F'\t' '$1 == "topunread" { print $2 }' | tr '\n' ' ')
     if [ -n "$ct_topunread" ]; then
