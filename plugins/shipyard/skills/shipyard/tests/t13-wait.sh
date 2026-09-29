@@ -375,7 +375,7 @@ outA2=$(run_report "$STALL_T")
 ok "A2: the gap is announced"               1 "$(printf '%s' "$outA2" | grep -c 'supervision resumed after')"
 ok "A2: ...with a plausible figure"         1 "$(printf '%s' "$outA2" | grep -c 'resumed after 5760 min')"
 # The notice is what makes a FORGED gap self-revealing (#270): a child can write an old epoch into
-# report-tick, and the only trace is this line naming that file as a cause.
+# report-tick, and beside the full table a gap tick prints, this line is what names that file.
 ok "A2: ...naming a rewritten report-tick as a cause" 1 \
    "$(printf '%s' "$outA2" | grep -c 'rewritten `report-tick` in the mailbox')"
 ok "A2: a restarted clock cannot be stalled" 0 "$(printf '%s' "$outA2" | grep -c '🛑 STALLED')"
