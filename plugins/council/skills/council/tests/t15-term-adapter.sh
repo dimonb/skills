@@ -72,13 +72,8 @@ ok "an unresolvable backend refuses (exit 1)" 1 "$rc"
 # restores the exact #141 defect (an unreachable backend read as "answered, nothing there", so
 # `say` exits 3 "that seat is gone" and sends the operator to `relaunch` on a live agent), left
 # the whole council suite green. So the wiring is asserted here, against the real file, the way
-# this file already asserts ct_name and the container verbs. Note what that does NOT amount to:
-# for the OP verbs — ct_capture, ct_type, ct_submit, ct_kill, ct_focus, ct_launch_record,
-# ct_target — nothing in the council suite asserts what the drv_* call was handed. (Several tests
-# do REACH one: t13-relaunch drives the real ct_launch_record to prove regeneration happens before
-# the launch, t16-keeper-canary drives _ct_launch_owned, and the launch-record section below fakes
-# drv_launch_handle to assert what gets RECORDED. None checks the driver's arguments.) So
-# "t15 covers the ct_* delegations" would be too broad a claim to make anywhere.
+# this file already asserts ct_name and the container verbs. The OP verbs are asserted in their
+# own section below (#248), which also checks that no ct_* verb term.sh defines goes unasserted.
 #
 # THE ONE PROPERTY EACH MUST HAVE is `_ct_pin_dir` FIRST. Without it the driver has no pin
 # directory, so `ct_pins_elsewhere` returns 1 — and because `say` guards that remedy with
@@ -115,6 +110,66 @@ ok "ct_absence_class passes all three arguments through" \
 probe=$( export COUNCIL_BACKEND=tmux ROOM="$ROOM"; . "$TERM_SH"; ct_pins_elsewhere )
 ok "ct_pins_elsewhere reads \$ROOM/state, so the remedy has a value" "agterm" "$probe"
 rm -f "$ROOM/state/container-agterm"
+
+# --- the OP verbs, and every other delegation (#248) ------------------------------------------
+# t21 and t27 replace these verbs wholesale with fakes, so without this section nothing ran the
+# shipped bodies. The failure it closes is silent: `ct_occupant` with its `ct_name` dropped hands
+# the driver a bare peer name, which names no session, so the driver returns no verdict, and then
+# `say`'s exit-8 refusal and `status`'s NO AGENT line never fire. With `_ct_pin_dir` dropped, a verb
+# loses the room's container pin on agterm. The same edit to `ct_type` sends every `say` down the
+# absence path.
+#
+# Every drv_* verb a ct_* one can reach is replaced by a recorder that appends one line to a file:
+# its own name, each argument, and the pin directory it saw. Each call runs in a fresh subshell
+# with the pin directory unset, so a dropped `_ct_pin_dir` reads `unset`, and a dropped `ct_name`
+# shows up as the bare peer. A file rather than stdout, because `ct_launch_record` captures what its
+# drv_* call prints.
+DRV_CALLS="$ROOT/drv-calls"
+dprobe() { # <ct verb> <arg>... — print the drv_* calls it made, one per line
+  : > "$DRV_CALLS"
+  ( export COUNCIL_BACKEND=tmux ROOM="$ROOM" POLICY_MAILBOX_DIR="$ROOT/probe-mailbox"
+    . "$TERM_SH"
+    local v
+    for v in drv_backend drv_shq drv_target drv_read drv_tell drv_submit drv_kill drv_focus \
+             drv_occupant drv_both_pinned drv_pin drv_handles drv_launch_handle; do
+      eval "$v() { { printf '%s' $v; [ \$# = 0 ] || printf '|%s' \"\$@\"; printf '|pindir=%s\n' \"\${DRV_CONTAINER_PIN_DIR:-unset}\"; } >> \"\$DRV_CALLS\"; }"
+    done
+    unset DRV_CONTAINER_PIN_DIR
+    "$@" ) >/dev/null 2>&1
+  cat "$DRV_CALLS"
+}
+SN="council-demo-room-alice"; PD="pindir=$ROOM/state"
+ok "ct_target resolves the name, sets the pin dir"  "drv_target|$SN|$PD"         "$(dprobe ct_target alice)"
+ok "ct_capture -> drv_read"                         "drv_read|$SN|$PD"           "$(dprobe ct_capture alice)"
+ok "ct_type -> drv_tell, with the text"             "drv_tell|$SN|hello there|$PD" "$(dprobe ct_type alice 'hello there')"
+ok "ct_submit -> drv_submit"                        "drv_submit|$SN|$PD"         "$(dprobe ct_submit alice)"
+ok "ct_kill -> drv_kill"                            "drv_kill|$SN|$PD"           "$(dprobe ct_kill alice)"
+ok "ct_focus -> drv_focus"                          "drv_focus|$SN|$PD"          "$(dprobe ct_focus alice)"
+ok "ct_occupant -> drv_occupant"                    "drv_occupant|$SN|$PD"       "$(dprobe ct_occupant alice)"
+ok "ct_both_pinned -> drv_both_pinned"              "drv_both_pinned|$PD"        "$(dprobe ct_both_pinned)"
+ok "ct_pin -> drv_pin"                              "drv_pin|$PD"                "$(dprobe ct_pin)"
+# The launch goes through drv_launch_handle; what it RECORDS is the launch-record section's job.
+ok "ct_launch_record -> drv_launch_handle"          "drv_launch_handle|$SN|/some/cwd|/some/launcher|$PD" \
+   "$(dprobe ct_launch_record up alice /some/cwd /some/launcher | head -1)"
+# These three set no pin directory, and need none: the backend and the quoting are process-wide,
+# and the handle list is read against the pin by its caller. Only the delegation is asserted.
+ok "ct_backend -> drv_backend"                      "drv_backend"                "$(dprobe ct_backend | sed 's/|pindir=.*//')"
+ok "ct_shq -> drv_shq, with its argument"           "drv_shq|a b"                "$(dprobe ct_shq 'a b' | sed 's/|pindir=.*//')"
+ok "ct_handles -> drv_handles"                      "drv_handles"                "$(dprobe ct_handles | sed 's/|pindir=.*//')"
+
+# NO ct_* VERB GOES UNASSERTED. A verb added to term.sh without a probe above, or in the sections
+# before this one, reds here. The ones that delegate to no single drv_* verb are listed with where
+# they are asserted instead.
+ASSERTED="ct_target ct_capture ct_type ct_submit ct_kill ct_focus ct_occupant ct_both_pinned ct_pin
+          ct_launch_record ct_backend ct_shq ct_handles
+          ct_name ct_container ct_container_pin ct_sessions ct_absence_class ct_pins_elsewhere
+          ct_record_launch"            # the launch-record section below
+NOT_DELEGATIONS="ct_seat_verdicts"    # verdict logic, asserted through `terminals` in t27 and t35
+defined=$( export COUNCIL_BACKEND=tmux ROOM="$ROOM"; . "$TERM_SH"; declare -F | awk '$3 ~ /^ct_/ { print $3 }' )
+unasserted=$(for f in $defined; do
+               case " $(echo $ASSERTED $NOT_DELEGATIONS) " in *" $f "*) ;; *) printf '%s ' "$f" ;; esac
+             done)
+ok "every ct_* verb term.sh defines is asserted somewhere" "" "$unasserted"
 
 # --- the launch record (#247): what `up` and `relaunch` write -------------------------------------
 # The readers of this record are exercised in t27, over a record written as `up` would write it.
