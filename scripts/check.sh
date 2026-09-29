@@ -7,8 +7,8 @@
 #    two manifests of a plugin declare the same version
 # 4. marketplace entries resolve, and both manifests offer the same plugins as plugins/ on disk
 # 5. dogfooding: every COMMITTED entry in a project skills dir is a symlink into plugins/; both
-#    agents linked to every packaged skill, that link resolving inside plugins/ staged or not;
-#    and no second copy of any SKILL.md
+#    agents linked to every packaged skill, that link resolving inside plugins/ staged or not,
+#    and never dropped from the index once HEAD has it; and no second copy of any SKILL.md
 # 6. ship's forge reference files do not carry a copy of the pipeline state enum
 # 7. no non-generic strings (structural patterns only; no dependency on any untracked file)
 # 8. no non-Latin script in any file, untracked included (the checkable half of "English")
@@ -98,13 +98,35 @@ untracked_local_skill() {
 # and failing on one only ever blocked unrelated commits.
 
 # ---------------------------------------------------------------- 1. shell syntax
-while IFS= read -r f; do
-  untracked_local_skill "$f" && continue
-  bash -n "$f" || fail "syntax: $f"
-done < <(git $GIT_Q ls-files --cached --others --exclude-standard '*.sh')
+# Each listing below is captured with its status BEFORE the loop that reads it, and an empty one is
+# a failure (#58). Read through `done < <(git ls-files ...)` instead, a listing that errored or
+# matched nothing was zero iterations with `rc` still 0: the assertion gone and the gate green.
+sh_ls=$(git $GIT_Q ls-files --cached --others --exclude-standard '*.sh')
+sh_rc=$?
+if [ "$sh_rc" -ne 0 ]; then
+  fail "could not list shell scripts for the syntax check (check 1) (git ls-files rc=$sh_rc)"
+elif [ -z "$sh_ls" ]; then
+  fail "the syntax check (check 1) found no shell script to parse (moved? renamed?)"
+else
+  while IFS= read -r f; do
+    untracked_local_skill "$f" && continue
+    bash -n "$f" || fail "syntax: $f"
+  done <<< "$sh_ls"
+fi
 
 # ------------------------------------------------- 2. SKILL.md frontmatter + name
+# ONE listing, read here and by check 5's outside-plugins loop, so the two cannot disagree about
+# which SKILL.md files exist. A failed or empty listing reds once, and both loops are then skipped.
+skillmd_ls=$(git $GIT_Q ls-files --cached --others --exclude-standard '*SKILL.md')
+skillmd_rc=$?
+if [ "$skillmd_rc" -ne 0 ]; then
+  fail "could not list SKILL.md files (checks 2 and 5) (git ls-files rc=$skillmd_rc)"
+  skillmd_ls=""
+elif [ -z "$skillmd_ls" ]; then
+  fail "checks 2 and 5 found no SKILL.md file at all (moved? renamed?)"
+fi
 while IFS= read -r f; do
+  [ -n "$f" ] || continue
   untracked_local_skill "$f" && continue
   head -1 "$f" | grep -q '^---$' || { fail "frontmatter missing: $f"; continue; }
   fm=$(awk 'NR>1 && /^---$/{exit} NR>1' "$f")
@@ -113,12 +135,35 @@ while IFS= read -r f; do
   want=$(basename "$(dirname "$f")")
   got=$(printf '%s\n' "$fm" | sed -n 's/^name: *//p' | tr -d '"'"'" | head -1)
   [ "$got" = "$want" ] || fail "skill name '$got' != directory '$want': $f"
-done < <(git $GIT_Q ls-files --cached --others --exclude-standard '*SKILL.md')
+done <<< "$skillmd_ls"
 
 # --------------------------------------------- 3. plugin manifests: JSON + agreement
-for d in plugins/*/; do
-  [ -d "$d" ] || continue
-  p=${d%/}; name=$(basename "$p")
+# The plugins on disk, listed through git rather than a `plugins/*/` glob, and read by checks 3 and
+# 4 alike (#58). Two things follow, and both are the point:
+#   * `.gitignore` applies. A raw glob saw every directory, so an untracked scratch directory under
+#     plugins/ reddened checks 3 and 4 and nothing could silence it. Now an empty one is invisible
+#     (git lists files, not directories) and an ignored one is too — the escape hatch checks 1 and
+#     2 always had. An untracked plugin that is NOT ignored is still checked in full: it is what a
+#     new plugin looks like before `git add`, and catching it then is why these checks read
+#     untracked files at all.
+#   * the listing is counted. A glob that matched nothing was a `[ -d ]` false, zero iterations and
+#     a green gate; a listing that errored or found no plugin is now a failure.
+plugins_ls=$(git $GIT_Q ls-files --cached --others --exclude-standard -- plugins/)
+plugins_rc=$?
+plugin_dirs=""
+if [ "$plugins_rc" -ne 0 ]; then
+  fail "could not list plugins/ (checks 3 and 4) (git ls-files rc=$plugins_rc)"
+else
+  # The first component, whether or not a path follows it: a plugin committed as a directory
+  # symlink is ONE entry, `plugins/<name>`, which the glob this replaced followed. `[ -d ]` drops a
+  # plain file sitting directly under plugins/.
+  plugin_dirs=$(printf '%s\n' "$plugins_ls" | sed -n 's|^plugins/\([^/][^/]*\).*|\1|p' | sort -u \
+    | while IFS= read -r n; do [ -d "plugins/$n" ] && printf '%s\n' "$n"; done)
+  [ -n "$plugin_dirs" ] || fail "checks 3 and 4 found no plugin under plugins/ (moved? renamed?)"
+fi
+while IFS= read -r name; do
+  [ -n "$name" ] || continue
+  p=plugins/$name
   vers=""
   for m in "$p/.claude-plugin/plugin.json" "$p/.codex-plugin/plugin.json"; do
     if [ ! -f "$m" ]; then fail "missing manifest: $m"; continue; fi
@@ -145,19 +190,17 @@ for d in plugins/*/; do
   # A plugin may hold MANY skills; require at least one.
   find "$p/skills" -name SKILL.md -mindepth 2 -maxdepth 2 | grep -q . \
     || fail "plugin has no skills/<skill>/SKILL.md: $p"
-done
+done <<< "$plugin_dirs"
 
 # ------------------------------------ 4. marketplace manifests: JSON + entries resolve
 for m in .claude-plugin/marketplace.json .agents/plugins/marketplace.json; do
   if [ ! -f "$m" ]; then fail "missing marketplace manifest: $m"; continue; fi
   python3 -c 'import json,sys; json.load(open(sys.argv[1]))' "$m" \
     || { fail "invalid JSON: $m"; continue; }
-  while IFS=$'\t' read -r name path; do
-    [ -n "$name" ] || continue
-    [ -d "$path" ] || fail "marketplace entry '$name' points at missing dir '$path': $m"
-    [ "$(basename "$path")" = "$name" ] \
-      || fail "marketplace entry '$name' points at differently-named dir '$path': $m"
-  done < <(python3 - "$m" <<'PY'
+  # Captured with its status, then counted (#58). Through `done < <(python3 ...)` an entry the
+  # extractor could not read — `"source": {"path": 123}` is valid JSON, so the arm above passes it —
+  # killed python having printed nothing, the loop ran zero times, and not one entry was asserted.
+  entries=$(python3 - "$m" <<'PY'
 import json, sys
 d = json.load(open(sys.argv[1]))
 for p in d.get("plugins", []):
@@ -166,6 +209,17 @@ for p in d.get("plugins", []):
     print("%s\t%s" % (p.get("name", ""), path.lstrip("./")))
 PY
   )
+  entries_rc=$?
+  if [ "$entries_rc" -ne 0 ]; then
+    fail "could not read the plugin entries of $m (python3 rc=$entries_rc)"; continue
+  fi
+  [ -n "$entries" ] || { fail "marketplace manifest lists no plugin: $m"; continue; }
+  while IFS=$'\t' read -r name path; do
+    [ -n "$name" ] || continue
+    [ -d "$path" ] || fail "marketplace entry '$name' points at missing dir '$path': $m"
+    [ "$(basename "$path")" = "$name" ] \
+      || fail "marketplace entry '$name' points at differently-named dir '$path': $m"
+  done <<< "$entries"
 done
 # The two manifests must offer the SAME plugins, and exactly the ones on disk. Validating each
 # file in isolation lets a plugin reach one agent's users and not the other's — the dual-agent
@@ -181,7 +235,7 @@ PY
 }
 cc=$(mnames .claude-plugin/marketplace.json | sort)
 cx=$(mnames .agents/plugins/marketplace.json | sort)
-disk=$(for d in plugins/*/; do [ -d "$d" ] && basename "${d%/}"; done | sort)
+disk=$plugin_dirs          # check 3's listing, already sorted; see the note there
 [ "$cc" = "$cx" ] || fail "the two marketplace manifests list different plugins:
   claude: $(echo "$cc" | tr '\n' ' ')
   codex:  $(echo "$cx" | tr '\n' ' ')"
@@ -217,11 +271,10 @@ if [ "$skills_rc" -ne 0 ]; then
   # Never read "could not list" as "nothing to report" — the trap sections 7 to 10 each guard.
   fail "could not list tracked project skill entries (git ls-files rc=$skills_rc)"
 elif [ -z "$skills_ls" ]; then
-  # A listing that matched nothing has not held, it has abstained. Nothing else here would say
-  # so: the "packaged skill has both links" loop below reads the FILESYSTEM, so links present on
-  # disk but dropped from the index satisfy it while every assertion above silently stops.
-  # This arm fires only on a TOTAL drop. ONE link removed from the index leaves the listing
-  # non-empty and stays green — a gap that predates this check and is not closed here.
+  # A listing that matched nothing has not held, it has abstained, and every assertion in the
+  # loop below silently stops. This arm names that; the packaged-skill loop at the end of this
+  # check also reds each packaged link HEAD has and the index does not, but a non-packaged entry
+  # dropped with the rest is reported by this arm alone.
   fail "no tracked entry under .claude/skills or .agents/skills at all (dropped from the index?)"
 else
   while IFS= read -r line; do
@@ -276,10 +329,11 @@ done <<< "$untracked_skills"
 # Without this exemption a local skill reddened the gate TWICE — the `--others` reach of this
 # loop is the other half of the same false positive, not a separate one.
 while IFS= read -r f; do
+  [ -n "$f" ] || continue
   case "$f" in plugins/*) continue ;; esac
   under_skill_dirs "$f" && continue
   fail "SKILL.md outside plugins/ (the packaged copy is the only source of truth): $f"
-done < <(git $GIT_Q ls-files --cached --others --exclude-standard '*SKILL.md')
+done <<< "$skillmd_ls"
 # Every packaged skill must HAVE both links. Validating only the links that exist lets a new
 # skill ship with no dogfooding at all, which is the invariant this check is here to protect.
 #
@@ -300,6 +354,13 @@ for s in plugins/*/skills/*/SKILL.md; do
   for d in $SKILL_LINK_DIRS; do
     [ -L "$d/$skill" ] || { fail "packaged skill '$skill' has no symlink at $d/$skill"; continue; }
     git ls-files --error-unmatch -- "$d/$skill" >/dev/null 2>&1 && continue
+    # Untracked is right for a link not yet added. A link HEAD has and the index does not is a
+    # staged deletion: the link still resolves on disk, so everything below passes it, and the
+    # next commit removes it from every clone (#58). No HEAD at all reads as "not in HEAD".
+    if git cat-file -e "HEAD:$d/$skill" 2>/dev/null; then
+      fail "packaged skill '$skill' link is in HEAD but dropped from the index, so the next commit deletes it: $d/$skill"
+      continue
+    fi
     ltgt=$(cd "$d/$skill" 2>/dev/null && pwd -P)
     case "$ltgt" in
       "$ROOT_P/plugins/"*) ;;
@@ -317,7 +378,18 @@ done
 # The core owns the state names. A copy inside a per-forge reference file is exactly the
 # stale-enum failure both source variants of ship warned about, so assert it cannot exist.
 core=plugins/ship/skills/ship/SKILL.md
-if [ -f "$core" ]; then
+# The reference files, listed through git (so `.gitignore` applies to an untracked scratch file
+# here, as it does to checks 1 and 2) and counted, for the reason checks 1 to 4 now are (#58).
+# A git pathspec's `*` crosses `/`, so this reads a `.md` in a subdirectory of references/ too,
+# which the glob it replaced did not: stricter, deliberately, since a copy of the enum there is the
+# same defect.
+ref_dir=plugins/ship/skills/ship/references
+if [ ! -f "$core" ]; then
+  # With no `else`, a moved or renamed core skipped this whole check: the enum-copy, handler and
+  # record assertions all stopped existing and the gate stayed green (#58). This repo has renamed
+  # a plugin before, which is how that happens.
+  fail "check 6 cannot find the core skill that owns the state enum: $core (moved? renamed?)"
+else
   # Derive the enum ONCE and use it for both assertions below. A second, hand-maintained
   # copy of the state list inside this gate would be a copy of an enum going stale, inside
   # the check written to stop copies of an enum going stale.
@@ -335,15 +407,26 @@ if [ -f "$core" ]; then
   # Only the hyphenated names are searched for in the forge files: the single-word states
   # (`apply`, `archive`, `done`) are ordinary English that legitimately appears in prose, so
   # matching them would be all false positives.
-  for ref in plugins/ship/skills/ship/references/*.md; do
-    [ -f "$ref" ] || continue
-    for st in $states; do
-      case "$st" in *-*) ;; *) continue ;; esac
-      if grep -qF -- "$st" "$ref"; then
-        fail "forge reference carries the state name '$st' (the core owns it): $ref"
-      fi
-    done
-  done
+  refs_ls=$(git $GIT_Q ls-files --cached --others --exclude-standard -- "$ref_dir/*.md")
+  refs_rc=$?
+  if [ "$refs_rc" -ne 0 ]; then
+    fail "could not list the forge reference files (check 6) (git ls-files rc=$refs_rc)"
+  elif [ -z "$refs_ls" ]; then
+    fail "check 6 found no forge reference file under $ref_dir (moved? renamed?)"
+  else
+    while IFS= read -r ref; do
+      for st in $states; do
+        case "$st" in *-*) ;; *) continue ;; esac
+        # 0 / 1 / >1, as checks 7 to 9 read grep: an error is not "the name is absent".
+        grep -qF -- "$st" "$ref"
+        case $? in
+          0) fail "forge reference carries the state name '$st' (the core owns it): $ref" ;;
+          1) ;;
+          *) fail "check 6 could not read forge reference $ref"; break ;;
+        esac
+      done
+    done <<< "$refs_ls"
+  fi
 
   # And no state may exist that the state machine cannot enter. A stage named in the enum
   # with no handler is the failure the launcher skill documents as its own worst: a
@@ -553,6 +636,7 @@ else
     case $? in
       0) fail "council test names a fixed temp path instead of \$COUNCIL_TEST_ROOT: $council_dir/$rel" ;;
       1) ;;
+      # UNPROBED: its only trigger is an unreadable file, a no-op as root (see check-test.sh, expect_fail)
       *) fail "could not scan council test for a fixed temp path: $council_dir/$rel" ;;
     esac
   done <<< "$council_tests"
@@ -784,6 +868,7 @@ else
       case $? in
         0) ;;
         1) fail "test suite runner is invoked by no Makefile target (it never runs): $runner" ;;
+        # UNPROBED: its only trigger is an unreadable file, a no-op as root (see check-test.sh, expect_fail)
         *) fail "could not scan the Makefile for a test runner invocation: $runner" ;;
       esac
 

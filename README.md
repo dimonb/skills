@@ -247,21 +247,13 @@ expected message to `expect_fail` and is failed as `WRONG ARM` without it. Asser
 that *something* reddened would keep reporting a pass over an assertion that had been
 deleted, which is how both of check 10's diagnostic arms were vacuous when first written.
 
-Five arms still have no kill test, named here rather than left to be found: delete the `fail`
-for `no name:`, `plugin has no skills/ directory`, `plugin has no skills/<skill>/SKILL.md`,
-`missing marketplace manifest` or `invalid JSON` (marketplace), and the probe that names it still
-reds — on a neighbouring assertion — so `make check-test` reports it caught over an assertion
-that no longer exists. Every one is pre-existing and each needs its own pin, so they are tracked
-as an issue rather than fixed alongside an unrelated change. The list `check-test.sh` keeps above
-`expect_fail` is the authoritative one; this paragraph is a summary of it and nothing more.
-
-Two arms have no probe at all, for a different reason — they are the per-item "this matcher
-errored" arms, reachable only by making a file unreadable, which is a no-op when the gate runs as
-root and so cannot be probed portably: `could not scan council test for a fixed temp path`
-(check 9) and `could not scan the Makefile for a test runner invocation` (check 12). Their
-siblings that error on a *listing* rather than a per-item read are probed, because a listing's
-status can be forced directly. Stated here because a green `make check-test` would otherwise be
-read as covering them.
+Some arms have no probe at all — the per-item "this matcher errored" arms, reachable only by
+making a file unreadable, which is a no-op when the gate runs as root and so cannot be probed
+portably. Each carries an `UNPROBED:` comment on the line above it in `scripts/check.sh`, so
+`grep -n UNPROBED: scripts/check.sh` is the list; it is kept there, beside the arms, rather than
+counted here. Their siblings that error on a *listing* rather than a per-item read are probed,
+because a listing's status can be forced directly. Stated here because a green `make check-test`
+would otherwise be read as covering them.
 
 Writing and re-running it has found six real bugs
 so far, including a broken symlink that slipped past an `[ -e ]` test, a leak check that never

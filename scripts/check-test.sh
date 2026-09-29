@@ -74,6 +74,10 @@ PROBE_FILES=(
   shared/adapters/tests/_probe-unreg.sh shared/policy/tests/_probe-unreg.sh
   shared/knobs/tests/_probe-unreg.sh
   plugins/shipyard/skills/shipyard/tests/t1-probe-dup.sh "$TESTS_DIR/t1z-probe.sh"
+  plugins/_probe-scratch plugins/_probe-scratch-empty
+  plugins/ship/skills/ship/references/_probe-scratch plugins/ship/skills/ship/references/_probe-dangling.md
+  plugins/ship/skills/ship/references/_probe-ignored.md
+  plugins/_probe-link
 )
 
 # THE RUN MARKER (#136). While a run is in flight its probes are in the tree, and from outside a
@@ -93,6 +97,9 @@ PROBE_FILES=(
 MARKER=$(git rev-parse --git-path check-test.running)
 
 restore() {
+  # A probe that exports a throwaway index may be interrupted before it unsets it, and restoring
+  # against that index would check out whatever it holds and lose whatever it lacks.
+  unset GIT_INDEX_FILE
   # shellcheck disable=SC2086
   git checkout -- $GUARDED 2>/dev/null || true
   # Only the entries this test replaces, never a whole directory.
@@ -222,21 +229,19 @@ pass=0; nocatch=0
 # probe keeps reporting `caught` over an assertion that no longer exists. Both of check 10's
 # diagnostic arms were vacuous in this way when they were written, and nothing said so.
 #
-# Pass $2 for any probe whose arm has a neighbour that can substitute for it. FIVE probes below
-# still need one and do not have it — the two hollow-plugin probes, `SKILL.md with no name:`,
-# `missing marketplace manifest` and `invalid JSON in a marketplace manifest`. Delete the arm any
-# of them names and this suite still reports it caught, so those five arms have no kill test. They
-# are pre-existing and tracked in the follow-up issue rather than pinned here; do not read the
-# absence of a $2 as evidence that a probe does not need one.
+# Pass $2 for any probe whose arm has a neighbour that can substitute for it — and when unsure,
+# pass it: a pin costs nothing, and the absence of one is exactly how arms once sat here with no
+# kill test, reported `caught` over a neighbour's red (#58). Do not read a missing $2 as evidence
+# that a probe does not need one.
 #
-# Separately, TWO arms have no probe at all, and this is the authoritative list of them:
-#   * check 9's  `could not scan council test for a fixed temp path`
-#   * check 12's `could not scan the Makefile for a test runner invocation`
-# Both are per-item "this matcher errored" arms whose only trigger is an unreadable file, which is
-# a no-op when the gate runs as root, so they cannot be probed portably. Their siblings that error
-# on a LISTING rather than a per-item read are probed (for example 14a, 21, 32f, 34f, 37g), because a
-# listing's exit status can be forced directly. Recorded here because a green run would otherwise be read as
-# covering them.
+# Separately, some arms have no probe at all. They are not listed here: each carries an `UNPROBED:`
+# comment on the line above it in check.sh, so `grep -n UNPROBED: scripts/check.sh` is the list, and
+# a new unprobed arm joins it by being marked where it is written rather than by someone updating a
+# count in this file (a count here went stale on the next addition, #58). The ones marked today are
+# per-item "this matcher errored" arms whose only trigger is an unreadable file, which is a no-op
+# when the gate runs as root, so they cannot be probed portably. Their siblings that error on a
+# LISTING rather than a per-item read are probed (for example 14a, 21, 32f, 34f, 37g), because a
+# listing's exit status can be forced directly.
 expect_fail() {
   if bash scripts/check.sh >"$SCRATCH/out" 2>&1; then
     echo "NOT CAUGHT: $1"; nocatch=$((nocatch+1))
@@ -301,17 +306,19 @@ git checkout -- "$CORE"
 
 # 3a — one of the two plugin manifests is missing
 rm plugins/ship/.codex-plugin/plugin.json
-expect_fail "missing .codex-plugin manifest"
+# Pinned (#58): with the guard's `continue` gone, the JSON arm below reds on the same file.
+expect_fail "missing .codex-plugin manifest" "missing manifest: plugins/ship/.codex-plugin/plugin.json"
 git checkout -- plugins/ship/.codex-plugin/plugin.json
 
 # 3b — a manifest's name disagrees with its directory
 perl -pi -e 's/"name": "ship"/"name": "shipx"/' plugins/ship/.claude-plugin/plugin.json
-expect_fail "manifest name != directory"
+expect_fail "manifest name != directory" "manifest name 'shipx' != directory 'ship'"
 git checkout -- plugins/ship/.claude-plugin/plugin.json
 
 # 3c — invalid JSON
 printf 'oops' >> plugins/ship/.claude-plugin/plugin.json
-expect_fail "invalid JSON in a plugin manifest"
+# Pinned (#58): with the guard's `continue` gone, the name arm reds on the same file.
+expect_fail "invalid JSON in a plugin manifest" "invalid JSON: plugins/ship/.claude-plugin/plugin.json"
 git checkout -- plugins/ship/.claude-plugin/plugin.json
 
 # 3d — the two manifests of one plugin declare different versions (#20), and one declares none.
@@ -328,14 +335,14 @@ git checkout -- plugins/ship/.claude-plugin/plugin.json
 # 4a — a marketplace entry pointing at a directory that does not exist, with the basename
 # still matching the entry name, so ONLY the existence branch can fire.
 perl -pi -e 's{"source": "./plugins/ship"}{"source": "./plugins/gone/ship"}' .claude-plugin/marketplace.json
-expect_fail "marketplace entry -> missing directory"
+expect_fail "marketplace entry -> missing directory" "points at missing dir 'plugins/gone/ship'"
 git checkout -- .claude-plugin/marketplace.json
 
 # 4b — an entry pointing at a real directory under a DIFFERENT name, so only the
 # name-agreement branch can fire. Split from 4a because one probe tripping both branches
 # proves neither: deleting either check would leave the assertion passing.
 perl -pi -e 's{"source": "./plugins/ship"}{"source": "./plugins/shipyard"}' .claude-plugin/marketplace.json
-expect_fail "marketplace entry -> differently-named directory"
+expect_fail "marketplace entry -> differently-named directory" "points at differently-named dir 'plugins/shipyard'"
 git checkout -- .claude-plugin/marketplace.json
 
 # 4c — the two marketplace manifests disagree about which plugins exist. Drop an entry
@@ -348,7 +355,7 @@ d = json.load(open(p))
 d["plugins"] = d["plugins"][:1]
 json.dump(d, open(p, "w"), indent=2)
 PY
-expect_fail "the two marketplace manifests list different plugins"
+expect_fail "the two marketplace manifests list different plugins" "the two marketplace manifests list different plugins"
 git checkout -- .agents/plugins/marketplace.json
 
 # 5a — an entry COMMITTED under a project skills directory as something other than a symlink,
@@ -404,13 +411,13 @@ link shipyard .agents/skills
 
 # 6a — a pipeline state name copied into a per-forge reference file
 printf '\nStages: need-issue then ready-to-merge.\n' >> plugins/ship/skills/ship/references/forge-github.md
-expect_fail "state enum copied into a forge reference"
+expect_fail "state enum copied into a forge reference" "forge reference carries the state name 'need-issue'"
 git checkout -- plugins/ship/skills/ship/references/forge-github.md
 
 # 6b — a state in the enum with no handler. `spec` is the real historical case: it is a
 # PREFIX of `spec-review`, so an unanchored check passes and proves nothing.
 perl -pi -e 's{"state": "need-issue\|issue-ready\|}{"state": "need-issue|issue-ready|spec|}' "$CORE"
-expect_fail "enum state with no §7 handler"
+expect_fail "enum state with no §7 handler" "state 'spec' is in the enum but has no"
 git checkout -- "$CORE"
 
 # 6c — a state the core enters but never tells the run to RECORD, which is how a stage becomes
@@ -520,16 +527,17 @@ for p in (".claude-plugin/marketplace.json", ".agents/plugins/marketplace.json")
     d["plugins"] = [e for e in d["plugins"] if e.get("name") != "shipyard"]
     json.dump(d, open(p, "w"), indent=2)
 PY
-expect_fail "marketplace plugins do not match plugins/ on disk"
+expect_fail "marketplace plugins do not match plugins/ on disk" "marketplace plugins do not match plugins/ on disk"
 git checkout -- .claude-plugin .agents/plugins
 
 # 9 — SKILL.md frontmatter: each field, and a skill tracked outside plugins/
 perl -0pi -e 's/^---\nname: ship\n/---\nnome: ship\n/' "$CORE"
-expect_fail "SKILL.md with no name:"
+# Pinned (#58): the name-vs-directory arm reds on the same edit (`'' != directory`).
+expect_fail "SKILL.md with no name:" "no name: $CORE"
 git checkout -- "$CORE"
 
 perl -pi -e 's/^description: "Drive one change/descriptio: "Drive one change/' "$CORE"
-expect_fail "SKILL.md with no description:"
+expect_fail "SKILL.md with no description:" "no description: $CORE"
 git checkout -- "$CORE"
 
 # Outside .claude/skills and .agents/skills on purpose — check 5 exempts those two paths from
@@ -540,30 +548,34 @@ git checkout -- "$CORE"
 mkdir -p docs/stray
 printf -- '---\nname: stray\ndescription: A stray skill outside plugins/.\n---\n' \
   > docs/stray/SKILL.md
-expect_fail "SKILL.md outside plugins/"
+expect_fail "SKILL.md outside plugins/" "SKILL.md outside plugins/"
 rm -rf docs/stray
 
 # 10 — a plugin with manifests but no skills tree, then one with an empty skills tree. Both
-# manifests carry the same version, so check 3d cannot be the arm that reds.
+# manifests carry the same version, so check 3d cannot be the arm that reds. Each is pinned (#58):
+# an unregistered plugin also reds the manifests-vs-disk arm, and the missing tree reds the
+# empty-tree arm too, so unpinned, deleting either arm left its probe reporting `caught`.
 mkdir -p plugins/hollow/.claude-plugin plugins/hollow/.codex-plugin
 printf '{"name":"hollow","version":"0.1.0","description":"d"}\n' > plugins/hollow/.claude-plugin/plugin.json
 printf '{"name":"hollow","version":"0.1.0","description":"d","skills":"./skills/"}\n' > plugins/hollow/.codex-plugin/plugin.json
-expect_fail "plugin with no skills/ directory"
+expect_fail "plugin with no skills/ directory" "plugin has no skills/ directory: plugins/hollow"
 mkdir -p plugins/hollow/skills
-expect_fail "plugin with an empty skills/ directory"
+expect_fail "plugin with an empty skills/ directory" "plugin has no skills/<skill>/SKILL.md: plugins/hollow"
 rm -rf plugins/hollow
 
 # 11 — the remaining gate assertions, so that "every assertion" is literally true
 perl -0pi -e 's/\A---\n/name: ship\n/' "$CORE"
-expect_fail "SKILL.md with no frontmatter"
+expect_fail "SKILL.md with no frontmatter" "frontmatter missing: $CORE"
 git checkout -- "$CORE"
 
+# Both pinned (#58): each also leaves the two manifests listing different plugins, which reds on
+# its own, so unpinned neither probe could tell its arm from that neighbour.
 mv .agents/plugins/marketplace.json "$SCRATCH/mp.json"
-expect_fail "missing marketplace manifest"
+expect_fail "missing marketplace manifest" "missing marketplace manifest: .agents/plugins/marketplace.json"
 mv "$SCRATCH/mp.json" .agents/plugins/marketplace.json
 
 printf 'oops' >> .agents/plugins/marketplace.json
-expect_fail "invalid JSON in a marketplace manifest"
+expect_fail "invalid JSON in a marketplace manifest" "invalid JSON: .agents/plugins/marketplace.json"
 git checkout -- .agents/plugins/marketplace.json
 
 # Moving the directory leaves its index entries behind, so check 5's link assertions and the
@@ -573,7 +585,7 @@ expect_fail "missing project skills dir" "missing project skills dir"
 mv "$SCRATCH/agents-skills" .agents/skills
 
 perl -pi -e 's/^  "state": "need-issue/  "sate": "need-issue/' "$CORE"
-expect_fail "state enum not found in the core skill"
+expect_fail "state enum not found in the core skill" "cannot find exactly one state enum"
 git checkout -- "$CORE"
 
 # 12 — a council test that builds its room at a path fixed by its own name. This is the shape
@@ -1489,6 +1501,102 @@ expect_fail "check 15 fails LOUDLY when it finds no section reference" \
 cp "$SCRATCH/check15.bak" scripts/check.sh
 rm -f docs/_probe.md
 rmdir docs 2>/dev/null || true
+
+# 38 — the listings of checks 1 to 6, each captured with its status and counted (#58). Before,
+# every one was a `done < <(...)` or a raw glob, so a listing that errored or matched nothing ran
+# zero iterations and the gate printed `check: OK` with the assertion gone. Each arm is proven in
+# the shapes 14a and 14b use: the status forced with the output kept (so only the status arm can
+# red), and the listing repointed at nothing (what a moved or renamed tree looks like). Edited
+# into check.sh rather than reproduced by moving a tree, for 14's reason: an interrupted `git mv`
+# is staged, and the restore cannot undo it. Every one is pinned, since several share a listing.
+cp scripts/check.sh "$SCRATCH/check38.bak"
+c38() { expect_fail "$1" "$2"; cp "$SCRATCH/check38.bak" scripts/check.sh; }
+perl -pi -e "s{^(sh_ls=.*'\\*\\.sh')\\)\$}{\$1; exit 128)}" scripts/check.sh
+c38 "check 1 listing fails LOUDLY when git ls-files errors" "could not list shell scripts for the syntax check"
+perl -pi -e "s{^(sh_ls=.*)'\\*\\.sh'\\)\$}{\$1'*.shx')}" scripts/check.sh
+c38 "check 1 fails LOUDLY when it finds no shell script" "the syntax check (check 1) found no shell script"
+perl -pi -e "s{^(skillmd_ls=.*'\\*SKILL\\.md')\\)\$}{\$1; exit 128)}" scripts/check.sh
+c38 "checks 2 and 5 listing fails LOUDLY when git ls-files errors" "could not list SKILL.md files"
+perl -pi -e "s{^(skillmd_ls=.*)'\\*SKILL\\.md'\\)\$}{\$1'*SKILL.mdx')}" scripts/check.sh
+c38 "checks 2 and 5 fail LOUDLY when they find no SKILL.md" "found no SKILL.md file at all"
+perl -pi -e 's{^(plugins_ls=.*-- plugins/)\)$}{$1; exit 128)}' scripts/check.sh
+c38 "checks 3 and 4 listing fails LOUDLY when git ls-files errors" "could not list plugins/"
+perl -pi -e 's{^(plugins_ls=.*-- )plugins/\)$}{${1}plugins-moved/)}' scripts/check.sh
+c38 "checks 3 and 4 fail LOUDLY when they find no plugin" "found no plugin under plugins/"
+perl -pi -e 's{^core=plugins/ship/skills/ship/SKILL\.md$}{core=plugins/shipcore/skills/ship/SKILL.md}' scripts/check.sh
+c38 "check 6 reds when the core skill is gone, rather than skipping itself" "check 6 cannot find the core skill"
+perl -pi -e "s{^(  refs_ls=.*\\.md\")\\)\$}{\$1; exit 128)}" scripts/check.sh
+c38 "check 6 reference listing fails LOUDLY when git ls-files errors" "could not list the forge reference files"
+perl -pi -e 's{^ref_dir=plugins/ship/skills/ship/references$}{ref_dir=plugins/ship/skills/ship/refs}' scripts/check.sh
+c38 "check 6 fails LOUDLY when it finds no forge reference file" "check 6 found no forge reference file"
+
+# 38b — check 4's extractor dies on a value that is valid JSON: the issue's own reproduction. The JSON
+# arm passes it, so only the captured status can red; before, not one entry was asserted.
+perl -pi -e 's{"path": "\./plugins/ship"}{"path": 123}' .agents/plugins/marketplace.json
+expect_fail "check 4 reds when it cannot read a manifest's entries" \
+  "could not read the plugin entries of .agents/plugins/marketplace.json"
+git checkout -- .agents/plugins/marketplace.json
+# 38c — ...and a manifest with no entry at all. The manifests-vs-disk arm reds on the same edit, so
+# the pin is what says this arm fired.
+python3 - <<'PY'
+import json
+for p in (".claude-plugin/marketplace.json", ".agents/plugins/marketplace.json"):
+    d = json.load(open(p))
+    d["plugins"] = []
+    json.dump(d, open(p, "w"), indent=2)
+PY
+expect_fail "check 4 reds on a manifest that lists no plugin" "marketplace manifest lists no plugin"
+git checkout -- .claude-plugin .agents/plugins
+
+# 38d — check 6's grep erroring on a reference file is not "the state name is absent". A dangling
+# symlink is a file the listing names and grep cannot open, the technique 37d uses; check 15 reds on
+# it too, so the pin keeps this probe on check 6's arm.
+ln -s "$SCRATCH/no-such-file" plugins/ship/skills/ship/references/_probe-dangling.md
+expect_fail "check 6 fails LOUDLY when grep cannot read a reference" "check 6 could not read forge reference"
+rm -f plugins/ship/skills/ship/references/_probe-dangling.md
+
+# 38e — a packaged skill's link dropped from the index while it still resolves on disk: a staged
+# deletion that the next commit makes, and that every other link assertion passes. A throwaway
+# index, as in 5a, so the repo's own index is never touched and an interrupt leaves a scratch file.
+cp "$(git rev-parse --git-path index)" "$SCRATCH/drop-index"
+GIT_INDEX_FILE="$SCRATCH/drop-index" git rm -q --cached -- .claude/skills/ship
+export GIT_INDEX_FILE="$SCRATCH/drop-index"
+expect_fail "a packaged skill's link dropped from the index reds" \
+  "packaged skill 'ship' link is in HEAD but dropped from the index"
+unset GIT_INDEX_FILE
+
+# 38f — the other direction (#58): incidental untracked state under plugins/ is none of checks 3, 4
+# and 6's business once git is not listing it. An empty scratch directory (git lists files, not
+# directories), and one whose own `.gitignore` ignores everything in it — the escape hatch a raw
+# glob never honoured; either reds a checks 3 and 4 that went back to `plugins/*/`. Under
+# references/, every fixture carries a real state name, in two places that prove different things:
+#   * directly under it, ignored through `core.excludesFile` pointed at a file in $SCRATCH for this
+#     one run, so no ignore file lands in the tree -- a `references/.gitignore` is a name a person
+#     might keep there, and `--recover` removes every path in PROBE_FILES. This is the one a check 6
+#     that went back to its `references/*.md` glob would red on;
+#   * in a subdirectory, ignored by its own `.gitignore`. The glob never reached there, so this one
+#     proves only that the recursive git pathspec honours `--exclude-standard`.
+# The hollow-plugin probe (10) is the counter-test: an untracked plugin that is NOT ignored is still
+# checked in full.
+# 38g — a plugin that is a directory symlink is ONE listing entry, `plugins/<name>`, with no path
+# below it. The glob checks 3 and 4 used to iterate followed it, so the listing must keep it: here
+# it points at a real plugin under another name, which only check 3 reading it can report.
+ln -s ship plugins/_probe-link
+expect_fail "checks 3 and 4 still read a plugin that is a directory symlink" \
+  "manifest name 'ship' != directory '_probe-link'"
+rm -f plugins/_probe-link
+
+REFS=plugins/ship/skills/ship/references
+mkdir -p plugins/_probe-scratch-empty plugins/_probe-scratch "$REFS/_probe-scratch"
+printf '*\n' > plugins/_probe-scratch/.gitignore
+printf 'notes\n' > plugins/_probe-scratch/notes.md
+printf '/%s/_probe-ignored.md\n' "$REFS" > "$SCRATCH/probe-exclude"
+printf 'Stages: need-issue then ready-to-merge.\n' > "$REFS/_probe-ignored.md"
+printf '*\n' > "$REFS/_probe-scratch/.gitignore"
+printf 'Stages: need-issue then ready-to-merge.\n' > "$REFS/_probe-scratch/notes.md"
+GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=core.excludesFile GIT_CONFIG_VALUE_0="$SCRATCH/probe-exclude" \
+  expect_pass "an empty or ignored scratch directory under plugins/ stays green"
+rm -rf plugins/_probe-scratch-empty plugins/_probe-scratch "$REFS/_probe-scratch" "$REFS/_probe-ignored.md"
 
 # 36 — this file's own entry arms (#136): the run marker and the leftover-fixture refusal. They are
 # not gate assertions, so they are proven by running this script a second time, NESTED, and reading
