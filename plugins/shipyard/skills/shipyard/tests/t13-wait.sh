@@ -396,6 +396,10 @@ ok "B: the escalated slot is classified by nothing" 0 \
    "$(printf '%s' "$outB" | sed -n '/### 🙋 WAITING FOR YOU/,/^$/p' | grep -c '^- `42`')"
 ok "B: ...and its row shows the escalation instead" 1 \
    "$(printf '%s' "$outB" | grep -c '^| 42 .*⚠️ 1')"
+# ...while the row keeps the class's LABEL (#270): the label gates nothing, and `⏸ idle/wait` for a
+# slot whose stage says it needs you is a misread. t19 pins the same for a finished slot with no agent.
+ok "B: ...beside its own label, not idle"       1 \
+   "$(printf '%s' "$outB" | grep -c '^| 42 .*🙋 needs you.*⚠️ 1')"
 ok "B: ...and it is not stalled either"     0 \
    "$(printf '%s' "$outB" | sed -n '/🛑 STALLED/,/^$/p' | grep -c '^- `42`')"
 # THE POINT OF THE WHOLE CHANGE: rarer and right, not quieter.

@@ -184,13 +184,14 @@ fi
 
 TAB=$(printf '\t')
 
-# ep_fp <text> — a fingerprint to compare, never printed. Two readers: the stall clock's `slot_sig`
-# (a body-only change must move it, or --only-changed cannot see it) and the episode table's `fp` (a
-# held or refused block whose text moved prints in full again). Each tool is tried only where it
-# answers with a hash, and POSIX `cksum` closes the chain: with `md5` and `md5sum` both missing, the
-# old `md5 || md5sum | cut` pipeline exited as `cut` did — 0, with an empty hash — so every text
-# fingerprinted to "" and both readers went blind to change. Spaces become `-`: `slot_sig` is split
-# on `|` and the episode row on tabs, so a space would be harmless, but a hash is one token here.
+# ep_fp <text> — a fingerprint to compare, never printed. Read by the stall clock's `slot_sig` (a
+# screen change must move it, or the clock carries `since` across real motion and can raise a false
+# 🛑 STALLED) and by the episode table's `fp` (a held or refused block whose text moved prints in full
+# again). Each tool is tried only where it answers with a hash, and POSIX `cksum` closes the chain:
+# with `md5` and `md5sum` both missing, the old `md5 || md5sum | cut` pipeline exited as `cut` did —
+# 0, with an empty hash — so every text fingerprinted to "" and every reader went blind to change.
+# Spaces become `-`: `slot_sig` is split on `|` and the episode row on tabs, so a space would be
+# harmless, but a hash is one token here.
 ep_fp() {
   local h=""
   if command -v md5 >/dev/null 2>&1; then h=$(printf '%s' "$1" | md5 -q 2>/dev/null) || h=""; fi
@@ -660,14 +661,16 @@ UNSCALED=()   # "<slot>|<display>" — a ctx figure with no window to assert it 
 #
 # A RESIDUAL, NOT CLOSED: $TICKFILE lives in the mailbox every child can write, so writing an old
 # epoch into it forges a gap. A gap restarts every stall clock and ends every episode, so a child
-# that forges one before every tick keeps every slot's 🛑 STALLED, its own included, from ever firing. That cannot be
-# prevented from here: every file this script could keep instead is equally writable by a child on
-# the same account. So it is made SELF-REVEALING instead: a gap tick bypasses --only-changed (the
-# silence test below requires `GAP = 0`) and prints the resumed-after notice, which says outright
-# that a gap with no stopped monitor and no sleeping machine behind it means this file was rewritten. A forged gap before every tick therefore
-# prints the full table and that notice on every tick, which a healthy fleet never does. A FUTURE
-# epoch is refused (`RUN_EPOCH -gt prev_tick`), and an unparseable one claims no gap, so neither
-# can be used to fake one.
+# that forges one before every tick keeps every slot's 🛑 STALLED and 🛑 UNREADABLE, its own
+# included, from ever firing, and every episode-tracked block (💀 NO AGENT, held, refused) from ever
+# reaching its later-tick entry. That cannot be prevented from here: every file this script could
+# keep instead is equally writable by a child on the same account. So it is made SELF-REVEALING
+# instead: a gap tick bypasses --only-changed (the silence test below requires `GAP = 0`) and prints
+# the resumed-after notice, which names a rewritten tick file as a cause beside a stopped monitor, a
+# sleeping machine and a report that dies before it stamps the tick (below). A forged gap before
+# every tick therefore prints the full table and that notice on every tick, which a healthy fleet
+# never does. A FUTURE epoch is refused (`RUN_EPOCH -gt prev_tick`), and an unparseable one claims
+# no gap, so neither can be used to fake one.
 RUN_EPOCH=$(date +%s)
 GAP=0
 if [ -n "$TICKFILE" ] && [ -f "$TICKFILE" ]; then
@@ -1813,8 +1816,8 @@ fi
     echo "_supervision resumed after $((GAP/60)) min with nothing watching — every stall clock was"
     echo "restarted from now, because a figure measured across that gap is one this report cannot"
     echo "justify. If the fleet was paused on purpose, this line is the whole of the news. If the"
-    echo "monitor did not stop and the machine did not sleep, the mailbox's \`report-tick\` was rewritten,"
-    echo "which any child can do._"
+    echo "monitor did not stop and the machine did not sleep, either the report is dying before it"
+    echo "stamps its tick, or the mailbox's \`report-tick\` was rewritten — which any child can do._"
   fi
   if [ "${#STALLED[@]}" -gt 0 ]; then
     # Split by shape — see "a stall is an EPISODE" above for the three shapes and the two constants.

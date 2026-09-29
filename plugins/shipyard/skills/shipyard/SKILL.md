@@ -537,7 +537,8 @@ mailbox, a child included, writing the predicted signature — the reason given 
 * **On tmux, `none` is wrong for an agent run without `exec`.** tmux names the process-group
   leader, so a wrapper shell that stays in front of the agent reads as a shell. shipyard's launcher
   `exec`s the agent, but tmux starts it through its `default-shell -c`, so this also assumes that
-  shell hands off to a single command — measured for zsh, not for others.
+  shell hands off to a single command — measured for zsh, bash, macOS `/bin/sh` and dash, not for
+  fish, ksh or tcsh (the driver's `drv_occupant` comment has the measurement).
 * **`agent` is no proof of life.** An agent that dies leaving another non-shell process in the
   foreground — something it `exec`ed, a hung command — reads `agent` for as long as that process
   lives. A child can therefore keep this block off by construction; what still catches that case
@@ -1386,8 +1387,8 @@ starts a fresh watcher for its own parent session.
 
 ⏸ idle-wait is **normal** for ship: it waits on CI or on a self-review round and re-wakes
 itself. Never read idle as "it died" — the only completion signal is a merged (or closed)
-MR. A child blocked on an escalation also looks idle; the `esc` column is what tells you it
-is waiting on *you*. A child at its context ceiling looks idle too, with `esc —`, and so
+MR. A child blocked on an escalation also looks idle — or reads `✅ finished` / `🙋 needs you`
+when its stage says so; either way the `esc` column is what tells you it is waiting on *you*. A child at its context ceiling looks idle too, with `esc —`, and so
 does one that simply left its own next instruction unsubmitted in the input box — the `ctx`
 column and the diagnosis order in Step 5 are what separate those three. `/ship` never waits
 for an approval, so a session parked for a long stretch with a green pipeline and no
