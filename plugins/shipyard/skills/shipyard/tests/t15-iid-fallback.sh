@@ -49,6 +49,8 @@
 #      fork is dropped, an open MR whose head is an ancestor wins, a merged one on HEAD keeps its
 #      number, a merged one from before the launch is an annotation, and a numeric slot is its own
 #      iid without a forge call.
+#  13. (#329) the report runs clean under a real bash 3.2 over live slots that reach the forge
+#      fallback, and renders the same rows as above; skipped, saying so, where no 3.2 exists.
 #
 # The rig is t13-wait.sh's: exported shell functions shadow `git`, `tmux`, `gh` and `glab`, which
 # works where a fake binary on PATH does not because shipyard-lib.sh prepends the system PATH over
@@ -462,6 +464,42 @@ ok "gitlab: every query asks for any state, several candidates, as JSON" 0 \
    "$(grep -v -- '--all -P 10 -F json' "$GLAB_CALLS" | grep -c .)"
 ok "gitlab: ...over the three non-numeric slots"    3 \
    "$(grep -c . "$GLAB_CALLS")"
+
+# #329 — THE BASH 3.2 FLOOR, over live slots. The report is run by stock macOS /bin/bash 3.2, and
+# its per-slot path (slot_iid, slot_iid_forge, slot_launch_epoch, iid_label, the row loop) is only
+# reached over a live slot, so the floor is checked here, over GitHub slots that reach the forge
+# fallback, rather than over an empty workspace. The interpreter is found, not assumed: `bash` on
+# PATH is 5.x on the CI runner and on any Mac with a newer bash in front, and /bin/bash is 5.x on
+# Linux. SHIPYARD_TEST_BASH32 names one explicitly. With none, this section says it did not run,
+# which on the Linux CI runner is every run — there the per-slot path's 3.2 cleanliness rests on a
+# macOS run of this file. The exported fakes above reach a 3.2 child: Apple's 3.2.57 reads the
+# `BASH_FUNC_<name>%%` form bash 5 exports (checked below rather than trusted, since a floor
+# whose fakes never loaded would fail for the wrong reason).
+FAKE_ORIGIN='https://github.com/example/example.git'; export FAKE_ORIGIN
+B32=""
+for b in "${SHIPYARD_TEST_BASH32:-}" /bin/bash; do
+  [ -n "$b" ] && [ -x "$b" ] || continue
+  [ "$("$b" -c 'echo "${BASH_VERSINFO[0]}"' 2>/dev/null)" = 3 ] && { B32=$b; break; }
+done
+if [ -z "$B32" ]; then
+  printf '  skip the bash 3.2 floor: no bash 3.2 interpreter here (/bin/bash is %s; set SHIPYARD_TEST_BASH32)\n' \
+    "$(/bin/bash -c 'echo "$BASH_VERSION"' 2>/dev/null || echo absent)"
+else
+  ok "3.2 floor: the exported fakes reach a $B32 child" yes \
+     "$("$B32" -c 'type gh >/dev/null 2>&1 && echo yes || echo no')"
+  : > "$GH_CALLS"
+  out32=$(SHIPYARD_MOTION_INTERVAL="${SHIPYARD_MOTION_INTERVAL:-0.01}" SHIPYARD_STALL_SECS=100000 SHIPYARD_BACKEND=tmux SHIPYARD_SESSION=t15ex \
+            SHIPYARD_FORGE_TIMEOUT=2 SHIPYARD_AUTODOWN=0 \
+            "$B32" "$REPORT" 51 58 59 64 65 2>"$T15TMP/b32.err")
+  ok "3.2 floor: the report writes nothing to stderr" "" "$(cat "$T15TMP/b32.err")"
+  ok "3.2 floor: the forge was asked for the slots that reach it" 5 "$(grep -c . "$GH_CALLS")"
+  ok "3.2 floor: 51's number comes from the forge"      1 "$(printf '%s' "$out32" | grep -c '^| 51 | !777 |')"
+  ok "3.2 floor: ...and its state from mr_state"        1 "$(printf '%s' "$out32" | grep -c '^| 51 .*opened /')"
+  ok "3.2 floor: an ancestor-only merge is an annotation" 1 "$(printf '%s' "$out32" | grep -c '^| 58 | !581? | .*no MR yet')"
+  ok "3.2 floor: a fork is dropped for the child's own"  1 "$(printf '%s' "$out32" | grep -c '^| 59 | !592 |')"
+  ok "3.2 floor: the gone-slot teardown arm keeps its number" 1 "$(printf '%s' "$out32" | grep -c '^| 64 | !641 |')"
+  ok "3.2 floor: a pre-launch merge is an annotation"    1 "$(printf '%s' "$out32" | grep -c '^| 65 | !651? | .*no MR yet')"
+fi
 
 unset -f git tmux gh glab
 if [ "$FAILURES" -eq 0 ]; then
