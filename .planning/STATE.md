@@ -1,5 +1,28 @@
 # STATE — session memory
 
+## ✅ DONE (2026-09-28/29) — backlog reduction: 79 open issues → 13
+
+Driven through shipyard, at first two slots at a time and later about one actively working slot
+(a slot waiting on CI or check-test did not count). Stopped on the owner's instruction once the
+in-flight work landed. The fleet is empty, every worktree is torn down, and no slot branch is left.
+
+- **Process:** a retro after every 3-5 merges (retros 1-13 in `RETROS.md`). Each retro's change
+  shipped as its own ship or shipyard PR before the next batch.
+- **Decisions taken by council rooms:**
+  - `disclosure` settled #212's security-disclosure posture; it shipped in #315 and its
+    follow-ups (#321 #324 #325).
+  - `residuals` produced the residual-filing rule shipped in #335: ordinary-use test, then
+    `## Known limits`. This rule is what let the count fall instead of holding at a fixed point.
+- **Owner decisions:**
+  - Released the withheld finding impl-8 (#322).
+  - Changed the fleet cap to count actively working slots rather than all slots.
+- **Keep open by design (10):** #17 #57 #66 #112 #128 #161 #170 #187 #191 #195.
+- **Parked for the owner's go-ahead:**
+  - #293: round budget; decide after 10 PRs' `Spend:` lines.
+  - #132: pin, item 2.
+  - #156: the fate of flow_run, and autodown option A. Autodown on live idle terminals is not
+    turned on without the owner.
+
 ## ✅ SHIPPED (2026-09-27/28) — the repeating-alarm follow-ups, and the #204 security sequence
 
 One slot, strictly sequential, unattended for the second half on the owner's instruction to decide
