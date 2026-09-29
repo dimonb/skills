@@ -270,7 +270,7 @@ v_claims() {
      then "after the close, or outside the snapshot of the record — in the log, counted nowhere:",
           (.late[] | "  ⊘ \(.id) (\(.from)) \(.act): \(.text)"), ""
      else empty end),
-    # An objection or amend whose refs name no proposal (#67): printed rather than lost, and not
+    # An objection whose refs name no proposal, or an amend that owns none (#67): printed, and not
     # counted, since it blocks nothing. claims.jq carries why.
     (if (.dangling|length) > 0
      then "referring to no proposal — not counted, check the refs:",
@@ -2072,7 +2072,7 @@ v_status() {
       # is this block, not `claims`, so a claim the snapshot leaves out is shown here too, rather
       # than quietly dropping out of the OPEN lines it would have occupied before.
       (.late[]? | "  ⊘ not in the record: \(.id) (\(.from)) \(.act): \((.text | tostring)[0:90]) (council.sh claims)"),
-      # An objection or amend whose refs name no proposal (#67): an annotation, never an OPEN line.
+      # An objection whose refs name no proposal, or an amend that owns none (#67): never an OPEN line.
       (.dangling[]? | "  ⌀ refers to no proposal: \(.id) (\(.from)) \(.act): \((.text | tostring)[0:90]) (council.sh claims)")'
     printf 'alarms:%s\n' "${alarms:- —}"
     printf 'last messages:\n'

@@ -231,8 +231,9 @@ no snapshot is read over the whole log, as before. That is a room older than thi
 `decide` reports on stderr. `decide --force` on a room already recorded `unresolved` rewrites the
 record over the whole log and takes a new snapshot, so the late claims are then in the record.
 
-An objection or amend whose references name no proposal — the third route above, or simply a typo
-in a ref, which `send` does not check — is listed rather than lost: in its own section of `claims`
+An objection whose references name no proposal, or an amend that owns none (it names no proposal,
+directly or through an objection it references; `lib/claims.jq` has the rule) — the dropped-proposal
+route above, or simply a typo in a ref, which `send` does not check — is listed rather than lost: in its own section of `claims`
 and as a `⌀ refers to no proposal` line of `status`, and such an objection in the record's
 Objections section too. It blocks nothing and is never counted open.
 

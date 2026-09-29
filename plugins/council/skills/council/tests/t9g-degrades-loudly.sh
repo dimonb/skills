@@ -643,8 +643,13 @@ if mkdir -p "$R/lane/$lane" 2>/dev/null; then
   # closed room lists its own recorded objection as "not in the record" after an upgrade.
   jq -c --arg raw "$lane" --arg flat "$flat" 'map(if .from == $flat then .from = $raw else . end)' \
     "$R/board/closed-over" > "$R/co.tmp" && mv "$R/co.tmp" "$R/board/closed-over"
+  # A claim planted AFTER the close must still read late, which proves the snapshot was read at all:
+  # an unreadable one falls back to the whole log, and z-1 would then be kept whatever the match did.
+  raw_msg a 50 999 null object '["a-1"]' "after the close"
+  co=$(COUNCIL_ME=a bash "$CLI" claims 2>/dev/null)
   if jq -e --arg raw "$lane" 'any(.[]; .from == $raw)' "$R/board/closed-over" >/dev/null \
-     && ! COUNCIL_ME=a bash "$CLI" claims 2>/dev/null | grep -q '⊘ z-1'; then
+     && grep -q '^CLOSED as' <<<"$co" && grep -q '✗ OPEN z-1' <<<"$co" && grep -q '⊘ a-50' <<<"$co" \
+     && ! grep -q '⊘ z-1' <<<"$co"; then
     echo "ok   a snapshot holding the raw lane name still keeps that lane's claim in the record"
   else
     echo "FAIL a pre-flatten snapshot moved the lane's recorded claim to 'not in the record'"; fail=1
@@ -673,6 +678,12 @@ if grep -q '⌀ b-1 (b) object' <<<"$co" && grep -q '^open objections: 0' <<<"$c
    && grep -q '⌀ a-7 (a) amend →"zz": An amendment of nothing' <<<"$co" \
    && ! grep -q '⌀ .*A real amendment' <<<"$co"; then
   echo "ok   dangling objections and amends are listed by claims and status, an attached amend is not, none counted open"
+  ct=$(COUNCIL_ME=a bash "$CLI" claims --raw 2>/dev/null | jq -r '.proposals[] | select(.id == "a-1") | .current_text')
+  if [ "$ct" = "A real amendment." ]; then
+    echo "ok   ...and the amendment of nothing that reuses an attached amend's id is not a-1's current text"
+  else
+    echo "FAIL a-1's current text is '$ct': an amend owning nothing was taken as its amendment"; fail=1
+  fi
 else
   echo "FAIL dangling claims: claims:"; printf '%s\n' "$co" | sed 's/^/     /'; fail=1
 fi
@@ -682,6 +693,22 @@ if grep -q '⌀ \*\*b\*\* on `b-1`' "$R/board/decision.md" 2>/dev/null \
   echo "ok   ...and the record lists it rather than saying there were no objections"
 else
   echo "FAIL the record lost the dangling objection:"; sed -n '/## Objections/,/## Transcript/p' "$R/board/decision.md" | sed 's/^/     /'; fail=1
+fi
+# The same reuse at the OTHER reader: an amend owned by b-1 that also refs objection b-2 (raised on
+# a-1) and reuses the id of a real amendment of a-1. An amend closes an objection only on the
+# proposal it owns (#176), so b-2 stays open; a lookup by (from, id) closed it on a-1.
+fresh
+raw_msg a 1 1 null propose '[]'              "Adopt A."
+raw_msg b 1 2 null propose '[]'              "Adopt B."
+raw_msg b 2 3 null object  '["a-1"]'         "A breaks."
+raw_msg a 2 4 null amend   '["a-1"]'         "A, amended."
+raw_msg a 3 5 null amend   '["b-1","b-2"]'   "B, amended."
+jq '.id = "a-2"' "$R/lane/a/000003.json" > "$R/lane/a/000003.tmp" && mv "$R/lane/a/000003.tmp" "$R/lane/a/000003.json"
+co=$(COUNCIL_ME=a bash "$CLI" claims 2>/dev/null)
+if grep -q '✗ OPEN b-2' <<<"$co" && grep -q '^open objections: 1' <<<"$co"; then
+  echo "ok   an amend of b-1 reusing a real amendment's id does not close a-1's objection"
+else
+  echo "FAIL an id-reusing amend of another proposal closed a-1's objection:"; printf '%s\n' "$co" | sed 's/^/     /'; fail=1
 fi
 
 # --- a send whose counters cannot be written (#169) ------------------------------

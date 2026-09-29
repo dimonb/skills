@@ -133,15 +133,16 @@ def _pair_in_snapshot: . as $x
 # Counting an amend for every proposal it mentions made a single amendment rewrite two rival
 # positions at once, so a room showed two different participants proposing the same words --
 # observed live, and it misleads a human before it misleads any code.
-| ( [ $m[] | select(.act == "amend")
-      | . as $a
-      | ( [ ($a.refs // [])[] | select( IN($props[].id) ) ] | first ) as $direct
-      | { id: $a.id, from: $a.from,
-          owner: ( $direct
-                   // ( [ ($a.refs // [])[] as $r | $objs[] | select(.id == $r)
-                          | [ (.refs // [])[] | select( IN($props[].id) ) ] | first // empty ]
-                        | first ) ) } ] ) as $owners
-| [ $props[]
+#
+# Computed FROM THE AMEND MESSAGE ITSELF, at every reader, never looked up by (from, id) (#67):
+# nothing makes that pair unique, and a lookup by it gave a message reusing an attached amend's id
+# that amend's owner, so an amendment of nothing became the proposal's current text.
+| def _owner: . as $a
+    | ( [ ($a.refs // [])[] | select( IN($props[].id) ) ] | first )
+      // ( [ ($a.refs // [])[] as $r | $objs[] | select(.id == $r)
+             | [ (.refs // [])[] | select( IN($props[].id) ) ] | first // empty ]
+           | first );
+[ $props[]
     | . as $p
     | ( [ $objs[] | select(((.refs // []) | index($p.id)) != null) ] ) as $po
     | ( [ $po[]
@@ -156,16 +157,13 @@ def _pair_in_snapshot: . as $x
           | ( [ $m[] | select( ((.refs // []) | index($o.id)) != null
                     and ( (.act == "withdraw" and .from == $o.from)
                        or (.act == "concede"  and .from == $o.from)
-                       or (.act == "amend" and (. as $x | any($owners[];
-                                .id == $x.id and .from == $x.from and .owner == $p.id)))
+                       or (.act == "amend" and _owner == $p.id)
                        or (.act == "overrule") ) ) ] | (.[0] // null) ) as $c
           | { id: $o.id, from: $o.from, text: $o.text, hand: ($o.hand // false),
               closed_by: ($c.id // null), closed_act: ($c.act // null),
               closed_by_who: ($c.from // null) } ] ) as $objd
-    # The amendments that carry this proposal: those it OWNS (see $owners above).
-    | ( [ $m[] | select(.act == "amend")
-          | select(. as $x | any($owners[]; .id == $x.id and .from == $x.from and .owner == $p.id)) ]
-      ) as $amends
+    # The amendments that carry this proposal: those it OWNS (see _owner above).
+    | ( [ $m[] | select(.act == "amend" and _owner == $p.id) ] ) as $amends
     | ( [ $m[] | select(.act == "withdraw" and .from == $p.from
                         and ((.refs // []) | index($p.id)) != null) ] ) as $wd
     # `concede` means the sender yields, so from a proposal's own author it kills the
@@ -191,19 +189,14 @@ def _pair_in_snapshot: . as $x
 # A kept objection that references NO kept proposal, and a kept amend that owns none, attach to
 # nothing above, so without this list they were printed nowhere and counted nowhere (#67): a typo'd
 # ref (`send` does not check refs) and a snapshot that dropped a forward referent both made an
-# objection vanish from every reader. They are listed here and printed by `claims` and `status` as an
-# annotation, and a dangling OBJECTION by the record's Objections section too (an amend is not an
-# objection, and the record's transcript carries it). They are NOT `open` and not counted: an objection to nothing blocks no
-# proposal, and counting it would let one typo hold every room. Log order, like everything else.
+# objection vanish from every reader. They are listed here and printed by `claims` and `status` as
+# an annotation, and a dangling OBJECTION by the record's Objections section too (an amend is not
+# an objection, and the record's transcript carries it). They are NOT `open` and not counted: an
+# objection to nothing blocks no proposal, and counting it would let one typo hold every room. Log
+# order, like everything else.
 | ( [ $m[]
       | select( (.act == "object" and (((.refs // []) | any(IN($props[].id))) | not))
-             # The amend's owner is recomputed from THIS message, the $owners rule applied to it,
-             # rather than looked up by (id, from): nothing makes that pair unique, and a lookup
-             # listed an attached amend as dangling when another amend reused its id.
-             or (.act == "amend"
-                 and ([ (.refs // [])[] | select(IN($props[].id)) ] | length) == 0
-                 and ([ (.refs // [])[] as $r | $objs[] | select(.id == $r)
-                        | (.refs // [])[] | select(IN($props[].id)) ] | length) == 0) )
+             or (.act == "amend" and _owner == null) )
       | { id, from, act, text, refs: (.refs // []) } ] ) as $dangling
 | { turns: $turns, last_claim_turn: ($last_claim // -1), decide_msg: $decide_msg,
     dangling: $dangling,
