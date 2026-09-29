@@ -18,7 +18,8 @@
 # 12. every test runner on disk under plugins/ or shared/ is invoked by a Makefile recipe AND
 #     declared in $GATED_SUITES, so no whole suite runs nowhere or escapes check 10
 # 13. the check-test CI job's pull-request path filter covers every path check-test.sh guards, so
-#     the gate-of-the-gate cannot be skipped by a change that could break what it proves
+#     the gate-of-the-gate cannot be skipped by a change that could break what it proves; and its
+#     push trigger stays unfiltered, the backstop that filter rests on
 # 14. no pgrep/pkill selects by parent (-P / --parent) without a pattern: on macOS that form
 #     lists every process on the machine
 set -uo pipefail
@@ -811,33 +812,104 @@ elif [ ! -f "$CT_WF" ]; then
 else
   # The single-quoted assignment, on one line, exactly as check-test.sh declares it.
   guarded=$(sed -n "s/^GUARDED='\([^']*\)'.*/\1/p" "$CT_FILE" | head -1)
-  # The `paths:` entries: QUOTED list items in the workflow, in either quote style. Read from the
-  # whole file rather than from inside the `pull_request:` block, because this file has one
-  # `paths:` list and a YAML-block parse in sed would be the fragile half of this check. Quoted
-  # is what keeps `- name: Check out the repository` in the steps out of the result; accepting
-  # both styles is so a reformat reds nothing rather than reddening confusingly.
-  #
-  # IT REQUIRES THE ENTRIES TO BE QUOTED, and YAML does not. An unquoted `- scripts/**` matches
-  # neither expression, drops out of `$filter`, and reds the corresponding `$GUARDED` entry over
-  # a filter that does in fact cover it. That direction is SAFE — a false red, fixed by adding
-  # quotes — and it is written down here so the red is not instead 'fixed' by loosening this.
-  filter=$(sed -n -e "s/^ *- *'\([^']*\)'.*/\1/p" -e 's/^ *- *"\([^"]*\)".*/\1/p' "$CT_WF")
+  # The `on:` block, read BY TRIGGER (#215). A flat scrape of every list item in the file could
+  # not see which event a `paths:` list sat under, so a list added under `push:` both removed the
+  # unconditional backstop and lent its entries to the pull-request filter, which then read as
+  # covering paths it did not. This reads the block by indentation and prints one row per event
+  # (`event <name>`), per key under an event (`key <event> <name>`), and per QUOTED list item under
+  # such a key (`item <event> <key> <value>`), a key quoted or not. It reads block-style YAML only.
+  # For `push:` and `pull_request:`, the events this check is about, a line it cannot place reds
+  # below rather than passing: `on:` in flow style (`on: [push]`) reads as a missing `push:`; an
+  # event carrying a value on its own line (`push: {paths: [...]}`) prints `inline <event>`; a line
+  # under an event that is neither a key nor a `-` item (a flow mapping on the next line, `paths :`)
+  # prints `unread <event>`; and an event line it cannot name (`pull_request_target :`) prints
+  # `unread ?` and reds whatever it is, since the lines under it would otherwise be credited to the
+  # event before it. Where the trigger is in fact unfiltered those are false reds, fixed by writing
+  # the block style this file already uses; where it carries a filter they are the red it deserves.
+  # A `-` item that is not quoted is not read, and that is NOT always a red: under
+  # `pull_request:`'s `paths:` it drops out of the filter, which reds only for an entry `$GUARDED`
+  # derives (an unquoted `- docs/**` vanishes silently); under `push:`'s `paths:` the key has
+  # already red; under any other key it is ignored, as this check reads no other key's items.
+  ct_on=$(awk '
+    function name(s) { sub(/:.*/, "", s); gsub(/["\047]/, "", s); return s }
+    # A line in column 0 opens a top-level key; only the `on:` block is read.
+    /^[^ #]/ { inon = ($0 ~ /^["\047]?on["\047]?:[ ]*(#.*)?$/); next }
+    !inon || /^[ ]*(#.*)?$/ { next }
+    {
+      match($0, /^ */); ind = RLENGTH; line = substr($0, ind + 1)
+      if (evind == 0) evind = ind
+      if (ind <= evind) {
+        if (line ~ /^["\047]?[A-Za-z_][A-Za-z0-9_-]*["\047]?:/) {
+          ev = name(line); key = ""; print "event\t" ev
+          if (line !~ /^[^:]*:[ ]*(#.*)?$/) print "inline\t" ev
+        } else {
+          # An event it cannot name (`pull_request_target :`, `? push`): the lines under it belong
+          # to no event it knows, never to the one before it.
+          ev = "?"; key = ""; print "unread\t?"
+        }
+        next
+      }
+      if (line ~ /^["\047]?[A-Za-z_][A-Za-z0-9_-]*["\047]?:/) {
+        key = name(line); print "key\t" ev "\t" key; next
+      }
+      # Neither a key nor a list item, e.g. a flow mapping on the line below its event, or a key
+      # with a blank before its colon: a shape this reader cannot place.
+      if (line !~ /^-/) { print "unread\t" ev; next }
+      if (key == "") next
+      if (line ~ /^- *\047[^\047]*\047/) { v = line; sub(/^- *\047/, "", v); sub(/\047.*/, "", v) }
+      else if (line ~ /^- *"[^"]*"/) { v = line; sub(/^- *"/, "", v); sub(/".*/, "", v) }
+      else next
+      print "item\t" ev "\t" key "\t" v
+    }
+  ' "$CT_WF" 2>&1); ct_rc=$?
   # A REFUSAL, NOT AN ANALYSIS. `paths-ignore:` is the same YAML shape as `paths:` with the
-  # opposite meaning, and the scrape above reads entries without reference to the key they sit
-  # under — so changing that one word would leave this check reading the identical eight entries,
-  # reporting full coverage, and the job skipped on EXACTLY the paths it was proving were
-  # covered. Green gate, silent gap, in the check whose whole purpose is that the gate-of-the-gate
-  # cannot be skipped. Rather than teach a sed to parse YAML scopes, this declines to reason about
-  # a construct it cannot distinguish: if the word appears anywhere in the file, red.
+  # opposite meaning, and this check reasons only about an explicit list of paths that DO run the
+  # job. An inverted list would need the reverse reasoning, and a check that got it wrong would
+  # report full coverage while the job skipped on exactly the paths it was proving were covered.
+  # So the key anywhere in the file is red, under any trigger.
   # ANCHORED ON THE KEY, not on the word. An unanchored match would red on PROSE — including the
   # sentence just above that names the construct, and the one in the workflow's own header that
   # explains the refusal, which is the natural next edit somebody makes. That red would be
   # permanent, on a correct file, with full coverage intact.
-  if grep -qE '^[[:space:]]*paths-ignore:' "$CT_WF"; then
-    fail "$CT_WF uses paths-ignore, which check 13 cannot tell from paths — it reads entries, not the key they sit under, so an inverted filter would read as full coverage"
+  if grep -qE '^[[:space:]]*["'\'']?paths-ignore["'\'']?:' "$CT_WF"; then
+    fail "$CT_WF uses paths-ignore, which check 13 does not reason about — it checks an explicit list of the paths that run the job, and an inverted list would read as full coverage"
   fi
+  if [ "$ct_rc" -ne 0 ]; then
+    fail "could not read the triggers out of $CT_WF (check 13, awk rc=$ct_rc): $ct_on"
+  else
+    # The backstop the pull-request filter rests on: an unconditional run on every push to main.
+    # A `push:` that is gone, or that carries a path filter, turns a too-narrow pull-request filter
+    # from one late red at merge into a silent gap.
+    if ! printf '%s\n' "$ct_on" | grep -qxF "$(printf 'event\tpush')"; then
+      fail "$CT_WF has no push: trigger — check-test's unconditional run on main, the backstop for its pull-request filter, is gone"
+    fi
+    push_filter=$(printf '%s\n' "$ct_on" | awk -F'\t' '$1 == "key" && $2 == "push" && $3 ~ /^paths(-ignore)?$/ { print $3 }')
+    if [ -n "$push_filter" ]; then
+      fail "$CT_WF filters its push: trigger by $(printf '%s' "$push_filter" | tr '\n' ' ')— the run on main must be unconditional, it is the backstop for the pull-request filter"
+    fi
+    # A line at event level it could not name may be either event, so it reds whichever it is.
+    if printf '%s\n' "$ct_on" | grep -qxF "$(printf 'unread\t?')"; then
+      fail "$CT_WF has an event under on: that check 13 cannot read as a key — write it as a block, as the rest of the file does"
+    fi
+    # A value on the event's own line is flow style, which the reader above does not look inside:
+    # `push: {branches: [main], paths: [...]}` would otherwise read as an unfiltered push. And a
+    # line under the event that is neither a key nor a list item is one it could not place.
+    for ev in push pull_request; do
+      if printf '%s\n' "$ct_on" | grep -qxF "$(printf 'inline\t%s' "$ev")"; then
+        fail "$CT_WF writes its $ev: trigger in flow style, which check 13 does not read inside — write it as a block, as the rest of the file does"
+      fi
+      if printf '%s\n' "$ct_on" | grep -qxF "$(printf 'unread\t%s' "$ev")"; then
+        fail "$CT_WF has a line under its $ev: trigger that check 13 cannot read as a key or a list item — write it as a block, as the rest of the file does"
+      fi
+    done
+  fi
+  # The pull-request filter is the `paths:` list under `pull_request:` and nothing else, so an entry
+  # under another trigger cannot stand in for one missing here.
+  filter=$(printf '%s\n' "$ct_on" | awk -F'\t' '$1 == "item" && $2 == "pull_request" && $3 == "paths" { print $4 }')
   if [ -z "$guarded" ]; then
     fail "could not read \$GUARDED out of $CT_FILE — the check-test path filter cannot be checked"
+  elif [ "$ct_rc" -ne 0 ]; then
+    :   # reported above; the arms below would only repeat it as an empty filter
   elif [ -z "$filter" ]; then
     fail "could not read any path filter out of $CT_WF — a pull request would skip check-test entirely"
   else
@@ -881,11 +953,10 @@ fi
 # read one level deep (#272): a quoted span is one word unless it holds the command word. Not
 # unwrapped, so a space inside can still split off a fragment that reads as the pattern: an
 # escaped quote nested in a quoted command (`sh -c "pgrep -P \"$a $b\""`), and a quoted `)`
-# inside a `$(...)` within double quotes, which ends that skip early. A quoted command word on a
-# path holding a space (`"$d/a b/pgrep" -P`) is read as a command of its own, cut off from its
-# options, and passes. A lookup inside a process substitution that is itself another lookup's
-# pattern (`pgrep -P "$x" <(pgrep -f y)`) reds, loudly. The rule it backs is broader and lives in AGENTS.md: a helper that signals a LIST of pids refuses pid 1 and
-# bounds the list, because the list is exactly what a wrong lookup inflates.
+# inside a `$(...)` within double quotes, which ends that skip early. A lookup inside a process
+# substitution that is itself another lookup's pattern (`pgrep -P "$x" <(pgrep -f y)`) reds,
+# loudly. The rule it backs is broader and lives in AGENTS.md: a helper that signals a LIST of
+# pids refuses pid 1 and bounds the list, because the list is exactly what a wrong lookup inflates.
 pg_files=$(git $GIT_Q ls-files --cached --others --exclude-standard '*.sh'); pg_rc=$?
 if [ "$pg_rc" -ne 0 ]; then
   fail "could not list shell files for the parent-pid lookup scan (check 14) (git ls-files rc=$pg_rc)"
@@ -912,7 +983,10 @@ else
       }
       # A quoted span is one word: its blanks and separators become \001, so `-P "$a $b"` or
       # `2>"$d/a b"` leaves no fragment to read as the pattern. A span holding the command word is
-      # left as it was when it is one word (`"pgrep" -P`), and otherwise read as the command it is
+      # left as it was when it IS the command word: one word (`"pgrep" -P`), or a path or leading
+      # blanks ending in it with no separator (`"$d/a b/pgrep" -P`, `" pgrep" -P`, #272), whose
+      # blank then splits off only a fragment the command-word test skips. Otherwise it is read as
+      # the command it is
       # (`sh -c "cd d && pgrep -P $x"`), its closing quote ending that command so a word after it
       # (`sh -c "..." arg`) is not its pattern. Inside double quotes a `$(...)` is skipped whole,
       # so its own quotes (`"$(pgrep -P "$x" sleep)"`) do not close the outer span.
@@ -933,7 +1007,8 @@ else
           body = substr(s, i + 1, j - i - 1)
           if (body !~ /(^|[^A-Za-z0-9_.-])p(grep|kill)([^A-Za-z0-9_.-]|$)/) {
             gsub(/[ \t|;&()`<>]/, "\001", body); out = out q body q
-          } else if (body ~ /[ \t]/) out = out q unquote(body) " ; "
+          } else if (body ~ /[ \t]/ && !(body ~ /(^[ \t]*|[\/\\])p(grep|kill)$/ && body !~ /[|;&()`<>]/))
+            out = out q unquote(body) " ; "
           else out = out q body q
           i = j + 1
         }

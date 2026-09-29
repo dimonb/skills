@@ -8,7 +8,7 @@ name: check-test
 #
 # IT IS A SEPARATE WORKFLOW FROM ci.yml FOR TWO REASONS.
 #
-# 1. CONCURRENCY. It is ~5 minutes of genuine CPU work (84 probes, each re-running the whole
+# 1. CONCURRENCY. It is ~5 minutes of genuine CPU work (every probe re-running the whole
 #    static gate, measured at 142% CPU) and it does not compress: the probes mutate the shared
 #    working tree, so parallelising them needs a copy of the tree per worker. Run in the same job
 #    as `make check` + `make test` it is serialised behind them; run as its own workflow it
@@ -19,6 +19,8 @@ name: check-test
 #
 # ON A PUSH TO `main` IT RUNS UNCONDITIONALLY, with no filter at all. That is the backstop: a
 # filter that turns out to be too narrow costs one late red at merge rather than a silent gap.
+# `scripts/check.sh` check 13 reads this block by trigger and reds a `push:` that is missing or
+# that carries a path filter, so adding one to spare docs pushes the run is a red, not a gap.
 #
 # THE FILTER IS DERIVED, NOT GUESSED. It is `$GUARDED` from scripts/check-test.sh with each
 # directory spelt `<dir>/**`, PLUS `docs/**`. `scripts/check.sh` check 13 asserts the `$GUARDED`
