@@ -31,10 +31,10 @@ packaged skills without a second copy in git. `make check` enforces this.
 rule above over **committed** content: a tracked entry there must be a symlink into `plugins/`,
 and a packaged skill's own two link paths are asserted staged or not, because those paths are the
 repo's. Anything else you keep there untracked — a scratch directory, a local skill of your own,
-whatever another tool left behind — is your business: **checks 1, 2, 5 and 14 ignore it**, so its
-frontmatter, its name and its scripts are not the gate's concern, and it draws a note rather than
-a failure. The two repo-wide scans still read it, deliberately: a leak or a non-Latin script reds
-the gate wherever it sits, including in a file you never meant to commit.
+whatever another tool left behind — is your business: **every check but the two repo-wide scans
+ignores it**, so its frontmatter, its name and its scripts are not the gate's concern, and it draws
+a note rather than a failure. The two repo-wide scans still read it, deliberately: a leak or a
+non-Latin script reds the gate wherever it sits, including in a file you never meant to commit.
 
 That carve-out costs no coverage of anything this repo ships, because everything it ships lives
 under `plugins/`, which is checked in full, untracked files included. Failing on incidental local
