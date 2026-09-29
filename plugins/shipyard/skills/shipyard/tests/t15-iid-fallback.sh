@@ -43,8 +43,8 @@
 # The rig is t13-wait.sh's: exported shell functions shadow `git`, `tmux` and `gh`, which works
 # where a fake binary on PATH does not because shipyard-lib.sh prepends the system PATH over
 # anything a test puts in front. Cost: the report sleeps once per slot for its motion diff, which
-# in production is three seconds and was once almost all of this file's measured time. The run below sets SHIPYARD_MOTION_INTERVAL (#203) and says there why that changes no
-# answer here. The suite is still in `make test` rather than the per-commit gate.
+# in production is three seconds and was once almost all of this file's measured time. The run
+# below sets SHIPYARD_MOTION_INTERVAL (#203) and says there why that changes no answer here. The suite is still in `make test` rather than the per-commit gate.
 #
 # WHAT A GREEN RUN DOES NOT PROVE, stated so it is not read as more than it is. The `gh` fake
 # honours `--jq` by piping its canned JSON through real jq, so the filter in shipyard-report.sh is
