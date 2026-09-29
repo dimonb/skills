@@ -1769,8 +1769,8 @@ if [ "$cfg_prev" = unset ]; then unset GIT_CONFIG_COUNT; else export GIT_CONFIG_
 rm -rf plugins/_probe-scratch-empty plugins/_probe-scratch "$REFS/_probe-scratch" "$REFS/_probe-ignored.md"
 
 # 39 — check 16, the macOS floor job against the tests that need it (#337). 39a is the issue's own
-# kill test: a floor test the job stops running. 39b-39d pin what the derivation counts and what it
-# does not; 39e-39g are the fail-closed arms.
+# kill test: a floor test the job stops running. 39b-39d, 39h and 39i pin what the derivation counts
+# and what it does not; 39e-39g are the fail-closed arms.
 FLWF=.github/workflows/ci.yml
 FLT=plugins/shipyard/skills/shipyard/tests/t1-totals.sh
 perl -pi -e 's{^(\s*run: )bash (plugins/shipyard/skills/shipyard/tests/t19-occupant\.sh)\s*$}{$1true $2\n}' "$FLWF"
@@ -1788,6 +1788,18 @@ git checkout -- "$FLT"
 # 39d — a re-exec candidate list, a comment and a message name the path without running it there.
 printf 'for c in /opt/homebrew/bin/bash /usr/bin/bash; do :; done\n# runs under /bin/bash\necho "stock /bin/bash is 3.2"\n' >> "$FLT"
 expect_pass "a re-exec candidate, a comment and an echo naming /bin/bash stay green"
+git checkout -- "$FLT"
+# 39h — a floor line followed by more than a pipe buffer of text is still derived. The derivation's
+# last stage used to be `grep -q`, whose early exit SIGPIPEs the stage feeding it under pipefail, so
+# a file like t7 (its match 30 KB from the end) dropped out about three runs in ten. 80 KB of live
+# lines after the match makes that the common case, so a return to `-q` reds here, not at random.
+perl -0pi -e 's{\A(#![^\n]*\n)}{$1/bin/bash -c true\n}' "$FLT"
+perl -e 'print ": padding line so the floor match sits far from the end of the file\n" x 1200' >> "$FLT"
+expect_fail "a floor line far from the end of a test is still derived" "t1-totals.sh runs code under /bin/bash"
+git checkout -- "$FLT"
+# 39i — the `${X:-/bin/bash}` default is a floor too: it is how t15 picks its interpreter.
+printf 'b=${SOME_BASH:-/bin/bash}\n' >> "$FLT"
+expect_fail "a \${X:-/bin/bash} default in a test the job does not run" "t1-totals.sh runs code under /bin/bash"
 git checkout -- "$FLT"
 # 39e — a job step naming a file that is not there.
 perl -pi -e 's{tests/t19-occupant\.sh}{tests/t19-gone.sh}' "$FLWF"

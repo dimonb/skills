@@ -26,8 +26,9 @@
 #     lists every process on the machine
 # 15. every section cross-reference (a section sign and a number) in a markdown file names a
 #     numbered heading that exists, in that file or in ship's core SKILL.md
-# 16. every gated test that runs code under /bin/bash is a step of the macOS bash32-floor CI job,
-#     since on Linux /bin/bash is 5.x and such a test measures nothing there
+# 16. every gated test naming /bin/bash on a line it runs is a step of the macOS bash32-floor CI
+#     job, since on Linux /bin/bash is 5.x and such a test measures nothing there (a floor reached
+#     through a variable or a helper it cannot see; its section says so)
 set -uo pipefail
 cd "$(dirname "$0")/.."
 ROOT_P=$(pwd -P)          # physical repo root; see the symlink containment check below
@@ -1395,7 +1396,7 @@ PY
   fi
 fi
 
-# ------------------ 16. every test that runs something under /bin/bash is a step of the macOS job
+# ------------------ 16. every test naming /bin/bash on a line it runs is a step of the macOS job
 # On Linux /bin/bash is 5.x, so a test that executes code under /bin/bash to hold the bash 3.2 floor
 # passes there vacuously; only the macOS job (`bash32-floor` in the CI workflow) measures it, and
 # only for the tests it names. That list was kept by hand (#337): a new floor test was run nowhere
@@ -1403,9 +1404,12 @@ fi
 # here from the tests, and every derived test must be named by a `run: bash <path>` step of the job.
 #
 # "Executes /bin/bash" is read off each test in $GATED_SUITES, line by line: a line that is not a
-# comment and not an echo or printf, naming `/bin/bash` as a whole path (so `/opt/homebrew/bin/bash`
-# in a re-exec candidate list is not it). A line that names it without being a floor carries a
-# `floor-exempt: <reason>` comment on that same line, where a reader of the test sees it.
+# comment and not an echo or printf, naming `/bin/bash` as a whole path or as a `${X:-/bin/bash}`
+# default (so `/opt/homebrew/bin/bash` in a re-exec candidate list is not it). A line that names it
+# without being a floor carries a `floor-exempt: <reason>` comment on that same line, where a reader
+# of the test sees it. The last grep is NOT `-q`: under pipefail its early exit SIGPIPEs the grep
+# feeding it whenever more than a pipe buffer follows the match, and the file then drops out of the
+# list at random (measured on t7, about three runs in ten).
 #
 # What it cannot see: a floor reached some other way — an interpreter held in a variable set
 # elsewhere, a helper that the test sources, a script that runs under /bin/bash because its caller
@@ -1431,7 +1435,7 @@ else
       [ -f "$f" ] || continue
       grep -v 'floor-exempt:' "$f" \
         | grep -Ev '^[[:space:]]*(#|echo([[:space:]]|$)|printf([[:space:]]|$))' \
-        | grep -Eq '(^|[^A-Za-z0-9_./-])/bin/bash([^A-Za-z0-9_./-]|$)' \
+        | grep -E '(^|:-|[^A-Za-z0-9_./-])/bin/bash([^A-Za-z0-9_./-]|$)' >/dev/null \
         && fl_found="$fl_found$f"$'\n'
     done <<< "$fl_tests"
   done
