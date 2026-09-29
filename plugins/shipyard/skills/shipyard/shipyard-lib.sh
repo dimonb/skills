@@ -63,6 +63,74 @@ shipyard_slot() {
 
 shipyard_now() { date -u +%Y-%m-%dT%H:%M:%SZ; }
 
+# --- the base branch, asked of git rather than assumed ---------------------------
+#
+# TWO CONSUMERS, one answer (#143): shipyard-down-gate.sh measures a slot's content against it,
+# and shipyard-report.sh refuses to ask the forge about a slot sitting on it. Each used to resolve
+# it on its own, and the report's single `symbolic-ref` returned empty on a clone with no
+# origin/HEAD, which its guard read as "no base branch to exclude".
+#
+# An option-shaped ref name is legal git (`git check-ref-format 'refs/heads/--depth=1'` passes)
+# and a REMOTE controls the name its HEAD points at, which a clone copies into
+# refs/remotes/origin/HEAD. Two things go wrong if one reaches us, and both were measured:
+# handed to `git fetch` in refspec position it is parsed as an OPTION (`--upload-pack=<cmd>`
+# executes, via a shell, for local-path and file:// remotes), and handed to `git diff` it makes
+# `git diff --quiet <option> HEAD` degenerate into a HEAD-vs-worktree comparison, which is rc 0
+# on a worktree already proven clean — a false `safe` (both in shipyard-down-gate.sh). Rejecting
+# the SHAPE here, in the resolver both consumers read the ref from, closes both at once.
+_shipyard_ref_ok() {
+  case "$1" in
+    -*|*/-*|'') return 1 ;;
+    *) return 0 ;;
+  esac
+}
+
+# The base-branch ref a slot is measured against, discovered rather than assumed — this skill
+# ships to repositories whose base branch is not `main` and whose forge remote is not `origin`.
+# In order:
+#
+#   1. origin/HEAD's target, the canonical answer where a clone recorded one.
+#   2. The branch's own @{upstream}, but ONLY when it is not this branch's own remote-tracking
+#      ref. That guard is load-bearing, not defensive: a branch pushed with `-u` has
+#      @{upstream} == <remote>/<its own name>, whose content is identical to the branch BY
+#      CONSTRUCTION, so the down gate measuring containment against it would call every
+#      pushed-but-unmerged branch `safe` — its old guard's bug with a new mechanism. What makes the upstream useful
+#      here is the OTHER case: `git switch -c <branch> origin/<base>` leaves it naming the BASE
+#      branch, which is exactly the ref we want and the only one a single-branch clone has.
+#
+#      THE GUARD ASKS GIT, NOT THE STRING. A first cut compared `${up#*/}` against the branch
+#      name, and two ordinary states walked straight through it, each yielding a wrong `safe`:
+#      a push under a different name (`push -u origin feat/w:feat/w-remote`) and a remote whose
+#      own name contains a slash (`git remote add team/fork` is legal). Both were measured.
+#      `branch.<name>.merge` is git's own record of which remote branch this branch tracks, so
+#      it needs no parsing; the OID test then catches the renamed-push case, where the config
+#      name differs but the ref is still this branch's own copy.
+#   3. origin/main, then origin/master — a last resort, not a definition.
+#
+# Prints the ref name (e.g. `origin/main`); rc 1 when none resolves, which the caller must treat
+# as "cannot ask the question" rather than as a verdict.
+shipyard_default_ref() {
+  local wt="$1" r b up tracked
+  r=$(git -C "$wt" symbolic-ref --quiet --short refs/remotes/origin/HEAD 2>/dev/null)
+  if _shipyard_ref_ok "$r" && git -C "$wt" rev-parse --verify --quiet "$r^{commit}" >/dev/null 2>&1; then
+    printf '%s' "$r"; return 0
+  fi
+  b=$(git -C "$wt" symbolic-ref --quiet --short HEAD 2>/dev/null)
+  up=$(git -C "$wt" rev-parse --abbrev-ref '@{upstream}' 2>/dev/null)
+  tracked=$(git -C "$wt" config --get "branch.$b.merge" 2>/dev/null)
+  if [ -n "$b" ] && [ "${tracked#refs/heads/}" != "$b" ] && _shipyard_ref_ok "$up" \
+     && git -C "$wt" rev-parse --verify --quiet "$up^{commit}" >/dev/null 2>&1 \
+     && [ "$(git -C "$wt" rev-parse "$up" 2>/dev/null)" != "$(git -C "$wt" rev-parse HEAD 2>/dev/null)" ]; then
+    printf '%s' "$up"; return 0
+  fi
+  for r in origin/main origin/master; do
+    if git -C "$wt" rev-parse --verify --quiet "$r^{commit}" >/dev/null 2>&1; then
+      printf '%s' "$r"; return 0
+    fi
+  done
+  return 1
+}
+
 # --- WHY a motionless child is not moving ---------------------------------------
 # shipyard_wait_state <screen> <phase> <stage>
 #   -> "<kind>\t<class>\t<label>\t<action>" and rc 0, or nothing and rc 1.

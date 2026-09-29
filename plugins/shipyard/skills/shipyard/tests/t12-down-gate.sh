@@ -84,6 +84,10 @@ set -uo pipefail
 export LC_ALL=C
 
 SKILL_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+# The lib first, in shipyard-down.sh's order: the base-branch resolver the gate measures against,
+# shipyard_default_ref, lives there since the status report became its second consumer (#143).
+# shellcheck source=../shipyard-lib.sh
+. "$SKILL_DIR/shipyard-lib.sh"
 # shellcheck source=../shipyard-down-gate.sh
 . "$SKILL_DIR/shipyard-down-gate.sh"
 
@@ -194,7 +198,7 @@ ok "B squash-merged, remote branch kept -> safe" "safe" "$(verdict "$TMP/wtB")"
 # `-u` made @{upstream} the branch's OWN remote ref. If that were accepted as the base ref the
 # comparison would be the branch against itself, so this must still resolve to origin/main.
 ok "B the branch's own remote ref is not the base" "origin/main" \
-   "$(shipyard_down_default_ref "$TMP/wtB")"
+   "$(shipyard_default_ref "$TMP/wtB")"
 
 # ---------------------------------------------------------------- C: the silent pass
 C=$(repo c)
@@ -319,7 +323,7 @@ git -C "$TMP/w-other" commit -qm "squashed (#7)"
 git -C "$TMP/w-other" push -q origin main
 _SHIPYARD_DOWN_FETCHED=''
 ok "W a slashed non-origin remote resolves its base" "team/fork/main" \
-   "$(shipyard_down_default_ref "$TMP/wtW")"
+   "$(shipyard_default_ref "$TMP/wtW")"
 ok "W the lazy fetch reaches a non-origin remote" "safe" "$(verdict "$TMP/wtW")"
 
 # ------------------------------------------- N: the fetch is latched per INVOCATION, not per slot
@@ -401,16 +405,16 @@ C=$(repo r)
 git -C "$C" push -q origin main:trunk
 git -C "$C" fetch -q origin
 git -C "$C" remote set-head origin trunk
-ok "R origin/HEAD wins over the fallback" "origin/trunk" "$(shipyard_down_default_ref "$C")"
+ok "R origin/HEAD wins over the fallback" "origin/trunk" "$(shipyard_default_ref "$C")"
 git -C "$C" remote set-head origin --delete
-ok "R falls back to origin/main"  "origin/main" "$(shipyard_down_default_ref "$C")"
+ok "R falls back to origin/main"  "origin/main" "$(shipyard_default_ref "$C")"
 
 # An option-shaped ref name is legal git and the REMOTE chooses it. It must never be returned:
 # in `git fetch` refspec position it is parsed as an option, and `git diff --quiet <option> HEAD`
 # answers rc 0 on a clean worktree — a false `safe`.
 git -C "$C" update-ref 'refs/remotes/origin/--upload-pack=touch' refs/remotes/origin/main
 git -C "$C" symbolic-ref refs/remotes/origin/HEAD 'refs/remotes/origin/--upload-pack=touch'
-ok "R an option-shaped origin/HEAD is rejected" "origin/main" "$(shipyard_down_default_ref "$C")"
+ok "R an option-shaped origin/HEAD is rejected" "origin/main" "$(shipyard_default_ref "$C")"
 git -C "$C" symbolic-ref -d refs/remotes/origin/HEAD 2>/dev/null
 git -C "$C" update-ref -d 'refs/remotes/origin/--upload-pack=touch' 2>/dev/null
 
@@ -430,7 +434,7 @@ git -C "$TMP/dv" worktree add -q "$TMP/wtDV" feat/dv
 git -C "$TMP/wtDV" fetch -q origin
 git -C "$TMP/wtDV" remote set-head origin --delete 2>/dev/null
 ok "R no origin/HEAD -> the branch's upstream names the base" "origin/develop" \
-   "$(shipyard_down_default_ref "$TMP/wtDV")"
+   "$(shipyard_default_ref "$TMP/wtDV")"
 ok "R a develop-based repo tears down normally" "safe" "$(verdict "$TMP/wtDV")"
 
 # THE DANGEROUS UPSTREAM. With no origin/HEAD, a branch pushed with `-u` has @{upstream} naming
@@ -446,7 +450,7 @@ git -C "$C" switch -q main
 git -C "$C" worktree add -q "$TMP/wtU" feat/u
 git -C "$TMP/wtU" remote set-head origin --delete 2>/dev/null
 ok "R the branch's own remote ref is never the base" "origin/main" \
-   "$(shipyard_down_default_ref "$TMP/wtU")"
+   "$(shipyard_default_ref "$TMP/wtU")"
 ok "R pushed but unmerged -> not safe" "$UNMERGED" "$(verdict "$TMP/wtU")"
 
 # The same trap under a DIFFERENT name. A first cut compared the upstream's tail against the
@@ -462,7 +466,7 @@ git -C "$C" switch -q main
 git -C "$C" worktree add -q "$TMP/wtV" feat/v
 git -C "$TMP/wtV" remote set-head origin --delete 2>/dev/null
 ok "R a push under another name is still its own copy" "origin/main" \
-   "$(shipyard_down_default_ref "$TMP/wtV")"
+   "$(shipyard_default_ref "$TMP/wtV")"
 ok "R renamed push, unmerged -> not safe" "$UNMERGED" "$(verdict "$TMP/wtV")"
 
 # The shape the OID test alone cannot see: pushed with `-u`, then amended. Same tree, new OID,
@@ -477,7 +481,7 @@ git -C "$C" switch -q main
 git -C "$C" worktree add -q "$TMP/wtZ" feat/z
 git -C "$TMP/wtZ" remote set-head origin --delete 2>/dev/null
 ok "R amended after -u: same tree, new OID, still its own copy" "origin/main" \
-   "$(shipyard_down_default_ref "$TMP/wtZ")"
+   "$(shipyard_default_ref "$TMP/wtZ")"
 ok "R amended after -u, unmerged -> not safe" "$UNMERGED" "$(verdict "$TMP/wtZ")"
 
 # A repo with no origin refs at all cannot be asked the question — and must not be told yes.
@@ -485,7 +489,7 @@ git init -q -b main "$TMP/lonely"
 printf 'x\n' > "$TMP/lonely/x.txt"
 git -C "$TMP/lonely" add -A; git -C "$TMP/lonely" commit -qm x
 ok "R no origin refs -> resolution fails" "1" \
-   "$( { shipyard_down_default_ref "$TMP/lonely" >/dev/null; echo $?; } )"
+   "$( { shipyard_default_ref "$TMP/lonely" >/dev/null; echo $?; } )"
 ok "R no origin refs -> no-default"       "no-default" "$(verdict "$TMP/lonely")"
 
 done_ t12-down-gate

@@ -74,66 +74,10 @@
 SHIPYARD_DOWN_KIND=''
 SHIPYARD_DOWN_REF=''
 
-# An option-shaped ref name is legal git (`git check-ref-format 'refs/heads/--depth=1'` passes)
-# and a REMOTE controls the name its HEAD points at, which a clone copies into
-# refs/remotes/origin/HEAD. Two things go wrong if one reaches us, and both were measured:
-# handed to `git fetch` in refspec position it is parsed as an OPTION (`--upload-pack=<cmd>`
-# executes, via a shell, for local-path and file:// remotes), and handed to `git diff` it makes
-# `git diff --quiet <option> HEAD` degenerate into a HEAD-vs-worktree comparison, which is rc 0
-# on a worktree already proven clean — a false `safe`. Rejecting the SHAPE here, at the one
-# place a ref enters this module, closes both at once.
-_shipyard_down_ref_ok() {
-  case "$1" in
-    -*|*/-*|'') return 1 ;;
-    *) return 0 ;;
-  esac
-}
-
-# The base-branch ref a slot is measured against, discovered rather than assumed — this skill
-# ships to repositories whose base branch is not `main` and whose forge remote is not `origin`.
-# In order:
-#
-#   1. origin/HEAD's target, the canonical answer where a clone recorded one.
-#   2. The branch's own @{upstream}, but ONLY when it is not this branch's own remote-tracking
-#      ref. That guard is load-bearing, not defensive: a branch pushed with `-u` has
-#      @{upstream} == <remote>/<its own name>, whose content is identical to the branch BY
-#      CONSTRUCTION, so measuring containment against it would call every pushed-but-unmerged
-#      branch `safe` — the old guard's bug with a new mechanism. What makes the upstream useful
-#      here is the OTHER case: `git switch -c <branch> origin/<base>` leaves it naming the BASE
-#      branch, which is exactly the ref we want and the only one a single-branch clone has.
-#
-#      THE GUARD ASKS GIT, NOT THE STRING. A first cut compared `${up#*/}` against the branch
-#      name, and two ordinary states walked straight through it, each yielding a wrong `safe`:
-#      a push under a different name (`push -u origin feat/w:feat/w-remote`) and a remote whose
-#      own name contains a slash (`git remote add team/fork` is legal). Both were measured.
-#      `branch.<name>.merge` is git's own record of which remote branch this branch tracks, so
-#      it needs no parsing; the OID test then catches the renamed-push case, where the config
-#      name differs but the ref is still this branch's own copy.
-#   3. origin/main, then origin/master — a last resort, not a definition.
-#
-# Prints the ref name (e.g. `origin/main`); rc 1 when none resolves, which the caller must treat
-# as "cannot ask the question" rather than as a verdict.
-shipyard_down_default_ref() {
-  local wt="$1" r b up tracked
-  r=$(git -C "$wt" symbolic-ref --quiet --short refs/remotes/origin/HEAD 2>/dev/null)
-  if _shipyard_down_ref_ok "$r" && git -C "$wt" rev-parse --verify --quiet "$r^{commit}" >/dev/null 2>&1; then
-    printf '%s' "$r"; return 0
-  fi
-  b=$(git -C "$wt" symbolic-ref --quiet --short HEAD 2>/dev/null)
-  up=$(git -C "$wt" rev-parse --abbrev-ref '@{upstream}' 2>/dev/null)
-  tracked=$(git -C "$wt" config --get "branch.$b.merge" 2>/dev/null)
-  if [ -n "$b" ] && [ "${tracked#refs/heads/}" != "$b" ] && _shipyard_down_ref_ok "$up" \
-     && git -C "$wt" rev-parse --verify --quiet "$up^{commit}" >/dev/null 2>&1 \
-     && [ "$(git -C "$wt" rev-parse "$up" 2>/dev/null)" != "$(git -C "$wt" rev-parse HEAD 2>/dev/null)" ]; then
-    printf '%s' "$up"; return 0
-  fi
-  for r in origin/main origin/master; do
-    if git -C "$wt" rev-parse --verify --quiet "$r^{commit}" >/dev/null 2>&1; then
-      printf '%s' "$r"; return 0
-    fi
-  done
-  return 1
-}
+# The base-branch ref every proof below measures against comes from shipyard_default_ref(), in
+# shipyard-lib.sh (sourced by shipyard-down.sh before this file). It lived here until the status
+# report grew the same question (#143); its tiers, and the option-shape screen that keeps a
+# remote-controlled ref name from reaching `git fetch` or `git diff` below, are documented there.
 
 # Can this git run proof 2 at all? `merge-tree --write-tree` arrived in git 2.38, and an older
 # one fails the whole option rather than the merge. Probed against the worktree so the answer
@@ -171,7 +115,7 @@ shipyard_down_contained() {
 # for three slots, against a promise of one.
 #
 # The refspec is fully qualified and follows `--` so that no part of it can be read as an
-# option (see _shipyard_down_ref_ok), and GIT_TERMINAL_PROMPT=0 keeps a teardown from blocking
+# option (see _shipyard_ref_ok in shipyard-lib.sh), and GIT_TERMINAL_PROMPT=0 keeps a teardown from blocking
 # forever on a credential prompt nobody is watching.
 _SHIPYARD_DOWN_FETCHED=''
 shipyard_down_refresh() {
@@ -221,7 +165,7 @@ shipyard_down_verdict() {
   [ -e "$wt/.git" ] || return 1
   st=$(git -C "$wt" status --porcelain 2>/dev/null) || return 1
   if [ -n "$st" ]; then SHIPYARD_DOWN_KIND=dirty; return 1; fi
-  ref=$(shipyard_down_default_ref "$wt") || { SHIPYARD_DOWN_KIND=no-default; return 1; }
+  ref=$(shipyard_default_ref "$wt") || { SHIPYARD_DOWN_KIND=no-default; return 1; }
   SHIPYARD_DOWN_REF="$ref"
   shipyard_down_contained "$wt" "$ref"
   case $? in
