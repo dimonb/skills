@@ -146,9 +146,9 @@ scripts/check-test.sh   proof the gate fires     (make check-test)
 the two project skill directories hold symlinks, so working in this repo exercises exactly
 what an install ships. `make check` fails if a second copy of a `SKILL.md` appears anywhere
 outside `plugins/`, tracked or not — with those two directories the one exception, where only a
-**committed** entry counts. An untracked entry you keep there is local state, and checks 1, 2, 5, 14
-and 15 ignore it: it is not in the repository and cannot reach a clone. (The leak and English scans
-still read it, wherever it sits.) A packaged skill's own two link paths are the other exception,
+**committed** entry counts. An untracked entry you keep there is local state, and every check
+but the leak and English scans ignores it: it is not in the repository and cannot reach a
+clone. (Those two scans still read it, wherever it sits.) A packaged skill's own two link paths are the other exception,
 and are asserted whether or not they have been staged.
 
 A plugin directory carries **both** agents' manifests. Neither agent objects to the other's,

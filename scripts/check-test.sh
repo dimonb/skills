@@ -229,16 +229,12 @@ pass=0; nocatch=0
 # are pre-existing and tracked in the follow-up issue rather than pinned here; do not read the
 # absence of a $2 as evidence that a probe does not need one.
 #
-# Separately, THREE arms have no probe at all, and this is the authoritative list of them:
+# Separately, TWO arms have no probe at all, and this is the authoritative list of them:
 #   * check 9's  `could not scan council test for a fixed temp path`
 #   * check 12's `could not scan the Makefile for a test runner invocation`
-#   * check 15's `found no section reference in any markdown file`
-# The third's only trigger is a tree whose markdown carries no section reference anywhere, and at
-# least one reference sits under .planning/, outside $GUARDED, which this suite does not restore
-# and so may not strip. The first two are
-# per-item "this matcher errored" arms whose only trigger is an unreadable file, which is
+# Both are per-item "this matcher errored" arms whose only trigger is an unreadable file, which is
 # a no-op when the gate runs as root, so they cannot be probed portably. Their siblings that error
-# on a LISTING rather than a per-item read are probed (for example 14a, 21, 32f, 34f), because a
+# on a LISTING rather than a per-item read are probed (for example 14a, 21, 32f, 34f, 37g), because a
 # listing's exit status can be forced directly. Recorded here because a green run would otherwise be read as
 # covering them.
 expect_fail() {
@@ -547,10 +543,11 @@ printf -- '---\nname: stray\ndescription: A stray skill outside plugins/.\n---\n
 expect_fail "SKILL.md outside plugins/"
 rm -rf docs/stray
 
-# 10 — a plugin with manifests but no skills tree, then one with an empty skills tree
+# 10 — a plugin with manifests but no skills tree, then one with an empty skills tree. Both
+# manifests carry the same version, so check 3d cannot be the arm that reds.
 mkdir -p plugins/hollow/.claude-plugin plugins/hollow/.codex-plugin
-printf '{"name":"hollow","description":"d"}\n' > plugins/hollow/.claude-plugin/plugin.json
-printf '{"name":"hollow","description":"d","skills":"./skills/"}\n' > plugins/hollow/.codex-plugin/plugin.json
+printf '{"name":"hollow","version":"0.1.0","description":"d"}\n' > plugins/hollow/.claude-plugin/plugin.json
+printf '{"name":"hollow","version":"0.1.0","description":"d","skills":"./skills/"}\n' > plugins/hollow/.codex-plugin/plugin.json
 expect_fail "plugin with no skills/ directory"
 mkdir -p plugins/hollow/skills
 expect_fail "plugin with an empty skills/ directory"
@@ -1476,8 +1473,24 @@ expect_fail "check 15 fails LOUDLY when the core is missing" "cannot find the co
 git checkout -- "$CORE"
 GIT_LITERAL_PATHSPECS=1 expect_fail "check 15 fails LOUDLY when it lists no markdown file" \
   "check 15) found no markdown file to read"
+# 37g — the listing errors, in 34f's shape: the output is kept, so only its status can red.
+cp scripts/check.sh "$SCRATCH/check15.bak"
+perl -pi -e "s{^(xr_files=\\\$\\(git .*'\\*\\.md')\\)}{\$1; exit 128)}" scripts/check.sh
+expect_fail "check 15 fails LOUDLY when its markdown listing errors (not open)" \
+  "could not list markdown files for the section cross-reference check"
+cp "$SCRATCH/check15.bak" scripts/check.sh
+# 37h — the scan finds no reference at all, in 34g's shape: the listing narrowed to one file that
+# carries none. The core is read for its headings only, so it cannot supply one.
+mkdir -p docs
+printf 'no section reference here\n' > docs/_probe.md
+perl -pi -e "s{^(xr_files=\\\$\\(git .*)'\\*\\.md'\\)}{\$1'docs/_probe.md')}" scripts/check.sh
+expect_fail "check 15 fails LOUDLY when it finds no section reference" \
+  "found no section reference in any markdown file"
+cp "$SCRATCH/check15.bak" scripts/check.sh
+rm -f docs/_probe.md
+rmdir docs 2>/dev/null || true
 
-# 36 —this file's own entry arms (#136): the run marker and the leftover-fixture refusal. They are
+# 36 — this file's own entry arms (#136): the run marker and the leftover-fixture refusal. They are
 # not gate assertions, so they are proven by running this script a second time, NESTED, and reading
 # how it refuses. Every nested run below must refuse before it arms a trap or mutates anything,
 # because a nested run that got past its entry guards would start a second full run over this
