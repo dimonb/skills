@@ -1598,7 +1598,8 @@ its orders said "no new issues".
 **First, check that no other open PR/MR is about to close the candidate.** Use the reference
 file's linked-PRs/MRs query (§3.2). A closer that read the issue's comments before yours arrived
 merges your scenario closed, unread. If one exists, choose another home. If no other issue fits,
-comment anyway, then leave one line on the closing PR/MR naming the new scenario, and say in the
+comment anyway, then leave one line on the closing PR/MR naming the new scenario — with no §5.9
+marker, so the closing change's own run reads it as input (§8) — and say in the
 stage record, and in a notice where a supervisor launched the run, that the closing change must
 carry it. The closer may already have handed off, and then nothing re-reads the issue for it.
 
@@ -2275,7 +2276,8 @@ anything. Authorship alone does not make one. **Two limits, named rather than so
 from `$ME` whose first line a person set to one of ship's markers reads as ship's: the marker
 renders as nothing, so nobody types one by accident, but nothing distinguishes a deliberate one.
 And a comment an earlier version of this skill posted without a marker now reads as a person's;
-that fails toward holding, and a human clears it.
+that fails toward holding. Resolving it is not possible for a plain comment, so a human clears it
+by deleting the comment or by editing its first line to the marker its kind takes.
 
 ---
 

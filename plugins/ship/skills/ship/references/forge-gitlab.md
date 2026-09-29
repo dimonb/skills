@@ -239,11 +239,12 @@ glab api --paginate "projects/$PROJECT/merge_requests/IID/discussions?per_page=1
       .[] as $d | $d.notes[]
       | select(.system != true)
       | select((.author.username == $me
-                and ((.body // "") | split("\n")[0] | test("^<!-- ship-review:.* -->\\s*$")))
+                and ((.body // "") | (split("\n")[0] // "")
+                     | test("^<!-- ship-review:.* -->\\s*$")))
                | not)
       | [.created_at, $d.id, .id, .author.username,
          (.resolvable|tostring), (.resolved|tostring),
-         (.body|gsub("\n";" ")|.[0:700])] | @tsv'
+         ((.body // "")|gsub("\n";" ")|.[0:700])] | @tsv'
 
 # reply INTO someone else's discussion (never resolve it)
 glab api --method POST \
