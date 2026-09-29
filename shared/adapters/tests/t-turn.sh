@@ -29,16 +29,12 @@
 # control socket and no repo: it sources the module and calls it.
 #
 # WHAT IS NOT COVERED, so a green run is never read as more than it is:
-#   * NOTHING ANYWHERE ASSERTS WHAT THE CALLERS DO WITH THESE FUNCTIONS. Specifically unguarded:
-#     the `unconfirmed` -> exit 6 mapping, the knob validation, the empty-verdict arm, the reply
-#     path's closing message, and the three-state mid-turn guard. (The loop and census those
-#     callers share are covered, in section 4a.)
-#     Stated as the property rather than as a list of script names on purpose — the list version
-#     said no test referenced those scripts at all, and went stale twice without anything saying
-#     so. The rig it called deferred now exists: the shipyard suite drives whole caller scripts
-#     over exported shell functions (a faked backend CLI cannot stay authoritative, because those
-#     scripts source a lib that prepends the system PATH). It is used for paths that exit before
-#     any turn-state read, so none of the properties above is reached by it.
+#   * WHAT THE CALLERS DO WITH THESE FUNCTIONS is not asserted here. It is asserted where the
+#     callers live, in each calling skill's own suite — for shipyard, the one that drives its caller
+#     scripts end to end over exported shell functions — and a green run of THIS file says nothing
+#     about it. Stated as where to look rather than as a list of callers or of which property is
+#     covered by which file: earlier versions of this bullet listed them, and each went stale
+#     without anything saying so. Grep the tree for the function names to find the callers.
 #   * Whether either kind ever renders its queued hint somewhere OTHER than the place captured
 #     here. Both observed placements are covered by a fixture and an assertion; a third placement,
 #     if one exists, would read as not-queued and fall to the alarm path.

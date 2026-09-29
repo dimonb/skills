@@ -867,11 +867,14 @@ run_report() { # sets report_rc; writes report.out / report.err
 }
 
 # A workspace that really is empty: the report may conclude the fleet is drained, and exit 0 is
-# what stops the Step 2 loop.
+# what stops the Step 2 loop. `bash` here is whatever is first on PATH, and an empty workspace
+# never reaches the per-slot code, so this proves the drained-fleet exit and a clean stderr — NOT
+# that the report runs under bash 3.2. That is t15's floor section (#329), which runs a real 3.2
+# over live slots that reach the forge fallback.
 printf '%s\n' empty-workspace >"$FAKE_MODE"
 run_report
-check 0 "$report_rc" "status monitoring executes on macOS Bash 3.2"
-check "" "$(cat "$TMP/report.err")" "status monitoring uses no unavailable Bash 4 builtins"
+check 0 "$report_rc" "status monitoring over an empty workspace exits 0"
+check "" "$(cat "$TMP/report.err")" "...writing nothing to stderr"
 check 1 "$(grep -Fc '_no live ship terminals' "$TMP/report.out")" \
   "status monitoring reaches its authoritative empty report"
 
@@ -914,6 +917,23 @@ check 0 "$(grep -Fc 'could not ensure the Codex parent continuity guard' "$TMP/r
   "...and the tick does not warn that it failed"
 check 0 "$(grep -Fc 'parent continuity guard started' "$TMP/rearm.out")" \
   "...nor puts the watcher's start line in the report"
+# THE LATER TICK (#119). Every tick after the first finds that watcher running, and re-ensuring it
+# is then a ping, not a start: a second watcher for one parent is two sets of nudges. The first tick
+# above covers only the start.
+rm -f "$_SHIPYARD_CONTINUITY_DIR"/continuity-*.ack
+later_rc=0
+CODEX_SESSION_ID=test-thread AGTERM_ENABLED=1 SHIPYARD_BACKEND=agterm SHIPYARD_WORKSPACE=test-ai \
+  _SHIPYARD_CONTINUITY_LAUNCH_MODE=agterm-session SHIPYARD_MOTION_INTERVAL=0.01 \
+  bash "$SKILL_DIR/shipyard-report.sh" >"$TMP/rearm-later.out" 2>"$TMP/rearm-later.err" || later_rc=$?
+check 1 "$later_rc" "a later tick over the same live slot reports work in flight"
+check 1 "$(grep -c '^session-new:.*watch-foreground' "$FAKE_LOG")" \
+  "...and starts no second watcher"
+check "$rearm_pid" "$(awk '{print $1}' "$_SHIPYARD_CONTINUITY_DIR/continuity-test-session.pid" 2>/dev/null)" \
+  "...keeping the one it started"
+if [ -n "$(find "$_SHIPYARD_CONTINUITY_DIR" -name 'continuity-*.ack' -print -quit)" ]; then pinged=yes; else pinged=no; fi
+check yes "$pinged" "...which it pinged, and which answered"
+check 0 "$(grep -Fc 'could not ensure the Codex parent continuity guard' "$TMP/rearm-later.err")" \
+  "...and the tick does not warn that it failed"
 shipyard_continuity_stop_all >/dev/null 2>&1 || true
 
 # ...AND DOES NOT RE-ARM ONE THE LAST-SLOT CLEANUP JUST STOPPED. The monitor names its slots, so it
