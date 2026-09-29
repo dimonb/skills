@@ -1560,6 +1560,28 @@ printf '#!/usr/bin/env bash\nexit 0\nkids=$("$d/a b/%s" -P "$x" sleep)\n' "$PG" 
 expect_pass "check 14: a quoted command path holding a space WITH a pattern stays green"
 printf '#!/usr/bin/env bash\nexit 0\nkids=$(%s -P "$x" "/opt/a b/%s")\n' "$PG" "$PG" > "$SH_PROBE"
 expect_pass "check 14: a quoted path holding a space as the pattern stays green"
+# 34e10 — unquote()'s escape and depth branches (#278's review): removing any one of them flipped
+# no probe above. Each probe below changes its verdict under exactly its own branch's removal.
+# A backslash outside quotes escapes the quote after it, so the words stay two and the pattern
+# stays a pattern...
+printf '#!/usr/bin/env bash\nexit 0\nkids=$(%s -P \\"$x\\" sleep)\n' "$PG" > "$SH_PROBE"
+expect_pass "check 14: an escaped quote outside quotes does not open a span"
+# ...a backslash inside double quotes escapes the quote after it, in both directions...
+printf '#!/usr/bin/env bash\nexit 0\nkids=$(%s -P "$x\\" sleep")\n' "$PG" > "$SH_PROBE"
+expect_fail "check 14: an escaped quote inside double quotes does not close the span" \
+  "pgrep/pkill with -P/--parent and no pattern"
+printf '#!/usr/bin/env bash\nexit 0\nkids=$(%s -P "$x\\"" sleep)\n' "$PG" > "$SH_PROBE"
+expect_pass "check 14: a span closed after an escaped quote leaves the pattern outside it"
+# ...a quote left open at the end of the line keeps the rest of it as one word...
+printf '#!/usr/bin/env bash\nexit 0\nkids=$(%s -P "$x sleep\n")\n' "$PG" > "$SH_PROBE"
+expect_fail "check 14: an unterminated quote swallows the rest of the line" \
+  "pgrep/pkill with -P/--parent and no pattern"
+# ...a `$(` inside single quotes is not a command substitution...
+printf '#!/usr/bin/env bash\nexit 0\nkids=$(%s -P \047$(\047 sleep)\n' "$PG" > "$SH_PROBE"
+expect_pass "check 14: a \$( inside single quotes opens no nested span"
+# ...and a `)` inside quotes at depth zero does not end anything.
+printf '#!/usr/bin/env bash\nexit 0\nkids=$(%s -P "a)" sleep)\n' "$PG" > "$SH_PROBE"
+expect_pass "check 14: a ) inside quotes at depth zero closes nothing"
 rm -f "$SH_PROBE"
 
 # 34f — check 14's fail-closed arms, in the shapes 14a and 14b use. The listing errors with its
