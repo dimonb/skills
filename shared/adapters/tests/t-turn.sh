@@ -30,11 +30,11 @@
 #
 # WHAT IS NOT COVERED, so a green run is never read as more than it is:
 #   * WHAT THE CALLERS DO WITH THESE FUNCTIONS is not asserted here. It is asserted where the
-#     callers live — for shipyard, by the suite that drives its caller scripts end to end over
-#     exported shell functions — and a green run of THIS file says nothing about it. Stated as
-#     where to look rather than as a list of which caller property is covered by which file: two
-#     earlier versions of this bullet listed them, and each went stale without anything saying so.
-#     council's `say` is the other caller, and is its own suite's to assert.
+#     callers live, in each calling skill's own suite — for shipyard, the one that drives its caller
+#     scripts end to end over exported shell functions — and a green run of THIS file says nothing
+#     about it. Stated as where to look rather than as a list of callers or of which property is
+#     covered by which file: earlier versions of this bullet listed them, and each went stale
+#     without anything saying so. Grep the tree for the function names to find the callers.
 #   * Whether either kind ever renders its queued hint somewhere OTHER than the place captured
 #     here. Both observed placements are covered by a fixture and an assertion; a third placement,
 #     if one exists, would read as not-queued and fall to the alarm path.

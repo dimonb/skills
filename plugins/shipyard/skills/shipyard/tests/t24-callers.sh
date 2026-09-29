@@ -29,9 +29,10 @@
 # WHAT IS NOT HERE, and why:
 #   * the confirm-window and interval knob validation is t16's, over this same rig;
 #   * `--submit`'s own verdicts and the repeat refusal are t18's, the no-agent refusal t19's;
-#   * `autodown_consider`'s own slot check in shipyard-report.sh is reached by no test and cannot be
-#     from a report run: the argv check (D below) refuses a bad name before it, and `shipyard_slots`
-#     filters one out of the enumeration. It is a second line nothing can reach today.
+#   * the refusal arm of `autodown_consider`'s own slot check in shipyard-report.sh is exercised by
+#     no test and cannot be from a report run: the argv check (D below) refuses a bad name before
+#     it, and `shipyard_slots` filters one out of the enumeration. t17 reaches the check with valid
+#     names only. It is a second line nothing can reach today.
 #
 # The rig is t18's and t19's: exported shell functions shadow `git`, `tmux` and `sleep`. An
 # exported function beats PATH lookup, which is why this works although shipyard-lib.sh prepends
@@ -125,7 +126,6 @@ run() {
   printf '%s\nrc=%s\n' "$out" "$rc"
 }
 rc_of() { printf '%s' "$1" | sed -n 's/^rc=//p' | tail -1; }
-typed() { grep -c -- ' -l ' "$KEYS" | tr -d ' '; }
 sent()  { grep -c . "$KEYS" | tr -d ' '; }
 delivery_of() { jq -r '.delivery // "<none>"' "$MB/$1.json" 2>/dev/null; }
 latest_directive() { # the newest directive record of slot 41, by its number
@@ -273,9 +273,9 @@ mkdir -p "$FAKE_ROOT/.claude/worktrees/ship-7" "$FAKE_ROOT/.claude/worktrees/shi
 out=$(run shipyard-down.sh 7/ --force)
 ok "down '7/' --force is refused"                1          "$(rc_of "$out")"
 ok "...naming the rule"                          yes        "$(has "$out" 'refusing the slot name')"
-ok "...removing no worktree"                     0          "$(grep -c 'worktree remove' "$CALLS")"
-ok "...closing no terminal"                      0          "$(grep -c 'kill-window' "$CALLS")"
-ok "...and slot 7's worktree is still there"     yes        "$( [ -d "$FAKE_ROOT/.claude/worktrees/ship-7" ] && echo yes || echo no )"
+# The fake git logs and removes nothing, and lists no `ship-7/` window, so the removal call is the
+# one observable a lost refusal produces here.
+ok "...asking git to remove no worktree"         0          "$(grep -c 'worktree remove' "$CALLS")"
 out=$(run shipyard-down.sh --list)
 ok "--list shows an invalid directory, unmanaged" 1         "$(printf '%s\n' "$out" | grep -c '^a\.b .*present .*INVALID SLOT NAME (not managed)$')"
 ok "...and a valid one as a slot"                0          "$(printf '%s\n' "$out" | grep -c '^7 .*INVALID SLOT NAME')"
