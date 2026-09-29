@@ -1602,8 +1602,9 @@ is the repo's stated convention for such a list, else `docs/known-limits.md`. On
 residual, each line carrying:
 
 - a stable id, `KL-<n>`, one more than the highest id that section has ever used, so an id is
-  never reused. A removed entry leaves its id behind as a one-line tombstone naming the issue it
-  was promoted to, or the change that removed it;
+  never reused. An entry that has reached the base branch leaves its id behind, once removed, as a
+  one-line tombstone naming the issue it was promoted to or the change that removed it. One added
+  and taken out within the same change is deleted outright;
 - the **shape** of the limit, one sentence;
 - the path as `file:line`;
 - the PR/MR whose review found it;
