@@ -1,6 +1,6 @@
 ---
 name: shipyard
-description: "shipyard: run the repo's ship skill in background terminals (agterm sessions when available, tmux windows otherwise) and supervise them. Use when changes should each be driven end to end by a background agent matching the parent runtime (Codex launches Codex; Claude launches Claude), with status and escalation monitoring. Requires a ship skill in the repo; it launches nothing else."
+description: "shipyard: run the repo's ship skill in background terminals (agterm sessions when available, tmux windows otherwise) and supervise them. Use when changes should each be driven end to end by a background agent matching the parent runtime (Codex launches Codex; Claude launches Claude; SHIPYARD_AGENT=agy launches Antigravity's agy), with status and escalation monitoring. Requires a ship skill in the repo; it launches nothing else."
 ---
 
 # shipyard: run ship in background terminals, monitor it, answer its escalations
@@ -14,7 +14,7 @@ every architectural decision **up to this session**, waits for your answer, and 
 then acts on it.
 
 **`shipyard` launches exactly one thing: the ship skill.** It is not a pipeline of its own and it
-knows nothing about the stages - `$ship` in Codex or `/ship` in Claude owns all of them and takes a free-text idea, a
+knows nothing about the stages - `$ship` in Codex or `/ship` in Claude and agy owns all of them and takes a free-text idea, a
 `#N` issue, or an MR/PR number as its argument. `shipyard` only starts it, watches it, and
 carries its questions to you. The repo must provide that skill; if it does not, `shipyard`
 has nothing to run. In Claude Code that dependency is declared in this plugin's manifest
@@ -95,10 +95,41 @@ being supported.
 
 ## Child runtime and identity
 
-`SHIPYARD_AGENT=auto|codex|claude` controls the child runtime. `auto` is the
+`SHIPYARD_AGENT=auto|codex|claude|agy` controls the child runtime. `auto` is the
 default: a Codex parent launches Codex and a Claude parent launches Claude. In a plain
 shell, auto uses the only installed agent, preferring Claude when both are present for
 backward compatibility. Set the variable explicitly when a shell has no parent-agent identity.
+`auto` never picks `agy`; an agy child is always `SHIPYARD_AGENT=agy`.
+
+### An `agy` child, and what it does without
+
+`agy` (the Antigravity CLI) is admitted with every per-kind path either given an arm or degraded on
+purpose, each from a capture of agy 1.2.13 rather than by analogy with the other two:
+
+* **Launch.** A pre-created worktree (as for Codex) and a `cd` into it, because agy has no
+  working-directory flag; `--dangerously-skip-permissions`, its only unattended mode; and the goal
+  `/ship <target>` with the protocol's TEXT fused into the same `-i` argument, because agy has no
+  system-prompt flag. No `--effort`, as for Codex.
+* **The `ship` skill must be where agy looks**: `<repo>/.agents/skills/ship/`,
+  `~/.gemini/antigravity-cli/skills/ship/` or `~/.gemini/skills/ship/`. The launch refuses when none
+  holds a `SKILL.md`. In `-i`, agy's client does not expand `/ship` itself; the agent resolves it
+  by reading that `SKILL.md`, which it did in the captures.
+* **Trust prompt — needs you once per child.** agy asks whether to trust every directory it has
+  not seen, by exact path, and every child worktree is new. The flag does not answer it and
+  shipyard does not either, so the launch line says where to answer it. Until you do, the child
+  sits at that prompt.
+* **Environment.** Nothing is propagated (agy reads no config-dir variable); the scrub list applies
+  as for every kind.
+* **ctx column: always `—`.** agy's footer carries no session figure and its transcript is not
+  JSON; the per-turn `Thought for …, N tokens` lines it renders are not a session total, so the
+  pane fallback is not used either.
+* **Stall classifier: no capacity-banner exemption.** `adp_wait_anchored agy` is no — no agy pane
+  with a banner has been captured — so a motionless agy child falls through to the stall clock.
+  `finished` and `needs you` still apply; they come from ship's state, not the pane.
+* **`shipyard-tell.sh`: never confirms.** agy's footer reads `esc to cancel` mid-turn and in an
+  open slash menu alike, and it renders no queued hint, so a send always ends `unconfirmed` (exit
+  6) with a line saying why. Look at the pane instead.
+* **`shipyard-compact.sh`: refused (exit 9).** agy has no `/compact`.
 
 **A child does not inherit this session's environment.** agterm spawns it from the app
 (the GUI environment) and tmux spawns it from a server whose environment was frozen
@@ -107,19 +138,20 @@ by itself, and the child's login profile then supplies whatever value it likes.
 
 That matters for variables which select the agent's config directory and therefore its
 skills, settings and memory: `CODEX_HOME` for Codex, or `CLAUDE_HOME` /
-`CLAUDE_CONFIG_DIR` for Claude. A parent using a non-default config directory whose
+`CLAUDE_CONFIG_DIR` for Claude (agy has none). A parent using a non-default config directory whose
 child falls back to the profile default can start with different skills and do the wrong work.
 
 So `shipyard-launch.sh` writes a **launcher script** and re-asserts those variables inside it,
 *after* the login profile has run:
 
 * propagated (only when set here): `CODEX_HOME` for Codex, or `CLAUDE_HOME`
-  and `CLAUDE_CONFIG_DIR` for Claude. `SHIPYARD_ENV_PASS` replaces the
+  and `CLAUDE_CONFIG_DIR` for Claude, and nothing for agy. `SHIPYARD_ENV_PASS` replaces the
   runtime default rather than adding to it;
 * scrubbed always: `CLAUDECODE`, `CLAUDE_CODE_ENTRYPOINT`, `CLAUDE_CODE_SESSION_ID`,
   `CLAUDE_CODE_CHILD_SESSION`, `CLAUDE_PID`, `CLAUDE_CODE_MESSAGING_SOCKET`,
   `CLAUDE_CODE_MESSAGING_TOKEN`, `CLAUDE_EFFORT`, `CODEX_SESSION_ID`,
-  `CODEX_THREAD_ID`, `SHIPYARD_SLOT` - these are *this* session's
+  `CODEX_THREAD_ID`, `ANTIGRAVITY_CONVERSATION_ID`, `ANTIGRAVITY_TRAJECTORY_ID`,
+  `ANTIGRAVITY_CSRF_TOKEN`, `ANTIGRAVITY_LS_ADDRESS`, `SHIPYARD_SLOT` - these are *this* session's
   identity, and handing a child the parent's messaging socket points it at the parent's
   own IPC channel.
 
@@ -146,7 +178,7 @@ maximum on every step.
 nothing more. It is read at launch, printed on the launch line as `effort: <level>
 (SHIPYARD_EFFORT)` — `effort: runtime default (ship decides)` when it is unset — and recorded in
 `<mailbox>/launch-<slot>.json`. An unusable value is not corrected to a level shipyard picked: it
-means no flag, and says so on stderr. A Codex child gets no `--effort` from shipyard at all, so
+means no flag, and says so on stderr. A Codex or agy child gets no `--effort` from shipyard at all, so
 with the override set the line reads `effort: runtime default (ship decides;
 SHIPYARD_EFFORT=<level> is not passed to a codex child)` rather than recording a level the child
 was never given. Ship flags you type (`effort <level>` among them) go through verbatim because
@@ -264,12 +296,20 @@ codex --approve-for-me -C .claude/worktrees/ship-<slot> \
 claude -w ship-<slot> -n ship-<slot> --permission-mode auto \
   --remote-control ship-<slot> --append-system-prompt "$(cat <mailbox>/protocol-<slot>.md)" \
   '/ship <target> [flags]'
+
+# SHIPYARD_AGENT=agy (never auto): no -C flag, so a cd; the protocol text rides in the goal.
+cd .claude/worktrees/ship-<slot> || exit 1
+agy --dangerously-skip-permissions \
+  -i '/ship <target> [flags]
+
+'"$(cat <mailbox>/protocol-<slot>.md)"
 ```
 
 **Automatic approval review is deliberate, and it is the child's whole risk posture.** A
 background session that stops to ask permission is a background session that sits idle until
-someone notices, so Codex uses `--approve-for-me` and Claude uses
-`--permission-mode auto`. The child works in a worktree of the repo
+someone notices, so Codex uses `--approve-for-me`, Claude uses
+`--permission-mode auto` and agy `--dangerously-skip-permissions` (its only unattended mode, and
+it approves everything — agy has no reviewer between the agent and the tool). The child works in a worktree of the repo
 and pushes to the forge with no human in its terminal. What makes that acceptable is the
 pairing — `/ship` escalates anything risky or irreversible rather than deciding, and the
 parent watcher is the human it escalates to. Launching children and then not reading their
@@ -618,12 +658,11 @@ worded twice drifts — what stays here is shipyard's own remedy clause, the ref
 the declared slot graph's phase. Nothing reads a resume TIME off a banner — the policy module's
 ESC-03 records why: a capacity banner states when the window **ran out**, not when it resumes.
 
-One gate in `shared/adapters` this skill does **not** call today, named so it is not mistaken for a
-gap: `adp_wait_anchored <kind>` says whether the banner anchor is evidenced for a given agent kind,
-i.e. whether a pane of that client has been captured. `shipyard_agent_kinds` admits exactly the two
-kinds that have one, so the answer here is always yes and `shipyard_wait_state` is not made to
-carry a kind it does not hold. council admits a wider set and gates on it. Widen this skill's
-admission set and the gate is already there to call.
+The banner read is gated per kind: `adp_wait_anchored <kind>` in `shared/adapters` says whether
+the banner anchor is evidenced for that agent kind, i.e. whether a pane of that client has been
+captured, and `shipyard_wait_state` takes the slot's kind (from its launch record) and asks it
+first. `shipyard_agent_kinds` admits `agy`, which has no such capture, so an agy child gets no
+capacity-wait exemption and a motionless one reaches the stall clock — louder, never quieter.
 
 Arm the **fast escalation monitor** too — 10 minutes is too slow for a child that is
 blocked on a question:
@@ -1046,8 +1085,9 @@ banded `⚠️` from 65% and `🛑` from 80%. Both halves are there on purpose:
   marker nothing is declared — an unmarked id is what a default-window session carries and what a
   future large-default model would carry too — and the window is then **inferred** from the peak: a
   request that carried N tokens cannot have run on a window smaller than N, so the window is the
-  smallest known size that still fits the largest total that session has ever reached. A kind added later takes
-  the claude path unless someone writes an arm for it. `SHIPYARD_CTX_WINDOW` overrides all of it;
+  smallest known size that still fits the largest total that session has ever reached. An **agy**
+  child has neither a readable transcript nor a footer figure, so its column is always `—`. A kind
+  added later takes the claude path unless someone writes an arm for it. `SHIPYARD_CTX_WINDOW` overrides all of it;
 * the raw count is printed **so that you can catch the inference being wrong** — it is what
   catches the case the column cannot detect on its own, a window that is on nobody's list (below),
   and `SHIPYARD_CTX_WINDOW` is what fixes it once you know. It travels with every percentage the
@@ -1417,7 +1457,7 @@ collide with it.
 
 | file | role |
 |------|------|
-| `shipyard-agent.sh` | agent-runtime adapter over the shared per-kind module: WHICH kinds shipyard admits, its environment propagation and scrub list, the codex worktree, and the child's bootstrap sentence |
+| `shipyard-agent.sh` | agent-runtime adapter over the shared per-kind module: WHICH kinds shipyard admits, its environment propagation and scrub list, the codex and agy worktree, where agy finds `ship`, and the child's bootstrap sentence |
 | `agent-adapters.sh` | vendored copy of the shared per-agent-kind adapters (`shared/adapters/agent-adapters.sh`): how a kind is started, how a skill is referenced in it, which kind is running the parent, plus `adp_turn_state`/`adp_delivery_verdict` — the ONE place a client's turn marker is spelled |
 | `shipyard-backend.sh` | the agterm/tmux abstraction — every terminal operation goes through it |
 | `shipyard-lib.sh` | mailbox paths, slot resolution, payload input, the child env preamble |

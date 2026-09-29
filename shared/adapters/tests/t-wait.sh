@@ -251,8 +251,16 @@ ok "an empty kind is not anchored"                1 "$(anchored '')"
 # anything about where a client puts its own output. A future turn-state capture of a third kind
 # must not read as evidence for this anchor, because the obvious way to make a red like that go
 # green is to add the label, which is the unevidenced widening this function's header forbids.
+# A capture is necessary, not sufficient, and one kind has been DECIDED unanchored with a capture
+# on disk: agy. Its mid-turn and idle captures (pane-agy-*.txt) show its own words indented and its
+# chrome behind `●`, `▸` and `>` in column one, none of which is in ADP_PROGRESS_GLYPHS — so a banner
+# on an agy screen would never be retired by later progress, and a stale one would park a wedged
+# child indefinitely. No agy banner has been captured either. Anchoring it needs both.
+DECIDED_UNANCHORED=agy
 for k in $(adp_kinds); do
-  if [ -f "$FIX/pane-$k-running.txt" ]; then
+  if [ "$k" = "$DECIDED_UNANCHORED" ]; then
+    ok "$k has a capture but no retiring progress glyph: decided unanchored" 1 "$(anchored "$k")"
+  elif [ -f "$FIX/pane-$k-running.txt" ]; then
     ok "$k has a mid-turn capture, so it is anchored" 0 "$(anchored "$k")"
   else
     ok "$k has no mid-turn capture: LOOK before labelling it" 1 "$(anchored "$k")"

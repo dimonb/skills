@@ -132,8 +132,13 @@ shipyard_default_ref() {
 }
 
 # --- WHY a motionless child is not moving ---------------------------------------
-# shipyard_wait_state <screen> <phase> <stage>
+# shipyard_wait_state <screen> <phase> <stage> [<agent kind>]
 #   -> "<kind>\t<class>\t<label>\t<action>" and rc 0, or nothing and rc 1.
+#
+# The agent kind gates the capacity-banner read (step 2) on `adp_wait_anchored`: a kind whose
+# column-one chrome has never been captured (agy) gets no banner exemption and falls through to
+# the stall clock. Omitted, it is read as claude, which is what `ctx_agent` answers for a slot with
+# no launch record.
 #
 # THE DEFECT THIS CLOSES. The stall watchdog measures motionlessness and concludes death. Three
 # measured false alarms on one fleet say the same thing from different directions: a rate-limited
@@ -171,7 +176,7 @@ shipyard_default_ref() {
 #
 # `<kind>` is `wait` (nothing to do) or `attention` (a person's move, but never compaction).
 shipyard_wait_state() {
-  local screen="${1:-}" phase="${2:-}" stage="${3:-}" cls='' shown='' ev=''
+  local screen="${1:-}" phase="${2:-}" stage="${3:-}" agent="${4:-claude}" cls='' shown='' ev=''
   # 1. Terminal BY DESIGN, and so exempt whatever the pane shows: a finished change does not become
   #    unfinished because a banner is still on screen above its last line.
   #
@@ -206,6 +211,7 @@ shipyard_wait_state() {
   #    the adapter's test but that the operator can see is old.
   # The `|| return 1` an eye expects here would be dead: in a pipeline `$?` is `cut`'s, which is 0
   # even when adp_wait_class found nothing and printed nothing. The emptiness test IS the check.
+  adp_wait_anchored "$agent" || return 1
   ev=$(adp_wait_class "$screen" 2>/dev/null)   # "<class><TAB><the line that said so>", or empty
   cls=${ev%%	*}
   ev=${ev#*	}
@@ -265,7 +271,8 @@ shipyard_env_summary() {
   for v in $pass; do
     if [ -n "${!v+set}" ]; then out="$out $v=${!v}"; else out="$out $v=<unset>"; fi
   done
-  printf '%s' "${out# }"
+  out=${out# }
+  printf '%s' "${out:-none}"
 }
 
 shipyard_esc_file() {

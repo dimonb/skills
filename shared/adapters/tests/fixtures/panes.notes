@@ -84,5 +84,17 @@ are verbatim; the screens derived from them are built inline in t-turn.sh, each 
                                  under that echo.
   pane-claude-compacted-stale.txt live, same kind, the finished screen followed by one more turn.
 
+A THIRD BATCH, of the third kind (agy 1.2.13), taken the same way (tmux, 100x40, a scratch
+repository, a trivial prompt). Substituted as above, plus the account line and the model name.
+They pin what agy does NOT give the turn read, and they are not banner evidence (t-wait.sh says
+why agy stays unanchored).
+
+  pane-agy-running.txt           live, mid-turn: a spinner line and an `esc to cancel` footer.
+  pane-agy-idle.txt              live, idle after the turn: `? for shortcuts` footer. Its
+                                 `Thought for 3s, 552 tokens` line is per-turn, not a session
+                                 total — the reason the ctx column reads nothing for agy.
+  pane-agy-menu.txt              live, idle with the slash menu open: the SAME `esc to cancel`
+                                 footer as mid-turn, so that footer is not a turn marker.
+
 NOT ASSERTED: whether either kind ever renders its queued hint somewhere other than the place
 captured here. A third placement, if one exists, reads as not-queued and falls to the alarm path.

@@ -1,0 +1,5 @@
+cd '@FX@/work tree' || exit 1
+exec agy --dangerously-skip-permissions \
+  -i '/ship #42
+
+'"$(cat '@FX@/pro to.md')"

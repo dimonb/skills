@@ -1,0 +1,40 @@
+   ▄▀▀    ▀▀▄
+  ▄▀▀      ▀▀▄
+
+  Antigravity CLI 1.2.13
+  <account> (<plan>)
+  example-model (High)
+  ~/src/example/.claude/worktrees/ship-NN
+
+────────────────────────────────────────────────────────────
+> Without using any tools, write a 12-line poem about harbours.
+
+▸ Thought for 3s, 552 tokens
+  Initial focus is on the poem's parameters: twelve lines, no tools, and the subject of harbours...
+  Beyond the reach of open, restless foam,
+  The weathered piers embrace the wandering fleet,
+  Where weary vessels find a quiet home,
+  And stormy surge gives way to still retreat.
+
+  Tall masts lean gently to the salty breeze,
+  Ropes hum like harpstrings on the wooden quay,
+  As twilight settles softly on the seas,
+  Reflecting lanterns on the sheltered bay.
+
+  Here iron anchors bite into the sand,
+  The creaking timber murmurs through the night,
+  A brief communion between sea and land,
+  Awaiting morning and the ocean's light.
+
+────────────────────────────────────────────────────────────────────────────────────────────────────
+> /
+────────────────────────────────────────────────────────────────────────────────────────────────────
+> /add-dir             Add a directory to the workspace
+  /agents              List available custom agents
+  /artifact            View and review artifacts
+  /btw                 Ask a side question without interrupting the current task
+  /changelog           Show release notes and changes
+   ↓ 42 more
+
+  ↑/↓ Navigate · enter Select · tab Complete
+esc to cancel                                                                example-model · high

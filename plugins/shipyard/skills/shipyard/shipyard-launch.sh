@@ -31,13 +31,14 @@
 # up to the parent watcher through shipyard-ask.sh.
 #
 # Env:
-#   SHIPYARD_AGENT      codex | claude | auto (default: match the parent runtime)
+#   SHIPYARD_AGENT      codex | claude | agy | auto (default: match the parent runtime;
+#                 auto never picks agy)
 #   SHIPYARD_BACKEND    agterm (default) | tmux | auto
 #   SHIPYARD_WORKSPACE  agterm workspace name (default: the parent's workspace + "-ai",
 #                 pinned in <mailbox>/container-agterm at the first launch)
 #   SHIPYARD_SESSION    tmux session name    (default: <repo>)
 #   SHIPYARD_ENV_PASS   env vars copied from THIS session into the child (default:
-#                 CODEX_HOME for Codex; CLAUDE_HOME CLAUDE_CONFIG_DIR for Claude)
+#                 CODEX_HOME for Codex; CLAUDE_HOME CLAUDE_CONFIG_DIR for Claude; none for agy)
 #   SHIPYARD_EFFORT     low|medium|high|xhigh|max: an explicit --effort for a Claude child
 #                 (default: none — no flag is passed, and ship chooses its own effort)
 #   SHIPYARD_FORCE=1    allow a second terminal for the same numeric slot
@@ -70,6 +71,7 @@ AGENT=$(shipyard_agent)
 shipyard_agent_check "$AGENT" || exit 1
 SHIP_REF=$(shipyard_skill_ref "$AGENT") || exit 1
 SELF_REF=$(shipyard_self_ref "$AGENT") || exit 1
+shipyard_agent_skill_check "$AGENT" "$ROOT" || exit 1
 
 shipyard_backend_check || exit 1
 BACKEND=$(shipyard_backend)
@@ -400,6 +402,15 @@ LAUNCHER="$MB/launch-$SLOT.sh"
 
 EFFORTSUM=$(shipyard_child_effort_summary "$AGENT")
 
+# agy trusts directories by exact path, a child worktree is always a new one, and
+# --dangerously-skip-permissions does not answer that prompt (captured on agy 1.2.13). shipyard
+# does not answer it either: trusting a directory is the operator's call, so the launch says where.
+agy_trust_note() {
+  [ "$AGENT" = agy ] || return 0
+  echo "note: agy asks whether to trust .claude/worktrees/$NAME before it starts, and nothing answers"
+  echo "      that for it: answer it in $1. Until then the child sits at that prompt."
+}
+
 if [ "${SHIPYARD_DRY:-}" = 1 ]; then
   echo "dry-run: agent $AGENT, backend $BACKEND, $KIND $CONTAINER, terminal $NAME (worktree .claude/worktrees/$NAME)"
   echo "dry-run: protocol $PROTO"
@@ -407,13 +418,14 @@ if [ "${SHIPYARD_DRY:-}" = 1 ]; then
   echo "dry-run: env      $ENVSUM"
   echo "dry-run: effort   $EFFORTSUM"
   printf '%s\n' "$ADMISSION" | sed 's/^/dry-run: /'
+  agy_trust_note "terminal $NAME" | sed 's/^/dry-run: /'
   sed -n '3,$p' "$LAUNCHER" | sed 's/^/dry-run| /'
   echo "SLOT:$SLOT"
   exit 0
 fi
 
 WORKTREE_CREATED=0
-if [ "$AGENT" = codex ] && [ ! -d "$WORKTREE" ]; then WORKTREE_CREATED=1; fi
+if shipyard_agent_needs_worktree "$AGENT" && [ ! -d "$WORKTREE" ]; then WORKTREE_CREATED=1; fi
 shipyard_agent_prepare_worktree "$AGENT" "$ROOT" "$WORKTREE" || {
   echo "error: failed to prepare child worktree $WORKTREE" >&2
   exit 1
@@ -448,4 +460,5 @@ fi
 echo "started $AGENT ship in $(shipyard_where "$SLOT") (worktree .claude/worktrees/$NAME) - $PROMPT"
 echo "env: $ENVSUM"
 echo "effort: $EFFORTSUM"
+agy_trust_note "$(shipyard_where "$SLOT")"
 echo "SLOT:$SLOT"

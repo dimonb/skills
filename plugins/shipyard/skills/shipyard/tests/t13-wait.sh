@@ -161,7 +161,7 @@ EOF
 # The whole assignment, not just the call: a slot with no agent in its terminal is asked the same
 # question on another line (#172), so the call alone is no longer unique to this site.
 ok "report.sh asks why before the clock" 1 \
-   "$(grep -Fc 'wait_line=$(shipyard_wait_state "$b" "$phase" "$stage" 2>/dev/null) || wait_line=""' "$REPORT")"
+   "$(grep -Fc 'wait_line=$(shipyard_wait_state "$b" "$phase" "$stage" "$(ctx_agent "$slot")" 2>/dev/null) || wait_line=""' "$REPORT")"
 ok "...only of a motionless child" 1 \
    "$(grep -Fc 'if [ "$run" = "⏸ idle/wait" ]; then' "$REPORT")"
 # ...and an open escalation holds back every class, an unreadable record only a `wait` (#270, #296).
