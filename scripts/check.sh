@@ -7,8 +7,8 @@
 #    two manifests of a plugin declare the same version
 # 4. marketplace entries resolve, and both manifests offer the same plugins as plugins/ on disk
 # 5. dogfooding: every COMMITTED entry in a project skills dir is a symlink into plugins/; both
-#    agents linked to every packaged skill, that link resolving inside plugins/ staged or not;
-#    and no second copy of any SKILL.md
+#    agents linked to every packaged skill, that link resolving inside plugins/ staged or not,
+#    and never dropped from the index once HEAD has it; and no second copy of any SKILL.md
 # 6. ship's forge reference files do not carry a copy of the pipeline state enum
 # 7. no non-generic strings (structural patterns only; no dependency on any untracked file)
 # 8. no non-Latin script in any file, untracked included (the checkable half of "English")
@@ -141,7 +141,7 @@ done <<< "$skillmd_ls"
 # The plugins on disk, listed through git rather than a `plugins/*/` glob, and read by checks 3 and
 # 4 alike (#58). Two things follow, and both are the point:
 #   * `.gitignore` applies. A raw glob saw every directory, so an untracked scratch directory under
-#     plugins/ reddened three checks and nothing could silence it. Now an empty one is invisible
+#     plugins/ reddened checks 3 and 4 and nothing could silence it. Now an empty one is invisible
 #     (git lists files, not directories) and an ignored one is too — the escape hatch checks 1 and
 #     2 always had. An untracked plugin that is NOT ignored is still checked in full: it is what a
 #     new plugin looks like before `git add`, and catching it then is why these checks read
@@ -154,7 +154,10 @@ plugin_dirs=""
 if [ "$plugins_rc" -ne 0 ]; then
   fail "could not list plugins/ (checks 3 and 4) (git ls-files rc=$plugins_rc)"
 else
-  plugin_dirs=$(printf '%s\n' "$plugins_ls" | sed -n 's|^plugins/\([^/][^/]*\)/.*|\1|p' | sort -u \
+  # The first component, whether or not a path follows it: a plugin committed as a directory
+  # symlink is ONE entry, `plugins/<name>`, which the glob this replaced followed. `[ -d ]` drops a
+  # plain file sitting directly under plugins/.
+  plugin_dirs=$(printf '%s\n' "$plugins_ls" | sed -n 's|^plugins/\([^/][^/]*\).*|\1|p' | sort -u \
     | while IFS= read -r n; do [ -d "plugins/$n" ] && printf '%s\n' "$n"; done)
   [ -n "$plugin_dirs" ] || fail "checks 3 and 4 found no plugin under plugins/ (moved? renamed?)"
 fi
@@ -268,11 +271,10 @@ if [ "$skills_rc" -ne 0 ]; then
   # Never read "could not list" as "nothing to report" — the trap sections 7 to 10 each guard.
   fail "could not list tracked project skill entries (git ls-files rc=$skills_rc)"
 elif [ -z "$skills_ls" ]; then
-  # A listing that matched nothing has not held, it has abstained. Nothing else here would say
-  # so: the "packaged skill has both links" loop below reads the FILESYSTEM, so links present on
-  # disk but dropped from the index satisfy it while every assertion above silently stops.
-  # This arm fires only on a TOTAL drop. ONE packaged skill's link removed from the index leaves
-  # the listing non-empty; the packaged-skill loop at the end of this check is what reds that.
+  # A listing that matched nothing has not held, it has abstained, and every assertion in the
+  # loop below silently stops. This arm names that; the packaged-skill loop at the end of this
+  # check also reds each packaged link HEAD has and the index does not, but a non-packaged entry
+  # dropped with the rest is reported by this arm alone.
   fail "no tracked entry under .claude/skills or .agents/skills at all (dropped from the index?)"
 else
   while IFS= read -r line; do
@@ -378,6 +380,9 @@ done
 core=plugins/ship/skills/ship/SKILL.md
 # The reference files, listed through git (so `.gitignore` applies to an untracked scratch file
 # here, as it does to checks 1 and 2) and counted, for the reason checks 1 to 4 now are (#58).
+# A git pathspec's `*` crosses `/`, so this reads a `.md` in a subdirectory of references/ too,
+# which the glob it replaced did not: stricter, deliberately, since a copy of the enum there is the
+# same defect.
 ref_dir=plugins/ship/skills/ship/references
 if [ ! -f "$core" ]; then
   # With no `else`, a moved or renamed core skipped this whole check: the enum-copy, handler and

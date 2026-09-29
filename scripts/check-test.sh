@@ -76,6 +76,8 @@ PROBE_FILES=(
   plugins/shipyard/skills/shipyard/tests/t1-probe-dup.sh "$TESTS_DIR/t1z-probe.sh"
   plugins/_probe-scratch plugins/_probe-scratch-empty
   plugins/ship/skills/ship/references/_probe-scratch plugins/ship/skills/ship/references/_probe-dangling.md
+  plugins/ship/skills/ship/references/.gitignore plugins/ship/skills/ship/references/_probe-ignored.md
+  plugins/_probe-link
 )
 
 # THE RUN MARKER (#136). While a run is in flight its probes are in the tree, and from outside a
@@ -95,6 +97,9 @@ PROBE_FILES=(
 MARKER=$(git rev-parse --git-path check-test.running)
 
 restore() {
+  # A probe that exports a throwaway index may be interrupted before it unsets it, and restoring
+  # against that index would check out whatever it holds and lose whatever it lacks.
+  unset GIT_INDEX_FILE
   # shellcheck disable=SC2086
   git checkout -- $GUARDED 2>/dev/null || true
   # Only the entries this test replaces, never a whole directory.
@@ -1563,16 +1568,32 @@ unset GIT_INDEX_FILE
 # 38f — the other direction (#58): incidental untracked state under plugins/ is none of checks 3, 4
 # and 6's business once git is not listing it. An empty scratch directory (git lists files, not
 # directories), and one whose own `.gitignore` ignores everything in it — the escape hatch a raw
-# glob never honoured. The reference-directory case carries a real state name, so a check 6 that
-# went back to globbing would red on it. The hollow-plugin probe (10) is the counter-test: an
-# untracked plugin that is NOT ignored is still checked in full.
-mkdir -p plugins/_probe-scratch-empty plugins/_probe-scratch plugins/ship/skills/ship/references/_probe-scratch
+# glob never honoured; either reds a checks 3 and 4 that went back to `plugins/*/`. Under
+# references/, every fixture carries a real state name, in two places that prove different things:
+#   * directly under it, ignored by an untracked `.gitignore` beside it. This is the one a check 6
+#     that went back to its `references/*.md` glob would red on;
+#   * in a subdirectory, ignored by its own `.gitignore`. The glob never reached there, so this one
+#     proves only that the recursive git pathspec honours `--exclude-standard`.
+# The hollow-plugin probe (10) is the counter-test: an untracked plugin that is NOT ignored is still
+# checked in full.
+# 38g — a plugin that is a directory symlink is ONE listing entry, `plugins/<name>`, with no path
+# below it. The glob checks 3 and 4 used to iterate followed it, so the listing must keep it: here
+# it points at a real plugin under another name, which only check 3 reading it can report.
+ln -s ship plugins/_probe-link
+expect_fail "checks 3 and 4 still read a plugin that is a directory symlink" \
+  "manifest name 'ship' != directory '_probe-link'"
+rm -f plugins/_probe-link
+
+REFS=plugins/ship/skills/ship/references
+mkdir -p plugins/_probe-scratch-empty plugins/_probe-scratch "$REFS/_probe-scratch"
 printf '*\n' > plugins/_probe-scratch/.gitignore
 printf 'notes\n' > plugins/_probe-scratch/notes.md
-printf '*\n' > plugins/ship/skills/ship/references/_probe-scratch/.gitignore
-printf 'Stages: need-issue then ready-to-merge.\n' > plugins/ship/skills/ship/references/_probe-scratch/notes.md
+printf '.gitignore\n_probe-ignored.md\n' > "$REFS/.gitignore"
+printf 'Stages: need-issue then ready-to-merge.\n' > "$REFS/_probe-ignored.md"
+printf '*\n' > "$REFS/_probe-scratch/.gitignore"
+printf 'Stages: need-issue then ready-to-merge.\n' > "$REFS/_probe-scratch/notes.md"
 expect_pass "an empty or ignored scratch directory under plugins/ stays green"
-rm -rf plugins/_probe-scratch-empty plugins/_probe-scratch plugins/ship/skills/ship/references/_probe-scratch
+rm -rf plugins/_probe-scratch-empty plugins/_probe-scratch "$REFS/_probe-scratch" "$REFS/.gitignore" "$REFS/_probe-ignored.md"
 
 # 36 — this file's own entry arms (#136): the run marker and the leftover-fixture refusal. They are
 # not gate assertions, so they are proven by running this script a second time, NESTED, and reading
