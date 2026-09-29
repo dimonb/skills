@@ -204,7 +204,11 @@ Environment knobs: `SHIPYARD_AGENT`, `SHIPYARD_BACKEND`, `SHIPYARD_WORKSPACE`, `
 `SHIPYARD_CTX_WINDOW`, `SHIPYARD_TELL_MAXLINE`, `SHIPYARD_TELL_CONFIRM_SECS`,
 `SHIPYARD_TELL_CONFIRM_INTERVAL`, `SHIPYARD_TELL_DEDUPE_SECS`, `SHIPYARD_TELL_SETTLE_DELAY`,
 `SHIPYARD_MOTION_INTERVAL`, `SHIPYARD_ASK_TIMEOUT`, `SHIPYARD_DOWN_FETCH`, `SHIPYARD_AUTODOWN`,
-`SHIPYARD_AUTODOWN_TICKS`.
+`SHIPYARD_AUTODOWN_TICKS`, `SHIPYARD_FORGE_TIMEOUT`.
+
+`SHIPYARD_FORGE_TIMEOUT` (default 20, whole seconds) bounds each `gh`/`glab` call the status
+report makes, so a hung forge client costs its deadline and the one cell it was asked for, not
+the whole tick's report.
 
 `SHIPYARD_TELL_DEDUPE_SECS` (default 600, `0` off) is how long `tell` refuses a directive that
 repeats one already sent to the same slot with the same reply target, with exit 9; `--again` sends
