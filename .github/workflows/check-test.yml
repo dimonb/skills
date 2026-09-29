@@ -24,7 +24,10 @@ name: check-test
 # `pull_request:` carrying any key but `paths:`, or a `paths:` entry it cannot read or that is
 # negated. Every entry is a quoted block item and no key carries a value on its own line, since
 # those are the only shapes it reads. So adding a filter to spare docs pushes the run, or narrowing
-# pull requests by branch or type, is a red, not a gap.
+# pull requests by branch or type, is a red, not a gap. It also reds the file outside the one shape
+# it reads: one YAML document, one block-style top-level `on:` carrying only `push:` and
+# `pull_request:`, and top-level keys from the fixed list check 13 names. Adding another trigger,
+# `workflow_dispatch:` included, means extending that list in check 13 first.
 #
 # THE FILTER IS DERIVED, NOT GUESSED. It is `$GUARDED` from scripts/check-test.sh with each
 # directory spelt `<dir>/**`, PLUS `docs/**`. `scripts/check.sh` check 13 asserts the `$GUARDED`

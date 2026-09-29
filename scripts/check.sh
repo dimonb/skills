@@ -931,7 +931,7 @@ else
   # (`event <name>`), per key under an event (`key <event> <name>`), and per QUOTED list item under
   # such a key (`item <event> <key> <value>`), a key quoted or not. It reads block-style YAML only.
   # For `push:` and `pull_request:`, the events this check is about, a line it cannot place reds
-  # below rather than passing: `on:` in flow style (`on: [push]`) reads as a missing `push:`; an
+  # below rather than passing: `on:` in flow style (`on: [push]`) prints `topval on`; an
   # event carrying a value on its own line (`push: {paths: [...]}`) prints `inline <event>`; a line
   # under an event that is neither a key nor a `-` item (a flow mapping on the next line, `paths :`)
   # prints `unread <event>`; and an event line it cannot name (`pull_request_target :`) prints
@@ -944,10 +944,27 @@ else
   # disagrees with what was read reds; under any other key of either event the key itself has
   # already red. A key with a value on its own line prints `keyval <event> <key>`, since the lines
   # below it are not its items.
+  #
+  # FAIL CLOSED ON THE FILE'S SHAPE (#314). The reader does not understand YAML; it understands one
+  # shape, so it also reports every column-0 line, and the arms below red anything outside that
+  # shape rather than letting it be read wrongly: a document marker (`---` anywhere but line 1, or
+  # `...`) prints `docmark`, since a parser may read another document than this one; a column-0 line
+  # that is not a `key:` prints `topunread`; every top-level key prints `top <name>`, and one with a
+  # value on its own line `topval <name>`. Only the one block-style `on:` is read below it.
   ct_on=$(awk '
     function name(s) { sub(/:.*/, "", s); gsub(/["\047]/, "", s); return s }
-    # A line in column 0 opens a top-level key; only the `on:` block is read.
-    /^[^ #]/ { inon = ($0 ~ /^["\047]?on["\047]?:[ ]*(#.*)?$/); next }
+    /^[ \t]*$/ { next }
+    # A line in column 0 opens a top-level key, and the block under it is read only when that key
+    # is `on:` with nothing after its colon but a comment.
+    /^[^ #]/ {
+      inon = 0
+      if ($0 ~ /^(---|\.\.\.)([ \t]|$)/) { if (NR != 1 || $0 !~ /^---/) print "docmark\t" NR; next }
+      if ($0 !~ /^["\047]?[A-Za-z_][A-Za-z0-9_-]*["\047]?:([ \t]|$)/) { print "topunread\t" NR; next }
+      t = name($0); print "top\t" t
+      if ($0 !~ /^[^:]*:[ \t]*(#.*)?$/) print "topval\t" t
+      else inon = (t == "on")
+      next
+    }
     !inon || /^[ ]*(#.*)?$/ { next }
     {
       match($0, /^ */); ind = RLENGTH; line = substr($0, ind + 1)
@@ -1002,6 +1019,37 @@ else
   if [ "$ct_rc" -ne 0 ]; then
     fail "could not read the triggers out of $CT_WF (check 13, awk rc=$ct_rc): $ct_on"
   else
+    # THE SHAPE, before anything read from it (#314). Each arm refuses a file this reader would
+    # otherwise read as something other than what a YAML parser reads. A marker splits the file into
+    # documents, and a parser that reads the first one runs none of the triggers read here. A second
+    # `on:` is a repeated key, and parsers that keep the last copy drop the one read here. A flow or
+    # valued `on:` is not read inside at all. And an allowlist rather than a denylist for the rest:
+    # at top level, where a YAML 1.1 parser reads `true:`, `On:` or `yes:` as the same boolean key
+    # `on:` is, and under `on:`, where every event but these two is one this check reasons nothing
+    # about. Extending either list is a deliberate edit here, never an event read past in silence.
+    ct_docmark=$(printf '%s\n' "$ct_on" | awk -F'\t' '$1 == "docmark" { print $2 }' | tr '\n' ' ')
+    if [ -n "$ct_docmark" ]; then
+      fail "$CT_WF carries a YAML document marker (--- after line 1, or ...) at line ${ct_docmark}— check 13 reads one document, and a parser may run the triggers of another"
+    fi
+    ct_topunread=$(printf '%s\n' "$ct_on" | awk -F'\t' '$1 == "topunread" { print $2 }' | tr '\n' ' ')
+    if [ -n "$ct_topunread" ]; then
+      fail "$CT_WF has a column-0 line check 13 cannot read as a top-level key, at line ${ct_topunread}— write every top-level key as a plain key: block, as the rest of the file does"
+    fi
+    ct_topextra=$(printf '%s\n' "$ct_on" | awk -F'\t' '$1 == "top" && $2 !~ /^(name|run-name|on|permissions|env|defaults|concurrency|jobs)$/ { print $2 }')
+    if [ -n "$ct_topextra" ]; then
+      fail "$CT_WF has top-level key $(printf '%s\n' "$ct_topextra" | tr '\n' ' ')— check 13 accepts only name, run-name, on, permissions, env, defaults, concurrency and jobs there, since a YAML 1.1 parser reads true:, On: or yes: as the trigger key"
+    fi
+    ct_oncount=$(printf '%s\n' "$ct_on" | awk -F'\t' '$1 == "top" && $2 == "on" { n++ } END { print n + 0 }')
+    if [ "$ct_oncount" -ne 1 ]; then
+      fail "$CT_WF has $ct_oncount top-level on: keys — check 13 reads exactly one, and parsers disagree on which copy of a repeated key wins"
+    fi
+    if printf '%s\n' "$ct_on" | grep -qxF "$(printf 'topval\ton')"; then
+      fail "$CT_WF writes its top-level on: in flow style or with a value on its own line, which check 13 does not read inside — write it as a block, as the rest of the file does"
+    fi
+    ct_evextra=$(printf '%s\n' "$ct_on" | awk -F'\t' '$1 == "event" && $2 != "push" && $2 != "pull_request" { print $2 }')
+    if [ -n "$ct_evextra" ]; then
+      fail "$CT_WF's on: carries event $(printf '%s\n' "$ct_evextra" | tr '\n' ' ')— check 13 accepts only push: and pull_request: there"
+    fi
     # The backstop the pull-request filter rests on: an unconditional run on every push to main.
     # A `push:` that is gone, or that carries a path filter, turns a too-narrow pull-request filter
     # from one late red at merge into a silent gap.
