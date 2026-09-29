@@ -195,6 +195,13 @@ starts nothing.
 ## Requirements
 
 - `git`, `bash`, `jq`, and either an agterm app or `tmux`.
+- **A bash 5 or newer on the machine**, found at `/opt/homebrew/bin/bash`, `/usr/local/bin/bash`,
+  `/usr/bin/bash` or as `bash` on `PATH`. The status report itself runs under macOS's stock
+  `/bin/bash` 3.2, but the slot graph it consults for each live slot, `shipyard-slot-graph.sh`,
+  re-executes itself in a bash >= 5 and refuses without one. On a stock Mac install one beside
+  the system bash (`brew install bash`); do not replace `/bin/bash`. Without it the report still
+  runs, but no slot's completion can be read: every live row says `completion unreadable`, its
+  glyph stays `active`, and each report run prints one stderr line saying so.
 - A `ship` skill in the repo — see above.
 - The CLI matching the parent runtime on `PATH`: `claude` for Claude Code or `codex` for Codex
   (`agy` when `SHIPYARD_AGENT=agy`, with the repo's `ship` skill under `.agents/skills/`).

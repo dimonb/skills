@@ -474,7 +474,8 @@ ok "gitlab: ...over the three non-numeric slots"    3 \
 # that is not a 3.x is a FAILURE, not a skip, and /bin/bash is not tried in its place. CI names
 # /bin/bash on its macOS job (#332, .github/workflows/ci.yml), so a runner image whose /bin/bash
 # stopped being 3.2 reds that job instead of turning the floor back into a skip line. No automated
-# run takes that failing arm; it was checked by hand when it was written. With none named and no
+# run takes that failing arm; it was checked by hand when it was written (the shipyard README,
+# Known limits, KL-1). With none named and no
 # 3.x /bin/bash, this section says it did not run, which is every run of the Linux job. The report's
 # slot graph is a subprocess that re-execs into a bash >= 5, so the floor also needs one installed
 # beside the 3.2: without one the graph's refusal lands on stderr and the floor reds. The exported fakes above reach a 3.2 child: Apple's 3.2.57 reads the
@@ -505,6 +506,40 @@ else
   ok "3.2 floor: the gone-slot teardown arm keeps its number" 1 "$(printf '%s' "$out32" | grep -c '^| 64 | !641 |')"
   ok "3.2 floor: a pre-launch merge is an annotation"    1 "$(printf '%s' "$out32" | grep -c '^| 65 | !651? | .*no MR yet')"
 fi
+
+# #338 — NO BASH 5 FOR THE SLOT GRAPH. Where no bash >= 5 is reachable the graph refuses for every
+# live slot. The report must say so ONCE per run, not once per slot, and each affected row must say
+# its completion cannot be read rather than read as a plain active slot. A missing bash 5 cannot be
+# arranged here (the graph looks at absolute paths, and CI has one on every runner), so the report
+# runs from a copy of the skill whose graph is a stub that refuses the way the real one does. The
+# real refusal's first line is pinned below, because the report's remedy hint keys on it. It runs
+# under the 3.2 found above where there is one, since that is the interpreter this path meets.
+ok "no bash 5: the graph's first refusal line names the requirement" 1 \
+   "$(grep -c 'echo "shipyard-slot-graph: needs bash >= 5 (a shipyard requirement)' "$SKILL_DIR/shipyard-slot-graph.sh")"
+NB5="$T15TMP/nobash5"; mkdir -p "$NB5"; cp -R "$SKILL_DIR/." "$NB5/"
+cat > "$NB5/shipyard-slot-graph.sh" <<'EOF'
+echo "shipyard-slot-graph: needs bash >= 5 (a shipyard requirement), this one is 3.2.57(1)-release." >&2
+echo "                     macOS ships bash 3.2 as /bin/bash; install a modern one beside it (brew install bash)." >&2
+exit 70
+EOF
+: > "$GH_CALLS"
+nb5=$(SHIPYARD_MOTION_INTERVAL="${SHIPYARD_MOTION_INTERVAL:-0.01}" SHIPYARD_STALL_SECS=100000 SHIPYARD_BACKEND=tmux SHIPYARD_SESSION=t15ex \
+        SHIPYARD_FORGE_TIMEOUT=2 SHIPYARD_AUTODOWN=0 \
+        "${B32:-bash}" "$NB5/shipyard-report.sh" 51 58 59 65 2>"$T15TMP/nb5.err")
+ok "no bash 5: every live row says its completion cannot be read" 4 \
+   "$(printf '%s' "$nb5" | grep -c '^| [0-9]* | .* · completion unreadable |')"
+ok "no bash 5: one stderr line for the whole run" 1 "$(grep -c . "$T15TMP/nb5.err")"
+ok "no bash 5: ...which counts the slots and names the cause and the remedy" 1 \
+   "$(grep -c '^shipyard-report: the slot graph could not answer for 4 live slot(s) .*needs bash >= 5 .*brew install bash; see the shipyard README, Requirements)$' "$T15TMP/nb5.err")"
+ok "no bash 5: the graph's own per-slot lines are not repeated" 0 \
+   "$(grep -c '^ *macOS ships bash 3.2' "$T15TMP/nb5.err")"
+# The same report over the real graph: no annotation and nothing on stderr, so the two assertions
+# above are about the refusal and not about these slots.
+nb5ok=$(SHIPYARD_MOTION_INTERVAL="${SHIPYARD_MOTION_INTERVAL:-0.01}" SHIPYARD_STALL_SECS=100000 SHIPYARD_BACKEND=tmux SHIPYARD_SESSION=t15ex \
+          SHIPYARD_FORGE_TIMEOUT=2 SHIPYARD_AUTODOWN=0 \
+          bash "$REPORT" 51 58 59 65 2>"$T15TMP/nb5ok.err")
+ok "with the real graph: no row is annotated" 0 "$(printf '%s' "$nb5ok" | grep -c 'completion unreadable')"
+ok "with the real graph: nothing on stderr" "" "$(cat "$T15TMP/nb5ok.err")"
 
 unset -f git tmux gh glab
 if [ "$FAILURES" -eq 0 ]; then

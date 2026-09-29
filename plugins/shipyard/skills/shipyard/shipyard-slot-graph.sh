@@ -73,8 +73,10 @@ if [ "${BASH_SOURCE[0]}" = "${0}" ] \
     _v=$("$_p" -c 'echo ${BASH_VERSINFO[0]}' 2>/dev/null) || continue
     [ "${_v:-0}" -ge 5 ] && exec env SHIPYARD_SLOT_GRAPH_REEXEC=1 "$_p" "$0" "$@"
   done
-  echo "shipyard-slot-graph: needs bash >= 5, this one is ${BASH_VERSION:-unknown}." >&2
-  echo "                     macOS ships bash 3.2 as /bin/bash; install a modern one (brew install bash)." >&2
+  # The first line stands alone: shipyard-report.sh prints only it, once per run (#338).
+  echo "shipyard-slot-graph: needs bash >= 5 (a shipyard requirement), this one is ${BASH_VERSION:-unknown}." >&2
+  echo "                     macOS ships bash 3.2 as /bin/bash; install a modern one beside it (brew install bash)." >&2
+  echo "                     See the shipyard plugin README, Requirements." >&2
   exit 70
 fi
 
