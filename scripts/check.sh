@@ -26,6 +26,8 @@
 #     lists every process on the machine
 # 15. every section cross-reference (a section sign and a number) in a markdown file names a
 #     numbered heading that exists, in that file or in ship's core SKILL.md
+# 16. every gated test that runs code under /bin/bash is a step of the macOS bash32-floor CI job,
+#     since on Linux /bin/bash is 5.x and such a test measures nothing there
 set -uo pipefail
 cd "$(dirname "$0")/.."
 ROOT_P=$(pwd -P)          # physical repo root; see the symlink containment check below
@@ -1390,6 +1392,63 @@ PY
       echo "FAIL: dangling section cross-reference (no such numbered heading in the file or in $core):"
       printf '%s\n' "$xr_out" | sed -n 's/^DANGLING /  /p'; rc=1
     fi
+  fi
+fi
+
+# ------------------ 16. every test that runs something under /bin/bash is a step of the macOS job
+# On Linux /bin/bash is 5.x, so a test that executes code under /bin/bash to hold the bash 3.2 floor
+# passes there vacuously; only the macOS job (`bash32-floor` in the CI workflow) measures it, and
+# only for the tests it names. That list was kept by hand (#337): a new floor test was run nowhere
+# that measures it unless somebody remembered the step. So the list the job SHOULD run is derived
+# here from the tests, and every derived test must be named by a `run: bash <path>` step of the job.
+#
+# "Executes /bin/bash" is read off each test in $GATED_SUITES, line by line: a line that is not a
+# comment and not an echo or printf, naming `/bin/bash` as a whole path (so `/opt/homebrew/bin/bash`
+# in a re-exec candidate list is not it). A line that names it without being a floor carries a
+# `floor-exempt: <reason>` comment on that same line, where a reader of the test sees it.
+#
+# What it cannot see: a floor reached some other way — an interpreter held in a variable set
+# elsewhere, a helper that the test sources, a script that runs under /bin/bash because its caller
+# said so. Those still depend on somebody adding the step. It also does not assert the step runs the
+# test in a way that reaches /bin/bash; the test does that itself. Fails CLOSED: no job, a job that
+# names no test, a job step naming a missing file, and a derivation that found nothing each red.
+fl_wf=.github/workflows/ci.yml
+if [ ! -f "$fl_wf" ]; then
+  fail "the bash 3.2 floor check (check 16) cannot find the CI workflow: $fl_wf"
+else
+  fl_job=$(awk '/^  bash32-floor:[[:space:]]*$/ {on=1; next}
+                on && /^  [^[:space:]#]/ {on=0}
+                on && /^[^[:space:]]/ {on=0}
+                on {print}' "$fl_wf" \
+           | sed -n 's/^[[:space:]]*run:[[:space:]]*bash[[:space:]][[:space:]]*\([^[:space:]]*\)[[:space:]]*$/\1/p')
+  fl_found=""
+  for suite_dir in $GATED_SUITES; do
+    fl_tests=$(list_suite_tests "$suite_dir") || {
+      fail "could not list the tests of $suite_dir for the bash 3.2 floor check (check 16)"; continue; }
+    while IFS= read -r rel; do
+      [ -n "$rel" ] || continue
+      f="$suite_dir/$rel"
+      [ -f "$f" ] || continue
+      grep -v 'floor-exempt:' "$f" \
+        | grep -Ev '^[[:space:]]*(#|echo([[:space:]]|$)|printf([[:space:]]|$))' \
+        | grep -Eq '(^|[^A-Za-z0-9_./-])/bin/bash([^A-Za-z0-9_./-]|$)' \
+        && fl_found="$fl_found$f"$'\n'
+    done <<< "$fl_tests"
+  done
+  if [ -z "$fl_job" ]; then
+    fail "the bash 3.2 floor check (check 16) found no \`run: bash <path>\` step in the bash32-floor job of $fl_wf (renamed? moved?)"
+  elif [ -z "$fl_found" ]; then
+    fail "the bash 3.2 floor check (check 16) found no test that runs anything under /bin/bash (moved? renamed?)"
+  else
+    while IFS= read -r p; do
+      [ -n "$p" ] || continue
+      [ -f "$p" ] || fail "the bash32-floor job in $fl_wf runs a test that does not exist: $p"
+    done <<< "$fl_job"
+    while IFS= read -r f; do
+      [ -n "$f" ] || continue
+      printf '%s\n' "$fl_job" | grep -Fxq -- "$f" || fail \
+        "$f runs code under /bin/bash, which is 5.x on Linux, but the macOS bash32-floor job in $fl_wf does not run it — add a step, or mark a line that is not a floor with a floor-exempt: comment (check 16)"
+    done <<< "$fl_found"
   fi
 fi
 

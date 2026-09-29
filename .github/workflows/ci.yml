@@ -44,19 +44,19 @@ jobs:
 
   # The shipyard report is run by stock macOS /bin/bash 3.2, and the tests that hold it to that run
   # parts of it under /bin/bash — which on Linux is 5.x, so there t15's floor prints a skip line
-  # (#332) and the /bin/bash sections of t19, t13, t-policy and t-adapters pass vacuously, as each
-  # says. This job runs those files on GitHub's macOS image, whose /bin/bash is 3.2: t15, t19 and
-  # t13 run the report over slots, and t13, t-policy and t-adapters the modules it sources. Helpers
-  # the report starts as `bash <script>` (the slot graph, escalations, down) resolve a bash 5 here,
-  # so the floors cover the report's in-process code and what it sources only. The list is what a
-  # grep for /bin/bash floors found when this job was written; a new test with a /bin/bash section
-  # needs a step here too, and nothing checks that. t15 is the step that proves the 3.2 is there: it
-  # NAMES /bin/bash and fails, rather than skips, when that is not a 3.x, so an image whose /bin/bash
-  # moves on reds this job instead of making the others vacuous again. A bash >= 5 is installed
-  # beside it because the report's slot graph is a subprocess that re-execs into one; without one
-  # the report still runs, with the graph's refusal on stderr and every slot's verdict `active`, a
-  # path this job therefore does not measure. These files, not `make test`: the rest already runs on
-  # Linux.
+  # (#332) and the /bin/bash sections of the others pass vacuously, as each says. This job runs
+  # those files on GitHub's macOS image, whose /bin/bash is 3.2: t15, t19 and t13 run the report
+  # over slots, t13, t-policy and t-adapters the modules it sources, and t7 and t21 the continuity
+  # watcher, which production launches under /bin/bash. Helpers the report starts as
+  # `bash <script>` (the slot graph, escalations, down) resolve a bash 5 here, so the floors cover
+  # the report's in-process code and what it sources only (the shipyard README's Known limits).
+  # Which files belong here is derived, not remembered: scripts/check.sh check 16 reds when a gated
+  # test runs code under /bin/bash and no step below runs it. t15 is the step that proves the 3.2
+  # is there: it NAMES /bin/bash and fails, rather than skips, when that is not a 3.x, so an image
+  # whose /bin/bash moves on reds this job instead of making the others vacuous again. A bash >= 5
+  # is installed beside it because the report's slot graph is a subprocess that re-execs into one
+  # (a documented shipyard requirement); the report without one is t15's no-bash-5 section, which
+  # stubs the graph's refusal. These files, not `make test`: the rest already runs on Linux.
   bash32-floor:
     name: shipyard report bash 3.2 floor (macOS)
     runs-on: macos-latest
@@ -85,3 +85,11 @@ jobs:
 
       - name: t-adapters under /bin/bash 3.2
         run: bash shared/adapters/tests/t-adapters.sh
+
+      # The Codex continuity watcher is launched as `/bin/bash shipyard-continuity.sh ...`, and t7
+      # and t21 drive that command through their fake agtermctl, so here they run it under 3.2.
+      - name: t7 under /bin/bash 3.2
+        run: bash plugins/shipyard/skills/shipyard/tests/t7-continuity.sh
+
+      - name: t21 under /bin/bash 3.2
+        run: bash plugins/shipyard/skills/shipyard/tests/t21-continuity-fifo.sh

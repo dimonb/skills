@@ -284,3 +284,25 @@ and get different skills. `SHIPYARD_ENV_SCRUB` overrides the set removed from th
 defaults strip the runtimes' session identities, including Claude Code's messaging socket.
 Override that one only if you know why. `SHIPYARD_DRY=1` prints everything a child would get
 and starts nothing.
+
+## Known limits
+
+Limits a review found and recorded rather than filed: each is reachable only by a later edit or an
+unsupported setup, not by ordinary use. Each names what would make it a defect worth an issue.
+
+- **KL-1 — t15's failing floor arm is exercised by no automated run.** When
+  `SHIPYARD_TEST_BASH32` names an interpreter that is not a bash 3.x, t15 fails rather than
+  skipping; the macOS CI job always names a real 3.2 and the Linux job never sets it, so no run
+  takes that arm, and the floors in t-policy and t-adapters lean on it.
+  `plugins/shipyard/skills/shipyard/tests/t15-iid-fallback.sh:487`. Found by the review of #336
+  (#337). *Promote when* an edit to that section is proposed, or a macOS runner image whose
+  `/bin/bash` is not 3.x is announced: then the arm needs a CI step asserting it fails.
+- **KL-2 — the helpers the report spawns are measured under bash 5 in CI, not 3.2.** The report
+  starts `shipyard-slot-graph.sh`, `shipyard-escalations.sh` and `shipyard-down.sh` as
+  `bash <script>`, and `shipyard-lib.sh` puts the Homebrew prefix first on `PATH`, so wherever a
+  bash 5 is installed there (the CI job, and every setup the Requirements above describe) they run
+  under it. Only a Mac with no such bash runs them under 3.2, where the escalations block would
+  vanish silently (its stderr goes to `/dev/null`) if that script ever used a bash-4 construct; it
+  uses none today. `plugins/shipyard/skills/shipyard/shipyard-report.sh:2317`. Found by the review
+  of #336 (#337). *Promote when* a bash-4 construct lands in `shipyard-escalations.sh` or
+  `shipyard-down.sh`, or when bash 5 stops being a requirement.
