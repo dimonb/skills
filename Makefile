@@ -4,7 +4,10 @@
 # every pure, fast suite under shared/ — each one listed below — so a regression in any of them
 # reds a commit. Whole target measured at 8.9s wall, warm and otherwise idle (gate 2.4s; driver
 # 1.3s, flow 2.3s, adapters 1.9s, policy 0.9s, knobs 0.1s), and more under load — re-measured at
-# 8.9s after #203 added check 13, so that check costs nothing worth recording. The figure lives
+# 8.9s after #203 added check 13, so that check costs nothing worth recording. The canary suite
+# (#279) measured 2.2s on its own, most of it its own bounded waits; the whole target was NOT
+# re-measured when it was added, because the only box to hand had a load average near 40 and a
+# figure taken there would be wrong, so the 8.9s predates it. The figure lives
 # here and not in a prose log because a wall-clock number recorded elsewhere goes stale silently
 # and then gets used to justify a decision — so re-measure it here when you add a suite, rather
 # than adjusting it by arithmetic.
