@@ -938,8 +938,10 @@ else
   # the block style this file already uses; where it carries a filter they are the red it deserves.
   # A `-` item that is not quoted is not read, and that is NOT always a red: under
   # `pull_request:`'s `paths:` it drops out of the filter, which reds only for an entry `$GUARDED`
-  # derives (an unquoted `- docs/**` vanishes silently); under `push:`'s `paths:` the key has
-  # already red; under any other key it is ignored, as this check reads no other key's items.
+  # derives (an unquoted `- docs/**` vanishes silently); under `push:`'s `branches:` it is counted
+  # (a `raw` row) but not read, so it reds as no `main` or as an entry other than `main`; under any
+  # other key of either event the key itself has already red. A key with a value on its own line
+  # prints `keyval <event> <key>`, since the lines below it are not its items.
   ct_on=$(awk '
     function name(s) { sub(/:.*/, "", s); gsub(/["\047]/, "", s); return s }
     # A line in column 0 opens a top-level key; only the `on:` block is read.
@@ -960,12 +962,17 @@ else
         next
       }
       if (line ~ /^["\047]?[A-Za-z_][A-Za-z0-9_-]*["\047]?:/) {
-        key = name(line); print "key\t" ev "\t" key; next
+        key = name(line); print "key\t" ev "\t" key
+        # A value on the same line as the key (a flow list, a scalar, a block-scalar indicator): the
+        # lines under it, if any, are not list items of that key, whatever they look like.
+        if (line !~ /^[^:]*:[ ]*(#.*)?$/) print "keyval\t" ev "\t" key
+        next
       }
       # Neither a key nor a list item, e.g. a flow mapping on the line below its event, or a key
       # with a blank before its colon: a shape this reader cannot place.
       if (line !~ /^-/) { print "unread\t" ev; next }
       if (key == "") next
+      print "raw\t" ev "\t" key
       if (line ~ /^- *\047[^\047]*\047/) { v = line; sub(/^- *\047/, "", v); sub(/\047.*/, "", v) }
       else if (line ~ /^- *"[^"]*"/) { v = line; sub(/^- *"/, "", v); sub(/".*/, "", v) }
       else next
@@ -1007,18 +1014,30 @@ else
       extra=$(printf '%s\n' "$ct_on" | awk -F'\t' -v ev="$ev" -v ok="$allowed" \
         '$1 == "key" && $2 == ev && $3 != ok && $3 !~ /^paths(-ignore)?$/ { print $3 }')
       if [ -n "$extra" ]; then
-        fail "$CT_WF's $ev: trigger carries $(printf '%s' "$extra" | tr '\n' ' ')— check 13 accepts only $allowed: there, since any other key narrows when check-test runs"
+        fail "$CT_WF's $ev: trigger carries $(printf '%s\n' "$extra" | tr '\n' ' ')— check 13 accepts only $allowed: there, since any other key narrows when check-test runs"
       fi
     done
-    # And the one list `push:` may carry must name `main`, as a quoted block item, with no negated
-    # pattern: a list without it (`dev` alone), or one that excludes it again (`'!main'`), is a push
-    # trigger that never fires on main. A flow list (`branches: [main]`) or an unquoted item is not
-    # read, so it reds here too: a false red on a correct file, fixed by the block style.
+    # A key under either event with a value on its own line is one whose lines below it the reader
+    # would otherwise take for its list items: `branches: >-` over `- 'main'` is a string to YAML.
+    for ev in push pull_request; do
+      kv=$(printf '%s\n' "$ct_on" | awk -F'\t' -v ev="$ev" '$1 == "keyval" && $2 == ev { print $3 }')
+      if [ -n "$kv" ]; then
+        fail "$CT_WF writes $(printf '%s\n' "$kv" | tr '\n' ' ')under its $ev: trigger with a value on the key's own line, which check 13 does not read — write it as a block list, as the rest of the file does"
+      fi
+    done
+    # And the one list `push:` may carry is exactly `main`, as a quoted block item. A list without
+    # it (`main-old` alone) is a push trigger that never fires on main; and any other entry beside it
+    # is refused rather than reasoned about, since a negated pattern (`'!main'`) excludes main again
+    # and an alias, an escape or an unquoted item may spell one this reader cannot see. So every `-`
+    # line under `branches:` must read as `main`. A flow list (`branches: [main]`) or an unquoted
+    # `- main` reds too: a false red on a correct file, fixed by the block style.
     push_branches=$(printf '%s\n' "$ct_on" | awk -F'\t' '$1 == "item" && $2 == "push" && $3 == "branches" { print $4 }')
-    if ! printf '%s\n' "$push_branches" | grep -qxF main; then
+    push_raw=$(printf '%s\n' "$ct_on" | awk -F'\t' '$1 == "raw" && $2 == "push" && $3 == "branches" { n++ } END { print n + 0 }')
+    push_main=$(printf '%s\n' "$push_branches" | grep -cxF main)
+    if [ "$push_main" -eq 0 ]; then
       fail "$CT_WF's push: trigger does not name 'main' under branches: (as a quoted block item) — check-test's unconditional run on main, the backstop for its pull-request filter, is gone"
-    elif printf '%s\n' "$push_branches" | grep -q '^!'; then
-      fail "$CT_WF's push: branches: carries a negated pattern, which check 13 does not reason about — it could exclude main again"
+    elif [ "$push_raw" -ne "$push_main" ]; then
+      fail "$CT_WF's push: branches: carries an entry other than 'main' — check 13 accepts exactly 'main' there, since a negated, aliased or unquoted entry could exclude main again"
     fi
     # A line at event level it could not name reds whatever event it is, since the lines under it
     # would otherwise be credited to the event before it.

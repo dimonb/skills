@@ -1304,14 +1304,26 @@ perl -0pi -e "s{(\n  pull_request:\n)}{\$1    types:\n      - 'closed'\n}" .gith
 expect_fail "check 13: types under pull_request: is refused" \
   "pull_request: trigger carries types"
 git checkout -- .github/workflows/check-test.yml
-# 33j — push: branches: must name main: a list without it, and one that excludes it again.
-perl -0pi -e "s{(\n  push:\n    branches:\n      - )'main'\n}{\$1'dev'\n}" .github/workflows/check-test.yml
+# 33j — push: branches: is exactly main. A list without it, spelt as a near miss so that a match
+# loosened to a substring would pass it; one that excludes it again; and an entry beside it the
+# reader cannot read (unquoted), which only the count of `-` lines sees.
+perl -0pi -e "s{(\n  push:\n    branches:\n      - )'main'\n}{\$1'main-old'\n}" .github/workflows/check-test.yml
 expect_fail "check 13: a push: branches list without main reds" \
   "push: trigger does not name 'main'"
 git checkout -- .github/workflows/check-test.yml
 perl -0pi -e "s{(\n  push:\n    branches:\n      - 'main'\n)}{\$1      - '!main'\n}" .github/workflows/check-test.yml
 expect_fail "check 13: a negated pattern under push: branches reds" \
-  "push: branches: carries a negated pattern"
+  "push: branches: carries an entry other than 'main'"
+git checkout -- .github/workflows/check-test.yml
+perl -0pi -e "s{(\n  push:\n    branches:\n      - 'main'\n)}{\$1      - release\n}" .github/workflows/check-test.yml
+expect_fail "check 13: an unreadable entry beside main under push: branches reds" \
+  "push: branches: carries an entry other than 'main'"
+git checkout -- .github/workflows/check-test.yml
+# 33k — a value on the key's own line: `>-` makes the list below it a string to YAML, yet its
+# `- 'main'` would read as an item. Nothing else reds here.
+perl -0pi -e "s{(\n  push:\n    branches:)\n}{\$1 >-\n}" .github/workflows/check-test.yml
+expect_fail "check 13: a key under push: with a value on its own line is refused" \
+  "with a value on the key's own line"
 git checkout -- .github/workflows/check-test.yml
 # 33f — an entry under ANOTHER trigger cannot stand in for one missing from the pull-request
 # filter. Under the flat scrape this line was read as coverage, so dropping `shared/**` from
@@ -1646,8 +1658,9 @@ rm -rf plugins/_probe-scratch-empty plugins/_probe-scratch "$REFS/_probe-scratch
 # not gate assertions, so they are proven by running this script a second time, NESTED, and reading
 # how it refuses. Every nested run below must refuse before it arms a trap or mutates anything,
 # because a nested run that got past its entry guards would start a second full run over this
-# tree. So each one without --recover (which never reaches a run) is given a file that reds the
-# gate — a non-Latin file under `docs/`, the exact state #136 measured — which makes a
+# tree. So each one without --recover (which never reaches a run) is given a non-Latin byte that
+# reds the gate — in a file under `docs/`, the exact state #136 measured, or in 36g inside its own
+# Makefile edit — which makes a
 # broken arm fall to another refusal, or to `BASELINE DIRTY`, and report here as a wrong arm
 # rather than run.
 # $1 label, $2 the exit status wanted, $3 a fixed string the nested output must contain, then the
