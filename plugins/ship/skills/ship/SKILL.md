@@ -1601,8 +1601,9 @@ reads when it uses the component: its SKILL.md, or its README. Where the compone
 is the repo's stated convention for such a list, else `docs/known-limits.md`. One entry per
 residual, each line carrying:
 
-- a stable id, `KL-<n>`, one more than the highest id that section has ever used, so an id is
-  never reused. An entry that has reached the base branch leaves its id behind, once removed, as a
+- a stable id, `KL-<n>`, one more than the highest id the section holds, tombstones included, and
+  never an id this change has already cited, so an id that reached the base branch is never
+  reused. An entry that has reached the base branch leaves its id behind, once removed, as a
   one-line tombstone naming the issue it was promoted to or the change that removed it. One added
   and taken out within the same change is deleted outright;
 - the **shape** of the limit, one sentence;
