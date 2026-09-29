@@ -41,3 +41,21 @@ jobs:
       # those surfaces, since `make check` deliberately does not run them.
       - name: make test
         run: make test
+
+  # The shipyard report is run by stock macOS /bin/bash 3.2, and the one check that it stays 3.2
+  # clean over live slots — the bash 3.2 floor in t15 — has no 3.2 to run under on Linux, where it
+  # prints a skip line (#332). GitHub's macOS image ships /bin/bash 3.2, so this job runs that file
+  # alone there. It NAMES the interpreter rather than letting t15 find one: t15 fails, rather than
+  # skips, when SHIPYARD_TEST_BASH32 is set and is not a 3.x, so an image whose /bin/bash moves on
+  # reds here instead of going quiet. One file, not `make test`: the rest already runs on Linux.
+  bash32-floor:
+    name: shipyard report bash 3.2 floor (macOS)
+    runs-on: macos-latest
+    steps:
+      - name: Check out the repository
+        uses: actions/checkout@v7
+
+      - name: t15 under /bin/bash 3.2
+        env:
+          SHIPYARD_TEST_BASH32: /bin/bash
+        run: bash plugins/shipyard/skills/shipyard/tests/t15-iid-fallback.sh

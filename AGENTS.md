@@ -388,7 +388,9 @@ run by hand, gated by nothing, for as long as it existed (#111).
 
 `make check` also runs the driver, flow, adapter and policy suites (all fast and pure), so a
 regression in any of the four reds a commit. CI runs `make check` and `make test` in one workflow
-(`.github/workflows/ci.yml`) on every push to `main` and every pull request, and `make check-test`
+(`.github/workflows/ci.yml`) on every push to `main` and every pull request — plus, in a macOS job
+of the same workflow, the shipyard report's bash 3.2 floor, which has no 3.2 to run under on
+Linux — and `make check-test`
 in a SEPARATE, concurrent workflow (`.github/workflows/check-test.yml`) — unconditionally on every
 push to `main`, and on a pull request only when the change touches a path that could affect what
 it proves. That filter is derived from `$GUARDED` in `scripts/check-test.sh` and asserted by

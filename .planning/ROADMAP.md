@@ -33,7 +33,7 @@
 `090ab52`. `.github/workflows/ci.yml` runs make check + check-test + test on push/PR — **on Linux
 only.** (This line said "green Linux + macOS"; corrected at #111. One `runs-on: ubuntu-latest` job,
 and no macOS runner ever existed in that file's history. macOS is covered only by a human running
-`make test`.) Getting the suites onto Linux caught + fixed **2 latent portability bugs** (shipyard
+`make test`. #332 later added one macOS job that runs only t15's bash 3.2 floor.) Getting the suites onto Linux caught + fixed **2 latent portability bugs** (shipyard
 `ctx_mtime` BSD `stat -f`; council `t3-token` wall-clock wedge race → now turn-count deterministic).
 Decision 91-3 (mine): Option A (fix them in-PR), bounded fallback to B — A worked, no rabbit hole.
 

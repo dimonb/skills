@@ -216,7 +216,9 @@ Beyond those static checks, `make check` also runs every fast, pure suite — th
 `check` recipe is the list — so a regression in any of them reds a commit; the slower shipyard and
 council suites run under `make test`, and `make check` gates only their registration, invocation
 and declaration (above). CI runs `make check` and `make test` in one workflow
-(`.github/workflows/ci.yml`) on every push to `main` and every pull request, and `make check-test`
+(`.github/workflows/ci.yml`) on every push to `main` and every pull request — plus, in a macOS job
+of the same workflow, the shipyard report's bash 3.2 floor, which has no 3.2 to run under on
+Linux — and `make check-test`
 in a SEPARATE, concurrent workflow (`.github/workflows/check-test.yml`) — unconditionally on every
 push to `main`, and on a pull request only when the change touches a path that could affect what
 it proves. That filter is derived from `$GUARDED` in `scripts/check-test.sh` and asserted by
