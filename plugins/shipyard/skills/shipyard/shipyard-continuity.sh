@@ -735,8 +735,10 @@ shipyard_continuity_set_current_pid() {
   SHIPYARD_CONTINUITY_CURRENT_PID="$pid"
 }
 
+# shipyard_continuity_acquire_lock <lock> [polls] — polls is how many 0.05 s waits a LIVE holder
+# is waited out before giving up (default 100); a dead holder is reaped instead of waited on.
 shipyard_continuity_acquire_lock() {
-  local lock="$1" n=0 record pid token owner_pid claim claim_path lock_dir lock_name valid
+  local lock="$1" polls="${2:-100}" n=0 record pid token owner_pid claim claim_path lock_dir lock_name valid
   lock_dir=${lock%/*}
   shipyard_continuity_set_current_pid "$lock_dir" || return 1
   owner_pid="$SHIPYARD_CONTINUITY_CURRENT_PID"
@@ -778,7 +780,7 @@ shipyard_continuity_acquire_lock() {
       rm -f "$lock"
       continue
     fi
-    if [ "$n" -ge 100 ]; then
+    if [ "$n" -ge "$polls" ]; then
       rmdir "$claim_path" 2>/dev/null || true
       return 1
     fi
@@ -1217,7 +1219,15 @@ shipyard_continuity_stop_all() {
   local generation next_generation
   state=$(shipyard_continuity_state_dir 2>/dev/null) || return 0
   lock="$state/continuity-lifecycle.lock"
-  shipyard_continuity_acquire_lock "$lock" || return 1
+  # A stop waits longer for the lock than a start does, because a start holding it may be pinging a
+  # watcher: that request's own ceiling is 70 waits of 0.1 s, past the 100 waits of 0.05 s a
+  # start allows, and a stop that gave up first returned 1 with the start's freshly published
+  # watcher left running (#270: t7's synchronized-stop case, reproduced by holding a start's
+  # publication past the 100 waits the stop then shared). The failure was never silent, since
+  # shipyard-down.sh reports it
+  # as a watcher it could not stop. Four hundred waits outlasts the ping with margin. A holder that
+  # outlasts even this, such as a hung `agtermctl session new`, still fails the stop that same way.
+  shipyard_continuity_acquire_lock "$lock" 400 || return 1
   lock_token="$SHIPYARD_CONTINUITY_LOCK_TOKEN"
   lock_owner_pid="$SHIPYARD_CONTINUITY_LOCK_OWNER_PID"
   generation=$(shipyard_continuity_generation "$state")

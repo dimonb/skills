@@ -711,18 +711,28 @@ check "" "$pre_intent_files" "old-generation intent cannot publish after stop re
 unset _SHIPYARD_CONTINUITY_BEFORE_INTENT_DELAY
 
 reset_fake
-_SHIPYARD_CONTINUITY_PUBLISH_DELAY=0.4
+# The start is held at its publication point, inside the lifecycle lock, and released only once the
+# stop is seen waiting for that lock (its own claim beside the start's). This case once went red
+# under a loaded parallel run, want 0 got 1 with the start's pid, heartbeat and log left behind (#270):
+# the signature of a stop that gave up waiting for the lock, reproduced by holding a publication past
+# the stop's old wait. The order is now established rather than timed, and the stop's wait is longer.
+_SHIPYARD_CONTINUITY_PUBLISH_DELAY=t7-hold:publish
 _SHIPYARD_CONTINUITY_PUBLICATION_POLLS=40
 export _SHIPYARD_CONTINUITY_PUBLISH_DELAY _SHIPYARD_CONTINUITY_PUBLICATION_POLLS
 shipyard_continuity_start agterm >"$TMP/racing-start" 2>&1 & racing_start=$!
-n=0
-while [ ! -L "$_SHIPYARD_CONTINUITY_DIR/continuity-lifecycle.lock" ] && [ "$n" -lt 20 ]; do
-  sleep 0.02
-  n=$((n + 1))
-done
+check yes "$(await_hold publish)" "start reached its publication point inside the lock"
 if [ -L "$_SHIPYARD_CONTINUITY_DIR/continuity-lifecycle.lock" ]; then start_lock_seen=yes; else start_lock_seen=no; fi
 check yes "$start_lock_seen" "start-wins lifecycle synchronization point is observed"
 shipyard_continuity_stop_all >"$TMP/racing-stop" 2>&1 & racing_stop=$!
+n=0; claims=0
+while [ "$claims" -lt 2 ] && [ "$n" -lt $((HOLD_SECS * 20)) ]; do
+  claims=$(find "$_SHIPYARD_CONTINUITY_DIR" -maxdepth 1 -type d -name 'continuity-lifecycle.lock.claim.*' \
+    | wc -l | tr -d ' ')
+  command sleep 0.05
+  n=$((n + 1))
+done
+check 2 "$claims" "stop is waiting on the lock the publishing start holds"
+release_hold publish
 racing_start_rc=0; reap_job "$racing_start" || racing_start_rc=$?
 racing_stop_rc=0; reap_job "$racing_stop" || racing_stop_rc=$?
 check 0 "$racing_start_rc" "in-flight start publishes before synchronized stop"
