@@ -34,7 +34,8 @@ repo's. Anything else you keep there untracked — a scratch directory, a local 
 whatever another tool left behind — is your business: **every check but the two repo-wide scans
 ignores it**, so its frontmatter, its name and its scripts are not the gate's concern, and it draws
 a note rather than a failure. The two repo-wide scans still read it, deliberately: a leak or a
-non-Latin script reds the gate wherever it sits, including in a file you never meant to commit.
+non-Latin script reds the gate wherever it sits, including in a file you never meant to commit,
+unless that file is git-ignored.
 
 That carve-out costs no coverage of anything this repo ships, because everything it ships lives
 under `plugins/`, which is checked in full, untracked files included unless git-ignored: every

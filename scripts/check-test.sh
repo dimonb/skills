@@ -78,6 +78,9 @@ PROBE_FILES=(
   plugins/ship/skills/ship/references/_probe-scratch plugins/ship/skills/ship/references/_probe-dangling.md
   plugins/ship/skills/ship/references/_probe-ignored.md
   plugins/_probe-link
+  # No probe writes this any more (#58); a run of the version before, killed inside 36g, did, and
+  # listing it keeps that one leftover named and recoverable rather than a bare `BASELINE DIRTY`.
+  docs/_probe-note.md
 )
 
 # THE RUN MARKER (#136). While a run is in flight its probes are in the tree, and from outside a
@@ -1325,6 +1328,28 @@ perl -0pi -e "s{(\n  push:\n    branches:)\n}{\$1 >-\n}" .github/workflows/check
 expect_fail "check 13: a key under push: with a value on its own line is refused" \
   "with a value on the key's own line"
 git checkout -- .github/workflows/check-test.yml
+# 33k2 — the same under pull_request:, where the list below still reads as a complete filter.
+perl -0pi -e "s{(\n  pull_request:\n    paths:)\n}{\$1 >-\n}" .github/workflows/check-test.yml
+expect_fail "check 13: a key under pull_request: with a value on its own line is refused" \
+  "under its pull_request: trigger with a value on the key's own line"
+git checkout -- .github/workflows/check-test.yml
+# 33j4 — a YAML escape: `'main''x'` is main'x, a branch that is not main. An item regex that stops at
+# the first closing quote would read it as `main`.
+perl -0pi -e "s{(\n  push:\n    branches:\n      - )'main'\n}{\$1'main''x'\n}" .github/workflows/check-test.yml
+expect_fail "check 13: an escaped quote in the only push: branch is not read as main" \
+  "push: trigger does not name 'main'"
+git checkout -- .github/workflows/check-test.yml
+# 33l — the pull-request filter reads every entry or reds: an unquoted one beside the complete
+# list, where the coverage loop stays green because every entry $GUARDED derives is still there...
+perl -0pi -e "s{(\n *- 'docs/\\*\\*'\n)}{\$1      - scripts/extra/**\n}" .github/workflows/check-test.yml
+expect_fail "check 13: an unreadable pull_request: paths: entry is refused" \
+  "has an entry check 13 cannot read"
+git checkout -- .github/workflows/check-test.yml
+# 33l2 — ...and a negated one, which takes a guarded tree back out of a list that still names it.
+perl -0pi -e "s{(\n *- 'docs/\\*\\*'\n)}{\$1      - '!scripts/**'\n}" .github/workflows/check-test.yml
+expect_fail "check 13: a negated pull_request: paths: entry is refused" \
+  "pull_request: paths: carries a negated pattern"
+git checkout -- .github/workflows/check-test.yml
 # 33f — an entry under ANOTHER trigger cannot stand in for one missing from the pull-request
 # filter. Under the flat scrape this line was read as coverage, so dropping `shared/**` from
 # `pull_request:` passed green. `pull_request_target:` rather than `push:`, so the push arm above
@@ -1660,9 +1685,8 @@ rm -rf plugins/_probe-scratch-empty plugins/_probe-scratch "$REFS/_probe-scratch
 # because a nested run that got past its entry guards would start a second full run over this
 # tree. So each one without --recover (which never reaches a run) is given a non-Latin byte that
 # reds the gate — in a file under `docs/`, the exact state #136 measured, or in 36g inside its own
-# Makefile edit — which makes a
-# broken arm fall to another refusal, or to `BASELINE DIRTY`, and report here as a wrong arm
-# rather than run.
+# Makefile edit — which makes a broken arm fall to another refusal, or to `BASELINE DIRTY`, and
+# report here as a wrong arm rather than run.
 # $1 label, $2 the exit status wanted, $3 a fixed string the nested output must contain, then the
 # nested run's arguments.
 expect_nested() {

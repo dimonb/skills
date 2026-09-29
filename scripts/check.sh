@@ -304,7 +304,7 @@ fi
 # Untracked entries get a NOTE, never a failure. Staying silent would be defensible — they
 # cannot violate a rule about committed content — but someone who expected their local skill to
 # be checked should learn here that it is not, rather than read a green gate as coverage.
-# Say WHICH checks ignore it. Checks 7 and 8 still read every untracked file wherever it sits —
+# Say WHICH checks ignore it. Checks 7 and 8 still read every untracked file that is not ignored —
 # a leak or a non-Latin script is high-consequence enough to scan a directory a person edits by
 # hand — so an absolute "the gate asserts nothing about it" is false, and would put the note and
 # a FAIL about one path in a single run: the shape this note exists to avoid, not to create.
@@ -908,7 +908,9 @@ fi
 # WHAT IT DOES NOT CATCH, so a green gate is not read as more: it does not verify that `$GUARDED`
 # is itself complete. A probe that mutates a path outside it and restores it by hand satisfies
 # both this check and check-test's own end-of-run cleanliness assertion. That one is judgement,
-# and it is stated in check-test.yml too.
+# and it is stated in check-test.yml too. Nor does it read the job: it reads the triggers only, so a
+# job-level `if:` that skips pushes, or a step that no longer runs `make check-test`, takes the
+# backstop away with this check green.
 #
 # Both inputs are read with a LOUD failure if either cannot be read: a filter check that abstains
 # is worse than none, because the job it guards is the one that proves the rest of this file is
@@ -936,12 +938,12 @@ else
   # `unread ?` and reds whatever it is, since the lines under it would otherwise be credited to the
   # event before it. Where the trigger is in fact unfiltered those are false reds, fixed by writing
   # the block style this file already uses; where it carries a filter they are the red it deserves.
-  # A `-` item that is not quoted is not read, and that is NOT always a red: under
-  # `pull_request:`'s `paths:` it drops out of the filter, which reds only for an entry `$GUARDED`
-  # derives (an unquoted `- docs/**` vanishes silently); under `push:`'s `branches:` it is counted
-  # (a `raw` row) but not read, so it reds as no `main` or as an entry other than `main`; under any
-  # other key of either event the key itself has already red. A key with a value on its own line
-  # prints `keyval <event> <key>`, since the lines below it are not its items.
+  # A `-` item is read only when it is one quoted scalar with nothing after it but a comment, so an
+  # unquoted item or an escape (`'a''b'`) is not read. Every `-` line under a key is still counted
+  # (a `raw` row), and under `pull_request:`'s `paths:` and `push:`'s `branches:` a count that
+  # disagrees with what was read reds; under any other key of either event the key itself has
+  # already red. A key with a value on its own line prints `keyval <event> <key>`, since the lines
+  # below it are not its items.
   ct_on=$(awk '
     function name(s) { sub(/:.*/, "", s); gsub(/["\047]/, "", s); return s }
     # A line in column 0 opens a top-level key; only the `on:` block is read.
@@ -953,7 +955,7 @@ else
       if (ind <= evind) {
         if (line ~ /^["\047]?[A-Za-z_][A-Za-z0-9_-]*["\047]?:/) {
           ev = name(line); key = ""; print "event\t" ev
-          if (line !~ /^[^:]*:[ ]*(#.*)?$/) print "inline\t" ev
+          if (line !~ /^[^:]*:[ \t]*(#.*)?$/) print "inline\t" ev
         } else {
           # An event it cannot name (`pull_request_target :`, `? push`): the lines under it belong
           # to no event it knows, never to the one before it.
@@ -965,7 +967,7 @@ else
         key = name(line); print "key\t" ev "\t" key
         # A value on the same line as the key (a flow list, a scalar, a block-scalar indicator): the
         # lines under it, if any, are not list items of that key, whatever they look like.
-        if (line !~ /^[^:]*:[ ]*(#.*)?$/) print "keyval\t" ev "\t" key
+        if (line !~ /^[^:]*:[ \t]*(#.*)?$/) print "keyval\t" ev "\t" key
         next
       }
       # Neither a key nor a list item, e.g. a flow mapping on the line below its event, or a key
@@ -973,8 +975,8 @@ else
       if (line !~ /^-/) { print "unread\t" ev; next }
       if (key == "") next
       print "raw\t" ev "\t" key
-      if (line ~ /^- *\047[^\047]*\047/) { v = line; sub(/^- *\047/, "", v); sub(/\047.*/, "", v) }
-      else if (line ~ /^- *"[^"]*"/) { v = line; sub(/^- *"/, "", v); sub(/".*/, "", v) }
+      if (line ~ /^- *\047[^\047]*\047[ \t]*(#.*)?$/) { v = line; sub(/^- *\047/, "", v); sub(/\047.*/, "", v) }
+      else if (line ~ /^- *"[^"\\]*"[ \t]*(#.*)?$/) { v = line; sub(/^- *"/, "", v); sub(/".*/, "", v) }
       else next
       print "item\t" ev "\t" key "\t" v
     }
@@ -1025,15 +1027,15 @@ else
         fail "$CT_WF writes $(printf '%s\n' "$kv" | tr '\n' ' ')under its $ev: trigger with a value on the key's own line, which check 13 does not read — write it as a block list, as the rest of the file does"
       fi
     done
-    # And the one list `push:` may carry is exactly `main`, as a quoted block item. A list without
-    # it (`main-old` alone) is a push trigger that never fires on main; and any other entry beside it
-    # is refused rather than reasoned about, since a negated pattern (`'!main'`) excludes main again
-    # and an alias, an escape or an unquoted item may spell one this reader cannot see. So every `-`
-    # line under `branches:` must read as `main`. A flow list (`branches: [main]`) or an unquoted
-    # `- main` reds too: a false red on a correct file, fixed by the block style.
-    push_branches=$(printf '%s\n' "$ct_on" | awk -F'\t' '$1 == "item" && $2 == "push" && $3 == "branches" { print $4 }')
+    # And the one list `push:` may carry is exactly `main`, as a quoted block item. A list without it
+    # (`main-old` alone) is a push trigger that never fires on main; and any other entry beside it is
+    # refused rather than reasoned about, since a negated pattern (`'!main'`) excludes main again and
+    # an alias, an escape (`'main''x'` is main'x to YAML, so it is not read) or an unquoted item may
+    # spell one this reader cannot see. So every `-` line under `branches:` must read as `main`. A
+    # flow list (`branches: [main]`) or an unquoted `- main` reds too: a false red on a correct file,
+    # fixed by the block style. Both counts come from awk's `n + 0`, so neither is ever empty.
     push_raw=$(printf '%s\n' "$ct_on" | awk -F'\t' '$1 == "raw" && $2 == "push" && $3 == "branches" { n++ } END { print n + 0 }')
-    push_main=$(printf '%s\n' "$push_branches" | grep -cxF main)
+    push_main=$(printf '%s\n' "$ct_on" | awk -F'\t' '$1 == "item" && $2 == "push" && $3 == "branches" && $4 == "main" { n++ } END { print n + 0 }')
     if [ "$push_main" -eq 0 ]; then
       fail "$CT_WF's push: trigger does not name 'main' under branches: (as a quoted block item) — check-test's unconditional run on main, the backstop for its pull-request filter, is gone"
     elif [ "$push_raw" -ne "$push_main" ]; then
@@ -1066,6 +1068,18 @@ else
   elif [ -z "$filter" ]; then
     fail "could not read any path filter out of $CT_WF — a pull request would skip check-test entirely"
   else
+    # Every entry of the filter is read, or the filter is refused: an entry the reader skips (an
+    # unquoted `- docs/**`, an escape) would drop out silently wherever `$GUARDED` does not derive
+    # it. And a negated entry (`'!scripts/**'`) takes a guarded tree back out of a filter that still
+    # lists it, which the coverage loop below cannot see, so it is refused rather than reasoned about.
+    pr_raw=$(printf '%s\n' "$ct_on" | awk -F'\t' '$1 == "raw" && $2 == "pull_request" && $3 == "paths" { n++ } END { print n + 0 }')
+    pr_read=$(printf '%s\n' "$filter" | awk 'NF { n++ } END { print n + 0 }')
+    if [ "$pr_raw" -ne "$pr_read" ]; then
+      fail "$CT_WF's pull_request: paths: has an entry check 13 cannot read (unquoted, aliased or escaped) — write every entry as a quoted block item"
+    fi
+    if printf '%s\n' "$filter" | grep -q '^!'; then
+      fail "$CT_WF's pull_request: paths: carries a negated pattern, which check 13 does not reason about — it could take a guarded tree back out of the filter"
+    fi
     for g in $guarded; do
       # A file entry must appear verbatim; a directory entry is covered by `<dir>/**`.
       if [ -f "$g" ]; then want="$g"; else want="$g/**"; fi
