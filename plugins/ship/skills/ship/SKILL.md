@@ -583,10 +583,10 @@ pass on the archived head (§7.F).
   check out another ref — return findings only.* Parallel writers in one worktree corrupt
   each other; ship applies every fix itself, sequentially.
 - **Every subagent, and every probe ship runs itself, reads and copies only from the worktree
-  and the session's scratch or temp directory** — never from the agent's own config, transcript
-  or tool-result directories. Reads there prompt for approval, and an unattended run stalls on
-  the prompt with nobody to answer it and nothing that reliably reports it. Content a subagent needs from
-  there goes into its prompt, never as a path. **One case is decided by the tool, not the path:**
+  and the session's scratch or temp directory** — never, save the one case below, from the agent's
+  own config, transcript or tool-result directories. Reads there prompt for approval, and an
+  unattended run stalls on the prompt with nobody to answer it and nothing that reliably reports
+  it. Content a subagent needs from there goes into its prompt, never as a path. **One case is decided by the tool, not the path:**
   output the runtime saved for the agent itself — a long tool result spilled to a file, its path
   handed back — is read with the **file-read tool**, and a scratch file is written with the
   **file-write tool**, into the scratch directory and never the worktree. Neither is ever reached
@@ -886,7 +886,9 @@ exists elsewhere, the input is impossible, the caller already handles it, the co
 dead), the verdict is REFUTED. Set `kind`: `prose` only when the defect is prose this change
 wrote disagreeing with other prose and every correct fix edits prose alone, with nothing a program
 parses or executes moving; anything else is `behaviour`, including prose that promises what the
-code does not do. Read-only: do not edit anything."*
+code does not do. Read-only: do not edit anything. Read your own saved tool output with the
+file-read tool, write scratch with the file-write tool, and never touch a path the runtime owns
+from the shell."*
 
 ```json
 { "fp": "…", "verdict": "CONFIRMED|REFUTED", "reason": "one sentence",
@@ -927,7 +929,9 @@ clean round, passed that test and made a finished slot raise a false stall. Char
 fix hunk and the round it came from — the finding it answers and the head that round reviewed.
 List every input or state the new predicate treats differently from the old one, and for each the
 output that reads it, operator-facing outputs first (§5.3's signal-silencing check). Report as a
-finding any that now takes a wrong branch. Read-only: do not edit anything."* One verifier per fix
+finding any that now takes a wrong branch. Read-only: do not edit anything. Read your own saved
+tool output with the file-read tool, write scratch with the file-write tool, and never touch a
+path the runtime owns from the shell."* One verifier per fix
 commit, covering every predicate hunk in it, counted as a verifier on the `Spend:` line. A hunk it
 confirms a finding against is not committed: it is dropped or reworked from the clean line, as
 §5.7's revert default says.
