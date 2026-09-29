@@ -37,7 +37,9 @@ a note rather than a failure. The two repo-wide scans still read it, deliberatel
 non-Latin script reds the gate wherever it sits, including in a file you never meant to commit.
 
 That carve-out costs no coverage of anything this repo ships, because everything it ships lives
-under `plugins/`, which is checked in full, untracked files included. Failing on incidental local
+under `plugins/`, which is checked in full, untracked files included unless git-ignored: a check
+that lists its files through git skips an ignored one there as git does, while the two repo-wide
+scans still read it. Failing on incidental local
 state only ever blocked unrelated commits. One consequence worth knowing: `make check-test`
 restores with `git checkout --`, so it refuses to run at all while any untracked file sits under
 the paths it guards — `make check` is fine, but move your scratch directory before running the

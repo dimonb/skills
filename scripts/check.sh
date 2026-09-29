@@ -20,7 +20,8 @@
 #     declared in $GATED_SUITES, so no whole suite runs nowhere or escapes check 10
 # 13. the check-test CI job's pull-request path filter covers every path check-test.sh guards, so
 #     the gate-of-the-gate cannot be skipped by a change that could break what it proves; and its
-#     push trigger stays unfiltered, the backstop that filter rests on
+#     triggers carry only the keys it reads: push on main, unfiltered (the backstop that filter
+#     rests on), and pull_request narrowed by paths alone
 # 14. no pgrep/pkill selects by parent (-P / --parent) without a pattern: on macOS that form
 #     lists every process on the machine
 # 15. every section cross-reference (a section sign and a number) in a markdown file names a
@@ -996,7 +997,31 @@ else
     if [ -n "$push_filter" ]; then
       fail "$CT_WF filters its push: trigger by $(printf '%s' "$push_filter" | tr '\n' ' ')— the run on main must be unconditional, it is the backstop for the pull-request filter"
     fi
-    # A line at event level it could not name may be either event, so it reds whichever it is.
+    # AN ALLOWLIST OF KEYS, not a denylist of the ones seen so far (#58). Under `push:` only
+    # `branches:` is accepted, and under `pull_request:` only `paths:`: every other key GitHub
+    # honours there narrows when the job runs (`branches-ignore:`, `tags:`, `types:`, a
+    # `branches:` on pull requests), and each of those passed green while this check read only the
+    # keys it was written about. `paths`/`paths-ignore` are left to the arms that name them.
+    for ev in push pull_request; do
+      if [ "$ev" = push ]; then allowed=branches; else allowed=paths; fi
+      extra=$(printf '%s\n' "$ct_on" | awk -F'\t' -v ev="$ev" -v ok="$allowed" \
+        '$1 == "key" && $2 == ev && $3 != ok && $3 !~ /^paths(-ignore)?$/ { print $3 }')
+      if [ -n "$extra" ]; then
+        fail "$CT_WF's $ev: trigger carries $(printf '%s' "$extra" | tr '\n' ' ')— check 13 accepts only $allowed: there, since any other key narrows when check-test runs"
+      fi
+    done
+    # And the one list `push:` may carry must name `main`, as a quoted block item, with no negated
+    # pattern: a list without it (`dev` alone), or one that excludes it again (`'!main'`), is a push
+    # trigger that never fires on main. A flow list (`branches: [main]`) or an unquoted item is not
+    # read, so it reds here too: a false red on a correct file, fixed by the block style.
+    push_branches=$(printf '%s\n' "$ct_on" | awk -F'\t' '$1 == "item" && $2 == "push" && $3 == "branches" { print $4 }')
+    if ! printf '%s\n' "$push_branches" | grep -qxF main; then
+      fail "$CT_WF's push: trigger does not name 'main' under branches: (as a quoted block item) — check-test's unconditional run on main, the backstop for its pull-request filter, is gone"
+    elif printf '%s\n' "$push_branches" | grep -q '^!'; then
+      fail "$CT_WF's push: branches: carries a negated pattern, which check 13 does not reason about — it could exclude main again"
+    fi
+    # A line at event level it could not name reds whatever event it is, since the lines under it
+    # would otherwise be credited to the event before it.
     if printf '%s\n' "$ct_on" | grep -qxF "$(printf 'unread\t?')"; then
       fail "$CT_WF has an event under on: that check 13 cannot read as a key — write it as a block, as the rest of the file does"
     fi
