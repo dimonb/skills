@@ -433,3 +433,36 @@ inferred.
 
 For the supervisor: take the disclosure line's open follow-ups (#322, #323) in one slot, with the
 retro-11 change.
+
+## Retro 12 — 2026-09-29, after #325 #324 #331
+
+Batch: 3 PRs, 6 issues closed (#322 #323 #319 #317 #119 #329), 3 opened (#328 #329 #332); open
+count 21 → 18. Pairing issues in one slot (two per PR) is what moved the count. Each PR still filed
+about one residual.
+
+### Went well
+
+* **Pairing issues per slot doubled the close rate at no visible cost in rounds.** Pairs were
+  chosen by one component and one file set: #322+#323, #319+#317, #119+#329. None took more than 5
+  rounds.
+* **The disclosure-hold contract closed in the shipped shape**, with the release made
+  self-revealing in the public hand-off record rather than guarded by a flag the guarded actor could
+  pass.
+
+### Went badly
+
+* **The backlog behaved as a fixed point, and nothing in the process names that as a failure.**
+  The #212 line alone went #212 → #318/#319 → #322/#323 → #328/#329, each issue narrower than its
+  parent and each correctly filed by the ladder. A run optimising the open count cannot see that the
+  ladder's own output is the inflow.
+
+### Change
+
+In `ship` (in flight): the council decision of the `residuals` room. An optional pre-existing
+residual earns an issue only when it states an ordinary-use failure. Everything else goes to the
+component doc's `## Known limits` section, with its shape, path, source PR and promotion trigger,
+and reviewers are briefed with that list. Blocking findings, §5.12 security findings and the change's
+own code are unchanged. The council stated its limit plainly: this bounds low-impact chains, not the
+open count.
+
+For the supervisor: keep pairing issues by component per slot.
