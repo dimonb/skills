@@ -252,7 +252,9 @@ gh api --method POST "repos/$REPO/pulls/N/comments/COMMENT_ID/replies" \
 gh api "repos/$REPO/pulls/N/reviews" --jq '.[] | {user: .user.login, state}'
 ```
 
-Paginate fully; skip resolved and outdated threads. Filter out `[bot]` authors when counting a
+Paginate fully; skip resolved threads. **Do not skip an outdated one**: `isOutdated` only means a
+push moved the lines under it, and that push may be ship's own, so an unresolved outdated thread
+still counts until the person who opened it resolves it (core §8). Filter out `[bot]` authors when counting a
 person's threads — a bot comment is not a person waiting on an answer. **Filter out nothing
 else by author**: a comment is ship's own record only when its `user.login` is `$ME` AND its
 first line is a ship marker (core §5.9, §8). A comment from `$ME` without one is a person's
