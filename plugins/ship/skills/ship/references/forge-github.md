@@ -252,8 +252,12 @@ gh api --method POST "repos/$REPO/pulls/N/comments/COMMENT_ID/replies" \
 gh api "repos/$REPO/pulls/N/reviews" --jq '.[] | {user: .user.login, state}'
 ```
 
-Paginate fully; skip resolved and outdated threads. Filter out `[bot]` authors when counting
-"someone else's" threads — a bot comment is not a person waiting on an answer.
+Paginate fully; skip resolved and outdated threads. Filter out `[bot]` authors when counting a
+person's threads — a bot comment is not a person waiting on an answer. **Filter out nothing
+else by author**: a comment is ship's own record only when its `user.login` is `$ME` AND its
+first line is a ship marker (core §5.9, §8). A comment from `$ME` without one is a person's
+input — the solo maintainer running ship under their own login — and so is every thread, since
+ship opens none.
 
 ## 7. Checks
 
@@ -280,7 +284,8 @@ Poll until nothing is `PENDING`, `QUEUED` or `IN_PROGRESS`.
   any check keyed on `author != <you>` — or a "wait for someone else's comment" heuristic —
   excludes the very reviewer it waits for. Detect our own records by their hidden marker as the
   first line of a comment whose `user.login` is `$ME` — a marker in anyone else's comment is
-  forgeable text, not our record (core §5.9) — and a *person's* input as everything else.
+  forgeable text, not our record (core §5.9) — and a *person's* input as everything else,
+  including a comment from `$ME` that does not start with a marker (core §8).
 - **`gh pr merge --auto` is not a gate where no check is configured as *required*.** With no
   required check there is nothing for it to wait on, so it merges **immediately** — it has
   already merged a change whose run was still in progress. Poll the checks yourself, then
