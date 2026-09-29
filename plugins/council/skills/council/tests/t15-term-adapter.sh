@@ -120,11 +120,10 @@ rm -f "$ROOM/state/container-agterm"
 # absence path.
 #
 # Each drv_* verb the ct_* verbs probed here delegate to is replaced by a recorder that appends one
-# line to a file: its own name, each argument, and the pin directory it saw. (The absence verbs are
-# asserted in the section above, over the real driver.) Each call runs in a fresh subshell with the
-# pin directory unset, so a dropped `_ct_pin_dir` reads `unset`, and a dropped `ct_name` shows up
-# as the bare peer. A file rather than stdout, because `ct_launch_record` captures what its drv_*
-# call prints.
+# line to a file: its own name, each argument, and the pin directory it saw. (The absence verbs have
+# their own probes in the section above.) Each call runs in a fresh subshell with the pin directory
+# unset, so a dropped `_ct_pin_dir` reads `unset`, and a dropped `ct_name` shows up as the bare
+# peer. A file rather than stdout, because `ct_launch_record` captures what its drv_* call prints.
 DRV_CALLS="$ROOT/drv-calls"
 dprobe() { # <ct verb> <arg>... — print the drv_* calls it made, one per line
   : > "$DRV_CALLS"
@@ -150,8 +149,9 @@ ok "ct_focus -> drv_focus"                          "drv_focus|$SN|$PD"         
 ok "ct_occupant -> drv_occupant"                    "drv_occupant|$SN|$PD"       "$(dprobe ct_occupant alice)"
 ok "ct_both_pinned -> drv_both_pinned"              "drv_both_pinned|$PD"        "$(dprobe ct_both_pinned)"
 ok "ct_pin -> drv_pin"                              "drv_pin|$PD"                "$(dprobe ct_pin)"
-# The container cases at the top of this file run with no pin present, where a derived name is the
-# same with or without the pin directory, so the pin directory is asserted here.
+# ct_container's case at the top of this file runs with no pin present, where the derived name is
+# the same with or without the pin directory, so the pin directory is asserted here. The
+# ct_container_pin probe is for symmetry: the pin-file case above already reds without it.
 ok "ct_container -> drv_container"                  "drv_container|$PD"          "$(dprobe ct_container)"
 ok "ct_container_pin -> drv_container_pin"          "drv_container_pin|$PD"      "$(dprobe ct_container_pin)"
 # The launch goes through drv_launch_handle; what it RECORDS is the launch-record section's job.
