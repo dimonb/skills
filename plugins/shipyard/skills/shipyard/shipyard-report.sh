@@ -666,8 +666,9 @@ UNSCALED=()   # "<slot>|<display>" — a ctx figure with no window to assert it 
 # reaching its later-tick entry. That cannot be prevented from here: every file this script could
 # keep instead is equally writable by a child on the same account. So it is made SELF-REVEALING
 # instead: a gap tick bypasses --only-changed (the silence test below requires `GAP = 0`) and prints
-# the resumed-after notice, which names a rewritten tick file as a cause beside a stopped monitor, a
-# sleeping machine and a report that dies before it stamps the tick (below). A forged gap before
+# the resumed-after notice, which names a rewritten tick file among the causes it lists — a list of
+# examples, not a closed set (a tick that finds no slots, a failed write, a monitor period longer
+# than the threshold reach the notice too). A forged gap before
 # every tick therefore prints the full table and that notice on every tick, which a healthy fleet
 # never does. A FUTURE epoch is refused (`RUN_EPOCH -gt prev_tick`), and an unparseable one claims
 # no gap, so neither can be used to fake one.
@@ -1815,9 +1816,10 @@ fi
     echo
     echo "_supervision resumed after $((GAP/60)) min with nothing watching — every stall clock was"
     echo "restarted from now, because a figure measured across that gap is one this report cannot"
-    echo "justify. If the fleet was paused on purpose, this line is the whole of the news. If the"
-    echo "monitor did not stop and the machine did not sleep, either the report is dying before it"
-    echo "stamps its tick, or the mailbox's \`report-tick\` was rewritten — which any child can do._"
+    echo "justify. If the fleet was paused on purpose, this line is the whole of the news. If it was"
+    echo "not, causes include a monitor period longer than the stall threshold, report runs that end"
+    echo "before stamping their tick (a crash, a failed write, a tick that found no slots), and a"
+    echo "rewritten \`report-tick\` in the mailbox — which any child can do._"
   fi
   if [ "${#STALLED[@]}" -gt 0 ]; then
     # Split by shape — see "a stall is an EPISODE" above for the three shapes and the two constants.

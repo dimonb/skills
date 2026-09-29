@@ -1388,7 +1388,8 @@ starts a fresh watcher for its own parent session.
 ⏸ idle-wait is **normal** for ship: it waits on CI or on a self-review round and re-wakes
 itself. Never read idle as "it died" — the only completion signal is a merged (or closed)
 MR. A child blocked on an escalation also looks idle — or reads `✅ finished` / `🙋 needs you`
-when its stage says so; either way the `esc` column is what tells you it is waiting on *you*. A child at its context ceiling looks idle too, with `esc —`, and so
+when its stage says so; either way the `esc` column is what tells you it is waiting on *you*.
+A child at its context ceiling looks idle too, with `esc —`, and so
 does one that simply left its own next instruction unsubmitted in the input box — the `ctx`
 column and the diagnosis order in Step 5 are what separate those three. `/ship` never waits
 for an approval, so a session parked for a long stretch with a green pipeline and no
