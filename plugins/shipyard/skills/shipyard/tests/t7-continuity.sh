@@ -731,6 +731,42 @@ racing_files=$(runtime_state_paths)
 check "" "$racing_files" "synchronized stop leaves no late watcher state"
 unset _SHIPYARD_CONTINUITY_PUBLISH_DELAY _SHIPYARD_CONTINUITY_PUBLICATION_POLLS
 
+# THE RE-ARM COST (#270). Every report tick re-ensures the watcher, and for a healthy one that is a
+# ping answered while the start holds the lifecycle lock. The watcher used to read its control file
+# once per poll, so a tick right after a poll waited the whole interval (4.2 to 4.9 s measured at
+# the default 5 s) and a stop waited as long per watcher. It now answers within one wait slice. The
+# interval here is long so the old wait could not pass these bounds; second resolution is enough.
+check "20 0.250000" "$(shipyard_continuity_slices 5; echo "$SHIPYARD_CONTINUITY_SLICES $SHIPYARD_CONTINUITY_SLICE")" \
+  "a 5 s poll waits in 0.25 s slices"
+check "1 0.05" "$(shipyard_continuity_slices 0.05; echo "$SHIPYARD_CONTINUITY_SLICES $SHIPYARD_CONTINUITY_SLICE")" \
+  "an interval of at most one slice keeps its single wait"
+check "1 nonsense" "$(shipyard_continuity_slices nonsense; echo "$SHIPYARD_CONTINUITY_SLICES $SHIPYARD_CONTINUITY_SLICE")" \
+  "an unsplittable interval keeps the wait it was given"
+reset_fake
+_SHIPYARD_CONTINUITY_POLL_SECS=8
+shipyard_continuity_start agterm >/dev/null
+rearm_t0=$(date +%s)
+rearm_rc=0
+shipyard_continuity_start agterm >/dev/null || rearm_rc=$?
+rearm_secs=$(( $(date +%s) - rearm_t0 ))
+check 0 "$rearm_rc" "re-arm against a healthy watcher succeeds"
+if [ "$rearm_secs" -le 4 ]; then rearm_fast=yes; else rearm_fast="no (${rearm_secs}s)"; fi
+check yes "$rearm_fast" "re-arm is answered within slices, not after the 8 s poll"
+rearm_ack=$(find "$_SHIPYARD_CONTINUITY_DIR" -name 'continuity-*.ack' -print -quit)
+rearm_inode=$(ls -i "$rearm_ack" 2>/dev/null | awk '{print $1}')
+command sleep 1
+check "$rearm_inode" "$(ls -i "$rearm_ack" 2>/dev/null | awk '{print $1}')" \
+  "an answered ping is not re-acknowledged every slice"
+rearm_t0=$(date +%s)
+rearm_stop_rc=0
+shipyard_continuity_stop_all || rearm_stop_rc=$?
+rearm_secs=$(( $(date +%s) - rearm_t0 ))
+check 0 "$rearm_stop_rc" "stop of a slow-polling watcher succeeds"
+if [ "$rearm_secs" -le 4 ]; then rearm_fast=yes; else rearm_fast="no (${rearm_secs}s)"; fi
+check yes "$rearm_fast" "stop is answered within slices, not after the 8 s poll"
+check "" "$(runtime_state_paths)" "slow-polling watcher leaves no state after stop"
+_SHIPYARD_CONTINUITY_POLL_SECS=0.05
+
 mkdir -p "$_SHIPYARD_CONTINUITY_DIR"
 printf '%s\n' orphan >"$_SHIPYARD_CONTINUITY_DIR/continuity-orphan.log"
 printf '%s\n' orphan >"$_SHIPYARD_CONTINUITY_DIR/continuity-orphan.heartbeat"

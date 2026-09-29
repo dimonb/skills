@@ -366,8 +366,47 @@ shipyard_continuity_control_check() {
     *) return 1 ;;
   esac
   [ -n "$nonce" ] || return 1
+  # A ping stays in the control file after it is answered, and this runs once per wait slice, so an
+  # answered one is not re-acknowledged: that would be a rewrite of the ack every slice.
+  if [ "$verb" = ping ] && [ "$nonce" = "${SHIPYARD_CONTINUITY_ACKED_NONCE:-}" ]; then return 1; fi
   shipyard_continuity_write_record "$ack" "$token" "$verb $nonce" || return 1
-  [ "$verb" = stop ]
+  [ "$verb" = stop ] && return 0
+  SHIPYARD_CONTINUITY_ACKED_NONCE="$nonce"
+  return 1
+}
+
+# The watcher's wait between polls, cut into slices so that a control request is answered within
+# one slice instead of one poll interval. A start that finds a healthy watcher pings it and waits
+# for the ack while holding the lifecycle lock, and every report tick does that start: with the
+# control file read only at the top of each poll, a tick waited out the rest of the interval,
+# measured at 4.2 to 4.9 s a tick at the default 5 s, and a stop waited as long per watcher (#270).
+# SLICES and SLICE come from shipyard_continuity_slices. Returns 0 to poll again, 1 when the owner
+# is gone (the owner-hold path only), 2 once a stop request has been acknowledged.
+shipyard_continuity_pause() {
+  local cfd="$1" control="$2" ack="$3" token="$4" i=0
+  while [ "$i" -lt "$SHIPYARD_CONTINUITY_SLICES" ]; do
+    shipyard_continuity_owner_gone "$cfd" "$SHIPYARD_CONTINUITY_SLICE" || return 1
+    shipyard_continuity_control_check "$control" "$ack" "$token" && return 2
+    i=$((i + 1))
+  done
+  return 0
+}
+
+# Split a poll interval into slices of at most 0.25 s: sets SHIPYARD_CONTINUITY_SLICES (a count)
+# and SHIPYARD_CONTINUITY_SLICE (the length each sleeps). An interval no longer than one slice, which
+# is every test suite's, stays one slice of itself, so those suites keep the wait they always had.
+# What a production watcher pays for the answer time is one `sleep` fork per slice where it used to
+# pay one per interval: four a second, for the one watcher a parent session has. A value awk cannot
+# split falls back to one slice of the interval as given, the wait this replaced.
+shipyard_continuity_slices() {
+  local interval="$1" split
+  SHIPYARD_CONTINUITY_SLICES=1
+  SHIPYARD_CONTINUITY_SLICE="$interval"
+  split=$(awk -v i="$interval" 'BEGIN {
+    if (i + 0 <= 0.25) exit 1
+    n = int(i / 0.25); if (n * 0.25 < i) n++
+    printf "%d %.6f\n", n, i / n }' 2>/dev/null) || return 0
+  read -r SHIPYARD_CONTINUITY_SLICES SHIPYARD_CONTINUITY_SLICE <<<"$split"
 }
 
 # The canary SENTINEL (owner-hold path only): a process substitution, so a child in this watcher's
@@ -472,6 +511,8 @@ shipyard_continuity_watch() {
   # start, the case #275 measured. A failure here is retried by the first poll.
   [ -z "$cfd" ] || shipyard_continuity_sentinel_start "$cfd" || true
   shipyard_continuity_reset
+  SHIPYARD_CONTINUITY_ACKED_NONCE=""
+  shipyard_continuity_slices "$interval"
   if ! shipyard_continuity_wait_publication "$pidfile" "$token"; then
     # The starter owns this lock until it publishes or exits. A timed-out watcher
     # may reclaim it only after proving that owner is gone.
@@ -487,7 +528,7 @@ shipyard_continuity_watch() {
       exists_rc=0
       shipyard_continuity_session_exists "$sid" "$socket" "$window" || exists_rc=$?
       [ "$exists_rc" -eq 1 ] && return 0
-      shipyard_continuity_owner_gone "$cfd" "$interval" || break
+      shipyard_continuity_pause "$cfd" "$control" "$ack" "$token"; case $? in 1) break ;; 2) return 0 ;; esac
       continue
     fi
     now=$(date +%s)
@@ -500,7 +541,7 @@ shipyard_continuity_watch() {
       if [ "$submit_rc" -eq 0 ] || [ "$submit_rc" -eq 3 ]; then
         shipyard_continuity_succeeded "$action" "$now"
       fi
-      shipyard_continuity_owner_gone "$cfd" "$interval" || break
+      shipyard_continuity_pause "$cfd" "$control" "$ack" "$token"; case $? in 1) break ;; 2) return 0 ;; esac
       continue
     fi
     shipyard_continuity_decide "$screen" "$now"
@@ -517,7 +558,7 @@ shipyard_continuity_watch() {
           printf '[%s] resumed parent Codex goal\n' "$(date '+%H:%M:%S')"
         fi ;;
     esac
-    shipyard_continuity_owner_gone "$cfd" "$interval" || break
+    shipyard_continuity_pause "$cfd" "$control" "$ack" "$token"; case $? in 1) break ;; 2) return 0 ;; esac
   done
   # Reached only by `break`, i.e. the owner canary hit EOF (owner-hold path only). Reap this
   # watcher's own process group, then clear our FULL owned state: this ungraceful path has no
