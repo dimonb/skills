@@ -196,6 +196,29 @@ out=$(dry_launch "$TMP/skill-ok" "$TMP/launch-blocked" launch-42.sh)
 check 1 "$(printf '%s' "$out" | sed -n 's/^rc=//p')" "an unwritable launcher refuses the launch"
 check 1 "$(printf '%s' "$out" | grep -c "cannot write the child's launcher")" "...saying why"
 
+# The other writes and renders are checked the same way (#119). The protocol file first: a
+# directory at its name makes its write refuse, and nothing after it may run.
+out=$(dry_launch "$TMP/skill-ok" "$TMP/launch-noproto" protocol-42.md)
+check 1 "$(printf '%s' "$out" | sed -n 's/^rc=//p')" "an unwritable protocol file refuses the launch"
+check 1 "$(printf '%s' "$out" | grep -c "cannot write the child's protocol file")" "...saying why"
+if [ -e "$TMP/launch-noproto/.git/ship-escalations/launch-42.sh" ]; then left=yes; else left=no; fi
+check no "$left" "...and writes no launcher after it"
+# The exec line and the environment summary are rendered before anything is written, each status
+# checked. Neither can fail for a kind that is admitted today: the summary's only failure is the
+# env-pass default the preamble has already refused on. So each is made to fail in a copy of the
+# skill, by a definition appended to its lib that replaces the real one, which pins that the
+# status is read and the launch refused rather than that some kind reaches it.
+for part in exec:shipyard_agent_exec:"no launch command" env:shipyard_env_summary:"no environment summary"; do
+  tag=${part%%:*}; rest=${part#*:}; fn=${rest%%:*}; why=${rest#*:}
+  cp -R "$SKILL_DIR" "$TMP/skill-no$tag"
+  printf '\n%s() { return 1; }\n' "$fn" >>"$TMP/skill-no$tag/shipyard-lib.sh"
+  out=$(dry_launch "$TMP/skill-no$tag" "$TMP/launch-no$tag")
+  check 1 "$(printf '%s' "$out" | sed -n 's/^rc=//p')" "a failed $fn refuses the launch"
+  check 1 "$(printf '%s' "$out" | grep -c "$why for agent kind 'claude'; refusing to launch")" "...saying why"
+  if [ -e "$TMP/launch-no$tag/.git/ship-escalations/protocol-42.md" ]; then left=yes; else left=no; fi
+  check no "$left" "...before any protocol file is written"
+done
+
 # --- the launch dedup does not read an unanswerable slot as free (#140) -----------------------
 rc_of() { printf '%s' "$1" | sed -n 's/^rc=//p'; }
 has() { [ -e "$1" ] && printf yes || printf no; }
