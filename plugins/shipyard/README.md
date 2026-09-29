@@ -315,7 +315,7 @@ unsupported setup, not by ordinary use. Each names what would make it a defect w
   watcher their fake agtermctl launches runs under 3.2; the job's other shipyard steps use the tmux
   backend, where the start path returns at once, and its shared-module steps never reach it. It
   uses no bash-4 construct today.
-  `plugins/shipyard/skills/shipyard/shipyard-continuity.sh:1172`. Found by the review of #340.
+  `plugins/shipyard/skills/shipyard/shipyard-continuity.sh:1115`. Found by the review of #340.
   *Promote when* a bash-4 construct lands in that start path, or a Codex parent on agterm reports a
   watcher that never started.
 - **KL-4 — the stall record's `fired_epoch` and `last_fired` guards are pinned by no case.** A
@@ -340,21 +340,20 @@ unsupported setup, not by ordinary use. Each names what would make it a defect w
   inside a race window. `plugins/shipyard/skills/shipyard/tests/t21-continuity-fifo.sh:15`. Found by
   the review of #259. *Promote when* a production caller arms the owner hold: then t21's case 3
   gains an owner-hold variant, holding the write end the way t10's owner script does.
-- **KL-7 — the canary sentinel's non-EOF branches have no test.** `shipyard_continuity_owner_gone`
-  drops a sentinel pipe that ends without an `eof` line and starts a new one on the next poll, and
-  reads the canary directly when a sentinel cannot start. Both are on the owner-hold path only, which
-  no production caller arms; the first also needs something to kill the sentinel alone, and the
-  second descriptor or process exhaustion.
-  `plugins/shipyard/skills/shipyard/shipyard-continuity.sh:456`. Found by the review of #281.
-  *Promote when* a production caller arms the owner hold. The deterministic test is in #269's
-  thread: a separate holder process for the write end, the sentinel killed alone by a pid taken
-  from a `ps -A -o pid= -o ppid=` filter (never `pgrep -P`), then the holder killed.
+- **KL-7 — the canary's direct-read fallback has no test.** When no sentinel can be started,
+  `canary_owner_gone` reads the canary itself, as it did before #275. t-canary drives the sentinel
+  path, including a signalled sentinel being replaced rather than read as a death, but nothing makes
+  `canary_sentinel_start` fail: that takes descriptor or process exhaustion, on either caller (the
+  owner-hold watcher here, and council's `up --hold` keeper since #343).
+  `shared/canary/canary.sh:78`, vendored as this skill's `canary.sh`. Found by the review of #281,
+  and narrowed once #343 added the signalled-sentinel case. *Promote when* a sentinel is observed
+  failing to start, or `canary_sentinel_start` gains a failure an ordinary run can reach.
 - **KL-8 — two continuity readers are driven only with the plain `› cmd` spelling.** The
   capacity-state `*)` arm and `shipyard_continuity_finish_owned`'s ownership check read the prompt
   through `_adp_box_content`, which also accepts an NBSP-separated or `❯` prompt; t7 drives that
   wider spelling for `prompt_empty` alone. The watcher runs for a Codex parent only, and Codex
   captures use `› ` with a plain space; the other spellings are the Claude client's.
-  `plugins/shipyard/skills/shipyard/shipyard-continuity.sh:89` and `:265`. Found by the review of
+  `plugins/shipyard/skills/shipyard/shipyard-continuity.sh:93` and `:269`. Found by the review of
   #290. *Promote when* continuity runs for a Claude parent, or a Codex capture shows an NBSP or `❯`
   prompt.
 - **KL-9 — on the kind that echoes no command, a fast compaction under a stale finished line reads
@@ -369,7 +368,7 @@ unsupported setup, not by ordinary use. Each names what would make it a defect w
   The wait between polls is cut into slices of at most 0.25 s, and t10, the only suite that drives
   the owner hold, polls at 0.1 s, a single slice; the multi-slice pause itself is run by t7 on the
   default path. The owner hold is opt-in and no production path arms it.
-  `plugins/shipyard/skills/shipyard/shipyard-continuity.sh:403`. Found by the review of #311.
+  `plugins/shipyard/skills/shipyard/shipyard-continuity.sh:407`. Found by the review of #311.
   *Promote when* a production caller arms the owner hold: then a t10 case at a 0.6 s interval (three
   slices) asserts owner death is reaped and a ping is answered within one slice.
 - **KL-11 — t7's synchronized-stop case pins the stop's longer lock wait only on a box fast enough.**
@@ -378,7 +377,7 @@ unsupported setup, not by ordinary use. Each names what would make it a defect w
   mutant survives. That loses coverage and never causes a false red. An evidence-ended hold was tried
   in #311 and reverted for its fork cost under load.
   `plugins/shipyard/skills/shipyard/tests/t7-continuity.sh:751`, against
-  `plugins/shipyard/skills/shipyard/shipyard-continuity.sh:1233`. Found by the review of #311.
+  `plugins/shipyard/skills/shipyard/shipyard-continuity.sh:1176`. Found by the review of #311.
   *Promote when* someone lowers the stop's wait or the case's hold, or a mutation run by hand shows
   the mutant surviving on an idle box (no automated run applies it): then the hold ends on the stop
   giving up, counted without a fork per pass.
