@@ -257,3 +257,37 @@ fix round lands, a fix that edits a guard or a predicate is reviewed against the
 
 For the supervisor: before answering a design escalation, ask of each option "what state can this
 leave the operator in, and what gets them out of it?" — a refusal with no exit is a deadlock.
+
+Shipped in #297 (Refs #293, narrowed to one item with a data-based close condition).
+
+## Retro 7 — 2026-09-29, after #297 #298 #300 #301
+
+Batch: 4 PRs, 7 issues closed (#176 #178 #158 #160 #199 #248, plus #297's own scope), open count
+33 → 28. Open-to-merge 25-45 min.
+
+### Went well
+
+* **Retro 6 applied to its own PR.** #297's blocker chain sat in one optional passage it had added;
+  the new "revert to the last clean line" rule was applied to #297 itself, and it merged clean.
+* **Design escalations now arrive already weighed** — #300's never-moved alarm came with the anchor,
+  the threshold, the false-positive cases measured and the residual routes listed; the decision
+  took one read.
+* **A predicate verifier ran before a guard fix was committed** (#299), exactly as retro 6 asked.
+
+### Went badly
+
+* **A `Refs` issue was closed by a merge anyway.** #278 had downgraded `Closes #272` to `Refs #272`
+  in its description, but an early commit's message still said `Closes #272`, and the squash merge
+  folds every commit message into the merge commit — so GitHub closed #272 with its residuals open.
+  A child caught it two PRs later and reopened it. The supervisor's merge was the vector.
+
+### Change
+
+For the supervisor (done): the merge helper now squashes with the PR's own description as the
+commit body, so the only closing keywords that reach `main` are the ones the PR says it closes.
+
+In `ship` (next PR): when a change downgrades an issue from `Closes` to `Refs`, it also rewrites any
+commit message that still carries a closing keyword for that issue (or, where rewriting history is
+not allowed, says in the hand-off record that the merger must squash with the PR body) — and the
+hand-off checks both the description and the commit messages for closing keywords against the
+list of issues the change actually closes.
