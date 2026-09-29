@@ -95,7 +95,7 @@ SESSIONS="$COUNCIL_TEST_ROOT/t27-sessions"       # what the backend lists, one n
 HANDLES="$COUNCIL_TEST_ROOT/t27-handles"         # ...and the same sessions as handle lines
 SESSIONS_RC="$COUNCIL_TEST_ROOT/t27-sessions-rc" # ...and the status it answers with
 SESSIONS_CALLS="$COUNCIL_TEST_ROOT/t27-sessions-calls"  # one line per enumeration, for cost tests
-OCC="$COUNCIL_TEST_ROOT/t27-occupant"            # what ct_occupant answers (agent|none); absent = no verdict
+OCC="$COUNCIL_TEST_ROOT/t27-occupant"            # what drv_occupant answers (agent|none); absent = no verdict
 OCC_CALLS="$COUNCIL_TEST_ROOT/t27-occupant-calls"  # one line per occupant read
 rm -f "$OCC"; : > "$OCC_CALLS"
 : > "$SESSIONS"; : > "$HANDLES"; printf '0\n' > "$SESSIONS_RC"; : > "$SESSIONS_CALLS"
@@ -111,7 +111,8 @@ ct_sessions() { printf 'call\\n' >> "$SESSIONS_CALLS"; cat "$SESSIONS" 2>/dev/nu
 ct_handles()  { printf 'call\\n' >> "$SESSIONS_CALLS"; cat "$HANDLES" 2>/dev/null; return "\$(cat "$SESSIONS_RC" 2>/dev/null || printf 0)"; }
 # The occupant read (#235), replaced for the same reason: a live tmux cannot be made to answer
 # \`none\` on demand. No file is no verdict, which is what every case outside section 10f gets.
-ct_occupant() { printf 'call\\n' >> "$OCC_CALLS"; [ -f "$OCC" ] || return 1; cat "$OCC"; }
+# Replaced at the driver, so the shipped \`ct_no_agent\` and the driver's two-read rule still run.
+drv_occupant() { printf 'call\\n' >> "$OCC_CALLS"; [ -f "$OCC" ] || return 1; cat "$OCC"; }
 SHADOWEOF
 SCLI="$SHADOW/council.sh"
 

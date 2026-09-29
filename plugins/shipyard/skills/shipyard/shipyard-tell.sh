@@ -145,16 +145,13 @@ WHERE=$(shipyard_where "$SLOT") || {
 # the pane BEFORE typing, and refuse on `none` with nothing typed and nothing recorded. Two reads,
 # SHIPYARD_MOTION_INTERVAL apart exactly as in the report: one `none` can be a launch caught before
 # its `exec`, and the second read is paid only on the rare path where the first said `none`. No
-# verdict (exit 1) is not `none` and goes on exactly as before; neither does `agent` prove the child
-# alive (see drv_occupant in shared/driver for the one way it can be wrong).
-if [ "$(shipyard_occupant "$SLOT" 2>/dev/null)" = none ]; then
-  sleep "$(knob_interval "${SHIPYARD_MOTION_INTERVAL:-}" 3)"
-  if [ "$(shipyard_occupant "$SLOT" 2>/dev/null)" = none ]; then
-    echo "error: $WHERE is up, but the agent launched into it is not: the backend reports a shell prompt" >&2
-    echo "       or an exited pane there. Nothing was typed and nothing was recorded — a directive would" >&2
-    echo "       reach a shell. Recover the child (SKILL.md, Step 5); do not compact it." >&2
-    exit 8
-  fi
+# verdict is not `none` and goes on exactly as before; neither does `agent` prove the child alive.
+# The rule is `drv_no_agent` in shared/driver, which says why each reading can be wrong.
+if shipyard_no_agent "$SLOT"; then
+  echo "error: $WHERE is up, but the agent launched into it is not: the backend reports a shell prompt" >&2
+  echo "       or an exited pane there. Nothing was typed and nothing was recorded — a directive would" >&2
+  echo "       reach a shell. Recover the child (SKILL.md, Step 5); do not compact it." >&2
+  exit 8
 fi
 
 if [ -n "$SUBMIT_ONLY" ]; then
@@ -283,14 +280,8 @@ fi
 # The diff this replaced could not answer the question. Typing changes the screen whether or not
 # the Return took, so it was non-empty either way and an unsubmitted directive reported
 # `delivered`. `adp_delivery_verdict` (shared/adapters) holds the rule and the definition of each
-# verdict, including what `unconfirmed` does and does not rule out; this loop only samples.
-#
-# It POLLS rather than sleeping once because the sampling rate is the only thing that sets how
-# often a real delivery still reads `unconfirmed`: the residual case is a turn that starts AND
-# finishes between two samples, and one `sleep 3` misses a two-second turn completely.
-#
-# Re-folding the whole series on every sample is deliberate — the rule stays in exactly one place
-# and the loop stays a sampler. Over one window that is at most a few hundred string comparisons.
+# verdict, including what `unconfirmed` does and does not rule out. `adp_delivery_poll` beside it
+# is the sampling loop, and says why it polls rather than sleeping once.
 #
 # Both knobs are VALIDATED, not just defaulted. An unusable value here fails OPEN in the worst
 # way: a non-numeric window makes the deadline arithmetic empty, `[ … -lt "" ]` errors, and the
@@ -342,37 +333,18 @@ SETTLE_DELAY=$(knob_interval "${SHIPYARD_TELL_SETTLE_DELAY:-}" 1) \
 
 # The pre-send sample. It is what lets a turn seen LATER count as one our submit started, and what
 # stops a queued hint left over from an earlier send being read as being about this one.
-STATES=("$(adp_turn_state "$(shipyard_capture "$SLOT")")")
+PRE=$(adp_turn_sample shipyard_capture "$SLOT")
 if [ -z "$SUBMIT_ONLY" ]; then
   shipyard_type "$SLOT" "$LINE" || { echo "error: typing into $WHERE failed" >&2; exit 1; }
   sleep "$SETTLE_DELAY"
 fi
 shipyard_submit "$SLOT" || { echo "error: submitting to $WHERE failed" >&2; exit 1; }
 
-DEADLINE=$(( $(date +%s) + CONFIRM_SECS ))
-while :; do
-  STATES+=("$(adp_turn_state "$(shipyard_capture "$SLOT")")")
-  DELIVERY=$(adp_delivery_verdict "${STATES[@]}")
-  [ "$DELIVERY" = unconfirmed ] || break
-  [ "$(date +%s)" -lt "$DEADLINE" ] || break
-  sleep "$CONFIRM_INTERVAL"
-done
+# The loop and the census of what it sampled are `adp_delivery_poll` (shared/adapters), which
+# `council say` runs too. An empty answer is the `*)` arm below: never success.
+POLLED=$(adp_delivery_poll "$CONFIRM_SECS" "$CONFIRM_INTERVAL" "$PRE" shipyard_capture "$SLOT") || POLLED=""
+DELIVERY=${POLLED%%"$(printf '\t')"*}; SAMPLED=${POLLED#*"$(printf '\t')"}
 [ -n "$SUBMIT_ONLY" ] || shipyard_json_set "$MB/$ID.json" --arg d "$DELIVERY" '.delivery=$d'
-
-# A run-length census of what was ACTUALLY sampled, pre-send state first. This replaced a list of
-# the causes `unconfirmed` could have had: that list was incomplete the moment the rule changed
-# (it omitted the commonest one, a child mid-turn all window with no queued hint), and naming the
-# evidence cannot go stale the way an enumeration does.
-SAMPLED=""; _prev=""; _run=0
-for _s in "${STATES[@]}"; do
-  if [ "$_s" = "$_prev" ]; then _run=$((_run + 1)); continue; fi
-  if [ -n "$_prev" ]; then
-    if [ "$_run" -gt 1 ]; then SAMPLED="$SAMPLED,$_prev x$_run"; else SAMPLED="$SAMPLED,$_prev"; fi
-  fi
-  _prev="$_s"; _run=1
-done
-if [ "$_run" -gt 1 ]; then SAMPLED="$SAMPLED,$_prev x$_run"; else SAMPLED="$SAMPLED,$_prev"; fi
-SAMPLED=${SAMPLED#,}
 
 case "$DELIVERY" in
   queued)      echo "told ship-$SLOT ($WHERE) — $ID queued; the child is mid-turn and will take it next" ;;

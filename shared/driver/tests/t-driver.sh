@@ -5,7 +5,7 @@
 # placed on PATH — NO live terminal, no network, no real agterm/tmux. It covers the driver's
 # deterministic surface: backend selection, drv_shq quoting, container-name derivation for BOTH
 # caller variants, drv_target handle construction, drv_signal, drv_occupant (against the real
-# captures in fixtures/), and the COMMAND the write/interaction
+# captures in fixtures/) and its two-read rule drv_no_agent, and the COMMAND the write/interaction
 # dispatches construct — the fakes log their argv, so the command line is asserted without a live
 # terminal: drv_launch on BOTH backends (agterm's zsh -lc session; tmux new-session vs new-window
 # and the AGTERM_* scrub); drv_tell/submit/kill/focus on tmux (send-keys -l, Enter vs KPEnter,
@@ -314,10 +314,29 @@ ok "tmux read returns the captured pane" "pane contents here" \
 
 # --- 6. drv_signal: minimal liveness + capacity ----------------------------------------------
 printf '\n── drv_signal ──\n'
-# Dead: the name has no live terminal in the tree -> "dead|gone", non-zero.
-sig_dead=$(PATH="$FAKEBIN:$PATH" FAKE_AT_TREE="$TMP/tree.json" _DRV_BE=agterm DRV_CONTAINER_OVERRIDE=proj drv_signal nope); sig_dead_rc=$?
+# Dead: the name has no live terminal in a tree the backend really answered with -> "dead|gone",
+# exit 1. The tree carries `ok: true` because `drv_sessions`, which corroborates the absence, holds
+# the tree to that shape, and a tree without it is no answer.
+printf '%s' '{"ok":true,"result":{"tree":{"workspaces":[{"id":"w1","name":"proj","sessions":[{"name":"s1","id":"u1"},{"name":"s2","id":"u2"}]}]}}}' >"$TMP/tree-ok.json"
+sig_dead=$(PATH="$FAKEBIN:$PATH" FAKE_AT_TREE="$TMP/tree-ok.json" _DRV_BE=agterm DRV_CONTAINER_OVERRIDE=proj drv_signal nope); sig_dead_rc=$?
 ok "signal for a gone session"      "dead|gone" "$sig_dead"
 ok "signal for a gone session exits 1" 1 "$sig_dead_rc"
+# A MISSED LOOKUP IS NOT A DEATH (#156). Each way the absence cannot be believed reads
+# `unknown|unknown`, exit 2, and never `dead`.
+sig_of() { # <VAR=VAL>... <session> -> "<token>|<rc>"
+  local out rc=0 kv
+  out=$( for kv in "${@:1:$#-1}"; do export "${kv?}"; done
+         PATH="$FAKEBIN:$PATH" _DRV_BE=agterm DRV_CONTAINER_OVERRIDE=proj drv_signal "${@: -1}" ) || rc=$?
+  printf '%s|%s' "$out" "$rc"
+}
+ok "the backend did not answer -> unknown, not dead" "unknown|unknown|2" \
+  "$(sig_of FAKE_AT_TREE="$TMP/tree-ok.json" FAKE_AT_TREE_RC=1 nope)"
+# The tree that has no `ok` field parses, but it is not the shape the enumeration trusts.
+ok "a tree the enumeration cannot trust -> unknown"  "unknown|unknown|2" \
+  "$(sig_of FAKE_AT_TREE="$TMP/tree.json" nope)"
+SIGPINS="$TMP/sig-pins"; mkdir -p "$SIGPINS"; : >"$SIGPINS/container-tmux"
+ok "launched on the other backend -> unknown"        "unknown|unknown|2" \
+  "$(sig_of FAKE_AT_TREE="$TMP/tree-ok.json" DRV_CONTAINER_PIN_DIR="$SIGPINS" nope)"
 # Live + an input prompt at the foot -> idle.
 printf '%s\n%s\n' 'some earlier output' '› Ask me anything' >"$TMP/screen-idle.txt"
 sig_idle=$(PATH="$FAKEBIN:$PATH" FAKE_AT_TREE="$TMP/tree.json" FAKE_AT_TEXT="$TMP/screen-idle.txt" _DRV_BE=agterm DRV_CONTAINER_OVERRIDE=proj drv_signal s1); sig_idle_rc=$?
@@ -411,6 +430,35 @@ ok "tmux: an unknown pane_dead has no verdict"      "|1" \
    "$(occ_of _DRV_BE=tmux DRV_CONTAINER_OVERRIDE=cont "FAKE_TMUX_WINDOWS=$TMP/win-occ.txt" "FAKE_TMUX_PANE=x zsh" probe)"
 ok "tmux: an absent window has no verdict"          "|1" \
    "$(occ_of _DRV_BE=tmux DRV_CONTAINER_OVERRIDE=cont "FAKE_TMUX_WINDOWS=$TMP/win-occ.txt" "FAKE_TMUX_PANE=0 zsh" nope)"
+
+# --- 8. drv_no_agent: the two-read rule over drv_occupant (#163) ------------------------------
+# `drv_occupant` and `sleep` are replaced by recorders in a subshell, so what is asserted is the
+# ORDER of reads and pauses, not the occupant verdicts (section 7 owns those). The pause is the
+# point: without it the two reads can both land inside one launch's pre-exec window, and removing
+# it used to leave every suite green. The helper reads the occupant inside `$( )`, so the fake
+# keeps its place in the answer list in a file: a shell variable would not survive the subshell.
+printf '\n── drv_no_agent ──\n'
+NA_N="$TMP/na-n"; NA_LOG="$TMP/na-log"
+na_of() { # <gap> <answer>... -> "<rc>|<call log>"
+  local gap="$1" rc=0; shift
+  printf '0' >"$NA_N"; : >"$NA_LOG"
+  ( ANSWERS=("$@")
+    drv_occupant() { local n; n=$(cat "$NA_N"); printf '%s' "$((n + 1))" >"$NA_N"
+                     printf 'read:%s ' "$1" >>"$NA_LOG"; printf '%s' "${ANSWERS[$n]:-}"; }
+    sleep() { printf 'sleep:%s ' "$1" >>"$NA_LOG"; }
+    drv_no_agent s1 "$gap" ) || rc=$?
+  printf '%s|%s' "$rc" "$(sed 's/ $//' "$NA_LOG")"
+}
+ok "none twice -> exit 0, with the gap between the reads" "0|read:s1 sleep:3 read:s1" "$(na_of 3 none none)"
+ok "none then agent -> exit 1 (a launch caught before its exec)" \
+   "1|read:s1 sleep:3 read:s1" "$(na_of 3 none agent)"
+ok "agent first -> exit 1, one read, no pause"   "1|read:s1" "$(na_of 3 agent)"
+ok "no verdict first -> exit 1, never none"      "1|read:s1" "$(na_of 3 '' none)"
+ok "a fractional gap is passed through"          "0|read:s1 sleep:0.5 read:s1" "$(na_of 0.5 none none)"
+# An unusable gap falls back to one second. It never becomes no pause at all.
+ok "a zero gap still pauses"                     "0|read:s1 sleep:1 read:s1" "$(na_of 0 none none)"
+ok "an empty gap still pauses"                   "0|read:s1 sleep:1 read:s1" "$(na_of '' none none)"
+ok "a non-numeric gap still pauses"              "0|read:s1 sleep:1 read:s1" "$(na_of x none none)"
 
 # --- 9. may an absence be believed? -----------------------------------------------------------
 # PROVENANCE. A supervisor that resolves a session name, finds nothing, and concludes the child

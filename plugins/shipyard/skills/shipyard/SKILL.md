@@ -371,8 +371,9 @@ so do not plan on driving it from here.
 * on agterm, it also repaints each child's sidebar glyph (its completed/active verdict comes
   from the declared slot graph — see below);
 * **and it TEARS DOWN a slot that is finished** — merged on consecutive ticks, ship's stage
-  terminal, nobody at the terminal, and clear through `shipyard-down.sh`'s own content gate. That
-  removes the terminal AND the worktree, so arming this loop arms that. An open escalation holds
+  terminal, its terminal already gone, and clear through `shipyard-down.sh`'s own content gate.
+  That removes the worktree, so arming this loop arms that. A live terminal is never torn down by
+  it. An open escalation holds
   it, and anything it declines is named in its own block with the exact command. Step 6 has every
   lock and the reasoning; `SHIPYARD_AUTODOWN=0` turns it off;
 * whole report in one block → Monitor batches it into one notification;
@@ -1289,13 +1290,15 @@ re-wakes itself and continues after long idle pauses, and the worktree goes with
 
 **A finished slot now tears itself down, and the report is what does it.** Once a slot's PR/MR
 has read `merged` on two consecutive ticks (`SHIPYARD_AUTODOWN_TICKS`), ship's own stage is
-terminal (`done` or `ready-to-merge`), and nobody is at the terminal — it reports `idle`, or it
-is gone and the backend corroborates that — the report calls `shipyard-down.sh <slot>` for you.
+terminal (`done` or `ready-to-merge`), and its terminal is gone and the backend corroborates
+that, the report calls `shipyard-down.sh <slot>` for you. **A slot whose terminal is still up is
+never torn down automatically**, whatever its screen shows: no screen read here is one this path
+may act on yet, so that slot stays for the manual command below (#156).
 It calls it **unchanged, with no flags and never `--force`**, so every gate below is the gate
 that runs; a slot the gate refuses is named in the report's `✋ AWAITING REMOVAL` block with the
 exact command, and nothing is removed. `SHIPYARD_AUTODOWN=0` turns it off and leaves teardown
 entirely manual. **An open escalation THAT THIS REPORT CAN SEE holds it**: a child that stopped to ask you something is
-idle *because it is waiting for you*, and tearing it down destroys the session that asked —
+still owed the answer, and tearing its slot down removes the worktree a relaunch would resume in —
 after which `shipyard-answer.sh` still exits 0 and claims the child will pick the answer up.
 Held slots get their own `✋ HELD` block naming the records that hold them; answer the question
 and the slot tears itself down on the next tick. A record the report cannot PARSE holds it too and
@@ -1306,7 +1309,7 @@ This applies to `/shipyard` with no arguments too — discovery mode reaches the
 
 Why those conditions and not simply `merged`: **merged is not "child done"**. The forge state
 says one PR ended, and a child is still posting its record and writing its state file after
-that — so the stage is what says the child is finished, and the idle/absent read is what says
+that — so the stage is what says the child is finished, and the corroborated absence is what says
 nobody is using the terminal. The cost of the stage condition, stated plainly: a child that
 writes no `.pipeline-state` file has no stage, so it is never torn down automatically. That
 fails towards leaving a worktree alone, and the manual command below is unchanged for it.

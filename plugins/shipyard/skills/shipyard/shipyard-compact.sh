@@ -41,16 +41,13 @@ T=$(shipyard_where "$SLOT") || { shipyard_absence_report "$SLOT" || exit 7; exit
 
 # Exit 8: the terminal is up but the agent launched into it is not (#172). Escape and `/compact`
 # would be typed at a shell prompt and the wait below would then time out into exit 4, which reads
-# as a slow compaction. The same two-read check as shipyard-tell.sh, which says why it takes two
-# and why no verdict is not `none`.
-if [ "$(shipyard_occupant "$SLOT" 2>/dev/null)" = none ]; then
-  sleep "$(knob_interval "${SHIPYARD_MOTION_INTERVAL:-}" 3)"
-  if [ "$(shipyard_occupant "$SLOT" 2>/dev/null)" = none ]; then
-    echo "error: $T is up, but the agent launched into it is not: the backend reports a shell prompt" >&2
-    echo "       or an exited pane there. Nothing was sent — there is no session to compact. Recover the" >&2
-    echo "       child (SKILL.md, Step 5)." >&2
-    exit 8
-  fi
+# as a slow compaction. The same two-read check as shipyard-tell.sh: `drv_no_agent` in
+# shared/driver, which says why it takes two and why no verdict is not `none`.
+if shipyard_no_agent "$SLOT"; then
+  echo "error: $T is up, but the agent launched into it is not: the backend reports a shell prompt" >&2
+  echo "       or an exited pane there. Nothing was sent — there is no session to compact. Recover the" >&2
+  echo "       child (SKILL.md, Step 5)." >&2
+  exit 8
 fi
 
 pane() { shipyard_capture "$SLOT"; }

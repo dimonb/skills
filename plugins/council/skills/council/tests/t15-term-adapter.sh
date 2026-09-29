@@ -113,7 +113,7 @@ rm -f "$ROOM/state/container-agterm"
 
 # --- the OP verbs, and every other delegation (#248) ------------------------------------------
 # t21 and t27 replace these verbs wholesale with fakes, so without this section nothing ran the
-# shipped bodies. The failure it closes is silent: `ct_occupant` with its `ct_name` dropped hands
+# shipped bodies. The failure it closes is silent: `ct_no_agent` with its `ct_name` dropped hands
 # the driver a bare peer name, which names no session, so the driver returns no verdict, and then
 # `say`'s exit-8 refusal and `status`'s NO AGENT line never fire. With `_ct_pin_dir` dropped, a verb
 # loses the room's container pin on agterm. The same edit to `ct_type` sends every `say` down the
@@ -131,7 +131,7 @@ dprobe() { # <ct verb> <arg>... — print the drv_* calls it made, one per line
     . "$TERM_SH"
     local v
     for v in drv_backend drv_shq drv_target drv_read drv_tell drv_submit drv_kill drv_focus \
-             drv_occupant drv_both_pinned drv_pin drv_handles drv_launch_handle drv_container \
+             drv_no_agent drv_both_pinned drv_pin drv_handles drv_launch_handle drv_container \
              drv_container_pin; do
       eval "$v() { { printf '%s' $v; [ \$# = 0 ] || printf '|%s' \"\$@\"; printf '|pindir=%s\n' \"\${DRV_CONTAINER_PIN_DIR:-unset}\"; } >> \"\$DRV_CALLS\"; }"
     done
@@ -146,7 +146,7 @@ ok "ct_type -> drv_tell, with the text"             "drv_tell|$SN|hello there|$P
 ok "ct_submit -> drv_submit"                        "drv_submit|$SN|$PD"         "$(dprobe ct_submit alice)"
 ok "ct_kill -> drv_kill"                            "drv_kill|$SN|$PD"           "$(dprobe ct_kill alice)"
 ok "ct_focus -> drv_focus"                          "drv_focus|$SN|$PD"          "$(dprobe ct_focus alice)"
-ok "ct_occupant -> drv_occupant"                    "drv_occupant|$SN|$PD"       "$(dprobe ct_occupant alice)"
+ok "ct_no_agent -> drv_no_agent, with the gap"      "drv_no_agent|$SN|1|$PD"     "$(dprobe ct_no_agent alice 1)"
 ok "ct_both_pinned -> drv_both_pinned"              "drv_both_pinned|$PD"        "$(dprobe ct_both_pinned)"
 ok "ct_pin -> drv_pin"                              "drv_pin|$PD"                "$(dprobe ct_pin)"
 # ct_container's case at the top of this file runs with no pin present, where the derived name is
@@ -166,7 +166,7 @@ ok "ct_handles -> drv_handles"                      "drv_handles"               
 # NO ct_* VERB GOES UNASSERTED. A verb added to term.sh without a probe above, or in the sections
 # before this one, reds here. The ones that delegate to no single drv_* verb are listed with where
 # they are asserted instead.
-ASSERTED="ct_target ct_capture ct_type ct_submit ct_kill ct_focus ct_occupant ct_both_pinned ct_pin
+ASSERTED="ct_target ct_capture ct_type ct_submit ct_kill ct_focus ct_no_agent ct_both_pinned ct_pin
           ct_launch_record ct_backend ct_shq ct_handles
           ct_name ct_container ct_container_pin ct_sessions ct_absence_class ct_pins_elsewhere
           ct_record_launch"            # the launch-record section below

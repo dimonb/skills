@@ -38,8 +38,8 @@
 # the residual `adp_delivery_verdict` documents — a turn that starts AND finishes between two
 # samples still reads `unconfirmed`, which no test over a scripted screen sequence can
 # distinguish; and the BODIES of the OP verbs this file shadows (`ct_capture`, `ct_type`,
-# `ct_submit`, `ct_occupant`, `ct_sessions`). What those bodies hand the driver is asserted in t15,
-# against the real `lib/term.sh` (#248).
+# `ct_submit`, `ct_sessions`) and the driver's occupant read under `ct_no_agent`. What those bodies
+# hand the driver is asserted in t15, against the real `lib/term.sh` (#248).
 #
 # up.sh's baseline is bash >= 5 (it sources the shared modules), so re-exec into one if a stock
 # bash 3.2 started us — the guard council.sh, t15 and t-driver all use.
@@ -91,7 +91,7 @@ SUBMITTED="$ROOT/submitted"                 # one line per ct_submit that succee
 PINS="$ROOM/state"                          # the container pins drv_pins_elsewhere reads
 SESSIONS="$ROOT/sessions"                   # what ct_sessions prints
 SESSIONS_RC="$ROOT/sessions-rc"             # ...and the status it exits with
-OCC="$ROOT/occupant"                        # one ct_occupant answer per line: agent|none|- (no verdict)
+OCC="$ROOT/occupant"                        # one drv_occupant answer per line: agent|none|- (no verdict)
 OCC_N="$ROOT/occupant-n"                    # how many occupant reads have been taken
 
 # The rest of the shipped skill, linked in, so `council.sh say` itself can run over this shadow
@@ -132,7 +132,7 @@ ct_submit() { [ "\${FAKE_SUBMIT_RC:-0}" = 0 ] || return "\$FAKE_SUBMIT_RC"; prin
 # The occupant read (#235), one scripted answer per call, so a case can say what the FIRST and the
 # SECOND read return. No file means no verdict, which is what every case above this section gets —
 # the read must change nothing for them. \`-\` is also no verdict, spelled explicitly.
-ct_occupant() {
+drv_occupant() {
   local n v
   [ -f "$OCC" ] || return 1
   n=\$(cat "$OCC_N" 2>/dev/null); n=\$(( \${n:-0} + 1 )); printf '%s\n' "\$n" >"$OCC_N"
