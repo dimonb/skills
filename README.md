@@ -217,11 +217,11 @@ Beyond those static checks, `make check` also runs every fast, pure suite — th
 council suites run under `make test`, and `make check` gates only their registration, invocation
 and declaration (above). CI runs `make check` and `make test` in one workflow
 (`.github/workflows/ci.yml`) on every push to `main` and every pull request — plus, in a macOS job
-of the same workflow, the shipyard report's bash 3.2 floor, which has no 3.2 to run under on
-Linux — and `make check-test`
-in a SEPARATE, concurrent workflow (`.github/workflows/check-test.yml`) — unconditionally on every
-push to `main`, and on a pull request only when the change touches a path that could affect what
-it proves. That filter is derived from `$GUARDED` in `scripts/check-test.sh` and asserted by
+of the same workflow, the test files that run parts of the shipyard report under /bin/bash, whose
+3.2 floor is vacuous on Linux (the job lists them) — and `make check-test` in a SEPARATE,
+concurrent workflow (`.github/workflows/check-test.yml`) — unconditionally on every push to
+`main`, and on a pull request only when the change touches a path that could affect what it
+proves. That filter is derived from `$GUARDED` in `scripts/check-test.sh` and asserted by
 check 13; the workflow file carries the reasoning and the one standing exception. So those suites'
 runtime errors surface in CI; locally, where `make check` stays fast, they still surface at
 `make test` time rather than at commit time.

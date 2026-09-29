@@ -470,19 +470,19 @@ ok "gitlab: ...over the three non-numeric slots"    3 \
 # reached over a live slot, so the floor is checked here, over GitHub slots that reach the forge
 # fallback, rather than over an empty workspace. The interpreter is found, not assumed: `bash` on
 # PATH is 5.x on the CI runner and on any Mac with a newer bash in front, and /bin/bash is 5.x on
-# Linux. SHIPYARD_TEST_BASH32 names one explicitly, and a named one that is not a 3.x is a
-# FAILURE, not a skip: CI names /bin/bash on its macOS job (#332, .github/workflows/ci.yml), so a
-# runner image whose /bin/bash stopped being 3.2 reds that job instead of turning the floor back
-# into a skip line. With none named and no 3.x /bin/bash, this section says it did not run, which
-# is every run of the Linux job. The exported fakes above reach a 3.2 child: Apple's 3.2.57 reads the
+# Linux. SHIPYARD_TEST_BASH32 names one explicitly, and then it is the only candidate: a named one
+# that is not a 3.x is a FAILURE, not a skip, and /bin/bash is not tried in its place. CI names
+# /bin/bash on its macOS job (#332, .github/workflows/ci.yml), so a runner image whose /bin/bash
+# stopped being 3.2 reds that job instead of turning the floor back into a skip line. No automated
+# run takes that failing arm; it was checked by hand when it was written. With none named and no
+# 3.x /bin/bash, this section says it did not run, which is every run of the Linux job. The report's
+# slot graph is a subprocess that re-execs into a bash >= 5, so the floor also needs one installed
+# beside the 3.2: without one the graph's refusal lands on stderr and the floor reds. The exported fakes above reach a 3.2 child: Apple's 3.2.57 reads the
 # `BASH_FUNC_<name>%%` form bash 5 exports (checked below rather than trusted, since a floor
 # whose fakes never loaded would fail for the wrong reason).
 FAKE_ORIGIN='https://github.com/example/example.git'; export FAKE_ORIGIN
-B32=""
-for b in "${SHIPYARD_TEST_BASH32:-}" /bin/bash; do
-  [ -n "$b" ] && [ -x "$b" ] || continue
-  [ "$("$b" -c 'echo "${BASH_VERSINFO[0]}"' 2>/dev/null)" = 3 ] && { B32=$b; break; }
-done
+B32=""; b=${SHIPYARD_TEST_BASH32:-/bin/bash}
+[ -x "$b" ] && [ "$("$b" -c 'echo "${BASH_VERSINFO[0]}"' 2>/dev/null)" = 3 ] && B32=$b
 if [ -z "$B32" ] && [ -n "${SHIPYARD_TEST_BASH32:-}" ]; then
   ok "3.2 floor: SHIPYARD_TEST_BASH32 names a bash 3.x" 3 \
      "$("$SHIPYARD_TEST_BASH32" -c 'echo "${BASH_VERSINFO[0]}"' 2>/dev/null || echo unrunnable)"

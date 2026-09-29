@@ -42,12 +42,19 @@ jobs:
       - name: make test
         run: make test
 
-  # The shipyard report is run by stock macOS /bin/bash 3.2, and the one check that it stays 3.2
-  # clean over live slots — the bash 3.2 floor in t15 — has no 3.2 to run under on Linux, where it
-  # prints a skip line (#332). GitHub's macOS image ships /bin/bash 3.2, so this job runs that file
-  # alone there. It NAMES the interpreter rather than letting t15 find one: t15 fails, rather than
-  # skips, when SHIPYARD_TEST_BASH32 is set and is not a 3.x, so an image whose /bin/bash moves on
-  # reds here instead of going quiet. One file, not `make test`: the rest already runs on Linux.
+  # The shipyard report is run by stock macOS /bin/bash 3.2, and the tests that hold it to that run
+  # parts of it under /bin/bash — which on Linux is 5.x, so there t15's floor prints a skip line
+  # (#332) and the /bin/bash sections of t19, t13, t-policy and t-adapters pass vacuously, as each
+  # says. This job runs those files on GitHub's macOS image, whose /bin/bash is 3.2: t15 and t19 run
+  # the report over slots, t13, t-policy and t-adapters the modules it sources. The list is what a
+  # grep for /bin/bash floors found when this job was written; a new test with a /bin/bash section
+  # needs a step here too, and nothing checks that. t15 is the step that proves the 3.2 is there: it
+  # NAMES /bin/bash and fails, rather than skips, when that is not a 3.x, so an image whose /bin/bash
+  # moves on reds this job instead of making the others vacuous again. A bash >= 5 is installed
+  # beside it because the report's slot graph is a subprocess that re-execs into one; without one
+  # the report still runs, with the graph's refusal on stderr and every slot's verdict `active`, a
+  # path this job therefore does not measure. These files, not `make test`: the rest already runs on
+  # Linux.
   bash32-floor:
     name: shipyard report bash 3.2 floor (macOS)
     runs-on: macos-latest
@@ -55,7 +62,24 @@ jobs:
       - name: Check out the repository
         uses: actions/checkout@v7
 
+      - name: Install a bash >= 5 beside the stock 3.2
+        env:
+          HOMEBREW_NO_AUTO_UPDATE: 1
+        run: brew install bash
+
       - name: t15 under /bin/bash 3.2
         env:
           SHIPYARD_TEST_BASH32: /bin/bash
         run: bash plugins/shipyard/skills/shipyard/tests/t15-iid-fallback.sh
+
+      - name: t19 under /bin/bash 3.2
+        run: bash plugins/shipyard/skills/shipyard/tests/t19-occupant.sh
+
+      - name: t13 under /bin/bash 3.2
+        run: bash plugins/shipyard/skills/shipyard/tests/t13-wait.sh
+
+      - name: t-policy under /bin/bash 3.2
+        run: bash shared/policy/tests/t-policy.sh
+
+      - name: t-adapters under /bin/bash 3.2
+        run: bash shared/adapters/tests/t-adapters.sh
