@@ -1449,7 +1449,7 @@ for slot in "${SLOTS[@]}"; do
   # exit 8 that tell and compact still give.
   finished_noagent=0
   if [ "$noagent" = 1 ] \
-     && [ "$(shipyard_wait_state "$b" "$phase" "$stage" 2>/dev/null | cut -f2)" = finished ]; then
+     && [ "$(shipyard_wait_state "$b" "$phase" "$stage" "$(ctx_agent "$slot")" 2>/dev/null | cut -f2)" = finished ]; then
     noagent=0; finished_noagent=1; run="⏸ idle/wait"
   fi
   # WHICH ANSWERS AN OPEN QUESTION HOLDS BACK. A slot with an open escalation is already accounted
@@ -1468,7 +1468,7 @@ for slot in "${SLOTS[@]}"; do
   # #296 and reverted). The stall guard itself does NOT take the unreadable count — that would
   # silence the stall alarm for the very slot this reroutes.
   if [ "$run" = "⏸ idle/wait" ]; then
-    wait_line=$(shipyard_wait_state "$b" "$phase" "$stage" 2>/dev/null) || wait_line=""
+    wait_line=$(shipyard_wait_state "$b" "$phase" "$stage" "$(ctx_agent "$slot")" 2>/dev/null) || wait_line=""
     if [ -n "$wait_line" ]; then
       wait_kind=$(printf '%s' "$wait_line" | cut -f1)
       wait_class=$(printf '%s' "$wait_line" | cut -f2)

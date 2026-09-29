@@ -11,10 +11,10 @@
 # shellcheck source=agent-adapters.sh
 . "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/agent-adapters.sh"
 
-# THE ADMISSION SET IS SHIPYARD'S OWN, and deliberately narrower than the module's. The module
-# knows more kinds than shipyard can drive (it also serves council, which runs `agy`), and a
-# child that cannot be supervised by this skill must not become launchable just because the
-# shared module learned how to start it.
+# THE ADMISSION SET IS SHIPYARD'S OWN, and may be narrower than the module's: a child that cannot
+# be supervised by this skill must not become launchable just because the shared module learned
+# how to start it. Today it equals the module's set. agy was admitted with its per-kind paths
+# either given an arm or degraded on purpose; SKILL.md ("Child agent") lists which and how.
 #
 # Widening it is a shipyard decision, and the admission-critical edits are three, all here: this
 # list; the `case` in `shipyard_agent` that reads the SHIPYARD_AGENT knob; and
@@ -32,16 +32,19 @@
 #
 # Other places branch on a kind without being admission, and this is NOT a closed list — treat it
 # as where to start looking, not as a checklist to tick off:
-#   * `shipyard_agent_prepare_worktree` below, and its caller's rollback bookkeeping, pre-create a
-#     worktree for codex only. A kind that needs one — any kind whose protocol mode is
-#     `reference`, i.e. `-C <dir>` shaped — execs into a directory that does not exist without it.
+#   * `shipyard_agent_needs_worktree` below decides which kinds get a pre-created worktree (every
+#     kind but claude, which makes its own with `-w`); a kind missing from it execs into a
+#     directory that does not exist.
 #   * `ctx_probe` in `shipyard-ctx.sh` reads a child's context window per kind, and `ctx_agent`
 #     there DEFAULTS an unrecognised kind to claude. So a new kind's ctx column is computed by
 #     hunting for a claude transcript it will never have, and the column and its stall alarm go
 #     quietly wrong for that slot.
+#   * `shipyard_wait_state` passes the kind to `adp_wait_anchored`, `shipyard-compact.sh` refuses a
+#     kind with no `/compact`, `shipyard-tell.sh` names a kind whose turn state cannot be read, and
+#     `shipyard_agent_skill_check` names where a kind finds the `ship` skill.
 # Both fail the way the arm above used to: silently. That is the reason to go looking rather than
 # to trust a count in a comment — including this one.
-shipyard_agent_kinds() { printf '%s\n' claude codex; }
+shipyard_agent_kinds() { printf '%s\n' claude codex agy; }
 # `-F`: a LITERAL match. Without it the pattern is a basic regular expression, and this function
 # is the one that keeps a kind shipyard cannot supervise out — `shipyard_agent_admits '.*'`
 # returning true is the opposite of what the rest of this change is built on (a kind is matched
@@ -52,10 +55,11 @@ shipyard_agent_admits() {
 
 shipyard_agent() {
   case "${SHIPYARD_AGENT:-auto}" in
-    codex|claude) printf '%s' "$SHIPYARD_AGENT" ;;
+    codex|claude|agy) printf '%s' "$SHIPYARD_AGENT" ;;
     auto)
       # The module answers "what is running me?"; shipyard then keeps only what it admits, so a
-      # parent kind outside the set degrades to `none` (no child) rather than to a launch.
+      # parent kind outside the set degrades to `none` (no child) rather than to a launch. The
+      # module never answers agy, so an agy child is always an explicit SHIPYARD_AGENT=agy.
       local parent; parent=$(adp_parent_kind)
       if shipyard_agent_admits "$parent"; then printf '%s' "$parent"; else printf 'none'; fi
       ;;
@@ -94,9 +98,32 @@ shipyard_self_ref() {
   adp_skill_ref "$1" shipyard
 }
 
+# shipyard_agent_needs_worktree <agent> — 0 when shipyard must create the child's worktree before
+# launch. claude creates its own (`-w <name>` under .claude/worktrees/); codex (`-C`) and agy (a
+# `cd` line) are pointed at a directory that must already exist.
+shipyard_agent_needs_worktree() {
+  case "${1:-}" in codex|agy) return 0 ;; *) return 1 ;; esac
+}
+
+# shipyard_agent_skill_check <agent> <root> — 0 when the child kind can find the `ship` skill.
+# Only agy is checked: its skill directories are fixed paths (listed by agy's own `/skills` on
+# 1.2.13) and none of them is where a claude or codex plugin install puts `ship`, so a repo without
+# one launches a child that starts fine and then has no skill to run. The workspace path is read in
+# the main checkout, which the child's worktree is cut from.
+shipyard_agent_skill_check() {
+  local agent="${1:-}" root="${2:-}" d
+  [ "$agent" = agy ] || return 0
+  for d in "$root/.agents/skills" "$HOME/.gemini/antigravity-cli/skills" "$HOME/.gemini/skills"; do
+    [ -f "$d/ship/SKILL.md" ] && return 0
+  done
+  echo "error: an agy child finds skills only in <workspace>/.agents/skills/, ~/.gemini/antigravity-cli/skills/" >&2
+  echo "       or ~/.gemini/skills/, and none of them holds ship/SKILL.md; refusing to launch" >&2
+  return 1
+}
+
 shipyard_agent_prepare_worktree() {
   local agent="$1" root="$2" worktree="$3" physical
-  [ "$agent" = codex ] || return 0
+  shipyard_agent_needs_worktree "$agent" || return 0
   if [ -e "$worktree" ]; then
     physical=$(cd "$worktree" 2>/dev/null && pwd -P) || physical="$worktree"
     git -C "$root" worktree list --porcelain | grep -Fqx "worktree $physical" && return 0
@@ -110,12 +137,19 @@ shipyard_agent_env_pass_default() {
   case "$1" in
     codex) printf 'CODEX_HOME' ;;
     claude) printf 'CLAUDE_HOME CLAUDE_CONFIG_DIR' ;;
+    # agy 1.2.13 keeps its config under $HOME and reads no config-dir variable that its binary
+    # names, so there is nothing to propagate. An arm that prints nothing, not a missing arm: a
+    # missing one refuses the launch (#113), and this one still gets the scrub list.
+    agy) printf '' ;;
     *) return 1 ;;
   esac
 }
 
 shipyard_agent_env_scrub_default() {
-  printf '%s' 'CLAUDECODE CLAUDE_CODE_ENTRYPOINT CLAUDE_CODE_SESSION_ID CLAUDE_CODE_CHILD_SESSION CLAUDE_PID CLAUDE_CODE_MESSAGING_SOCKET CLAUDE_CODE_MESSAGING_TOKEN CLAUDE_EFFORT CODEX_SESSION_ID CODEX_THREAD_ID SHIPYARD_SLOT'
+  # The ANTIGRAVITY_* four are what agy 1.2.13's tool shell exports per session (captured with
+  # `env` inside one): a parent run from such a shell would otherwise hand its own conversation,
+  # language-server address and token to the child.
+  printf '%s' 'CLAUDECODE CLAUDE_CODE_ENTRYPOINT CLAUDE_CODE_SESSION_ID CLAUDE_CODE_CHILD_SESSION CLAUDE_PID CLAUDE_CODE_MESSAGING_SOCKET CLAUDE_CODE_MESSAGING_TOKEN CLAUDE_EFFORT CODEX_SESSION_ID CODEX_THREAD_ID ANTIGRAVITY_CONVERSATION_ID ANTIGRAVITY_TRAJECTORY_ID ANTIGRAVITY_CSRF_TOKEN ANTIGRAVITY_LS_ADDRESS SHIPYARD_SLOT'
 }
 
 # The exec line for the child's launcher. shipyard sets the knobs; the module spells them.
@@ -181,11 +215,11 @@ shipyard_agent_exec() {
         ADP_CWD="$worktree"
         ADP_PROMPT="Read and follow the supervisor protocol at $proto. Then invoke $prompt and stay inside that workflow until its stopping condition."
         ;;
-      # `inline` is refused, loudly, rather than guessed at: shipyard has no established way to
-      # point such a kind at the child's WORKTREE (claude takes -w, codex takes -C, and a kind
-      # that has neither would silently run the child in the parent's checkout — the one place
-      # a wrong answer is worse than no answer). Admitting an inline kind means deciding that
-      # here, alongside widening shipyard_agent_kinds.
+      # inline (agy): the protocol's TEXT is fused into the goal by the module, and the worktree is
+      # a `cd` the module renders from ADP_CWD — agy has no -C, and without the cd the child would
+      # run in the parent's checkout. No effort flag: agy has one, but shipyard passes it to no
+      # kind but claude (shipyard_child_effort_summary says so on the launch line).
+      inline) ADP_PROTOCOL="$proto"; ADP_CWD="$worktree" ;;
       *) exit 1 ;;
     esac
     adp_cmd "$agent"

@@ -120,6 +120,17 @@ ok "predicate: not running on an empty capture"         no \
 # An empty capture is what a FAILED read returns as well as what a blank screen returns. Calling
 # it idle would let the fold below read a turn that was already running as one our send started.
 printf '\n── unreadable vs idle ──\n'
+# agy (pane-agy-*.txt) renders no anchorable turn state: its footer reads `esc to cancel` mid-turn
+# AND with its slash menu open at an idle composer, and it has no queued hint. So every agy screen
+# reads idle — which is why shipyard-tell can only answer `unconfirmed` for an agy child. Pinned so
+# that nobody widens the marker to `esc to cancel` from the running capture alone.
+ok "agy mid-turn reads idle: no anchored marker"   idle "$(state_of agy-running)"
+ok "agy idle reads idle"                           idle "$(state_of agy-idle)"
+ok "agy idle with its menu open reads idle"        idle "$(state_of agy-menu)"
+ok "agy's footer says the same mid-turn and in the menu" \
+  "$(pane agy-running | grep -v '^ *$' | tail -1)" "$(pane agy-menu | grep -v '^ *$' | tail -1)"
+ok "so a send to agy never confirms" unconfirmed \
+  "$(adp_delivery_verdict "$(state_of agy-idle)" "$(state_of agy-running)" "$(state_of agy-idle)")"
 ok "an empty capture reads unknown"           unknown "$(adp_turn_state "")"
 ok "a blank but non-empty screen reads idle"  idle    "$(adp_turn_state '   ')"
 

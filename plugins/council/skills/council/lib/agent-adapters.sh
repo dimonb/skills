@@ -22,8 +22,8 @@
 # admission set of its own (`shipyard_agent_kinds`) and widening that is a shipyard decision, made
 # there. Neither statement is a promise that a new kind is launchable everywhere.
 #
-# WHAT THIS IS NOT: it does not decide WHICH kind a caller may launch (shipyard admits only
-# claude and codex; council admits every kind here), it does not carry either skill's launcher
+# WHAT THIS IS NOT: it does not decide WHICH kind a caller may launch (shipyard admits its own
+# list, `shipyard_agent_kinds`; council admits every kind here), it does not carry either skill's launcher
 # preamble (shipyard's CLAUDE_*/CODEX_* propagation and scrub list, council's protocol and roster
 # wiring), and it does not write or run the launcher. It renders one `exec` line.
 #
@@ -38,7 +38,7 @@
 # sourcing anything, so it constrains nothing; shipyard is the binding caller.
 
 # A version marker, bumped when the body changes, so sync + the drift gate stay easy to prove.
-_ADP_VERSION=5
+_ADP_VERSION=6
 
 # --- the kinds -----------------------------------------------------------------
 # One per line, sorted, so a caller can `paste -sd, -` them into a message.
@@ -109,7 +109,8 @@ _adp_approval() { case "${ADP_APPROVAL:-sandboxed}" in full) printf 'full' ;; *)
 #   ADP_PROMPT     the goal text (the one argument every kind takes).
 #   ADP_PROTOCOL   path to the protocol / system-prompt file; delivered per adp_protocol_mode.
 #   ADP_DIRS       extra directories to grant, one per line -> `--add-dir` each.
-#   ADP_CWD        the directory the agent itself should run in (codex `-C`).
+#   ADP_CWD        the directory the agent itself should run in (codex `-C`; agy has no such
+#                  flag, so its arm renders a `cd` line ahead of the exec).
 #   ADP_NAME       a session identity; where the CLI has session flags they are wired to it.
 #   ADP_EFFORT     reasoning-effort selector, where the CLI has one.
 #   ADP_APPROVAL   sandboxed|full, above.
@@ -167,6 +168,10 @@ adp_cmd() {
       # file-access prompt for any path a participant DISCOVERS for itself, with no "always"
       # option, and while it is up the agent holds the floor and looks exactly like one that is
       # thinking. See adp_notes.
+      # agy has no working-directory flag (1.2.13's --help lists none), so ADP_CWD is a `cd` ahead
+      # of the exec. `|| exit 1`: a missing directory must stop the launcher, never run the agent
+      # in whatever directory the launcher happened to start in.
+      [ -n "${ADP_CWD:-}" ] && printf 'cd %s || exit 1\n' "$(_adp_shq "$ADP_CWD")"
       printf 'exec agy --dangerously-skip-permissions'
       while IFS= read -r d; do
         [ -n "$d" ] && printf ' --add-dir %s' "$(_adp_shq "$d")"
@@ -221,12 +226,16 @@ adp_notes() {
 }
 
 # --- adp_skill_ref <kind> <skill-name> — how a skill is invoked in that agent ---
-# `/name` in claude, `$name` in codex. agy's syntax is not established here, so it returns rc 1
-# rather than a plausible guess: a wrong invocation string produces a child that starts fine and
-# then does nothing anyone asked for. Its only caller today admits claude and codex only.
+# `/name` in claude, `$name` in codex, and `/name` in agy — the last from a capture (agy 1.2.13,
+# a scratch repo holding `.agents/skills/probe/SKILL.md`): the composer lists a workspace skill as a
+# slash command, a TYPED `/probe <arg>` runs it, and the same text handed over as the `-i` goal is
+# not expanded by the client but was resolved by the agent reading that SKILL.md. So in `-i` the
+# invocation is honoured by the agent, not by the client — the weaker of the two, and the reason a
+# kind with no established syntax still returns rc 1 rather than a plausible guess: a wrong
+# invocation string produces a child that starts fine and then does nothing anyone asked for.
 adp_skill_ref() {
   case "${1:-}" in
-    claude) printf '/%s' "${2:-}" ;;
+    claude|agy) printf '/%s' "${2:-}" ;;
     codex)  printf '$%s' "${2:-}" ;;
     *)      return 1 ;;
   esac
@@ -234,8 +243,10 @@ adp_skill_ref() {
 
 # --- adp_parent_kind — which kind is running THIS session -----------------------
 # Environment markers first (they are authoritative: they say what actually started us), then
-# what is installed. agy publishes no parent marker, so it is never auto-detected — a caller that
-# wants it must be told explicitly. `none` when nothing is available.
+# what is installed. agy is never auto-detected — a caller that wants it must be told explicitly.
+# (Its tool shell does export per-session `ANTIGRAVITY_*` variables, captured on 1.2.13; nothing
+# here reads them, so auto-detecting agy would be a new decision, not a fix.) `none` when nothing
+# is available.
 adp_parent_kind() {
   if [ -n "${CODEX_SESSION_ID:-}${CODEX_THREAD_ID:-}" ]; then
     printf 'codex'
@@ -803,13 +814,10 @@ adp_wait_class() {
 # It lives HERE because it is the per-kind half of the same question the allow-list answers: which
 # client renders what is this module's knowledge, not a supervisor's.
 #
-# THE CALLER THAT NEEDS IT TODAY IS THE ONE WITH THE WIDER SET, and that is a seam worth naming
-# rather than plumbing. council admits every kind `adp_kinds` lists, so it asks this before
-# PRINTING a sentence about what a client's chrome means. shipyard's admission set
-# (`shipyard_agent_kinds`) is exactly the two evidenced kinds, so the gate would change nothing
-# there today — and making `shipyard_wait_state` carry a kind it does not currently hold, to reach
-# a call whose answer is always 0, is the plumbing this repo's law tells you not to buy. The day
-# either admission set widens, the gate is already here and that caller passes the kind it knows.
+# BOTH CALLERS NOW HOLD A WIDER SET THAN THE EVIDENCE. council admits every kind `adp_kinds`
+# lists, so it asks this before PRINTING a sentence about what a client's chrome means. shipyard
+# admits agy too, so `shipyard_wait_state` takes the slot's kind and asks this before granting the
+# capacity-wait exemption.
 #
 # WHAT ANSWERING 1 COSTS DEPENDS ON WHAT THE CALLER DOES WITH A 0, and the live callers differ —
 # so this is stated case by case rather than as one rule. shipyard's read grants an exemption from

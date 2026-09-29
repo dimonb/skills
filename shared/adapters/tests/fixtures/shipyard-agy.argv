@@ -1,0 +1,15 @@
+<<CMD>>
+agy
+<<END>>
+<<ARG>>
+--dangerously-skip-permissions
+<<END>>
+<<ARG>>
+-i
+<<END>>
+<<ARG>>
+/ship #42
+
+PROTOCOL LINE ONE $notavar `notacmd`
+PROTOCOL LINE TWO
+<<END>>

@@ -10,6 +10,8 @@ carried back to the session you are sitting in.
 
 Use `/shipyard` in Claude Code and `$shipyard` in Codex. The child runtime matches the
 runtime that invoked the skill: Claude Code launches Claude Code, while Codex launches Codex.
+`SHIPYARD_AGENT=agy` launches Antigravity's `agy` instead, with the degradations SKILL.md lists
+(no ctx figure, no delivery confirmation, no `/compact`, and a trust prompt to answer per child).
 /shipyard 108 104           continue two existing PRs/MRs, in parallel
 /shipyard "#42"             start from issue 42
 /shipyard "add X to Y"      a brand-new change from an idea
@@ -175,7 +177,8 @@ already in flight.
 
 A child is an **autonomous agent session with automatic approval review**, working in a git
 worktree of your repository and pushing to your forge, with no human in its terminal. Claude
-Code uses `--permission-mode auto`; Codex uses `--approve-for-me`. A background session that
+Code uses `--permission-mode auto`; Codex uses `--approve-for-me`; agy uses
+`--dangerously-skip-permissions`. A background session that
 stops to ask permission is a background session that sits idle until someone notices.
 
 What keeps that safe is the pairing, so do not break it:
@@ -193,7 +196,8 @@ starts nothing.
 
 - `git`, `bash`, `jq`, and either an agterm app or `tmux`.
 - A `ship` skill in the repo — see above.
-- The CLI matching the parent runtime on `PATH`: `claude` for Claude Code or `codex` for Codex.
+- The CLI matching the parent runtime on `PATH`: `claude` for Claude Code or `codex` for Codex
+  (`agy` when `SHIPYARD_AGENT=agy`, with the repo's `ship` skill under `.agents/skills/`).
 - `gh` or `glab`, authenticated, for the status table's forge lookups. `GH_CONFIG_DIR` is
   honoured from your environment when set and otherwise left to `gh` — there is no default
   pointing at anyone's machine. `GITLAB_HOST` defaults to the host in the `origin` remote.
@@ -263,12 +267,13 @@ own. Setting this variable replaces the bound with an exact band, for good.
 child. Unset, the child is launched with no such flag: how hard to think and how deep to review
 are `ship`'s decisions, made after its discovery step, and `shipyard` does not pre-empt them.
 
-Three more are worth knowing about. `SHIPYARD_AGENT=auto|codex|claude` defaults to matching the
-parent runtime; set it explicitly only when invoking the scripts from a shell with no parent
-agent identity. `SHIPYARD_ENV_PASS` **replaces** the set of variables copied from your session
-into a child — the runtime-specific default is `CODEX_HOME` or `CLAUDE_HOME CLAUDE_CONFIG_DIR`.
+Three more are worth knowing about. `SHIPYARD_AGENT=auto|codex|claude|agy` defaults to matching
+the parent runtime; set it explicitly when invoking the scripts from a shell with no parent agent
+identity, or to launch agy, which `auto` never picks. `SHIPYARD_ENV_PASS` **replaces** the set of variables copied from your session
+into a child — the runtime-specific default is `CODEX_HOME` or `CLAUDE_HOME CLAUDE_CONFIG_DIR`
+(nothing for agy).
 Name those again if you still want them, or the child may resolve a different config directory
 and get different skills. `SHIPYARD_ENV_SCRUB` overrides the set removed from the child; the
-defaults strip both runtimes' session identities, including Claude Code's messaging socket.
+defaults strip the runtimes' session identities, including Claude Code's messaging socket.
 Override that one only if you know why. `SHIPYARD_DRY=1` prints everything a child would get
 and starts nothing.

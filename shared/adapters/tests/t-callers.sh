@@ -218,6 +218,19 @@ ok "shipyard/claude launches the same agent process" \
 ok "shipyard/codex launches the same agent process" \
   "$(cat "$FIX/shipyard-codex.argv")" \
   "$(shipyard_agent_exec codex ship-42 "$WORKTREE" "$PROTO" '$ship #42' | argv_of)"
+ok "shipyard/agy launches the same agent process" \
+  "$(cat "$FIX/shipyard-agy.argv")" \
+  "$(shipyard_agent_exec agy ship-42 "$WORKTREE" "$PROTO" '/ship #42' | argv_of)"
+# agy has no -C, so the worktree is a `cd` ahead of the exec. The fake prints its cwd so the
+# assertion is on where the agent RUNS, not on the text of the line.
+printf '#!/usr/bin/env bash\npwd\n' >"$BIN/agy-pwd"
+chmod +x "$BIN/agy-pwd"
+agy_cwd=$(shipyard_agent_exec agy ship-42 "$WORKTREE" "$PROTO" '/ship #42' \
+  | sed 's/^exec agy /exec agy-pwd /' | ( PATH="$BIN:$PATH" bash ))
+ok "shipyard/agy runs in the child's worktree" "$(cd "$WORKTREE" && pwd)" "$agy_cwd"
+agy_gone=$(shipyard_agent_exec agy ship-42 "$FX/no such tree" "$PROTO" '/ship #42' \
+  | ( PATH="$BIN:$PATH" bash 2>/dev/null ); echo "rc=$?")
+ok "a missing worktree stops the launcher before agy starts" "rc=1" "$agy_gone"
 
 # The inbound direction again, for shipyard. `ADP_DIRS` is the sharp one: a leaked value becomes
 # an extra `--add-dir` on a child that already runs with approvals off.
@@ -229,22 +242,27 @@ ok "shipyard/claude ignores an inherited ADP_*" \
 ok "shipyard/codex ignores an inherited ADP_*" \
   "$(cat "$FIX/shipyard-codex.argv")" \
   "$(shipyard_agent_exec codex ship-42 "$WORKTREE" "$PROTO" '$ship #42' | argv_of)"
+ok "shipyard/agy ignores an inherited ADP_*" \
+  "$(cat "$FIX/shipyard-agy.argv")" \
+  "$(shipyard_agent_exec agy ship-42 "$WORKTREE" "$PROTO" '/ship #42' | argv_of)"
 unset ADP_PROMPT ADP_PROTOCOL ADP_DIRS ADP_CWD ADP_NAME ADP_EFFORT ADP_APPROVAL
 
 printf '\n── shipyard: the admission set is ITS OWN, not the module one ──\n'
-# The module knows `agy` because council runs it. shipyard cannot supervise it, so it must not
-# become launchable here just because the shared module learned how to start it.
+# agy is admitted, explicitly: `auto` never resolves to it. A kind outside the set stays out
+# whatever the knob says — the admission set is literals, never a pattern.
 ok "the module knows agy"                0 "$(adp_known agy; echo $?)"
-ok "shipyard does not admit agy"         1 "$(shipyard_agent_admits agy; echo $?)"
-ok "SHIPYARD_AGENT=agy resolves invalid" invalid "$(SHIPYARD_AGENT=agy shipyard_agent)"
-ok "SHIPYARD_AGENT=agy is refused"       1 "$(SHIPYARD_AGENT=agy shipyard_agent_check >/dev/null 2>&1; echo $?)"
-agy_msg=$(SHIPYARD_AGENT=agy shipyard_agent_check 2>&1 >/dev/null | head -1)
-case "$agy_msg" in *SHIPYARD_AGENT*) ok "the refusal names the knob the operator set" yes yes ;;
-                   *)                ok "the refusal names the knob the operator set" yes "no: [$agy_msg]" ;; esac
-ok "shipyard_agent_exec refuses agy"     1 "$(shipyard_agent_exec agy n "$WORKTREE" "$PROTO" p >/dev/null 2>&1; echo $?)"
-ok "and renders nothing for it"          "" "$(shipyard_agent_exec agy n "$WORKTREE" "$PROTO" p 2>/dev/null)"
-ok "shipyard_skill_ref refuses agy"      1 "$(shipyard_skill_ref agy >/dev/null 2>&1; echo $?)"
-ok "shipyard_self_ref refuses agy"       1 "$(shipyard_self_ref agy >/dev/null 2>&1; echo $?)"
+ok "shipyard admits agy"                 0 "$(shipyard_agent_admits agy; echo $?)"
+ok "SHIPYARD_AGENT=agy resolves to agy"  agy "$(SHIPYARD_AGENT=agy shipyard_agent)"
+ok "shipyard_skill_ref for agy"          '/ship' "$(shipyard_skill_ref agy)"
+ok "shipyard_self_ref for agy"           '/shipyard' "$(shipyard_self_ref agy)"
+ok "SHIPYARD_AGENT=stub resolves invalid" invalid "$(SHIPYARD_AGENT=stub shipyard_agent)"
+ok "SHIPYARD_AGENT=stub is refused"       1 "$(SHIPYARD_AGENT=stub shipyard_agent_check >/dev/null 2>&1; echo $?)"
+stub_msg=$(SHIPYARD_AGENT=stub shipyard_agent_check 2>&1 >/dev/null | head -1)
+case "$stub_msg" in *"claude, codex, agy or auto"*) ok "the refusal names every admitted kind and the knob" yes yes ;;
+                    *)  ok "the refusal names every admitted kind and the knob" yes "no: [$stub_msg]" ;; esac
+ok "a pattern is not a kind"             1 "$(shipyard_agent_admits '.*'; echo $?)"
+ok "shipyard_agent_exec refuses an unknown kind" 1 "$(shipyard_agent_exec stub n "$WORKTREE" "$PROTO" p >/dev/null 2>&1; echo $?)"
+ok "and renders nothing for it"          "" "$(shipyard_agent_exec stub n "$WORKTREE" "$PROTO" p 2>/dev/null)"
 
 printf '\n── approval: shipyard stays full, council stays sandboxed ──\n'
 # The one place a behaviour-preserving refactor could silently change a security posture: the

@@ -14,6 +14,9 @@
 set -uo pipefail
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 . "$DIR/shipyard-lib.sh"
+# For ctx_agent, which reads the slot's kind from its launch record.
+# shellcheck source=shipyard-ctx.sh
+. "$DIR/shipyard-ctx.sh"
 
 SLOT=""; RESUME_FILE=""; RESUME_TEXT=""; NO_RESUME=0; TIMEOUT=300
 while [ $# -gt 0 ]; do
@@ -31,6 +34,13 @@ while [ $# -gt 0 ]; do
 done
 [ -n "$SLOT" ] || { echo "usage: shipyard-compact.sh <slot> [--resume-file <path>|--resume <text>|--no-resume]" >&2; exit 2; }
 shipyard_slot_check "$SLOT" || exit 2
+
+# Exit 9: the child's kind has no `/compact`. agy 1.2.13's slash menu lists none (captured), so
+# typing it would reach the agent as a message, after an Escape that cancels a running turn.
+if [ "$(ctx_agent "$SLOT")" = agy ]; then
+  echo "error: ship-$SLOT is an agy child, and agy has no /compact command. Nothing was sent." >&2
+  exit 9
+fi
 
 shipyard_backend_check || exit 1
 # Exit 3 means the backend answered and does not have this slot — the child is gone. Exit 7 means

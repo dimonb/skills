@@ -170,10 +170,13 @@ render() { # <pair> — the exact knobs the named caller sets for that kind
     shipyard-codex)  ( ADP_APPROVAL=full ADP_CWD="$FX/work tree" \
                        ADP_PROMPT="Read and follow the supervisor protocol at $PROTO. Then invoke \$ship #42 and stay inside that workflow until its stopping condition."
                        adp_cmd codex ) ;;
+    shipyard-agy)    ( ADP_APPROVAL=full ADP_CWD="$FX/work tree" ADP_PROTOCOL=$PROTO \
+                       ADP_PROMPT='/ship #42'
+                       adp_cmd agy ) ;;
   esac
 }
 
-for pair in council-claude council-codex council-agy shipyard-claude shipyard-codex; do
+for pair in council-claude council-codex council-agy shipyard-claude shipyard-codex shipyard-agy; do
   got=$(render "$pair" | sed "s#$FX#@FX@#g")
   want=$(cat "$FIX/$pair.text")
   ok "rendered text matches the golden: $pair" "$want" "$got"
@@ -240,10 +243,12 @@ ok "claude invokes a skill with a slash" '/ship'     "$(adp_skill_ref claude shi
 ok "codex invokes a skill with a dollar" '$ship'     "$(adp_skill_ref codex ship)"
 ok "claude, the other skill"             '/shipyard' "$(adp_skill_ref claude shipyard)"
 ok "codex, the other skill"              '$shipyard' "$(adp_skill_ref codex shipyard)"
-# agy's syntax is not established here: rc 1 and no output beats a plausible guess, which would
-# produce a child that starts fine and then does nothing anyone asked for.
-ok "agy has no skill-reference syntax (rc)"  1  "$(adp_skill_ref agy ship >/dev/null 2>&1; echo $?)"
-ok "agy has no skill-reference syntax (out)" "" "$(adp_skill_ref agy ship 2>/dev/null)"
+# agy's slash form is from a capture (see adp_skill_ref). A kind with no established syntax still
+# gets rc 1 and no output: a plausible guess would produce a child that starts fine and then does
+# nothing anyone asked for.
+ok "agy invokes a skill with a slash"        '/ship' "$(adp_skill_ref agy ship)"
+ok "an unknown kind has no syntax (rc)"      1  "$(adp_skill_ref stub ship >/dev/null 2>&1; echo $?)"
+ok "an unknown kind has no syntax (out)"     "" "$(adp_skill_ref stub ship 2>/dev/null)"
 
 env_kind() { ( unset CODEX_SESSION_ID CODEX_THREAD_ID CLAUDECODE CLAUDE_CODE_SESSION_ID
                [ -n "${1:-}" ] && export "$1=set"

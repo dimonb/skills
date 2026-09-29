@@ -60,6 +60,9 @@ set -o pipefail
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=shipyard-lib.sh
 . "$DIR/shipyard-lib.sh"
+# For ctx_agent, which reads the slot's kind from its launch record.
+# shellcheck source=shipyard-ctx.sh
+. "$DIR/shipyard-ctx.sh"
 
 # The header, to the first line that is not a comment. Line-numbered ranges go stale the moment
 # anyone adds a paragraph above them, and this one already had: it over-ran by three lines and
@@ -370,6 +373,11 @@ case "$DELIVERY" in
                  echo "           $(shipyard_peek_hint "$SLOT")" >&2
                  echo "         if your directive is in the box, submit what is already there:" >&2
                  echo "           bash $DIR/shipyard-tell.sh $SLOT --submit" >&2
+               fi
+               if [ "$(ctx_agent "$SLOT")" = agy ]; then
+                 echo "         ship-$SLOT is an agy child, whose turn state shipyard cannot read: its" >&2
+                 echo "         footer says the same thing mid-turn as in an open menu. A send to it" >&2
+                 echo "         never confirms, so this warning is the expected answer — read the pane." >&2
                fi
                echo "         This is NOT proof it went nowhere — see adp_delivery_verdict in" >&2
                echo "         shared/adapters for what the verdict does and does not rule out." >&2 ;;

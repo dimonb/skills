@@ -56,6 +56,10 @@
 #           reads — but only when the id carries a window marker. Without one the window is
 #           INFERRED from the peak (ctx_window) and ctx_window_unproven marks the readings where
 #           that inference is a guess.
+#   agy     NOTHING, so its column is "—" and ctx_probe returns before the pane path. Captured on
+#           agy 1.2.13: its footer carries no session figure, its transcript is not JSON, and
+#           each turn renders a per-turn `Thought for 4s, 775 tokens` line that the pane scrape
+#           below would read as a session total. No reading beats a wrong one.
 #   a new kind takes the claude arm by ctx_probe's own `elif`, so it inherits the inference
 #           silently unless an arm is written for it — see shipyard-agent.sh, which says the same
 #           about the rest of a new kind's wiring.
@@ -392,6 +396,7 @@ ctx_pane_tokens() {
 ctx_probe() {
   local slot="$1" pane="$2" agent f tot cur peak win pct declared=""
   agent=$(ctx_agent "$slot")
+  if [ "$agent" = agy ]; then printf '%s %s' '-' "—"; return; fi
   if [ "$agent" = codex ]; then
     if f=$(ctx_codex_transcript "$slot"); then tot=$(ctx_codex_totals "$f"); fi
     if [ -n "${tot:-}" ]; then
