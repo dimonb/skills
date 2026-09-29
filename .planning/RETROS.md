@@ -466,3 +466,31 @@ own code are unchanged. The council stated its limit plainly: this bounds low-im
 open count.
 
 For the supervisor: keep pairing issues by component per slot.
+
+## Retro 13 — 2026-09-29, after #330 #335 #336
+
+Batch: 3 PRs, 5 issues closed (#67 #334 #328 #332, and #269 is split in flight), 4 opened (#333
+#334 #337 #338); open count 18 → 18. The residual-filing rule from the `residuals` council room
+shipped as #335.
+
+### Went well
+
+* **A macOS CI job now asserts the bash 3.2 floor instead of skipping it** (#336), so a class of
+  regression that was green by construction on Linux runners is now a red check.
+* **A collector is being closed rather than grown.** #269 (10 comments, ~30 items) was triaged under
+  the new rule into tests, small fixes and Known limits entries, split by suite into two PRs.
+
+### Went badly
+
+* **A child launched before a skill change merged ran the old rule to the end.** #336's slot started
+  12 minutes before #335 merged. Its worktree carried the old §5.11, so it filed two issues. The
+  new rule would have sent one of them (#337, CI-internal gaps) mostly to Known limits. Nothing
+  tells a running child that the skill it follows has changed on main.
+
+### Change
+
+In `shipyard` (next PR): **when a merge changes the ship skill, the supervisor tells every running
+child.** It sends one directive naming the changed section and what it now requires, before that
+child reaches the stage the change governs. A child's worktree is branched from main at launch and
+does not see later skill changes on its own. This is supervisor procedure, not ship's, which is why
+the change lands in shipyard this time.
