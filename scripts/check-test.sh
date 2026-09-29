@@ -1536,8 +1536,8 @@ git checkout -- "$RUNNER"
 
 # 37 — check 15, section cross-references (#213). 37a is the issue's own kill test: a reference in
 # the core renumbered past its last subsection, the edit shape that breaks these for real.
-perl -pi -e 's/§5\.11/§5.12/' "$CORE"
-expect_fail "a dangling section cross-reference in the core" "§5.12"
+perl -pi -e 's/§5\.11/§5.99/' "$CORE"
+expect_fail "a dangling section cross-reference in the core" "§5.99"
 git checkout -- "$CORE"
 # 37b — the same in an untracked file, resolving against neither its own headings nor the core's.
 mkdir -p docs
