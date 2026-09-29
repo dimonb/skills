@@ -576,6 +576,7 @@ passes it — the absent file does not fail safe, it fails open.)
       "reason": "novel trust-boundary path, reachable on the base branch",
       "channel": "github-draft-advisory|github-private-report|gitlab-confidential-issue|none",
       "private_ref": "<advisory id or confidential issue iid, or null>", "verified": true,
+      "matches": ["<ids of every entry it matched>"], "sightings": ["<head sha>"],
       "status": "held|released", "released_by": null,
       "exposed": false }
   ],
@@ -903,7 +904,9 @@ runs, verbatim.
 > already carries equivalent actionable detail; a bare identifier such as a CVE or GHSA number,
 > without that detail, does not count, and neither does the repository's own source code, public
 > or not — the source must be a prior write-up of this defect, such as an advisory, a bug report
-> or a published analysis. `none` means one of the three plainly fails: list in
+> or a published analysis, readable by the destination's audience without the run's own access.
+> A private-channel record (a draft advisory, a private report, a confidential issue, ship's own
+> included) never counts. `none` means one of the three plainly fails: list in
 > `disclosure_reason` EVERY one that does (`not-on-base`, `no-untrusted-input`,
 > `public:<the source you cite>`), not only the first you notice.
 > `uncertain` means you cannot tell. Do not write an exploit payload into any field.
@@ -931,7 +934,7 @@ Normalization ship applies on receipt — deterministic, no judgement needed:
 - **optional** = advisory: nitpick, style, naming, "consider…", micro-perf, refactor idea,
   low-confidence note. Optional findings NEVER gate anything and are never fixed under time
   pressure — batch and post them (§5.9), and place every one not fixed on the ladder (§5.11).
-  The one exception is a finding the disclosure screen withholds (§5.12): it holds the change
+  Except that a finding the disclosure screen withholds (§5.12) holds the change
   whatever its severity, and it is neither batched nor placed.
 - **Dedupe across axes** by `(file, line ±3, category)` and by summary similarity. Two axes
   finding one defect is one finding: keep the better failure scenario, union the axes.
@@ -973,9 +976,9 @@ wrote disagreeing with other prose and every correct fix edits prose alone, with
 parses or executes moving; anything else is `behaviour`, including prose that promises what the
 code does not do. Set `disclosure` by the clause in §5.4, with the path you constructed in hand.
 You may raise the finder's value. You may set `none` only by naming, in `disclosure_reason`, the
-conditions that plainly fail — every one — and the evidence for each. Read-only: do not edit anything. Read your own
-saved tool output with the file-read tool, write scratch with the file-write tool, and never touch
-a path the runtime owns from the shell."*
+conditions that plainly fail — every one — and the evidence for each. Read-only: do not edit
+anything. Read your own saved tool output with the file-read tool, write scratch with the
+file-write tool, and never touch a path the runtime owns from the shell."*
 
 ```json
 { "fp": "…", "verdict": "CONFIRMED|REFUTED", "reason": "one sentence",
@@ -1123,11 +1126,15 @@ round 3: …
   is not carried into later briefs. **Every later finding is matched against every `withheld`
   entry, held or released, by the dedupe rule (§5.4: file, line ±3, category, summary
   similarity), not by fingerprint alone,** since a fix push shifts lines and a fresh reviewer
-  words it differently. A match is that finding: it is withheld, never fixed or published in
-  this change, and a match to a released entry adds no new hold. It holds the change
-  through its `withheld` entry and §10
-  instead, so the stage does not spend rounds re-confirming a finding it may not fix. Record it
-  against the head sha and move on. A clean round is a snapshot of that round, **not proof
+  words it differently. A match is withheld, never fixed or published in this change, and its
+  verifier (§5.5) is given the detail of every entry it matched and rules **same** or
+  **distinct**. Same as any one of them: it is recorded as a sighting on that entry (the head
+  sha), with no new entry, channel record or hold, so a released entry stays released. Distinct
+  from all, or cannot tell: its own `withheld` entry with its own detail and `matches` links,
+  status `held`, counted in the stub and needing its own release. So releasing one entry never
+  covers another. A withheld finding holds the change through its own entry and §10 instead, so
+  the stage does not spend rounds re-confirming a finding it may not fix. Record it against the
+  head sha and move on. A clean round is a snapshot of that round, **not proof
   the diff is clean** — the same engine over the same bytes disagrees with itself at
   multi-thousand-line scale (one measured case: round 63 clean, round 64 four new findings
   in a file untouched between them). So `max-rounds` is the real stop condition; never
@@ -1603,8 +1610,10 @@ Otherwise the finding publishes exactly as the rest of this skill says. `disclos
 common case, and nothing below touches it.
 
 **What this deliberately does not cover**, so that it cannot become a way to move ordinary
-findings off a tracker. Each case is one of §5.4's failing conditions, so a verifier that finds it
-sets `none` and names it:
+findings off a tracker. The diff-only, race and already-public cases are §5.4's `not-on-base`,
+`no-untrusted-input` and `public:<source>`, which a verifier names when it sets `none`. A prose
+overclaim or a weak rule is `none` where one of those conditions holds, named as such. The
+private-GitHub case is trigger 2 and needs no verifier:
 - prose that overclaims a guard;
 - a weak rule;
 - a race or data corruption with no untrusted trigger;
@@ -1661,7 +1670,8 @@ sets `none` and names it:
      report is a notice.
 
    A human releases the hold by re-running `ship` and saying so in that invocation. A release
-   lifts the hold on §10, and undoes the draft this step set unless another stop still requires
+   covers only the entries already held when that invocation started; one created during it
+   stays held. A release lifts the hold on §10, and undoes the draft this step set unless another stop still requires
    it (§5.9). It does nothing else. The finding stays unfixed and unpublished in this
    change, and its `open` entry stays `withheld`. Fixing it is a separate change, which the human
    starts once disclosure is settled. Where the finding went to a private channel, that record

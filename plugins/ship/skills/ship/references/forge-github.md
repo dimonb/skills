@@ -301,9 +301,9 @@ Poll until nothing is `PENDING`, `QUEUED` or `IN_PROGRESS`.
 ## 9. Private disclosure channel (core §5.12)
 
 **The two create commands below (the advisory and the report) are documentation-verified only.**
-They are written from
-GitHub's REST documentation and have not been run against a live repository. The read-only probes
-above them have been run. Run the first real use with care, and read back what it made.
+They are written from GitHub's REST documentation and have not been run against a live
+repository. The read-only probes above them have been run. Run the first real use with care, and
+read back what it made.
 
 ```bash
 unset GITHUB_TOKEN; export REPO=<owner>/<repo>
