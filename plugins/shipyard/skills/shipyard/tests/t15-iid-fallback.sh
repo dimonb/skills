@@ -43,8 +43,7 @@
 # The rig is t13-wait.sh's: exported shell functions shadow `git`, `tmux` and `gh`, which works
 # where a fake binary on PATH does not because shipyard-lib.sh prepends the system PATH over
 # anything a test puts in front. Cost: the report sleeps once per slot for its motion diff, which
-# in production is three seconds and made this six-slot run eighteen of its nineteen measured
-# seconds. The run below sets SHIPYARD_MOTION_INTERVAL (#203) and says there why that changes no
+# in production is three seconds and was once almost all of this file's measured time. The run below sets SHIPYARD_MOTION_INTERVAL (#203) and says there why that changes no
 # answer here. The suite is still in `make test` rather than the per-commit gate.
 #
 # WHAT A GREEN RUN DOES NOT PROVE, stated so it is not read as more than it is. The `gh` fake
@@ -217,8 +216,8 @@ gh() {
 export -f git tmux gh
 
 printf '%s\n' "$(date +%s)" >"$FAKE_GIT/ship-escalations/report-tick"
-# SHIPYARD_MOTION_INTERVAL: six slots, and the report waits between two captures for each one —
-# eighteen seconds of a nineteen-second file. The faked `capture-pane` above returns a fixed
+# SHIPYARD_MOTION_INTERVAL: the report waits between two captures for every live slot, which at the
+# production interval was almost all of this file's time. The faked `capture-pane` above returns a fixed
 # string, so both captures are identical at any interval and nothing below reads the ▶️/⏸
 # column; production's three-second default is untouched (#203).
 # SHIPYARD_FORGE_TIMEOUT: slot 62's fake hangs for sixty seconds, so the report finishing well
@@ -310,6 +309,15 @@ ok "64: a gone slot at a terminal stage IS asked"   1 \
    "$(grep -c -- '--head feat/november' "$GH_CALLS")"
 ok "64: ...and its row carries the number"          1 \
    "$(printf '%s' "$out" | grep -c '^| 64 | !641 |')"
+
+# The forge deadline's PRODUCTION default, asserted rather than trusted: the run above shrinks it,
+# so a default quietly lowered to suit this file would stay green here and kill slow calls live.
+ok "the forge timeout still defaults to 20s"        1 \
+   "$(grep -Fc 'knob_uint "${SHIPYARD_FORGE_TIMEOUT:-}" 20)' "$REPORT")"
+ok "...and a zero deadline is refused, with a warning" 1 \
+   "$(SHIPYARD_FORGE_TIMEOUT=0 SHIPYARD_BACKEND=tmux SHIPYARD_SESSION=t15ex SHIPYARD_MOTION_INTERVAL=0.01 \
+        SHIPYARD_STALL_SECS=100000 SHIPYARD_AUTODOWN=0 bash "$REPORT" 53 2>&1 >/dev/null \
+      | grep -c 'SHIPYARD_FORGE_TIMEOUT is not a usable')"
 
 # 7 — the flags themselves. The call log holds the whole argv, so the three that carry meaning are
 # pinned here rather than left to the fake, which answers on `--head` alone and would keep

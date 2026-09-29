@@ -820,7 +820,7 @@ slot_iid_forge() {
            --jq '.[] | select(.isCrossRepository | not) | "\(.number) \(.state) \(.headRefOid)"') 2>/dev/null)
   else
     list=$( (cd "$ROOT" 2>/dev/null \
-      && forge_bounded env OAUTH_TOKEN= glab mr list --source-branch "$br" --all -P "$FORGE_CANDIDATES" -F json \
+      && OAUTH_TOKEN= forge_bounded glab mr list --source-branch "$br" --all -P "$FORGE_CANDIDATES" -F json \
       | jq -r '.[] | select(.source_project_id == .target_project_id)
                    | "\(.iid) \(.state | ascii_upcase) \(.sha)"') 2>/dev/null)
   fi
@@ -830,12 +830,21 @@ slot_iid_forge() {
   #   * OPEN — its head must be this worktree's HEAD or an ancestor of it (a child may carry
   #     commits it has not pushed yet). An open candidate that matches wins outright.
   #   * MERGED or CLOSED — its head must BE this worktree's HEAD. A slot relaunched on a reused
-  #     branch name has moved past its old PR or never had it; an ancestry test alone still admits
-  #     the kept-branch restart path, and that PR's `merged` would render over a live child. A
-  #     child whose change merged leaves HEAD where it pushed it, so its own PR still matches and
-  #     keeps its number for the slot graph.
+  #     branch name that was recreated never had it, and one on the kept branch moves past it with
+  #     its first commit; an ancestry test alone would still admit the kept branch after that
+  #     commit, and the old PR's `merged` would render over a live child. A child whose change
+  #     merged leaves HEAD where it pushed it, so its own PR still matches and keeps its number for
+  #     the slot graph.
   # No match is an empty answer and the column blanks — the honest reading of "not this child's
   # PR". A head sha this repository does not hold fails the ancestry test the same way.
+  #
+  # WHAT THIS DOES NOT CLOSE, both failing toward a blank or a stale row rather than a teardown:
+  #   * a kept-branch relaunch BEFORE its first commit — HEAD is still the old PR's head, so no git
+  #     evidence tells the two apart and the old `merged`/`closed` still shows until the child
+  #     commits;
+  #   * a head moved ON THE FORGE (an "update branch" merge, a maintainer's push, a server-side
+  #     rebase) and never pulled — the child's own PR then fails both rules and the column blanks.
+  # The state file, when the child writes one, answers first and is untouched by either.
   while read -r v st oid; do
     case "$v" in ''|*[!0-9]*) continue ;; esac
     case "$oid" in ''|-*) continue ;; esac
@@ -917,7 +926,7 @@ mr_state() {
     esac
     return
   fi
-  st=$(forge_bounded env OAUTH_TOKEN= glab mr view "$iid" -F json 2>/dev/null | jq -r '.state // "?"')
+  st=$(OAUTH_TOKEN= forge_bounded glab mr view "$iid" -F json 2>/dev/null | jq -r '.state // "?"')
   [ -z "$st" ] && st="?"
   printf '%s' "$st"
 }
