@@ -81,6 +81,9 @@ jobs:
       - name: t13 under /bin/bash 3.2
         run: bash plugins/shipyard/skills/shipyard/tests/t13-wait.sh
 
+      - name: t17 under /bin/bash 3.2
+        run: bash plugins/shipyard/skills/shipyard/tests/t17-autodown.sh
+
       - name: t-policy under /bin/bash 3.2
         run: bash shared/policy/tests/t-policy.sh
 

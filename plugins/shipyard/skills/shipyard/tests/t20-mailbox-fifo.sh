@@ -122,7 +122,12 @@ bounded() {
 }
 returned() { case "$1" in *HUNG) printf no ;; *) printf yes ;; esac; }
 regular() { [ -f "$1" ] && [ ! -p "$1" ] && printf yes || printf no; }
-SECS=20
+# The bound tells a hung opener from a slow one, and a hung opener never returns, so any finite
+# bound separates them: it costs its full length only on a real hang. 20 s was once exceeded by a
+# case that passed alone, under a full parallel run, so it is sized for a loaded box, not a quiet one.
+# What a real hang costs is the bound once per bounded call, so a regression that hangs every
+# opener takes this file minutes, not seconds, to red. It still reds.
+SECS=60
 
 report() {
   SHIPYARD_MOTION_INTERVAL=0.01 SHIPYARD_STALL_SECS=100000 SHIPYARD_AUTODOWN=0 \

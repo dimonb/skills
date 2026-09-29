@@ -534,12 +534,65 @@ ok "E6: a leading-zero since does not abort the report" 1 \
 # E7 — the carry is bounded. With no directive on record, a screen change sheds the firing record:
 # the next stall of this slot is a new one, not the old episode with a stale count.
 backdate_stall 200
-tick_now; run_report 100 >/dev/null     # 43 fires again, so it has a live record to shed
+tick_now; outE7=$(run_report 100)     # 43 fires again, so it has a live record to shed
+# ...asserted, because the shed below is only a shed if there was a record: were this firing lost,
+# the count would already be 0 and the E7 row would pass over nothing.
+ok "E7: premise — 43 fires, so it has a record to shed"  1 "$(stall_43 "$outE7")"
+ok "E7: ...and the record counts that firing"            yes \
+   "$(n=$(awk -F'\t' '$1 == "43" { print $6 }' "$FAKE_GIT/ship-escalations/report-stall")
+      [ "${n:-0}" -ge 1 ] 2>/dev/null && echo yes || echo no)"
 rm -f "$FAKE_GIT/ship-escalations/directive-43-"*.json
 unset T13_PANE43
 tick_now; run_report 100 >/dev/null
 ok "E7: a screen change with no directive sheds the episode" 0 \
    "$(awk -F'\t' '$1 == "43" { print $6 }' "$FAKE_GIT/ship-escalations/report-stall")"
+
+# E8 — the carry's two refusing arms (#237's review). E4 pins only the side that carries: a nudged
+# slot whose screen changed keeps its episode. A nudge still sheds it when the last firing is older
+# than one stall threshold, or when the stage moved, and nothing drove either. Each case differs
+# from E4's carrying one in that single input, with a directive on record in both.
+e8_count() { awk -F'\t' '$1 == "43" { print $6 }' "$FAKE_GIT/ship-escalations/report-stall"; }
+e8_fire() { backdate_stall 200; tick_now; run_report 100 >/dev/null; }
+e8_nudge() { # <pane text> — a directive on record and the screen it types
+  jq -n --arg now "$(shipyard_now)" \
+    '{id:"directive-43-8", slot:"43", kind:"directive", text:"resume", created_at:$now,
+      status:"sent", delivery:"delivered"}' >"$FAKE_GIT/ship-escalations/directive-43-8.json"
+  export T13_PANE43="$1"
+}
+e8_fire
+ok "E8: premise — 43 has a live firing record"           yes \
+   "$([ "$(e8_count)" -ge 1 ] 2>/dev/null && echo yes || echo no)"
+awk -F'\t' -v t="$(( $(date +%s) - 300 ))" 'BEGIN{OFS="\t"} $1 == "43" {$7=t} {print}' \
+  "$FAKE_GIT/ship-escalations/report-stall" >"$FAKE_GIT/ship-escalations/report-stall.tmp" \
+  && mv "$FAKE_GIT/ship-escalations/report-stall.tmp" "$FAKE_GIT/ship-escalations/report-stall"
+e8_nudge '❯ [supervisor directive] resume, after the window'
+tick_now; run_report 100 >/dev/null
+ok "E8: a nudge after the last firing's window starts a new episode" 0 "$(e8_count)"
+e8_fire
+ok "E8: premise — 43 fires again"                        yes \
+   "$([ "$(e8_count)" -ge 1 ] 2>/dev/null && echo yes || echo no)"
+printf '{"pr_number":903,"state":"apply"}\n' >"$FAKE_ROOT/.claude/worktrees/ship-43/.pipeline-state/PR-903.json"
+e8_nudge '❯ [supervisor directive] resume, across a stage change'
+tick_now; run_report 100 >/dev/null
+ok "E8: a nudge across a stage change starts a new episode" 0 "$(e8_count)"
+# Put 43 back as E7 left it, and let one run settle it, so run C's "nothing changed" is about run C.
+printf '{"pr_number":903,"state":"impl-review"}\n' >"$FAKE_ROOT/.claude/worktrees/ship-43/.pipeline-state/PR-903.json"
+rm -f "$FAKE_GIT/ship-escalations/directive-43-8.json"
+
+# E9 — the `last line` column drops a line holding a composer glyph (#290's review). A tell leaves
+# the supervisor's own words on the pane, in the input box or as a submitted message, and they are
+# not the child's last word. The text here carries a keyword the column's filter keeps ("ship"), so
+# only the glyph stage can drop it. One pass per glyph ADP_BOX_GLYPHS lists (agent-adapters.sh),
+# read from the module itself, so a glyph added there is covered here too.
+[ -n "${ADP_BOX_GLYPHS:-}" ] || { echo "  FAIL E9: ADP_BOX_GLYPHS is not in scope — the case asserts nothing"; FAILURES=$((FAILURES + 1)); }
+for g in ${ADP_BOX_GLYPHS:-}; do
+  export T13_PANE43="$g [supervisor directive] ship the fix now"
+  row=$(run_report 100000 | grep '^| 43 ')
+  ok "E9: a $g line is not the last line"               0 "$(printf '%s' "$row" | grep -c 'supervisor directive')"
+  ok "E9: ...the child's own line is"                   1 "$(printf '%s' "$row" | grep -c 'awaiting the verifier')"
+done
+unset T13_PANE43
+tick_now; run_report 100 >/dev/null
 
 # --- run C: --only-changed is silent when nothing moved, which is what makes suppressing the
 # stall block for a classified slot cost the operator nothing.

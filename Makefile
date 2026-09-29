@@ -32,11 +32,12 @@ check:
 # check` does not run those two (only their registration and invocation are gated at commit time;
 # every other suite runs there in full).
 #
-# MEASURED at 5:29 wall with the load average climbing from ~8 to ~20 during the run (this box also
-# drives a fleet, so a quiet one will be faster and a busier one slower). The previous figure was
-# 2:10 at load 14, and the two are not comparable. The per-file figures below were taken back to
-# back on one box and are the ones to compare. It was 12-13 min at ~28% CPU before #203, and BOTH
-# halves of that changed:
+# MEASURED at 7:50 wall with the load average between ~6 and ~51 during the run, most of it other
+# work on the same box. Taken for #269, which added and grew several shipyard and council files, on
+# the tree with both of its pull requests applied. A quiet box will be faster and a busier one
+# slower. The figure before it was 5:29 at load ~8 to ~20, and before that 2:10 at load 14; none of
+# the three is comparable to another. The per-file figures below are the ones to compare. It was
+# 12-13 min at ~28% CPU before #203, and BOTH halves of that changed:
 #
 #   * the sleeping is gone. The suites used to wait on three production constants a faked backend
 #     does not need — the report's motion diff, the keeper's poll, and `tell`'s settle delay — and
@@ -49,18 +50,20 @@ check:
 #     `SHIPYARD_TEST_JOBS=1` restore the old serial behaviour if you need the old shape back.
 #
 # So the thing to watch is no longer the total: it is whether a file you are adding lands in the
-# top few. The longest file is `t19-occupant`, at ~115s alone. It was ~102s before #290 added its
-# compaction cases, so it had already overtaken `t16-tell-knobs` (~35s) before then. Most of its
-# time is shipyard-compact.sh's fixed sleeps, paid once per run of that script. t16 is close to
-# irreducible: the remaining time is three confirmation windows whose DURATIONS are what its
-# assertions check.
+# top few. The longest file is `t19-occupant`, at ~143s alone at load ~24, with `t17-autodown`
+# (~43s) and `t16-tell-knobs` (~35s) timed in the same sitting. It was ~115s after #290 and ~102s
+# before it, at loads not recorded, so the rise mixes load with #269's three added compaction runs.
+# Those run side by side, and compact.sh's fixed sleeps put the longest at ~13s (1+1+3+3+5, summed
+# from the script, not timed): it waits out the loop's five-second poll. Most of t19's time is those
+# fixed sleeps, paid once per run of that script. t16 is close to irreducible: the remaining time is
+# three confirmation windows whose DURATIONS are what its assertions check.
 #
 # AND THE TARGET IS NOT MET, SO SAY SO HERE RATHER THAN LEAVE IT TO BE INFERRED. #203 wanted
-# `make check` + `make test` comfortably under a minute; together they were ~2:20 against the
-# earlier 2:10 figure, and a figure taken on a quiet box is what would settle it now. The remaining
-# lever is that this recipe runs the two slow suites ONE AFTER THE OTHER even though each now
-# fans out internally — overlapping them would cost roughly the longer of the two instead of the
-# sum. It was not taken: each already fans out to min(nproc, 8), so running both at once
+# `make check` + `make test` comfortably under a minute; at #203's time they were ~2:20 together,
+# against the earlier 2:10 figure, and a figure taken on a quiet box is what would settle it now.
+# The remaining lever is that this recipe runs the two slow suites ONE AFTER THE OTHER even though
+# each now fans out internally — overlapping them would cost roughly the longer of the two instead
+# of the sum. It was not taken: each already fans out to min(nproc, 8), so running both at once
 # oversubscribes the box, and this change has already measured what an oversubscribed box does
 # to this suite (see the keeper-period note in council's tests/_helpers.sh). That is a judgement,
 # not a measurement — if someone measures it and it holds, the minute is reachable.

@@ -4,8 +4,8 @@
 # The assertion that earns this file: a client-written all-zero usage record must NOT be taken
 # as the current total. It shipped once, and it made a child frozen at its session limit read
 # `0% · 0` with no glyph — the most reassuring display the report can produce, on the one child
-# that is certainly dead. 18 of 290 transcripts on the machine that found it ended on such a
-# record.
+# that is certainly dead. How often a transcript ends on such a record, as measured on the machine
+# that found it, is recorded once, at the zero-sum paragraph in shipyard-ctx.sh.
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=_helpers.sh
 . "$DIR/_helpers.sh"

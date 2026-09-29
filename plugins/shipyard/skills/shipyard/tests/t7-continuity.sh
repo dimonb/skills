@@ -48,7 +48,7 @@ reap_job() {
   return 124
 }
 
-# HANDSHAKES FOR THE ORDERED RACE CASES (#240). Three cases below need a start and a stop to
+# HANDSHAKES FOR THE ORDERED RACE CASES (#240). The race cases below need two lifecycle jobs to
 # interleave at one exact point, and the lifecycle code already has a delay knob at each point
 # (`sleep "${_SHIPYARD_CONTINUITY_..._DELAY:-0}"`). They used to set the knob to 0.4s and race it
 # with a 0.02s poll or a bare `sleep 0.1`, which orders nothing on a loaded runner: one red CI run
@@ -559,20 +559,33 @@ timeout_files=$(runtime_state_paths)
 check "" "$timeout_files" "startup timeout removes all watcher state and logs"
 unset _SHIPYARD_CONTINUITY_INITIAL_DELAY
 
-_SHIPYARD_CONTINUITY_PUBLISH_DELAY=2
+# The starter is HELD before it publishes, and the check waits for the watcher to give up on the
+# publication, which it shows by removing its own log. Both are events: a fixed 2 s delay and a
+# 1.2 s sleep used to stand in for them, which passed vacuously when the watcher had not given up
+# yet and redded falsely when a loaded box let the starter publish first (#277's review).
+_SHIPYARD_CONTINUITY_PUBLISH_DELAY=t7-hold:interrupted-publish
 export _SHIPYARD_CONTINUITY_PUBLISH_DELAY
 shipyard_continuity_start agterm >/dev/null 2>&1 & interrupted_starter=$!
+check yes "$(await_hold interrupted-publish)" "interrupted publication: the starter is held before it publishes"
+# The starter renames the log into place before it forks the watcher and reaches the hold, so the
+# log's absence below can only be the watcher's give-up. Its presence at the hold is not checked:
+# the watcher gives up about a second after it starts, and a check that raced that would red a
+# starved box for nothing.
 n=0
-while [ -z "$(find "$_SHIPYARD_CONTINUITY_DIR" -name 'continuity-*.log' -print -quit)" ] \
-  && [ "$n" -lt 20 ]; do
-  sleep 0.05
+while [ -n "$(find "$_SHIPYARD_CONTINUITY_DIR" -name 'continuity-*.log' -print -quit)" ] \
+  && [ "$n" -lt $(( HOLD_SECS * 20 )) ]; do
+  command sleep 0.05
   n=$((n + 1))
 done
-sleep 1.2
+check yes "$([ -z "$(find "$_SHIPYARD_CONTINUITY_DIR" -name 'continuity-*.log' -print -quit)" ] && echo yes || echo no)" \
+  "...and the watcher gives up on the publication"
 if [ -L "$_SHIPYARD_CONTINUITY_DIR/continuity-lifecycle.lock" ]; then live_lock=yes; else live_lock=no; fi
 check yes "$live_lock" "unpublished watcher cannot release a live starter lock"
+# Killed while still held, and released only after: a release first could let a preempted test
+# see the starter publish before its kill landed.
 kill "$interrupted_starter" 2>/dev/null || true
 reap_job "$interrupted_starter" 2>/dev/null || true
+release_hold interrupted-publish
 interrupted_pidfiles=$(find "$_SHIPYARD_CONTINUITY_DIR" -name 'continuity-*.pid' -print)
 check "" "$interrupted_pidfiles" "interrupted unpublished start leaves no published watcher"
 unset _SHIPYARD_CONTINUITY_PUBLISH_DELAY
