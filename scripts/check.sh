@@ -266,7 +266,7 @@ while IFS= read -r e; do
   packaged=""
   for s in plugins/*/skills/"$(basename "$e")"/SKILL.md; do [ -f "$s" ] && packaged=1; done
   [ -n "$packaged" ] && continue
-  echo "note: untracked entry $e is local state; checks 1, 2, 5, 14 and 15 ignore it"
+  echo "note: untracked entry $e is local state; every check but the leak and English scans ignores it"
 done <<< "$untracked_skills"
 
 # A SKILL.md anywhere but plugins/ is a duplicated source of truth (tracked or not). The two
