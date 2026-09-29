@@ -991,7 +991,7 @@ Normalization ship applies on receipt — deterministic, no judgement needed:
   branch. So on every route that publishes a finding unfixed, ship strikes `not-on-base` from its
   reasons. A `none` with another reason left stays `none`. One with none left is `uncertain`,
   and goes back to the disclosure-only verifier on the two remaining conditions before §5.12
-  screens it. That covers ladder rungs 2 and 3, the optional batch,
+  screens it. That covers ladder rungs 2 and 3, a Known limits entry (§5.11), the optional batch,
   §5.7's escalation record and the hand-off record.
 
 ### 5.5 Adversarial verification (a skeptic per blocking finding)
@@ -1503,8 +1503,9 @@ not commented or filed.
 **When it is worked.** ONCE per stage, at the point the stage record is posted — not per round.
 Filing mid-stage files findings a later round refutes or a later fix obviates, and it is how one
 change produces several tickets for a defect it went on to fix itself. Rung 1 is the exception by
-nature: a fix happens in the round that confirmed the finding, so by the time the record is
-written only rungs 2 and 3 remain to work.
+nature: a fix happens in the round that confirmed the finding. A Known limits entry (below) is the
+same kind of exception, because it lands through a push. So by the time the record is written only
+rungs 2 and 3 remain to work.
 
 **A stage that escalates does not work the ladder.** At `max-rounds` the stage posts §5.7's
 escalation record, which is not a stage record, and stops — so rungs 2 and 3 are not worked and no
@@ -1600,18 +1601,31 @@ reads when it uses the component: its SKILL.md, or its README. Where the compone
 is the repo's stated convention for such a list, else `docs/known-limits.md`. One entry per
 residual, each line carrying:
 
-- a stable id, `KL-<n>`, the next number unused in that section;
+- a stable id, `KL-<n>`, one more than the highest id that section has ever used, so an id is
+  never reused. A removed entry leaves its id behind as a one-line tombstone naming the issue it
+  was promoted to, or the change that removed it;
 - the **shape** of the limit, one sentence;
 - the path as `file:line`;
 - the PR/MR whose review found it;
 - the **promotion trigger**: what would make it an ordinary-use failure, and so fileable.
 
-The entry is written on the branch and committed with the change, so it publishes through the
-push: the disclosure screen (§5.12) runs on it first. It is prose in a component doc, not
-machinery, so rung 1's question 1 does not bar it where the doc is a file this diff does not
-otherwise touch; questions 3 and 4 still apply. Where the section does not exist yet, the first
-entry creates it. An absent section is an empty list, and nothing requires the section to exist
-before it has an entry.
+**The entry is written in the round that raised the residual, as a rung-1 fix is,** and it goes
+out with that round's fix push, so the next scoped round reviews it (§5.10, *fix-only head
+advance*). A clean round that raises one pushes it the way it pushes an optional fixed at rung 1
+after a clean round, and §5.7 lets that scoped round run past `max-rounds`. **A scoped round whose
+delta is only Known limits entries reviews those lines alone**: that each carries the shape,
+`file:line`, source and promotion trigger it claims, and the disclosure screen. What it finds is
+fixed in place and never placed on the ladder, as the `final-archive` check works (§7.F), so it
+defers nothing and cannot raise another entry. An entry whose residual a later round refutes, or a
+later fix removes, is taken out in the same change before the stage record is posted.
+
+The entry publishes through the push, so the disclosure screen (§5.12) runs on it first. It is
+prose in a component doc, not machinery, so rung 1's question 1 does not bar it where the doc is a
+file this diff does not otherwise touch; questions 3 and 4 still apply. An entry that fails either
+is reworded until it passes. One that still fails stays in the ledger's `deferred` entry with the
+reason, as an unreached rung that §7.C step 5 / §7.E step 6 collect. Where the section does not
+exist yet, the first entry creates it. An absent section is an empty list, and nothing requires
+the section to exist before it has an entry.
 
 **It is a completed disposition, not unfiled work.** The finding's `deferred` entry records
 `outcome: known-limit: <doc>#KL-<n>`, and §7.C step 5 / §7.E step 6 do not collect it again. The
