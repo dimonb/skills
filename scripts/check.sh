@@ -993,8 +993,9 @@ else
   if grep -qE '^[[:space:]]*["'\'']?paths-ignore["'\'']?:' "$CT_WF"; then
     fail "$CT_WF uses paths-ignore, which check 13 does not reason about — it checks an explicit list of the paths that run the job, and an inverted list would read as full coverage"
   fi
-  # The reader splits lines on LF alone, and YAML also breaks a line at CR, NEL, LS and PS: a key or
-  # an entry after one of those, behind a comment, is a line to a YAML parser and none to awk.
+  # The reader splits lines on LF alone. YAML also breaks a line at CR, and YAML 1.1 parsers (libyaml
+  # among them) at NEL, LS and PS too: a key or an entry after one of those, behind a comment, is a
+  # line to such a parser and none to awk. All four are refused, whichever version reads the file.
   if LC_ALL=C grep -qE "$(printf '\r|\302\205|\342\200\250|\342\200\251')" "$CT_WF"; then
     fail "$CT_WF contains a line break other than LF (CR, NEL, LS or PS), which check 13 does not read — a YAML parser may split a line there that check 13 reads as one"
   fi
