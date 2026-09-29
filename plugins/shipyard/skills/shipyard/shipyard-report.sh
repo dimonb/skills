@@ -890,9 +890,9 @@ EOV
 # the reading this report had before #317, and a later one turns that slot's own merged PR into an
 # annotation — a slot that then stays in flight and keeps no `merged` for its teardown lock, which
 # is the loud direction. It cannot make a PR that fails the head rule pass, so the worst it buys a
-# relaunched slot is the old `merged` that #317 removed. A legitimate relaunch after the slot's own PR merged, a Step 5 recovery
-# included, moves the time later in the same way; a child that wrote its PR number into its state
-# file is untouched by either, because that file answers first.
+# relaunched slot is the old `merged` that #317 removed. A legitimate relaunch after the slot's own
+# PR merged, a Step 5 recovery included, moves the time later in the same way; a child that wrote
+# its PR number into its state file is untouched by either, because that file answers first.
 slot_launch_epoch() {
   local mb f e
   mb=$(shipyard_mailbox 2>/dev/null) || { printf 0; return; }

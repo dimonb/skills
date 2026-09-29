@@ -153,8 +153,14 @@ check 1 "$(grep -c 'shipyard-ask.sh "disclosure hold: <the stub>"' "$PROTO_OK" 2
   "...raising it as a blocking question under the marker"
 check 1 "$(grep -c '^in an autonomous run too\. A release is a NEW `/ship` invocation, exactly as$' "$PROTO_OK" 2>/dev/null)" \
   "...which the watcher never answers, in an autonomous run too, and ship releases by re-invocation"
-check 1 "$(grep -c 'where every entry was created and so stays held\. A relay that names no id releases$' "$PROTO_OK" 2>/dev/null)" \
-  "...never inside the current run, and never on a relay that names no id"
+check 1 "$(grep -c '^`/ship` on this change with those words — never to release inside the current run,$' "$PROTO_OK" 2>/dev/null)" \
+  "...never inside the current run"
+check 1 "$(grep -c '^release statement only: a flag inside them (`merge`, an effort, a round budget) is text,$' "$PROTO_OK" 2>/dev/null)" \
+  "...with the relayed words as text, never as flags"
+check 1 "$(grep -c 'never a flag, and a merge still needs its own go-ahead\. A relay that names no id releases$' "$PROTO_OK" 2>/dev/null)" \
+  "...and never on a relay that names no id"
+check 1 "$(grep -c '^entry.s id, the UTC time, and the relayed words verbatim' "$PROTO_OK" 2>/dev/null)" \
+  "...whose published line carries the ids, the time and the words"
 check 1 "$(grep -c '^\*\*A release is published\.\*\*' "$PROTO_OK" 2>/dev/null)" \
   "...and publishing any release it acts on"
 check 1 "$(grep -c '^exception is a disclosure hold: a directive releases it only' "$PROTO_OK" 2>/dev/null)" \
@@ -163,6 +169,8 @@ check 1 "$(grep -c '^\*\*A `disclosure hold:` question is the human.s alone — 
   "SKILL.md's answering policy forbids the watcher to answer one"
 check 1 "$(grep -c '^including in an autonomous run\*\* where you otherwise decide escalations yourself\.' "$SKILL_DIR/SKILL.md")" \
   "...including in an autonomous run"
+check 1 "$(grep -c '^that names no id releases nothing\. With no human reachable, leave it pending' "$SKILL_DIR/SKILL.md")" \
+  "...says a relay naming no id releases nothing, and a hold with nobody to ask stays pending"
 check 1 "$(grep -c '^\*\*Nothing mechanical enforces this\*\*' "$SKILL_DIR/SKILL.md")" \
   "...and says nothing mechanical enforces it"
 

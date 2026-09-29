@@ -125,8 +125,8 @@ mkdir -p "$FAKE_ROOT" "$FAKE_GIT/ship-escalations"
 #     time that cannot be read skips the launch test rather than failing it.
 # 68: a CLOSED (not merged) PR on HEAD, closed before the launch -> the same annotation as a merge.
 GH_SLOTS="51 52 53 54 55 56 57 58 59 60 61 62 63 64 65 66 67 68"
-# The GitLab run's slots (case 12). Non-numeric but one, because a numeric GitLab slot IS its iid
-# and never reaches the forge — which is what 71 pins.
+# The GitLab run's slots (header case 12; the `#317 — the GitLab arm` section below). Non-numeric
+# but one, because a numeric GitLab slot IS its iid and never reaches the forge — which 71 pins.
 #   gfork:   a fork's opened MR listed first, then the child's own merged one on HEAD -> the latter;
 #   ganc:    a merged MR on HEAD, then an opened one whose head is an ancestor -> the opened one;
 #   gold:    a merged MR on HEAD that merged before the launch record -> annotation only;
@@ -428,8 +428,8 @@ ok "...and for the fields the choice among candidates reads" 0 \
    "$(grep -v -- '--json number,state,headRefOid,isCrossRepository,closedAt' "$GH_CALLS" | grep -c .)"
 ok "...and for several candidates, not one"         0 \
    "$(grep -v -- '--limit 10 ' "$GH_CALLS" | grep -c .)"
-# ...and the log holds exactly the slots that should reach the forge — 51 54 58 59 60 61 62 64 65 66 67 68
-# — so the checks above cannot pass vacuously over no calls.
+# ...and the log holds exactly the slots that should reach the forge — 51 54 58 59 60 61 62 64 65
+# 66 67 68 — so the checks above cannot pass vacuously over no calls.
 ok "the log they read holds the expected queries"   12 \
    "$(grep -c . "$GH_CALLS")"
 
