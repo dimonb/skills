@@ -818,12 +818,15 @@ else
   # covering paths it did not. This reads the block by indentation and prints one row per event
   # (`event <name>`), per key under an event (`key <event> <name>`), and per QUOTED list item under
   # such a key (`item <event> <key> <value>`), a key quoted or not. It reads block-style YAML only.
-  # For `push:` and `pull_request:`, the two events this check is about, a line it cannot place reds
+  # For `push:` and `pull_request:`, the events this check is about, a line it cannot place reds
   # below rather than passing: `on:` in flow style (`on: [push]`) reads as a missing `push:`; an
   # event carrying a value on its own line (`push: {paths: [...]}`) prints `inline <event>`; a line
   # under an event that is neither a key nor a `-` item (a flow mapping on the next line, `paths :`)
-  # prints `unread <event>`. Those reds are false reds, fixed by writing the block style this file
-  # already uses. A `-` item that is not quoted is not read, and that is NOT always a red: under
+  # prints `unread <event>`; and an event line it cannot name (`pull_request_target :`) prints
+  # `unread ?` and reds whatever it is, since the lines under it would otherwise be credited to the
+  # event before it. Where the trigger is in fact unfiltered those are false reds, fixed by writing
+  # the block style this file already uses; where it carries a filter they are the red it deserves.
+  # A `-` item that is not quoted is not read, and that is NOT always a red: under
   # `pull_request:`'s `paths:` it drops out of the filter, which reds only for an entry `$GUARDED`
   # derives (an unquoted `- docs/**` vanishes silently); under `push:`'s `paths:` the key has
   # already red; under any other key it is ignored, as this check reads no other key's items.
@@ -839,6 +842,10 @@ else
         if (line ~ /^["\047]?[A-Za-z_][A-Za-z0-9_-]*["\047]?:/) {
           ev = name(line); key = ""; print "event\t" ev
           if (line !~ /^[^:]*:[ ]*(#.*)?$/) print "inline\t" ev
+        } else {
+          # An event it cannot name (`pull_request_target :`, `? push`): the lines under it belong
+          # to no event it knows, never to the one before it.
+          ev = "?"; key = ""; print "unread\t?"
         }
         next
       }
@@ -880,9 +887,13 @@ else
     if [ -n "$push_filter" ]; then
       fail "$CT_WF filters its push: trigger by $(printf '%s' "$push_filter" | tr '\n' ' ')— the run on main must be unconditional, it is the backstop for the pull-request filter"
     fi
+    # A line at event level it could not name may be either event, so it reds whichever it is.
+    if printf '%s\n' "$ct_on" | grep -qxF "$(printf 'unread\t?')"; then
+      fail "$CT_WF has an event under on: that check 13 cannot read as a key — write it as a block, as the rest of the file does"
+    fi
     # A value on the event's own line is flow style, which the reader above does not look inside:
-    # `push: {branches: [main], paths: [...]}` would otherwise read as an unfiltered push.
-    # A line under the event that is neither a key nor a list item is one it could not place.
+    # `push: {branches: [main], paths: [...]}` would otherwise read as an unfiltered push. And a
+    # line under the event that is neither a key nor a list item is one it could not place.
     for ev in push pull_request; do
       if printf '%s\n' "$ct_on" | grep -qxF "$(printf 'inline\t%s' "$ev")"; then
         fail "$CT_WF writes its $ev: trigger in flow style, which check 13 does not read inside — write it as a block, as the rest of the file does"

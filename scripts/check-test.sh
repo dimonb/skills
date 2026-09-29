@@ -101,7 +101,9 @@ restore() {
   done
   # shellcheck disable=SC2086
   git checkout -- $GUARDED 2>/dev/null || true
-  rm -rf "${PROBE_FILES[@]}" ${SCRATCH:+"$SCRATCH"} 2>/dev/null || true
+  # docs/_probe-note.md is removed but is not in PROBE_FILES: 36g needs a gate-reddening file that
+  # the leftover arm does not count as a fixture.
+  rm -rf "${PROBE_FILES[@]}" docs/_probe-note.md ${SCRATCH:+"$SCRATCH"} 2>/dev/null || true
   rmdir docs 2>/dev/null || true
   # Last, so the marker says "in progress" for as long as anything of this run is in the tree.
   rm -f "$MARKER"
@@ -1194,6 +1196,11 @@ perl -pi -e 's/^    paths:$/    paths-ignore:/' .github/workflows/check-test.yml
 expect_fail "check 13: paths-ignore is refused rather than misread" \
   "uses paths-ignore"
 git checkout -- .github/workflows/check-test.yml
+# 33b3 — and the same key quoted, which is the same key to YAML.
+perl -pi -e "s/^    paths:\$/    'paths-ignore':/" .github/workflows/check-test.yml
+expect_fail "check 13: a quoted paths-ignore is refused too" \
+  "uses paths-ignore"
+git checkout -- .github/workflows/check-test.yml
 
 # 33c — and the two loud arms, so a filter check that ABSTAINS can never be mistaken for one that
 # passed. A check that goes quiet over the job proving every other check is not decoration is the
@@ -1230,6 +1237,17 @@ git checkout -- .github/workflows/check-test.yml
 perl -0pi -e "s{\n  push:\n    branches: \\[main\\]\n}{\n  push:\n    {branches: [main], paths: ['docs/**']}\n}" .github/workflows/check-test.yml
 expect_fail "check 13: a line under push: that is neither a key nor an item is refused" \
   "cannot read as a key or a list item"
+git checkout -- .github/workflows/check-test.yml
+# 33d5 — the same under pull_request:, after its complete paths list, where nothing else reds.
+perl -0pi -e "s{(\n *- 'docs/\\*\\*'\n)}{\$1    {types: [opened]}\n}" .github/workflows/check-test.yml
+expect_fail "check 13: a line under pull_request: that is neither a key nor an item is refused" \
+  "has a line under its pull_request: trigger"
+git checkout -- .github/workflows/check-test.yml
+# 33d6 — an EVENT line it cannot name: without its own red, the `paths:` under it would be credited
+# to the event before it, so `plugins/**` dropped from pull_request: would read as still covered.
+perl -0pi -e "s{\n *- 'plugins/\\*\\*'\n}{\n}; s{\npermissions:}{  pull_request_target :\n    paths:\n      - 'plugins/**'\n\npermissions:}" .github/workflows/check-test.yml
+expect_fail "check 13: an event line it cannot name is refused" \
+  "has an event under on: that check 13 cannot read"
 git checkout -- .github/workflows/check-test.yml
 # 33e — and the backstop removed outright.
 perl -0pi -e 's{\n  push:\n    branches: \[main\]\n}{\n}' .github/workflows/check-test.yml
@@ -1400,8 +1418,8 @@ git checkout -- "$RUNNER"
 # not gate assertions, so they are proven by running this script a second time, NESTED, and reading
 # how it refuses. Every nested run below must refuse before it arms a trap or mutates anything,
 # because a nested run that got past its entry guards would start a second full run over this
-# tree. So each one without --recover (which never reaches a run) is given a leftover that also
-# reds the gate — a non-Latin `docs/_probe.md`, the exact state #136 measured — which makes a
+# tree. So each one without --recover (which never reaches a run) is given a file that reds the
+# gate — a non-Latin file under `docs/`, the exact state #136 measured — which makes a
 # broken arm fall to another refusal, or to `BASELINE DIRTY`, and report here as a wrong arm
 # rather than run.
 # $1 label, $2 the exit status wanted, $3 a fixed string the nested output must contain, then the
@@ -1464,10 +1482,22 @@ rm -f "$MARKER" docs/_probe.md
 printf '# probe\n' >> Makefile
 expect_nested "--recover refuses changes nothing marks as check-test's" 2 "not assumed to be check-test's" --recover
 git checkout -- Makefile
+# 36g — a dead run's marker with an edit under $GUARDED and NO probe fixture: the refusal names the
+# run but says the edit may be the user's own. The gate-reddening file here is deliberately not a
+# probe fixture, so the fixture branch cannot claim the output.
+mkdir -p docs
+printf 'probe \320\226\n' > docs/_probe-note.md
+( : ) & dead=$!; wait "$dead"
+printf 'pid=%s\nstarted=probe\n' "$dead" > "$MARKER"
+printf '# probe\n' >> Makefile
+expect_nested "a dead run's marker without a fixture does not claim the edit" 2 "no probe fixture was found"
+git checkout -- Makefile
+rm -f "$MARKER" docs/_probe-note.md
 expect_nested "--recover with nothing to recover" 0 "nothing to recover" --recover
 rmdir docs 2>/dev/null || true
-# Not probed: the `note:` line for a stale marker over a clean tree, since that nested run would
-# pass every guard and start a second full run.
+# Not probed: the `note:` line for a stale marker over a clean tree. A nested run there passes every
+# guard, so only a gate arm (BASELINE DIRTY) would stop it — and if that arm regressed, the nested
+# run would start a full run of its own, reach this same probe and nest again without end.
 write_marker
 
 echo
