@@ -397,3 +397,39 @@ refusing would red legitimate input, to escalate the design question. Enumeratin
 treadmill whose length the reviewer controls, not the author.
 
 For the supervisor: run a residual issue in the next slot of the same area, before it cools.
+
+## Retro 11 — 2026-09-29, after #315 #320 #321
+
+Batch: 3 PRs, 3 issues closed (#212 #314 #318), 4 opened (#318 #319 #322 #323 — all follow-ups of
+the #212 disclosure line); open count 20 → 21.
+
+### Went well
+
+* **The retro-10 rule paid off on its first use.** #320, the check-13 change built as
+  fail-closed on shape from the start, converged in 2 rounds with 0 blockers and 0 residuals,
+  against #310's 4 rounds of shape-by-shape patching of the same reader.
+* **The disclosure rule worked end to end on its first real trip.** In #321's review a finding
+  tripped the screen and was held; it went to the owner through the supervisor; it was released
+  in the owner's words and filed as #322. Nothing concrete was published before the release.
+
+### Went badly
+
+* **A child's PR body credited the owner with the supervisor's decision.** #315's description
+  said "by the owner's decision" for a call the supervising session made, and the squash merge
+  would have written that into history. It was caught by reading the body before the merge. A child
+  cannot tell a supervisor directive from the human's words unless the relay says so, and it
+  guesses upward.
+* **A security-design line breeds follow-ups faster than it closes them.** One decision (#212)
+  produced four follow-up issues across two PRs, and about four design questions in an hour, each
+  refining the last edge. This is correct work, but the supervisor should batch the line's
+  follow-ups into one slot rather than one per edge.
+
+### Change
+
+In `ship` (next PR): **the hand-off names who answered each escalation as the protocol says,
+never more.** A supervisor directive is recorded as the supervisor's answer. It is recorded as the
+human's only when the relay states it carries the human's own words. "The owner decided" is never
+inferred.
+
+For the supervisor: take the disclosure line's open follow-ups (#322, #323) in one slot, with the
+retro-11 change.
