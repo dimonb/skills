@@ -1362,6 +1362,12 @@ perl -0pi -e "s{(\n *- 'docs/\\*\\*'\n)}{\$1      - 'scripts/**\t'\n}" .github/w
 expect_fail "check 13: a tab inside a quoted pull_request: paths: entry is not read" \
   "has an entry check 13 cannot read"
 git checkout -- .github/workflows/check-test.yml
+# 33l5 — the same tab inside a DOUBLE-quoted entry, which is a separate regex in the reader (#314):
+# reverting its tab exclusion (`[^"\\\t]` to `[^"\\]`) passed every probe above.
+perl -0pi -e "s{(\n *- 'docs/\\*\\*'\n)}{\$1      - \"scripts/**\t\"\n}" .github/workflows/check-test.yml
+expect_fail "check 13: a tab inside a double-quoted pull_request: paths: entry is not read" \
+  "has an entry check 13 cannot read"
+git checkout -- .github/workflows/check-test.yml
 # 33n — a line break awk does not split on (a lone CR) hides a second entry behind a comment.
 perl -0pi -e "s{(\n  push:\n    branches:\n      - 'main')\n}{\$1 #\r      - '!main'\n}" .github/workflows/check-test.yml
 expect_fail "check 13: a line break other than LF is refused" \
@@ -1373,6 +1379,65 @@ git checkout -- .github/workflows/check-test.yml
 perl -0pi -e "s{(\n *- 'docs/\\*\\*'\n)}{\$1    paths:\n      - 'docs/**'\n}" .github/workflows/check-test.yml
 expect_fail "check 13: a repeated key under pull_request: is refused" \
   "repeats pull_request.paths"
+git checkout -- .github/workflows/check-test.yml
+# 33p — the file's SHAPE (#314): check 13 reads one document with one block-style `on:`, and reds
+# every other shape rather than reading it wrongly. Most fixtures below only add to the file and
+# leave the committed `on:` block intact, so the trigger arms above stay green; every one is pinned
+# on its own shape arm's message, whatever else reds beside it.
+# A second `on:` after the committed one, in block style and in flow style: a parser that keeps the
+# last copy runs check-test on neither push nor pull request.
+printf 'on:\n  workflow_dispatch:\n' >> .github/workflows/check-test.yml
+expect_fail "check 13: a second block-style top-level on: is refused" \
+  "has 2 top-level on: keys"
+git checkout -- .github/workflows/check-test.yml
+printf 'on: [workflow_dispatch]\n' >> .github/workflows/check-test.yml
+expect_fail "check 13: a second flow-style top-level on: is refused" \
+  "has 2 top-level on: keys"
+git checkout -- .github/workflows/check-test.yml
+# 33p2 — the only `on:` in flow style, which the reader does not look inside.
+perl -0pi -e "s{\non:\n.*?\n\npermissions:}{\non: [push, pull_request]\n\npermissions:}s" .github/workflows/check-test.yml
+expect_fail "check 13: a flow-style top-level on: is refused" \
+  "writes its top-level on: in flow style"
+git checkout -- .github/workflows/check-test.yml
+# 33p3 — a multi-document file: a parser that reads the first document runs its triggers, not these.
+# The leading document carries an `on:` of its own, so the on-count arm would red too; the pin is
+# the marker arm, and the trailing `...` below has no second `on:` to lean on.
+perl -0pi -e 's{\A}{on: [workflow_dispatch]\njobs: {}\n---\n}' .github/workflows/check-test.yml
+expect_fail "check 13: a document marker after line 1 is refused" \
+  "carries a YAML document marker"
+git checkout -- .github/workflows/check-test.yml
+printf '...\n' >> .github/workflows/check-test.yml
+expect_fail "check 13: a document end marker is refused" \
+  "carries a YAML document marker"
+git checkout -- .github/workflows/check-test.yml
+# ...and a line-1 marker carrying content: `--- |` makes the whole document one string to YAML.
+perl -0pi -e 's{\A}{--- |\n}' .github/workflows/check-test.yml
+expect_fail "check 13: a line-1 document marker with content after it is refused" \
+  "carries a YAML document marker"
+git checkout -- .github/workflows/check-test.yml
+# 33p4 — the top-level allowlist: `true:` is the key `on:` is to a YAML 1.1 parser, so a block under
+# it is a second trigger key the on-count arm cannot see...
+printf 'true:\n  workflow_dispatch:\n' >> .github/workflows/check-test.yml
+expect_fail "check 13: a top-level key outside the allowlist is refused" \
+  "has top-level key true"
+git checkout -- .github/workflows/check-test.yml
+# 33p5 — ...and a column-0 line that is no plain key: `on :` is the key `on` to YAML.
+printf 'on :\n  workflow_dispatch:\n' >> .github/workflows/check-test.yml
+expect_fail "check 13: a column-0 line it cannot read as a key is refused" \
+  "cannot read as a top-level key"
+git checkout -- .github/workflows/check-test.yml
+# 33p6 — the event allowlist under `on:`: an event this check reasons nothing about.
+perl -0pi -e "s{\non:\n}{\non:\n  workflow_dispatch:\n}" .github/workflows/check-test.yml
+expect_fail "check 13: an event under on: outside the allowlist is refused" \
+  "on: carries event workflow_dispatch"
+git checkout -- .github/workflows/check-test.yml
+# 33p7 — and the two spellings the shape arms must NOT refuse: a quoted `"on":` is the same key, and
+# a `---` on line 1 opens the one document rather than a second.
+perl -0pi -e 's{\non:\n}{\n"on":\n}' .github/workflows/check-test.yml
+expect_pass "check 13: a quoted top-level on: is read as on:"
+git checkout -- .github/workflows/check-test.yml
+perl -0pi -e 's{\A}{---\n}' .github/workflows/check-test.yml
+expect_pass "check 13: a document start marker on line 1 is accepted"
 git checkout -- .github/workflows/check-test.yml
 # 33f — an entry under ANOTHER trigger cannot stand in for one missing from the pull-request
 # filter. Under the flat scrape this line was read as coverage, so dropping `shared/**` from
