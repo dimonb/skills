@@ -180,6 +180,33 @@ ok "4: ...with the pin to set"                 yes  "$(has "$out" 'COUNCIL_BACKE
 ok "4: ...and what it means if pinning fails" yes  "$(has "$out" 'really gone')"
 ok "4: ...and not another class's reading"     no   "$(has "$out" 'did not answer when asked')"
 
+# ====================================================== 4b. A PIN THE LAUNCH RECORD CONTRADICTS (#67, #333)
+# The seats were launched on tmux and the pin says agterm. `relaunch` prints the remedy `down` and
+# `say` print (t30 2b, t21 2b3), so it names both backends and offers neither — and then its own
+# trailing sentence about pinning failing, which is what an operator reads last on this refusal.
+# The record goes where production writes it (`lr_file`, under _helpers.sh's mailbox) and the one
+# that was there is put back after.
+printf '\n── pin says agterm, launch record says tmux ──\n'
+# shellcheck source=../lib/launch-record.sh
+. "$REAL_SKILL/lib/launch-record.sh"
+LRF=$(lr_file) || { echo "t23 FAIL: no launch record path"; exit 1; }
+LRF_SAVED=""; [ -f "$LRF" ] && { LRF_SAVED="$ROOT/lrf.saved"; cp "$LRF" "$LRF_SAVED"; }
+reset; : >"$ROOM/state/container-agterm"; : >"$SESSIONS"; printf '0\n' >"$SESSIONS_RC"
+jq -n --arg room "$(lr_room_path)" --arg cms "$(lr_room_created)" \
+  '{room: $room, created_ms: ($cms | tonumber), generation: 1,
+    seats: {claude: {backend: "tmux", container: "c", name: "n", handle: "%1", launched: true, generation: 1},
+            codex:  {backend: "tmux", container: "c", name: "n", handle: "%2", launched: true, generation: 1}}}' > "$LRF"
+out=$(run_relaunch claude)
+ok "4b: still refused"                             4    "$(rc_of "$out")"
+ok "4b: ...killing nothing"                        no   "$(lines "$KILLED")"
+ok "4b: ...launching nothing"                      no   "$(lines "$LAUNCHED")"
+ok "4b: ...saying the pin and the record disagree" yes  "$(has "$out" 'pin and its launch record disagree')"
+ok "4b: ...naming the pin's backend"               yes  "$(has "$out" 'the pin says agterm')"
+ok "4b: ...and the recorded one"                   yes  "$(has "$out" 'launched on tmux\.')"
+ok "4b: ...and NOT offering the pin's backend"     no   "$(has "$out" 'COUNCIL_BACKEND=agterm')"
+ok "4b: ...ending on what it means if pinning fails" yes "$(has "$out" 'really gone')"
+if [ -n "$LRF_SAVED" ]; then cp "$LRF_SAVED" "$LRF"; else rm -f "$LRF"; fi
+
 printf '\nt24-relaunch-absence: %s checks, %s\n' "$CHECKS" \
   "$([ "$FAILURES" = 0 ] && echo 'all passed' || echo "$FAILURES FAILED")"
 [ "$FAILURES" = 0 ]
