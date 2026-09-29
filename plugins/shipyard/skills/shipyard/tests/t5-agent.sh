@@ -142,6 +142,22 @@ if grep -q '^unset CLAUDE_CODE_MESSAGING_SOCKET$' "$TMP/launch-ok/.git/ship-esca
   scrubbed=yes; else scrubbed=no; fi
 check yes "$scrubbed" "control: ...and its launcher scrubs the parent's IPC socket"
 
+# #319: a disclosure hold is the human's alone. The child is told the marker to raise it under and
+# that a release it acts on is published; the watcher is told, where it reads its answering policy,
+# never to answer one. Text pins, not behaviour: nothing mechanical enforces the rule, and both
+# files say so — these checks keep the words from being dropped, which is all the rule has.
+PROTO_OK="$TMP/launch-ok/.git/ship-escalations/protocol-42.md"
+check 1 "$(grep -c '^## A disclosure hold is the human.s alone$' "$PROTO_OK" 2>/dev/null)" \
+  "the child protocol has the disclosure-hold section"
+check 1 "$(grep -c 'shipyard-ask.sh "disclosure hold: <the stub>"' "$PROTO_OK" 2>/dev/null)" \
+  "...raising it as a blocking question under the marker"
+check 1 "$(grep -c '^\*\*A release is published\.\*\*' "$PROTO_OK" 2>/dev/null)" \
+  "...and publishing any release it acts on"
+check 1 "$(grep -c '^exception is a disclosure hold: a directive releases it only' "$PROTO_OK" 2>/dev/null)" \
+  "...which a supervisor directive does not bypass"
+check 1 "$(grep -c '^\*\*A `disclosure hold:` question is the human.s alone — never answer it, never release it,$' "$SKILL_DIR/SKILL.md")" \
+  "SKILL.md's answering policy forbids the watcher to answer one"
+
 out=$(dry_launch "$TMP/skill-noarm" "$TMP/launch-noarm")
 check 1 "$(printf '%s' "$out" | sed -n 's/^rc=//p')" "no env-pass arm: the launch is refused"
 check 1 "$(printf '%s' "$out" | grep -c 'no environment preamble for agent kind')" "...saying why"

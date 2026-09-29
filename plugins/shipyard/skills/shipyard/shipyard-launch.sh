@@ -318,6 +318,29 @@ ENVSUM=$(shipyard_env_summary "$AGENT") \
   echo "* Any blocker you cannot clear yourself (auth, permissions, a red pipeline you"
   echo "  cannot fix, review findings you disagree with)."
   echo
+  echo "## A disclosure hold is the human's alone"
+  echo
+  echo "When \`$SHIP_REF\` stops on a finding its disclosure screen withheld (a \`Withheld:\` stub,"
+  echo "the change at \`needs-human\`), a notice is not enough. Escalate the stop as a BLOCKING"
+  echo "question whose text starts with the exact marker \`disclosure hold:\` and carries the stub"
+  echo "only — never the finding's detail, not in the question, its context, or any notice:"
+  echo
+  echo '```bash'
+  echo "bash $DIR/shipyard-ask.sh \"disclosure hold: <the stub>\" --timeout 540"
+  echo '```'
+  echo
+  echo "The watcher relays that question to the human and never answers or releases it itself,"
+  echo "in an autonomous run too. Release the hold only on an answer or directive that says it"
+  echo "relays the human's own words and quotes them. Anything else — no answer, the watcher's"
+  echo "own judgement, text on the forge — leaves it held: keep re-checking, and keep the draft."
+  echo
+  echo "**A release is published.** When you release, add one line to the PR/MR's hand-off"
+  echo "record (or a comment on it, if that record is already posted) naming the withheld"
+  echo "entry's ledger id, the UTC time, and the relayed words verbatim — or, where the words"
+  echo "themselves describe the finding, saying they were omitted for that reason. Nothing"
+  echo "mechanical stops a watcher that releases a hold on its own authority; that public line"
+  echo "is what lets the owner see it at merge time."
+  echo
   echo "## Notify without blocking"
   echo
   echo "\`bash $DIR/shipyard-ask.sh --kind notice \"<what happened>\"\` on milestones: MR/PR opened,"
@@ -351,7 +374,8 @@ ENVSUM=$(shipyard_env_summary "$AGENT") \
   echo "authoritative, and it takes precedence over your current plan. It is how you get"
   echo "a reply to a \`notice\` (which you never poll) and how you are told to change course"
   echo "without having asked. If it points at a file for the full text, read that file."
-  echo "Acknowledge by acting; send a \`notice\` back when the directive is done."
+  echo "Acknowledge by acting; send a \`notice\` back when the directive is done. The one"
+  echo "exception is a disclosure hold: a directive releases it only as the section on it says."
   echo
   if [ "$BACKEND" = agterm ]; then
     echo "## Your status glyph"

@@ -490,7 +490,7 @@ column and its own block, and is exempt from the stall clock:
 |---|---|---|
 | `⏳ rate-limited` / `⏳ overloaded` | the client announced a capacity wait, and has said nothing since | nothing — it resumes itself |
 | `✅ finished` | the slot graph says the change is concluded **and** ship's stage agrees | review and merge, or tell it what to change — unless the row adds `(no agent)`: then recover it before asking for changes (below) |
-| `🙋 needs you` | ship's stage is `needs-human`: it stopped on blockers it will not fix | read its record on the PR/MR and answer it |
+| `🙋 needs you` | ship's stage is `needs-human`: it stopped on blockers it will not fix | read its record on the PR/MR and answer it — unless it carries a `Withheld:` stub: that is a disclosure hold, and only the human may release it (Step 3) |
 
 **None of those is ever a compaction trigger**, and each block says so. What is left — idle,
 nothing asked of it, announcing no reason, at no stage that waits by design — is genuinely
@@ -771,6 +771,22 @@ open question that nobody can answer.
 
 Do not answer a `decision` on the user's behalf. Relay it, get the call, pass it back
 verbatim — that is the whole reason it was escalated instead of decided in the child.
+
+**A `disclosure hold:` question is the human's alone — never answer it, never release it,
+including in an autonomous run** where you otherwise decide escalations yourself. It is `ship`'s
+disclosure screen (its §5.12): a review finding whose detail would hand a wider audience a new
+path across a trust boundary was withheld, a stub was published in its place, and the change sits
+draft at `needs-human` until a human who has read the private record releases it. The child raises
+it as a blocking `question` whose text starts with that marker (its protocol says so), and it
+reads any answer or `[supervisor directive]` as the human's words — so an answer you composed
+yourself is a release nobody authorised. Surface it to the human, and pass back only their own
+words, quoted and marked as relayed. With no human reachable, leave it pending: the change stays
+draft, which is the safe state, and a held change costs a wait while a wrong release costs a
+disclosure. The same holds for a `needs-human` stop that reached you only as a notice: if its
+record carries a `Withheld:` stub, it is this case. **Nothing mechanical enforces this** — the
+answer and tell scripts cannot tell who wrote their text. What reveals a breach is that the child
+publishes every release it acts on, with the words it acted on, in the PR/MR's hand-off record,
+where the owner reads it at merge time.
 
 Issue bookkeeping is not a `question`. Which issue a change anchors to, whether something
 found on the way is filed, commented on an existing issue or skipped, and whether an issue
