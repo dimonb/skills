@@ -120,7 +120,11 @@ mkdir -p "$FAKE_ROOT" "$FAKE_GIT/ship-escalations"
 #     it merged BEFORE the slot's launch record -> no iid, only the `!651?` annotation.
 # 66: 65's shape on the GONE-slot teardown arm (no terminal, stage `done`) -> the same annotation,
 #     so the arm that feeds lock 1 never takes an unverified number for `merged`.
-GH_SLOTS="51 52 53 54 55 56 57 58 59 60 61 62 63 64 65 66"
+# 67: a failing candidate listed FIRST (merged, head only an ancestor), then the child's own merged
+#     PR on HEAD whose merge time is missing -> the verified one wins over the earlier hint, and a
+#     time that cannot be read skips the launch test rather than failing it.
+# 68: a CLOSED (not merged) PR on HEAD, closed before the launch -> the same annotation as a merge.
+GH_SLOTS="51 52 53 54 55 56 57 58 59 60 61 62 63 64 65 66 67 68"
 # The GitLab run's slots (case 12). Non-numeric but one, because a numeric GitLab slot IS its iid
 # and never reaches the forge — which is what 71 pins.
 #   gfork:   a fork's opened MR listed first, then the child's own merged one on HEAD -> the latter;
@@ -145,7 +149,7 @@ printf '{"state":"done"}\n' >"$FAKE_ROOT/.claude/worktrees/ship-64/.pipeline-sta
 printf '{"state":"done"}\n' >"$FAKE_ROOT/.claude/worktrees/ship-66/.pipeline-state/ISSUE-66.json"
 # Launch records, in the shape shipyard-launch.sh writes. Every merge time below is either
 # 2026-01-01 (before a launch) or 2026-06-01 (after one); the launches are all 2026-03-01.
-for s in 59 60 65 66 gfork ganc gold; do
+for s in 59 60 65 66 67 68 gfork ganc gold; do
   printf '{"id":"launch-%s","slot":"%s","kind":"launch","status":"info","started_at":"2026-03-01T00:00:00Z"}\n' "$s" "$s" \
     >"$FAKE_GIT/ship-escalations/launch-$s.json"
 done
@@ -193,6 +197,8 @@ git() {
         *ship-64) printf 'feat/november\n' ;;
         *ship-65) printf 'feat/oscar\n' ;;
         *ship-66) printf 'feat/papa\n' ;;
+        *ship-67) printf 'feat/quebec\n' ;;
+        *ship-68) printf 'feat/romeo\n' ;;
         *ship-gfork) printf 'feat/gl-fork\n' ;;
         *ship-ganc)  printf 'feat/gl-anc\n' ;;
         *ship-gold)  printf 'feat/gl-old\n' ;;
@@ -209,7 +215,7 @@ git() {
 tmux() {
   case "${1:-}" in
     # 63, 64 and 66 have no terminal.
-    list-windows) printf '1 ship-51\n2 ship-52\n3 ship-53\n4 ship-54\n5 ship-55\n6 ship-56\n7 ship-57\n8 ship-58\n9 ship-59\n10 ship-60\n11 ship-61\n12 ship-62\n13 ship-65\n14 ship-gfork\n15 ship-ganc\n16 ship-gold\n17 ship-71\n'; return 0 ;;
+    list-windows) printf '1 ship-51\n2 ship-52\n3 ship-53\n4 ship-54\n5 ship-55\n6 ship-56\n7 ship-57\n8 ship-58\n9 ship-59\n10 ship-60\n11 ship-61\n12 ship-62\n13 ship-65\n14 ship-gfork\n15 ship-ganc\n16 ship-gold\n17 ship-71\n18 ship-67\n19 ship-68\n'; return 0 ;;
     has-session)  return 0 ;;
     capture-pane) printf '⏺ working\n'; return 0 ;;
   esac
@@ -252,6 +258,8 @@ gh() {
         # Merged on HEAD, but before the slot's launch record: the kept-branch relaunch.
         *"--head feat/oscar"*) out='[{"number":651,"state":"MERGED","headRefOid":"h65","isCrossRepository":false,"closedAt":"2026-01-01T00:00:00Z"}]' ;;
         *"--head feat/papa"*) out='[{"number":661,"state":"MERGED","headRefOid":"h66","isCrossRepository":false,"closedAt":"2026-01-01T00:00:00Z"}]' ;;
+        *"--head feat/quebec"*) out='[{"number":671,"state":"MERGED","headRefOid":"anc-67","isCrossRepository":false,"closedAt":"2026-06-01T00:00:00Z"},{"number":672,"state":"MERGED","headRefOid":"h67","isCrossRepository":false,"closedAt":null}]' ;;
+        *"--head feat/romeo"*) out='[{"number":681,"state":"CLOSED","headRefOid":"h68","isCrossRepository":false,"closedAt":"2026-01-01T00:00:00Z"}]' ;;
         *) out='[]' ;;
       esac ;;
     # Logged, so an annotation reaching mr_state is provable: none may ever be asked about.
@@ -363,8 +371,12 @@ ok "61: an open PR outside this worktree's history is only an annotation" 1 \
 # #317 — a merge from before the launch is the old PR of a kept-branch relaunch.
 ok "65: a merged PR on HEAD that merged before the launch is only an annotation" 1 \
    "$(printf '%s' "$out" | grep -c '^| 65 | !651? | .*no MR yet')"
+ok "67: a verified merged PR wins over an earlier failing candidate" 1 \
+   "$(printf '%s' "$out" | grep -c '^| 67 | !672 |')"
+ok "68: a CLOSED PR on HEAD closed before the launch is only an annotation" 1 \
+   "$(printf '%s' "$out" | grep -c '^| 68 | !681? | .*no MR yet')"
 ok "...and no annotation ever reached mr_state"     0 \
-   "$(grep -cE 'pr view ~?(581|611|651|661)( |$)' "$GH_VIEWS")"
+   "$(grep -cE 'pr view ~?(581|611|651|661|671|681)( |$)' "$GH_VIEWS")"
 ok "...while a verified number did, so that log is not empty" 1 \
    "$(grep -cE 'pr view 777( |$)' "$GH_VIEWS")"
 
@@ -416,9 +428,9 @@ ok "...and for the fields the choice among candidates reads" 0 \
    "$(grep -v -- '--json number,state,headRefOid,isCrossRepository,closedAt' "$GH_CALLS" | grep -c .)"
 ok "...and for several candidates, not one"         0 \
    "$(grep -v -- '--limit 10 ' "$GH_CALLS" | grep -c .)"
-# ...and the log holds exactly the slots that should reach the forge — 51 54 58 59 60 61 62 64 65 66
+# ...and the log holds exactly the slots that should reach the forge — 51 54 58 59 60 61 62 64 65 66 67 68
 # — so the checks above cannot pass vacuously over no calls.
-ok "the log they read holds the expected queries"   10 \
+ok "the log they read holds the expected queries"   12 \
    "$(grep -c . "$GH_CALLS")"
 
 # #317 — the GitLab arm, in its own run, because the forge is derived from the origin remote.
