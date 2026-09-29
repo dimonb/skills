@@ -586,8 +586,18 @@ pass on the archived head (§7.F).
   and the session's scratch or temp directory** — never from the agent's own config, transcript
   or tool-result directories. Reads there prompt for approval, and an unattended run stalls on
   the prompt with nobody to answer it and nothing that reliably reports it. Content a subagent needs from
-  there goes into its prompt, never as a path. Measured: a skeptic that copied from its own
-  transcript directory held a slot idle on the prompt, unescalated.
+  there goes into its prompt, never as a path. **One case is decided by the tool, not the path:**
+  output the runtime saved for the agent itself — a long tool result spilled to a file, its path
+  handed back — is read with the **file-read tool**, and a scratch file is written with the
+  **file-write tool**, into the scratch directory and never the worktree. Neither is ever reached
+  through the shell — no `cp`, `cat` or redirection on a path the runtime owns, which can resolve
+  through a symlinked config directory and raise a sensitive-file prompt. **Every brief that
+  launches a subagent says so**, beside the read-only clause: *read your own saved tool output
+  with the file-read tool, write scratch with the file-write tool, and never touch a path the
+  runtime owns from the shell.* A subagent stuck on a prompt is invisible to the parent's wait, so
+  the brief is the only place the stall can be prevented. Measured twice: a skeptic that copied
+  from its own transcript directory, and a review subagent that shell-copied its own saved tool
+  output, each held a slot idle on the prompt, unescalated.
 - **Run the axes concurrently** — dispatch the whole battery in ONE message so they run in
   parallel. They are read-only over the same tree and cannot conflict.
 - **Barrier before acting.** Do not start fixing until every axis of the round has returned.
@@ -1384,6 +1394,14 @@ candidate already carrying more than five homed scenarios is full**, whatever it
 not grow it. Rung 1's test is not loosened for this, so a finding a full candidate would have taken
 goes to rung 3, as a new focused issue with its own close condition that names the collector it did
 not join. Measured: two collectors reached nine and seven homed comments, and neither closed.
+**A caller's instruction not to file new issues does not override the cap** — launch orders, a
+supervisor's standing orders, "comment on an existing issue instead". It governs the choice
+between homes that have room, never whether a full one grows; past the cap the finding goes to rung
+3 as above, and the run's report says which cap sent it there. What bars rung 3 is what rung 3
+itself names — the `no-create` flag, or a stage that cannot ask §7.A's confirmation — and a barred
+finding stays at its written record there, still off the full candidate.
+Measured: a slot homed three more residuals on a collector it had noted was past the cap, because
+its orders said "no new issues".
 
 **First, check that no other open PR/MR is about to close the candidate.** Use the reference
 file's linked-PRs/MRs query (§3.2). A closer that read the issue's comments before yours arrived
