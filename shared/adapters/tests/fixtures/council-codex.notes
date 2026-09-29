@@ -1,2 +1,4 @@
-codex (alice): the first launch in an unfamiliar directory asks you to trust it.
-            until you answer, the participant holds the floor and looks wedged.
+codex (alice): the first launch in an unfamiliar directory asks whether to trust it.
+            the supervising session answers it in place, after reading the screen:
+            an update menu can come first, with "Update now" pre-selected.
+            until it is answered, the participant holds the floor and looks wedged.

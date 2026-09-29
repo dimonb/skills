@@ -90,10 +90,12 @@ blanket `--dangerously-skip-permissions`, which covers what a participant reads 
 room. That flag applies only to sessions this skill starts.
 
 What still stops a room is the **first launch in a directory the agent has not seen**: both
-Codex and Antigravity ask you to trust it, and the blanket flag does not answer that one.
-Until you do, the participant holds the floor and looks, from the room, exactly like a wedged
-session. Answer it once per directory — **in place**. Relaunching that seat only asks the same
-question again, with everything it has read thrown away.
+Codex and Antigravity ask whether to trust it, and the blanket flag does not answer that one.
+Until somebody does, the participant holds the floor and looks, from the room, exactly like a
+wedged session. **The supervising session — the one that ran `up` — answers it**, once per
+directory and **in place**: it reads the seat's screen and picks the option by its label, and it
+hands the prompt to a human only when it is not that question. Relaunching that seat only asks
+the same question again, with everything it has read thrown away.
 
 `council.sh status` narrows it and says how far. It asks the terminal backend whether the seat's
 session exists, so the alarm can say what a **gone** seat and an **up** seat look like — and when
