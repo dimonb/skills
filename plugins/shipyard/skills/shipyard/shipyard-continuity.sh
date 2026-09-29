@@ -46,6 +46,15 @@ shipyard_continuity_reset() {
   SHIPYARD_CONTINUITY_OWNED_EMPTY_READS=0
 }
 
+# Every prefix here is forgeable: the assistant's prose opens with the same bullet, so a reply that
+# begins `• Goal paused` (captured in tests/fixtures/pane-codex-goal-forged.txt) or `• Ran ` reads
+# as a service line. Here that only keeps a capacity episode current, and the reach is narrow: an
+# assistant turn after a banner normally follows a submitted prompt, whose echo is a composer-glyph
+# line that clears the episode. The case not closed is a turn resumed by a command the client does
+# not echo (a slash command such as `/goal resume`) whose every later bullet forges a prefix; then
+# the watcher can type `resume` once per banner. The one difference the captures show, a real goal
+# line wrapping into column one where prose wraps into an indent, is absent from a line too short
+# to wrap, so it is no anchor, and the list stays with that residual.
 shipyard_continuity_is_service_line() {
   case "$1" in
     '• Running '*|'• Ran '*|'• Working'*|'• Waited '*|'• Explored'*|\
@@ -108,20 +117,27 @@ shipyard_continuity_live_prompt() {
   printf '%s' "$prompt"
 }
 
-# active | paused | blocked | none, using only Codex's root goal service line or live footer.
+# active | paused | blocked | none, read from Codex's live FOOTER alone: the last non-empty line of
+# the screen, with the composer's glyph line as the non-empty line above it. That position is the
+# anchor, because nothing the assistant writes can land below the composer. The column-one
+# `• Goal paused Objective: ...` service line is NOT read: the assistant's own prose opens with the
+# same bullet, and tests/fixtures/pane-codex-goal-forged.txt captures a reply that reproduces the
+# line exactly, whose wrapped continuation also carries a footer's words in a two-space indent.
+# Both used to read as a paused goal, and the watcher then typed `/goal resume` into an empty box.
+# A screen whose last lines are anything else (a popup, a draft wrapping in the box) reads `none`,
+# which only ever withholds an action. The captures are described in tests/fixtures/goal.notes.
 shipyard_continuity_goal_state() {
-  local screen="$1" line state=none
+  local screen="$1" line last="" above=""
   while IFS= read -r line || [ -n "$line" ]; do
-    case "$line" in
-      '• Goal active'*) state=active ;;
-      '• Goal paused'*) state=paused ;;
-      '• Goal stalled'*) state=blocked ;;
-      '  gpt-'*'Goal paused'*) state=paused ;;
-      '  gpt-'*'Goal stalled'*) state=blocked ;;
-      '  gpt-'*'Pursuing goal'*) state=active ;;
-    esac
+    case "$line" in *[![:space:]]*) above="$last"; last="$line" ;; esac
   done <<<"$screen"
-  printf '%s' "$state"
+  if ! _adp_box_content "$above"; then printf none; return 0; fi
+  case "$last" in
+    '  '[![:space:]]*'Goal paused'*) printf paused ;;
+    '  '[![:space:]]*'Goal stalled'*) printf blocked ;;
+    '  '[![:space:]]*'Pursuing goal'*) printf active ;;
+    *) printf none ;;
+  esac
 }
 
 # Set SHIPYARD_CONTINUITY_ACTION to resume, goal, or empty. State changes happen

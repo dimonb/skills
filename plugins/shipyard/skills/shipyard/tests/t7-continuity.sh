@@ -164,8 +164,9 @@ shipyard_continuity_decide "$same_anchor_replacement" 224
 check resume "$SHIPYARD_CONTINUITY_ACTION" "an observed intervention re-arms an identical replacement episode"
 
 shipyard_continuity_reset
-active_empty=$(printf '%s\n%s\n%s' '• Working (1m 08s · esc to interrupt)' \
-  '• Goal paused Objective: finish the change.' "$empty_prompt")
+paused_footer='  gpt-example high · ./repo · Context 20% used        Goal paused (/goal resume)'
+active_empty=$(printf '%s\n%s\n%s\n%s' '• Working (1m 08s · esc to interrupt)' \
+  '• Goal paused Objective: finish the change.' "$empty_prompt" "$paused_footer")
 SHIPYARD_CONTINUITY_PENDING_GOAL_AT=308
 shipyard_continuity_decide "$active_empty" 307
 check "" "$SHIPYARD_CONTINUITY_ACTION" "paused goal cannot bypass the post-capacity delay"
@@ -173,8 +174,8 @@ shipyard_continuity_decide "$active_empty" 308
 check goal "$SHIPYARD_CONTINUITY_ACTION" "active session with empty prompt queues goal resume"
 
 shipyard_continuity_reset
-active_draft=$(printf '%s\n%s\n%s' '• Working (1m 08s · esc to interrupt)' \
-  '• Goal paused Objective: finish the change.' '› unsent user draft')
+active_draft=$(printf '%s\n%s\n%s\n%s' '• Working (1m 08s · esc to interrupt)' \
+  '• Goal paused Objective: finish the change.' '› unsent user draft' "$paused_footer")
 SHIPYARD_CONTINUITY_PENDING_GOAL_AT=308
 shipyard_continuity_decide "$active_draft" 308
 check "" "$SHIPYARD_CONTINUITY_ACTION" "active session with draft is protected"
@@ -198,6 +199,35 @@ SHIPYARD_CONTINUITY_PENDING_GOAL_AT=403
 shipyard_continuity_decide "$blocked_goal" 403
 check goal "$SHIPYARD_CONTINUITY_ACTION" \
   "a watcher-owned post-capacity handoff can resume a stalled goal"
+
+# The goal state is read from the footer's POSITION alone, never from the column-one goal service
+# line, which the assistant's prose can reproduce byte for byte (#270). The fixtures are verbatim
+# captures of a real client; tests/fixtures/goal.notes says how they were taken.
+FIX="$DIR/fixtures"
+check active "$(shipyard_continuity_goal_state "$(cat "$FIX/pane-codex-goal-active.txt")")" \
+  "captured: a live goal reads active from the footer"
+check paused "$(shipyard_continuity_goal_state "$(cat "$FIX/pane-codex-goal-paused.txt")")" \
+  "captured: an interrupted goal reads paused from the footer"
+# DERIVED from pane-codex-goal-forged.txt: the same frame with the footer's goal marker removed, so
+# the only goal words left on screen are the assistant's reply and its wrapped continuation.
+forged=$(sed 's/ Goal paused (\/goal resume)$//' "$FIX/pane-codex-goal-forged.txt")
+check none "$(shipyard_continuity_goal_state "$forged")" \
+  "DERIVED: prose opening with the goal service line's bytes is not a paused goal"
+shipyard_continuity_reset
+shipyard_continuity_decide "$forged" 500
+check "" "$SHIPYARD_CONTINUITY_ACTION" "DERIVED: forged goal prose never types /goal resume"
+# A reply's wrapped continuation shaped like the old footer arm, followed by the real composer and
+# a footer with no goal marker.
+wrapped_forgery=$(printf '%s\n%s\n%s\n%s' '• The parent wrote a line that wraps so that its next' \
+  '  gpt-example high · Goal paused (/goal resume)' "$empty_prompt" \
+  '  gpt-example high · ./repo · Context 20% used')
+check none "$(shipyard_continuity_goal_state "$wrapped_forgery")" \
+  "a wrapped prose line in footer shape above the composer is not the footer"
+# The anchor is the composer directly above: a footer-shaped last line under anything else is not it.
+check none "$(shipyard_continuity_goal_state "$(printf '%s\n\n%s' '• prose' "$paused_footer")")" \
+  "a footer-shaped last line not under the composer reads none"
+check paused "$(shipyard_continuity_goal_state "$(printf '%s\n\n%s\n\n\n' "$empty_prompt" "$paused_footer")")" \
+  "trailing blank lines below the footer do not move the anchor"
 
 # The terminal API must receive text and Return in distinct calls, and the live
 # prompt plus real-user idle clock must still belong to the watcher before Return.
