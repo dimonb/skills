@@ -1716,7 +1716,9 @@ private-GitHub case is trigger 2 and needs no verifier:
    does one created during the invocation. A release that names no id releases nothing, and the
    run reports that and the ids still held. So a relayed or earlier "release" cannot clear an
    entry no human was shown. A release lifts the hold on §10, and undoes the draft this step set
-   unless another stop still requires it (§5.9). It does nothing else. The finding stays unfixed
+   unless another stop still requires it (§5.9). A release of a close-sweep entry may also say,
+   in the human's words, that the entry covers its issue; that is recorded as `covers_issue:
+   true` (§7.G step 2), and never inferred. A release does nothing else. The finding stays unfixed
    and unpublished in this change, and its `open` entry stays `withheld`. Fixing it is a separate
    change, which the human starts once disclosure is settled. Where the finding went to a
    private channel, that record keeps it. Where it is ledger only, the git-ignored state file is
