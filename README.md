@@ -219,8 +219,8 @@ and declaration (above). CI runs `make check` and `make test` in one workflow
 (`.github/workflows/ci.yml`) on every push to `main` and every pull request — plus, in a macOS job
 of the same workflow, the test files that run shipyard code under /bin/bash, whose 3.2 floor is
 vacuous on Linux (the job lists them; `scripts/check.sh` check 16 reds when a test naming
-`/bin/bash` on a line it runs is missing from it, and a floor reached through a variable or a
-helper it cannot see) — and `make check-test` in a SEPARATE,
+`/bin/bash` on a line it runs is missing from it, and a floor reached through a variable set
+elsewhere or a helper it cannot see) — and `make check-test` in a SEPARATE,
 concurrent workflow (`.github/workflows/check-test.yml`) — unconditionally on every push to
 `main`, and on a pull request only when the change touches a path that could affect what it
 proves. That filter is derived from `$GUARDED` in `scripts/check-test.sh` and asserted by

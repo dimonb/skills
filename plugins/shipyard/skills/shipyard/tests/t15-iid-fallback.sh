@@ -547,8 +547,9 @@ nb5run() { SHIPYARD_MOTION_INTERVAL="${SHIPYARD_MOTION_INTERVAL:-0.01}" SHIPYARD
              SHIPYARD_FORGE_TIMEOUT=2 SHIPYARD_AUTODOWN=0 "${B32:-bash}" "$1" --only-changed 51 58 59 65 2>"$2"; }
 rm -f "$FAKE_GIT/ship-escalations/report-sig"
 nb5run "$NB5/shipyard-report.sh" "$T15TMP/oc1.err" >/dev/null
-oc2=$(nb5run "$NB5/shipyard-report.sh" "$T15TMP/oc2.err")
+oc2=$(nb5run "$NB5/shipyard-report.sh" "$T15TMP/oc2.err"); oc2_rc=$?
 ok "no bash 5, --only-changed: a repeated tick prints no table" "" "$oc2"
+ok "...because it took the report's nothing-new exit" 1 "$oc2_rc"
 ok "no bash 5, --only-changed: ...and still prints its one stderr line" 1 \
    "$(grep -c '^shipyard-report: the slot graph could not answer for 4 live slot(s)' "$T15TMP/oc2.err")"
 oc3=$(nb5run "$REPORT" "$T15TMP/oc3.err")
@@ -565,7 +566,8 @@ pt=$(SHIPYARD_MOTION_INTERVAL="${SHIPYARD_MOTION_INTERVAL:-0.01}" SHIPYARD_STALL
 ok "an answering graph's stderr passes through, once per slot" 4 \
    "$(grep -c '^graph warning: an answered tick with something to say$' "$T15TMP/pt.err")"
 ok "...with no refusal summary" 0 "$(grep -c '^shipyard-report: the slot graph' "$T15TMP/pt.err")"
-ok "...and no row annotated" 0 "$(printf '%s' "$pt" | grep -c 'completion unreadable')"
+ok "...with every live row printed" 4 "$(printf '%s' "$pt" | grep -c '^| [0-9]* | ')"
+ok "...and none of them annotated" 0 "$(printf '%s' "$pt" | grep -c 'completion unreadable')"
 
 unset -f git tmux gh glab
 if [ "$FAILURES" -eq 0 ]; then

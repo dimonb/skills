@@ -28,7 +28,7 @@
 #     numbered heading that exists, in that file or in ship's core SKILL.md
 # 16. every gated test naming /bin/bash on a line it runs is a step of the macOS bash32-floor CI
 #     job, since on Linux /bin/bash is 5.x and such a test measures nothing there (a floor reached
-#     through a variable or a helper it cannot see; its section says so)
+#     through a variable set elsewhere or a helper it cannot see; its section says so)
 set -uo pipefail
 cd "$(dirname "$0")/.."
 ROOT_P=$(pwd -P)          # physical repo root; see the symlink containment check below

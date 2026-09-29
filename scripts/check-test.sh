@@ -1791,10 +1791,11 @@ expect_pass "a re-exec candidate, a comment and an echo naming /bin/bash stay gr
 git checkout -- "$FLT"
 # 39h — a floor line followed by more than a pipe buffer of text is still derived. The derivation's
 # last stage used to be `grep -q`, whose early exit SIGPIPEs the stage feeding it under pipefail, so
-# a file like t7 (its match 30 KB from the end) dropped out about three runs in ten. 80 KB of live
-# lines after the match makes that the common case, so a return to `-q` reds here, not at random.
+# a file like t7 (its match 30 KB from the end) dropped out about three runs in ten. About 1.3 MB of
+# live lines after the match puts it past GNU grep's read buffer as well as BSD grep's (80 KB still
+# passed under GNU `-q` every time), so a return to `-q` reds here on either platform.
 perl -0pi -e 's{\A(#![^\n]*\n)}{$1/bin/bash -c true\n}' "$FLT"
-perl -e 'print ": padding line so the floor match sits far from the end of the file\n" x 1200' >> "$FLT"
+perl -e 'print ": padding line so the floor match sits far from the end of the file\n" x 20000' >> "$FLT"
 expect_fail "a floor line far from the end of a test is still derived" "t1-totals.sh runs code under /bin/bash"
 git checkout -- "$FLT"
 # 39i — the `${X:-/bin/bash}` default is a floor too: it is how t15 picks its interpreter.

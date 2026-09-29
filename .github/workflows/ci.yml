@@ -51,10 +51,10 @@ jobs:
   # graph, escalations, down) resolve a bash 5 here too (the shipyard README's Known limits). Which
   # files belong here is checked, not only remembered: scripts/check.sh check 16 reds when a gated
   # test names /bin/bash on a line it runs and no step below runs it; a floor reached through a
-  # variable or a helper it cannot see, so such a test still needs its step added by hand. t15 is
-  # the step that proves the 3.2 is there: it NAMES /bin/bash and fails, rather than skips, when that
-  # is not a 3.x, so an image whose /bin/bash moves on reds this job instead of making the others
-  # vacuous again. A bash >= 5 is installed beside it because the report's slot graph is a
+  # variable set elsewhere or a helper it cannot see, so such a test still needs its step added by
+  # hand. t15 is the step that proves the 3.2 is there: it NAMES /bin/bash and fails, rather than
+  # skips, when that is not a 3.x, so an image whose /bin/bash moves on reds this job instead of
+  # making the others vacuous again. A bash >= 5 is installed beside it because the report's slot graph is a
   # subprocess that re-execs into one (a documented shipyard requirement); the report without one is
   # t15's no-bash-5 section, which stubs the graph's refusal. These files, not `make test`: the rest
   # already runs on Linux.
