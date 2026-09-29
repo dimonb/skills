@@ -400,6 +400,13 @@ so do not plan on driving it from here.
   slot worktree's own branch; only when neither can answer does the column say `no MR yet`. The
   one slot that skips the forge is a numeric GitLab one, where the slot already IS the iid;
   a numeric GitHub slot is an issue number, so it goes through both sources like any other.
+  The forge's answer counts only when it is tied to the worktree's own history and, for a merged
+  or closed one, to a merge or close no earlier than the slot's launch record; one that fails
+  reads `!N?` — the number the forge names for that branch, **unverified**, with `no MR yet` as
+  its state. Nothing decides on it (not the state, the slot graph or a teardown), so a head moved
+  on the forge and never pulled shows its number without it ever painting a live child finished.
+  A slot relaunched after its own PR merged — a Step 5 recovery included — reads its old PR that
+  way too unless its state file carries the number, and stays in flight rather than finished.
   The stage column gets no such fallback: no forge knows whether a child is at `apply` or
   `impl-review`, so a `—` there means the child has not recorded a stage, and `ship` §2.8 is
   what makes it do so;
@@ -525,7 +532,7 @@ column and its own block, and is exempt from the stall clock:
 |---|---|---|
 | `⏳ rate-limited` / `⏳ overloaded` | the client announced a capacity wait, and has said nothing since | nothing — it resumes itself |
 | `✅ finished` | the slot graph says the change is concluded **and** ship's stage agrees | review and merge, or tell it what to change — unless the row adds `(no agent)`: then recover it before asking for changes (below) |
-| `🙋 needs you` | ship's stage is `needs-human`: it stopped on blockers it will not fix | read its record on the PR/MR and answer it |
+| `🙋 needs you` | ship's stage is `needs-human`: it stopped on blockers it will not fix | read its record on the PR/MR and answer it — unless its `Withheld:` line counts a held entry: that is a disclosure hold, and only the human may release it (Step 3) |
 
 **None of those is ever a compaction trigger**, and each block says so. What is left — idle,
 nothing asked of it, announcing no reason, at no stage that waits by design — is genuinely
@@ -805,6 +812,28 @@ open question that nobody can answer.
 
 Do not answer a `decision` on the user's behalf. Relay it, get the call, pass it back
 verbatim — that is the whole reason it was escalated instead of decided in the child.
+
+**A `disclosure hold:` question is the human's alone — never answer it, never release it,
+including in an autonomous run** where you otherwise decide escalations yourself. It is `ship`'s
+disclosure screen (its §5.12): a review finding whose detail would hand a wider audience a new
+path across a trust boundary was withheld, a stub was published in its place, and the change sits
+draft at `needs-human` until a human who has read the private record releases it. The child raises
+it as a blocking `question` whose text starts with that marker (its protocol says so). It acts on
+any answer or `[supervisor directive]` that is shaped as a relay of the human's words, and it
+cannot tell who composed one — so a relay you composed yourself is a release nobody authorised.
+Surface it to the human with the entry ids its stub shows, and pass back only their own words,
+quoted and marked as relayed. The release rules are `ship`'s (§5.12), not this skill's: the
+human's words name each entry they release by its id, and a release is a new `ship` invocation —
+the child re-invokes it on receiving the relay, always with `no-merge`, so the answer is how the
+words travel, ship never merges a released change itself, and the release line is public before
+anyone merges it. A relay
+that names no id releases nothing. With no human reachable, leave it pending: the change stays
+draft, which is the safe state, and a held change costs a wait while a wrong release costs a
+disclosure. The same holds for a `needs-human` stop that reached you only as a notice: if its
+record's `Withheld:` line counts a held entry (anything but `Withheld: none`), it is this case.
+**Nothing mechanical enforces this** — the answer and tell scripts cannot tell who wrote their
+text. What reveals a breach is that the child publishes every release it acts on, with the ids and
+the words it acted on, in the PR/MR's hand-off record, where the owner reads it at merge time.
 
 Issue bookkeeping is not a `question`. Which issue a change anchors to, whether something
 found on the way is filed, commented on an existing issue or skipped, and whether an issue

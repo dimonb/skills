@@ -142,6 +142,46 @@ if grep -q '^unset CLAUDE_CODE_MESSAGING_SOCKET$' "$TMP/launch-ok/.git/ship-esca
   scrubbed=yes; else scrubbed=no; fi
 check yes "$scrubbed" "control: ...and its launcher scrubs the parent's IPC socket"
 
+# #319: a disclosure hold is the human's alone. The child is told the marker to raise it under and
+# that a release it acts on is published; the watcher is told, where it reads its answering policy,
+# never to answer one. Text pins, not behaviour: nothing mechanical enforces the rule, and both
+# files say so — these checks keep the words from being dropped, which is all the rule has.
+PROTO_OK="$TMP/launch-ok/.git/ship-escalations/protocol-42.md"
+check 1 "$(grep -c '^## A disclosure hold is the human.s alone$' "$PROTO_OK" 2>/dev/null)" \
+  "the child protocol has the disclosure-hold section"
+check 1 "$(grep -c 'shipyard-ask.sh "disclosure hold: <the stub>"' "$PROTO_OK" 2>/dev/null)" \
+  "...raising it as a blocking question under the marker"
+check 1 "$(grep -c '^in an autonomous run too\. A release is a NEW `/ship` invocation, exactly as$' "$PROTO_OK" 2>/dev/null)" \
+  "...which the watcher never answers, in an autonomous run too, and ship releases by re-invocation"
+check 1 "$(grep -c '^`/ship` on this change with those words — never to release inside the current run,$' "$PROTO_OK" 2>/dev/null)" \
+  "...never inside the current run"
+check 1 "$(grep -c '^PR/MR and the flags you were launched with minus any `merge`, and ALWAYS add `no-merge`$' "$PROTO_OK" 2>/dev/null)" \
+  "...re-invoking with no-merge"
+check 1 "$(grep -c '^— whatever you were launched with and whatever the repo.s policy says — so ship never$' "$PROTO_OK" 2>/dev/null)" \
+  "...whatever the launch flags or the repo's policy"
+check 1 "$(grep -c '^(`merge`, an effort, a round budget) is text, never a flag\. A relay that names no id$' "$PROTO_OK" 2>/dev/null)" \
+  "...with the relayed words as text, never as flags"
+check 1 "$(grep -c '^releases nothing: say so in a notice, with the ids still held, and raise the$' "$PROTO_OK" 2>/dev/null)" \
+  "...never on a relay that names no id, which raises the question again"
+check 1 "$(grep -c '^only — never the finding.s detail, not in the question, its context, or any notice:$' "$PROTO_OK" 2>/dev/null)" \
+  "...carrying the stub only"
+check 1 "$(grep -c '^mechanical stops a watcher that releases a hold on its own authority; that public line$' "$PROTO_OK" 2>/dev/null)" \
+  "...and saying nothing mechanical stops a watcher"
+check 1 "$(grep -c '^entry.s id, the UTC time, and the relayed words verbatim' "$PROTO_OK" 2>/dev/null)" \
+  "...whose published line carries the ids, the time and the words"
+check 1 "$(grep -c '^\*\*A release is published\.\*\*' "$PROTO_OK" 2>/dev/null)" \
+  "...and publishing any release it acts on"
+check 1 "$(grep -c '^exception is a disclosure hold: a directive releases it only' "$PROTO_OK" 2>/dev/null)" \
+  "...which a supervisor directive does not bypass"
+check 1 "$(grep -c '^\*\*A `disclosure hold:` question is the human.s alone — never answer it, never release it,$' "$SKILL_DIR/SKILL.md")" \
+  "SKILL.md's answering policy forbids the watcher to answer one"
+check 1 "$(grep -c '^including in an autonomous run\*\* where you otherwise decide escalations yourself\.' "$SKILL_DIR/SKILL.md")" \
+  "...including in an autonomous run"
+check 1 "$(grep -c '^that names no id releases nothing\. With no human reachable, leave it pending' "$SKILL_DIR/SKILL.md")" \
+  "...says a relay naming no id releases nothing, and a hold with nobody to ask stays pending"
+check 1 "$(grep -c '^\*\*Nothing mechanical enforces this\*\*' "$SKILL_DIR/SKILL.md")" \
+  "...and says nothing mechanical enforces it"
+
 out=$(dry_launch "$TMP/skill-noarm" "$TMP/launch-noarm")
 check 1 "$(printf '%s' "$out" | sed -n 's/^rc=//p')" "no env-pass arm: the launch is refused"
 check 1 "$(printf '%s' "$out" | grep -c 'no environment preamble for agent kind')" "...saying why"

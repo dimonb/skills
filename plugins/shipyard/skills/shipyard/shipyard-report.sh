@@ -765,7 +765,7 @@ FORGE_CANDIDATES=10
 # ORDER: last. Every cheaper source wins first — including GitLab's slot-is-the-iid rule, which is
 # a heuristic rather than an exact answer (see slot_iid). This is a fallback, never a substitute.
 slot_iid_forge() {
-  local slot="$1" wt physical br base head v st oid list first=""
+  local slot="$1" wt physical br base head v st oid closed list launched first="" hint=""
   wt="$ROOT/.claude/worktrees/ship-$slot"
   [ -d "$wt" ] || return 0
   # A DIRECTORY IS NOT A WORKTREE, and the difference is a wrong answer rather than a blank. Git
@@ -808,22 +808,28 @@ slot_iid_forge() {
   #     client stalled on a prompt) would otherwise withhold the whole tick's report, which on an
   #     `--only-changed` monitor reads exactly like a quiet tick.
   #
-  # Each candidate comes back as one `<number> <STATE> <head sha>` line, and a FORK's is dropped in
-  # the query: `--head` filters on the ref name alone (`gh pr list --help`: "<owner>:<branch>"
-  # syntax is not supported), so in a public repo a fork's `feat/alpha` is a candidate on equal
-  # footing with the child's own. glab reports the same fact as a source project that is not the
-  # target project.
+  # Each candidate comes back as one `<number> <STATE> <head sha> <closed epoch>` line, and a FORK's
+  # is dropped in the query: `--head` filters on the ref name alone (`gh pr list --help`:
+  # "<owner>:<branch>" syntax is not supported), so in a public repo a fork's `feat/alpha` is a
+  # candidate on equal footing with the child's own. glab reports the same fact as a source project
+  # that is not the target project. The closed epoch is when a merged or closed candidate stopped
+  # being open, and 0 for an open one or a time neither jq can parse (see the loop below for what 0
+  # means). GitHub stamps `closedAt` on a merge too; GitLab stamps `merged_at` on a merge and
+  # `closed_at` on a close only, with milliseconds that `fromdateiso8601` refuses, so they are cut.
+  # The GitLab field names were read off a real `glab mr list -F json` (1.90), not reasoned about.
   if [ "$(forge)" = github ]; then
     list=$( (cd "$ROOT" 2>/dev/null && unset GITHUB_TOKEN \
       && forge_bounded gh pr list --head "$br" --state all --limit "$FORGE_CANDIDATES" \
-           --json number,state,headRefOid,isCrossRepository \
-           --jq '.[] | select(.isCrossRepository | not) | "\(.number) \(.state) \(.headRefOid)"') 2>/dev/null)
+           --json number,state,headRefOid,isCrossRepository,closedAt \
+           --jq '.[] | select(.isCrossRepository | not)
+                     | "\(.number) \(.state) \(.headRefOid) \((.closedAt // "") | sub("\\.[0-9]+"; "") | try fromdateiso8601 catch 0 | floor)"') 2>/dev/null)
   else
     list=$( (cd "$ROOT" 2>/dev/null \
       && OAUTH_TOKEN= forge_bounded glab mr list --source-branch "$br" --all -P "$FORGE_CANDIDATES" -F json \
       | jq -r '.[] | select(.source_project_id == .target_project_id)
-                   | "\(.iid) \(.state | ascii_upcase) \(.sha)"') 2>/dev/null)
+                   | "\(.iid) \(.state | ascii_upcase) \(.sha) \((.merged_at // .closed_at // "") | sub("\\.[0-9]+"; "") | try fromdateiso8601 catch 0 | floor)"') 2>/dev/null)
   fi
+  launched=$(slot_launch_epoch "$slot")
   # THE NAME IS NOT THE CHILD, so a candidate must be tied to this worktree's own history. Before
   # #138 an iid could only come from ship's state file; nothing re-established that after it. Two
   # rules, and the stricter one is for the candidate that could paint a live child finished:
@@ -835,30 +841,66 @@ slot_iid_forge() {
   #     commit, and the old PR's `merged` would render over a live child. A child whose change
   #     merged leaves HEAD where it pushed it, so its own PR still matches and keeps its number for
   #     the slot graph.
-  # No match is an empty answer and the column blanks — the honest reading of "not this child's
-  # PR". A head sha this repository does not hold fails the ancestry test the same way.
+  #   * ...and it must not have stopped being open BEFORE THIS SLOT WAS LAUNCHED (#317). A slot
+  #     relaunched on its kept branch has HEAD equal to the old PR's head until its first commit,
+  #     so no git evidence tells the two apart; the launch time does. It comes from the launch
+  #     record (slot_launch_epoch), and either time unknown — no record, or a stamp neither side
+  #     can parse — skips this test rather than failing it, because a blank there would take the
+  #     `merged` a finished child's teardown needs. A relaunch AFTER the child's own PR merged is
+  #     indistinguishable from that and reads as the annotation below (slot_launch_epoch says so).
+  # A HEAD sha this repository does not hold fails the ancestry test like any other outsider.
   #
-  # WHAT THIS DOES NOT CLOSE, both failing toward a blank or a stale row rather than a teardown:
-  #   * a kept-branch relaunch BEFORE its first commit — HEAD is still the old PR's head, so no git
-  #     evidence tells the two apart and the old `merged`/`closed` still shows until the child
-  #     commits;
-  #   * a head moved ON THE FORGE (an "update branch" merge, a maintainer's push, a server-side
-  #     rebase) and never pulled — the child's own PR then fails both rules and the column blanks.
-  # The state file, when the child writes one, answers first and is untouched by either.
-  while read -r v st oid; do
+  # A CANDIDATE THAT FAILS IS NOT DISCARDED: the first one comes back as `~<number>`, an
+  # ANNOTATION the caller shows as `!<number>?` and never feeds to mr_state, the slot graph or a
+  # teardown (#317). That is the case of a head moved ON THE FORGE — an "update branch" merge, a
+  # maintainer's push, a server-side rebase — and never pulled: the child's own PR fails every rule
+  # above, and before the annotation its column went blank where the forge knew the number. It is
+  # the reused-name and the relaunched cases too, which is why it is only ever an annotation: the
+  # operator sees what the forge names for this branch, marked unverified, and nothing decides on it.
+  # The state file, when the child writes one, answers first and is untouched by any of this.
+  while read -r v st oid closed; do
     case "$v" in ''|*[!0-9]*) continue ;; esac
     case "$oid" in ''|-*) continue ;; esac
+    case "$closed" in ''|*[!0-9]*) closed=0 ;; esac
     case "$st" in
       OPEN|OPENED)
         if [ "$oid" = "$head" ] || git -C "$wt" merge-base --is-ancestor "$oid" "$head" 2>/dev/null; then
           printf '%s' "$v"; return 0
         fi ;;
-      *) [ -z "$first" ] && [ "$oid" = "$head" ] && first="$v" ;;
+      *) if [ -z "$first" ] && [ "$oid" = "$head" ] \
+            && { [ "$closed" = 0 ] || [ "$launched" = 0 ] || [ "$closed" -ge "$launched" ]; }; then
+           first="$v"; continue
+         fi ;;
     esac
+    [ -z "$hint" ] && hint="$v"
   done <<EOV
 $list
 EOV
-  printf '%s' "$first"
+  if [ -n "$first" ]; then printf '%s' "$first"
+  elif [ -n "$hint" ]; then printf '~%s' "$hint"; fi
+}
+
+# slot_launch_epoch <slot> — when shipyard-launch.sh last launched this slot, as epoch seconds from
+# its launch record's `started_at`, or 0 when that cannot be said (no record, not a regular
+# readable file, or a stamp jq cannot parse). 0 means "unknown", never "the epoch".
+#
+# The record lives in the mailbox, which EVERY child can write, and nothing ties launch-<slot>.json
+# to the slot it names: any child can move, forge or delete any slot's launch time, its own or a
+# peer's. What that buys is bounded the same way for either: an earlier time, or no record, gives
+# the reading this report had before #317, and a later one turns that slot's own merged PR into an
+# annotation — a slot that then stays in flight and keeps no `merged` for its teardown lock, which
+# is the loud direction. It cannot make a PR that fails the head rule pass, so the worst it buys a
+# relaunched slot is the old `merged` that #317 removed. A legitimate relaunch after the slot's own
+# PR merged, a Step 5 recovery included, moves the time later in the same way; a child that wrote
+# its PR number into its state file is untouched by either, because that file answers first.
+slot_launch_epoch() {
+  local mb f e
+  mb=$(shipyard_mailbox 2>/dev/null) || { printf 0; return; }
+  f="$mb/launch-$1.json"
+  shipyard_record_readable "$f" || { printf 0; return; }
+  e=$(jq -r '(.started_at // "") | try fromdateiso8601 catch 0 | floor' "$f" 2>/dev/null)
+  case "$e" in ''|*[!0-9]*) e=0 ;; esac
+  printf '%s' "$e"
 }
 
 # The MR/PR number for a slot, or empty when the change has not opened one yet.
@@ -873,8 +915,8 @@ EOV
 # shipyard-launch.sh maps both `!42` and `#42` to slot 42, and its own comment says `#N` is the
 # issue form on GitLab too — so a `#N`-launched GitLab slot returns an ISSUE number here, exactly
 # the GitHub defect above. It is left as it stands because narrowing it to the `!N` spelling is a
-# behaviour change on a path nothing here tests (t15's rig is GitHub-only); filed rather than
-# guessed at. Do not read the arm as exact.
+# behaviour change t15's GitLab pass would have to pin first (it pins only that a numeric slot is
+# its own iid); filed rather than guessed at. Do not read the arm as exact.
 #
 # ONLY A NUMBER IS AN ANSWER, and that test lives HERE, at the single exit, rather than in the arm
 # that happens to have prompted it. Every arm can yield junk: `.pr_number` is hand-authored JSON
@@ -902,9 +944,23 @@ slot_iid() {
   # Only GitLab may fall back to the slot itself.
   if [[ "$slot" =~ ^[0-9]+$ ]] && [ "$(forge)" = gitlab ]; then printf '%s' "$slot"; return; fi
   [ "$mode" = local ] && return 0
+  # The forge arm alone may also answer `~<number>`: an unverified candidate, an annotation and
+  # never an iid (slot_iid_forge says why). iid_label is what splits the two for a caller.
   v=$(slot_iid_forge "$slot")
-  case "$v" in ''|*[!0-9]*) return 0 ;; esac
+  case "${v#\~}" in ''|*[!0-9]*) return 0 ;; esac
   printf '%s' "$v"
+}
+
+# iid_label <slot_iid answer> — sets the globals IID and LABEL from one answer: a number is an iid
+# labelled `!N`; an unverified `~N` is NO iid, labelled `!N?`, so nothing that decides — mr_state,
+# the slot graph, a teardown lock — ever reads it; empty is neither. Globals rather than stdout
+# because both callers need both values from one answer.
+iid_label() {
+  case "$1" in
+    '~'*) IID=""; LABEL="!${1#\~}?" ;;
+    '')   IID=""; LABEL="—" ;;
+    *)    IID="$1"; LABEL="!$1" ;;
+  esac
 }
 
 # opened | merged | closed | ? — normalised across both forges.
@@ -1219,7 +1275,7 @@ for slot in "${SLOTS[@]}"; do
     case "$gone_stage" in
       done|ready-to-merge)
         # The one gone-slot row that uses more than the label: lock 1 needs the forge's `merged`.
-        [ -z "$iid" ] && iid=$(slot_iid "$slot") && [ -n "$iid" ] && mr_label="!$iid"
+        if [ -z "$iid" ]; then iid_label "$(slot_iid "$slot")"; iid=$IID; mr_label=$LABEL; fi
         gone_state="no MR yet"
         [ -n "$iid" ] && gone_state=$(mr_state "$iid")
         if autodown_consider "$slot" "$iid" "$gone_state" "$gone_stage" "" "$unsettled"; then
@@ -1250,8 +1306,7 @@ for slot in "${SLOTS[@]}"; do
   # A LIVE slot the state file could not answer for asks the forge now, and only now — the same
   # principle as the graph subprocess below: a row known to be dead is never charged for it (#143).
   if [ -z "$iid" ]; then
-    iid=$(slot_iid "$slot")
-    [ -n "$iid" ] && mr_label="!$iid"
+    iid_label "$(slot_iid "$slot")"; iid=$IID; mr_label=$LABEL
   fi
 
   # IS THE AGENT STILL IN THE TERMINAL? A terminal outliving its agent reads, from the screen, as a
