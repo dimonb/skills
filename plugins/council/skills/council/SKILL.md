@@ -1391,7 +1391,8 @@ an ordinary-use failure, and so fileable.
   procps derives `lstart` from boot time plus start ticks, which is unverified to be stable to the
   second between calls. A shift fails closed (the keeper reads as absent). `lib/up.sh:94`. Found by
   the review of #257. Promote on a CI flake in t9g's "vouched for" rows on the Linux runner, or a
-  report of `decide` saying "no live keeper" over a live one on Linux.
+  report of `decide` saying "no live keeper" over a live one on Linux. The CI runner is Linux and
+  runs those rows on every pull request, so it is the standing measurement.
 
 ## Files
 
@@ -1409,7 +1410,7 @@ an ordinary-use failure, and so fileable.
 | `lib/agent-adapters.sh` | vendored copy of the shared per-agent-kind adapters (`shared/adapters/agent-adapters.sh`); `up.sh` renders every launcher through it |
 | `protocol/_channel.md` | the channel rules every participant gets |
 | `scenarios/*.md` | roles per scenario |
-| `tests/run-all.sh` | the suite (`--full` adds load and latency runs) |
+| `tests/run-all.sh` | the suite (`--full` adds the load and latency runs that need a quiet box) |
 
 `lib/term.sh` is a thin council **adapter** over the shared agent-console driver
 (`shared/driver/agent-driver.sh`, vendored beside it as `lib/agent-driver.sh` and kept

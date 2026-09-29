@@ -93,13 +93,16 @@ ok "...and leaves the others intact"           "goto:beta" "${_FLOW_ON_DONE[alph
 # Validation.
 badopt_rc=0; ( flow_node z --nope x ) 2>/dev/null || badopt_rc=$?
 ok "an unknown flow_node option is refused"  2 "$badopt_rc"
-# Every value-taking flag, not only the first: a flag dropped from the guard's list would make its
-# `shift 2` fail with one argument left and spin, so each call is bounded and a hang reads as a
-# kill's status, never as 2.
+# Each value-taking flag in flow_node's guard (flow.sh, the `--enter|--done-when|...` arm), not
+# only the first. This list is a copy of that arm and nothing keeps the two in step. A flag dropped
+# from the guard exits 1 on the unbound `$2` under this file's `set -u`; a caller without `-u`
+# would instead have `shift 2` fail with one argument left and spin, so each call is bounded and a
+# hang reads as a kill's status. Either way it is never 2. Only a call that outlived the bound is
+# signalled: one that exited has been reaped, and its pid may no longer be ours.
 for f in --enter --done-when --on-done --on-block --emit; do
   ( flow_node z "$f" ) 2>"$TMP/noval.err" & np=$!
   i=0; while kill -0 "$np" 2>/dev/null && [ "$i" -lt 50 ]; do sleep 0.1; i=$((i + 1)); done
-  kill "$np" 2>/dev/null; noval_rc=0; wait "$np" 2>/dev/null || noval_rc=$?
+  [ "$i" -lt 50 ] || kill "$np" 2>/dev/null; noval_rc=0; wait "$np" 2>/dev/null || noval_rc=$?
   ok "$f with no value is refused"             2 "$noval_rc"
   ok "...and the refusal names $f"             yes \
     "$(grep -qF -- "flow_node: $f needs a value" "$TMP/noval.err" && echo yes || echo no)"

@@ -1517,7 +1517,7 @@ council_relaunch() {
     || echo "council relaunch: COUNCIL_RELAUNCH_REAP_CEILING is not a usable whole number — using 300" >&2
   if ! _keeper_await_reap "$ROOM" "$reap_ceil"; then
     echo "council relaunch: refusing — $(_keeper_reaping_file "$ROOM") says a reap is in flight, and" >&2
-    echo "                  the keeper it would belong to is still alive after $((reap_ceil / 10)) s. Starting '$peer'" >&2
+    echo "                  the keeper it would belong to is still alive after $((reap_ceil / 10)).$((reap_ceil % 10)) s. Starting '$peer'" >&2
     echo "                  now could leave the room without a keeper, or be closed by that reap." >&2
     echo "                  Nothing was launched. If no close is in progress, the file is left over:" >&2
     echo "                  remove $(_keeper_reaping_file "$ROOM") and run relaunch again." >&2
