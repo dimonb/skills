@@ -270,6 +270,12 @@ v_claims() {
      then "after the close, or outside the snapshot of the record — in the log, counted nowhere:",
           (.late[] | "  ⊘ \(.id) (\(.from)) \(.act): \(.text)"), ""
      else empty end),
+    # An objection or amend whose refs name no proposal (#67): printed rather than lost, and not
+    # counted, since it blocks nothing. claims.jq carries why.
+    (if (.dangling|length) > 0
+     then "referring to no proposal — not counted, check the refs:",
+          (.dangling[] | "  ⌀ \(.id) (\(.from)) \(.act) →\(.refs | map(@json) | join(",")): \(.text)"), ""
+     else empty end),
     "open objections: \(.open|length)"'
 }
 
@@ -2065,7 +2071,9 @@ v_status() {
       # A closed room lists what is outside the snapshot of its record (#176). The watched output
       # is this block, not `claims`, so a claim the snapshot leaves out is shown here too, rather
       # than quietly dropping out of the OPEN lines it would have occupied before.
-      (.late[]? | "  ⊘ not in the record: \(.id) (\(.from)) \(.act): \((.text | tostring)[0:90]) (council.sh claims)")'
+      (.late[]? | "  ⊘ not in the record: \(.id) (\(.from)) \(.act): \((.text | tostring)[0:90]) (council.sh claims)"),
+      # An objection or amend whose refs name no proposal (#67): an annotation, never an OPEN line.
+      (.dangling[]? | "  ⌀ refers to no proposal: \(.id) (\(.from)) \(.act): \((.text | tostring)[0:90]) (council.sh claims)")'
     printf 'alarms:%s\n' "${alarms:- —}"
     printf 'last messages:\n'
     v_transcript | tail -3 | sed 's/^/  /'
@@ -2141,10 +2149,9 @@ v_decide() {
   local j verd g out status gist
   j=$(v_verdict --json); verd=$(printf '%s' "$j" | jq -r '.verdict // empty' 2>/dev/null)
   # A record is never written from a ROSTER or a GRAPH this verb could not read. That is
-  # narrower than it once said here, and the narrowing is the point: an unreadable LANE FILE
-  # reaches this guard as a perfectly computable empty room, so `--force` does write a record
-  # over it, saying there were no objections. Three attempts to close that door are recorded at
-  # `c_all` in lib.sh, two of them reverted; do not re-derive them from this comment. Both reads
+  # narrower than it sounds: an unreadable LANE FILE reaches THIS guard as a perfectly computable
+  # empty room, and it is refused by a separate one further down (c_log_parses, #67). The attempts
+  # before it are recorded at `c_all` in lib.sh; do not re-derive them from this comment. Both reads
   # below can come
   # back empty rather than wrong -- `_graph` is a jq program over peer-written messages, and one
   # message of the wrong shape aborts it mid-stream -- and every renderer further down treats
@@ -2209,10 +2216,8 @@ v_decide() {
   # message produced exactly that lane). The two predicates carry the asymmetry in their names;
   # picking the counting one here is a leak, not a tidy-up.
   #
-  # The unparseable-log case leaves `--force` able to write a record over a log
-  # it could not read, which is a REMAINDER THIS GATE DELIBERATELY DOES NOT TAKE ON: it is
-  # recorded at `c_all` and in SKILL.md, three attempts at it are recorded there, and two were
-  # reverted. Do not quietly make this gate the fourth.
+  # The unparseable-log case is NOT this gate's: it is c_log_parses, just below this one, and
+  # c_all's header carries why it had to be a separate check rather than a change to c_all.
   #
   # The first two tests fail closed. `! c_round_closed` (round not verifiably closed), never
   # `c_round_open`: a c_barrier that dies mid-function prints NEITHER word (its own header carries
@@ -2291,6 +2296,15 @@ v_decide() {
     echo "council decide: another seat has round-0 traffic being withheld from you and you have posted nothing — refusing to close a round you have not taken part in, because the record is written from the whole log and would hand you what the barrier is holding back. Post your position first (--act propose); that stands this refusal down at once. Once any position exists the round also closes on its own past its deadline — but with no position anywhere the deadline never starts, so waiting alone will not clear this." >&2
     return 2
   fi
+  # A LOG THAT DOES NOT PARSE IS NOT AN EMPTY LOG (#67). c_all fails as a whole on one unparseable
+  # lane file and every reader swallows that, so the graph below came out empty and `--force` wrote
+  # "(there were no objections)" at rc 0 over a room with open objections. Refused here, after the
+  # verdict dispatch, so an already-decided room still answers 3 from its record; c_all's header
+  # carries why the check is not a change to c_all itself.
+  c_log_parses || {
+    echo "council decide: a lane file in this room does not parse, so the log cannot be read in full — refusing to write a record over it. The error above names the file; repair or move it and re-run." >&2
+    return 1
+  }
   # ONE READ OF THE LOG feeds the graph, the transcript and the snapshot below (#176), so all three
   # describe the same messages. Two reads let a message landing between them appear in the
   # transcript while the Objections section said there were none. The graph is built over
@@ -2357,13 +2371,19 @@ v_decide() {
     fi
     printf '## Objections, and how they were closed\n\n'
     printf '%s' "$g" | jq -r "$C_MD"'
-      if ([.proposals[].objections[]] | length) == 0 then "* (there were no objections)" else
+      if ([.proposals[].objections[]] + [.dangling[]? | select(.act == "object")] | length) == 0
+      then "* (there were no objections)" else
       (.proposals[] | . as $p | .objections[]
        | "* \(if .closed_by != null then "✓" elif $p.dead then "·" else "✗" end) **\(.from|_md_line)** on `\(.id|_md_line)`: \(.text|_md_item)\n  * "
          + if .closed_by != null
            then "closed by `\(.closed_by|_md_line)` — \(.closed_act|_md_line) from \(.closed_by_who|_md_line)"
            elif $p.dead then "fell with proposal `\($p.id|_md_line)`"
-           else "**left open**" end) end'
+           else "**left open**" end),
+      # An objection whose refs name no proposal (#67) is listed, not dropped: before, a typo in a
+      # ref made the record say "(there were no objections)" over one. It is not counted open.
+      (.dangling[]? | select(.act == "object")
+       | "* ⌀ **\(.from|_md_line)** on `\(.id|_md_line)`: \(.text|_md_item)\n  * refers to no proposal — not counted open")
+      end'
     printf '\n'
     if [ "$status" != decided ]; then
       printf '## Left open\n\n'

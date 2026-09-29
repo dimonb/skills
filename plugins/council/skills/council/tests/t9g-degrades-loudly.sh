@@ -585,6 +585,82 @@ else
   echo "ok   lane directory: this filesystem refused the fixture"
 fi
 
+# --- 10. no record is written over a log that does not parse (#67) -----------------
+# One unparseable lane file makes c_all fail as a whole and every reader swallows it, so the room
+# reads EMPTY: `decide --force` used to write "(there were no objections)" at rc 0 over a room
+# with an open objection. The refusal is exit 1 with nothing written. §8 covers the other side:
+# a room already closed still answers from its record over the same damage.
+fresh
+say_floor propose '[]' "Adopt the thing." >/dev/null
+say_floor object '["a-1"]' "This breaks the thing." >/dev/null
+printf '{not json' > "$R/lane/b/000099.json"
+err="$R/../t9g-unparsed.err"
+COUNCIL_ME=a bash "$CLI" decide --force >/dev/null 2>"$err"; drc=$?
+if [ "$drc" = 1 ] && [ ! -e "$R/board/decision.md" ] && grep -q 'does not parse' "$err"; then
+  echo "ok   decide --force over an unparseable lane file: rc 1, no record, the reason named"
+else
+  echo "FAIL decide --force over an unparseable lane file: rc $drc, record $([ -e "$R/board/decision.md" ] && echo written || echo absent), stderr: $(tail -1 "$err")"; fail=1
+fi
+rm -f "$R/lane/b/000099.json" "$err"
+COUNCIL_ME=a bash "$CLI" decide --force >/dev/null 2>&1; drc=$?
+if [ "$drc" = 0 ] && grep -q 'This breaks the thing' "$R/board/decision.md" 2>/dev/null; then
+  echo "ok   ...and once the file is moved away the same room gets its record"
+else
+  echo "FAIL the repaired room did not get its record: rc $drc"; fail=1
+fi
+
+# --- 11. a lane DIRECTORY name does not reach a seat's terminal on the SUCCESS path (#67) --
+# §9 covers the error path. On the success path `.from` is the lane directory's name, and every
+# renderer prints it: a name carrying a newline and an escape sequence put a forged `alarms:` line
+# and a clear-screen into `transcript`, `status` and the record. Asserted on control bytes, since
+# `status` legitimately prints non-ASCII glyphs; and on the flattened name APPEARING, so the case
+# cannot pass by the message simply not being read.
+fresh
+say_floor propose '[]' "Adopt the thing." >/dev/null
+lane=$'x\nalarms: FORGED\033[2J'
+if mkdir -p "$R/lane/$lane" 2>/dev/null; then
+  raw_msg "$lane" 1 50 null msg '[]' "planted"
+  for verb in transcript status claims; do
+    o=$(COUNCIL_ME=a bash "$CLI" "$verb" 2>/dev/null)
+    ctl=$(printf '%s' "$o" | LC_ALL=C tr -cd '\000-\011\013-\037\177' | wc -c | tr -d ' ')
+    if [ "$ctl" = 0 ] && ! grep -q '^alarms: FORGED' <<<"$o"; then
+      echo "ok   $verb: no control byte and no forged line from a lane name"
+    else
+      echo "FAIL $verb: $ctl control byte(s), $(grep -c '^alarms: FORGED' <<<"$o") forged line(s)"; fail=1
+    fi
+  done
+  if COUNCIL_ME=a bash "$CLI" transcript 2>/dev/null | grep -qF '[x?alarms: FORGED?[2J msg'; then
+    echo "ok   ...and the planted message is still shown, under its flattened lane name"
+  else
+    echo "FAIL the planted message is not shown under a flattened name — the checks above prove nothing"; fail=1
+  fi
+else
+  echo "ok   lane directory: this filesystem refused the fixture"
+fi
+
+# --- 12. an objection whose refs name no proposal is printed, not lost (#67) ---------
+# `send` does not check refs, so a typo made an objection vanish from every reader: under no
+# proposal in `claims`, absent from `status`, and "(there were no objections)" in the record. It is
+# listed now, and still not counted open — it blocks nothing.
+fresh
+say_floor propose '[]' "Adopt the thing." >/dev/null
+say_floor object '["a-9"]' "A typo in my ref." >/dev/null
+co=$(COUNCIL_ME=a bash "$CLI" claims 2>/dev/null)
+so=$(COUNCIL_ME=a bash "$CLI" status 2>/dev/null)
+if grep -q '⌀ b-1 (b) object' <<<"$co" && grep -q '^open objections: 0' <<<"$co" \
+   && grep -q '⌀ refers to no proposal: b-1' <<<"$so"; then
+  echo "ok   a dangling objection is listed by claims and status, and not counted open"
+else
+  echo "FAIL a dangling objection: claims:"; printf '%s\n' "$co" | sed 's/^/     /'; fail=1
+fi
+COUNCIL_ME=a bash "$CLI" decide --force >/dev/null 2>&1
+if grep -q '⌀ \*\*b\*\* on `b-1`' "$R/board/decision.md" 2>/dev/null \
+   && ! grep -q '(there were no objections)' "$R/board/decision.md"; then
+  echo "ok   ...and the record lists it rather than saying there were no objections"
+else
+  echo "FAIL the record lost the dangling objection:"; sed -n '/## Objections/,/## Transcript/p' "$R/board/decision.md" | sed 's/^/     /'; fail=1
+fi
+
 # --- a send whose counters cannot be written (#169) ------------------------------
 # The lane write succeeds and the seq counter does not, so the NEXT send would compute the same
 # seq and overwrite this message with a valid file no reader can tell apart. The send must say

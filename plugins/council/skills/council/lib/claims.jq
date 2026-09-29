@@ -54,8 +54,10 @@
 #     slot, and can then close an objection the record left open;
 #   * a pair appended to board/closed-over moves a post-close closing act into the kept set;
 #   * a snapshot that drops a proposal named by an EARLIER objection's forward ref leaves that
-#     objection attached to nothing, so it prints nowhere. The same happens with no snapshot at all
-#     when an objection names only an id that never becomes a proposal.
+#     objection attached to nothing. The same happens with no snapshot at all when an objection
+#     names only an id that never becomes a proposal. Since #67 such an objection is listed in
+#     `dangling` (below) and printed as an annotation, so it is no longer printed nowhere; it is
+#     still not counted OPEN, so the edit can take it out of the count the record gives.
 # None of these is new ground. On main, one legal `send --hand --act overrule` after the close
 # silenced the same OPEN line, which the refusal and this snapshot now prevent. Each route needs a
 # write a human reading the lanes or the snapshot can see. The room is not a trust boundary
@@ -183,7 +185,18 @@
         dead: ((($wd | length) + ($yield | length)) > 0),
         dead_by: (($wd + $yield) | (.[0].id // null)),
         objections: $objd } ] as $P
+# A kept objection that references NO kept proposal, and a kept amend that owns none, attach to
+# nothing above, so without this list they were printed nowhere and counted nowhere (#67): a typo'd
+# ref (`send` does not check refs) and a snapshot that dropped a forward referent both made an
+# objection vanish from every reader. They are listed here and printed by `claims`, `status` and the
+# record as an annotation. They are NOT `open` and not counted: an objection to nothing blocks no
+# proposal, and counting it would let one typo hold every room. Log order, like everything else.
+| ( [ $m[] | . as $x
+      | select( (.act == "object" and (((.refs // []) | any(IN($props[].id))) | not))
+             or (.act == "amend" and any($owners[]; .id == $x.id and .from == $x.from and .owner == null)) )
+      | { id, from, act, text, refs: (.refs // []) } ] ) as $dangling
 | { turns: $turns, last_claim_turn: ($last_claim // -1), decide_msg: $decide_msg,
+    dangling: $dangling,
     late: [ $late[] | select(.act | IN("propose", "amend", "object", "withdraw", "concede", "overrule"))
             | { id, from, act, text } ],
     proposals: $P,
