@@ -45,8 +45,10 @@ jobs:
   # The shipyard report is run by stock macOS /bin/bash 3.2, and the tests that hold it to that run
   # parts of it under /bin/bash — which on Linux is 5.x, so there t15's floor prints a skip line
   # (#332) and the /bin/bash sections of t19, t13, t-policy and t-adapters pass vacuously, as each
-  # says. This job runs those files on GitHub's macOS image, whose /bin/bash is 3.2: t15 and t19 run
-  # the report over slots, t13, t-policy and t-adapters the modules it sources. The list is what a
+  # says. This job runs those files on GitHub's macOS image, whose /bin/bash is 3.2: t15, t19 and
+  # t13 run the report over slots, and t13, t-policy and t-adapters the modules it sources. Helpers
+  # the report starts as `bash <script>` (the slot graph, escalations, down) resolve a bash 5 here,
+  # so the floors cover the report's in-process code and what it sources only. The list is what a
   # grep for /bin/bash floors found when this job was written; a new test with a /bin/bash section
   # needs a step here too, and nothing checks that. t15 is the step that proves the 3.2 is there: it
   # NAMES /bin/bash and fails, rather than skips, when that is not a 3.x, so an image whose /bin/bash

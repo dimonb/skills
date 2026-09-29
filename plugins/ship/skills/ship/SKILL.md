@@ -2277,7 +2277,8 @@ from `$ME` whose first line a person set to one of ship's markers reads as ship'
 renders as nothing, so nobody types one by accident, but nothing distinguishes a deliberate one.
 And a comment an earlier version of this skill posted without a marker now reads as a person's;
 that fails toward holding. Resolving it is not possible for a plain comment, so a human clears it
-by deleting the comment or by editing its first line to the marker its kind takes.
+by deleting the comment or by adding the marker its kind takes (§5.9) as a new first line. Ship
+never deletes or edits a comment itself to clear a hold, its own included: it escalates instead.
 
 ---
 
