@@ -181,7 +181,7 @@ ok "an answered slot never reaches STALLED" 1 \
 # band field became `$sig_band` (the band, plus the bound's own band where the band is `unknown`)
 # and this assertion is what caught it. A count would not have.
 ok "the class is in the --only-changed signature" 1 \
-   "$(grep -Fc 'SIG+=("$slot|$mr_label|term=1|$state|$stage|$pend/$badrec|$sig_band|$wait_class|$reap_note|noagent=$noagent|fna=$finished_noagent|unread=$unread")' "$REPORT")"
+   "$(grep -Fc 'SIG+=("$slot|$mr_label|term=1|$state|$stage|$pend/$badrec|$sig_band|$wait_class|$reap_note|noagent=$noagent|fna=$finished_noagent|unread=$unread|graph=$graph_unread")' "$REPORT")"
 # Every signature line carries the unreadable-record count beside the pending one (#197), so a
 # record that becomes unreadable is news under --only-changed on a gone or reaped slot too.
 ok "every signature line carries the unreadable count" "$(grep -c 'SIG+=(' "$REPORT")" \

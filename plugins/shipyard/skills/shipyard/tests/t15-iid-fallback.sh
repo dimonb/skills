@@ -540,6 +540,32 @@ nb5ok=$(SHIPYARD_MOTION_INTERVAL="${SHIPYARD_MOTION_INTERVAL:-0.01}" SHIPYARD_ST
           bash "$REPORT" 51 58 59 65 2>"$T15TMP/nb5ok.err")
 ok "with the real graph: no row is annotated" 0 "$(printf '%s' "$nb5ok" | grep -c 'completion unreadable')"
 ok "with the real graph: nothing on stderr" "" "$(cat "$T15TMP/nb5ok.err")"
+# Under --only-changed: a repeated refusing tick is silent on stdout and still carries its stderr
+# line, and the tick the graph starts answering again is news, which only `graph=` in the
+# signature can make it — no other field moves between these runs.
+nb5run() { SHIPYARD_MOTION_INTERVAL="${SHIPYARD_MOTION_INTERVAL:-0.01}" SHIPYARD_STALL_SECS=100000 SHIPYARD_BACKEND=tmux SHIPYARD_SESSION=t15ex \
+             SHIPYARD_FORGE_TIMEOUT=2 SHIPYARD_AUTODOWN=0 "${B32:-bash}" "$1" --only-changed 51 58 59 65 2>"$2"; }
+rm -f "$FAKE_GIT/ship-escalations/report-sig"
+nb5run "$NB5/shipyard-report.sh" "$T15TMP/oc1.err" >/dev/null
+oc2=$(nb5run "$NB5/shipyard-report.sh" "$T15TMP/oc2.err")
+ok "no bash 5, --only-changed: a repeated tick prints no table" "" "$oc2"
+ok "no bash 5, --only-changed: ...and still prints its one stderr line" 1 \
+   "$(grep -c '^shipyard-report: the slot graph could not answer for 4 live slot(s)' "$T15TMP/oc2.err")"
+oc3=$(nb5run "$REPORT" "$T15TMP/oc3.err")
+ok "--only-changed: the tick the graph answers again is news" 4 "$(printf '%s' "$oc3" | grep -c '^| [0-9]* | ')"
+# A graph that answers and ALSO writes to stderr: the answer is used and the stderr passes through,
+# unannotated and without the refusal summary.
+cat > "$NB5/shipyard-slot-graph.sh" <<'EOF'
+echo "graph warning: an answered tick with something to say" >&2
+printf 'in-review active\n'
+EOF
+pt=$(SHIPYARD_MOTION_INTERVAL="${SHIPYARD_MOTION_INTERVAL:-0.01}" SHIPYARD_STALL_SECS=100000 SHIPYARD_BACKEND=tmux SHIPYARD_SESSION=t15ex \
+       SHIPYARD_FORGE_TIMEOUT=2 SHIPYARD_AUTODOWN=0 \
+       "${B32:-bash}" "$NB5/shipyard-report.sh" 51 58 59 65 2>"$T15TMP/pt.err")
+ok "an answering graph's stderr passes through, once per slot" 4 \
+   "$(grep -c '^graph warning: an answered tick with something to say$' "$T15TMP/pt.err")"
+ok "...with no refusal summary" 0 "$(grep -c '^shipyard-report: the slot graph' "$T15TMP/pt.err")"
+ok "...and no row annotated" 0 "$(printf '%s' "$pt" | grep -c 'completion unreadable')"
 
 unset -f git tmux gh glab
 if [ "$FAILURES" -eq 0 ]; then
