@@ -229,10 +229,14 @@ pass=0; nocatch=0
 # are pre-existing and tracked in the follow-up issue rather than pinned here; do not read the
 # absence of a $2 as evidence that a probe does not need one.
 #
-# Separately, TWO arms have no probe at all, and this is the authoritative list of them:
+# Separately, THREE arms have no probe at all, and this is the authoritative list of them:
 #   * check 9's  `could not scan council test for a fixed temp path`
 #   * check 12's `could not scan the Makefile for a test runner invocation`
-# Both are per-item "this matcher errored" arms whose only trigger is an unreadable file, which is
+#   * check 15's `found no section reference in any markdown file`
+# The third's only trigger is a tree whose markdown carries no section reference anywhere, and at
+# least one reference sits under .planning/, outside $GUARDED, which this suite does not restore
+# and so may not strip. The first two are
+# per-item "this matcher errored" arms whose only trigger is an unreadable file, which is
 # a no-op when the gate runs as root, so they cannot be probed portably. Their siblings that error
 # on a LISTING rather than a per-item read are probed (for example 14a, 21, 32f, 34f), because a
 # listing's exit status can be forced directly. Recorded here because a green run would otherwise be read as
@@ -312,6 +316,17 @@ git checkout -- plugins/ship/.claude-plugin/plugin.json
 # 3c — invalid JSON
 printf 'oops' >> plugins/ship/.claude-plugin/plugin.json
 expect_fail "invalid JSON in a plugin manifest"
+git checkout -- plugins/ship/.claude-plugin/plugin.json
+
+# 3d — the two manifests of one plugin declare different versions (#20), and one declares none.
+# Pinned: nothing else in check 3 reads the version, but a pin is what says which arm fired.
+perl -pi -e 's/"version": "[^"]*"/"version": "99.0.0"/' plugins/ship/.codex-plugin/plugin.json
+expect_fail "the two manifests of a plugin carry different versions" \
+  "the two manifests of plugin 'ship' carry different versions"
+git checkout -- plugins/ship/.codex-plugin/plugin.json
+perl -ni -e 'print unless /"version":/' plugins/ship/.claude-plugin/plugin.json
+expect_fail "a plugin manifest declares no version" \
+  "manifest declares no version string: plugins/ship/.claude-plugin/plugin.json"
 git checkout -- plugins/ship/.claude-plugin/plugin.json
 
 # 4a — a marketplace entry pointing at a directory that does not exist, with the basename
@@ -444,6 +459,12 @@ probe '/home/someone/secret/path'           'absolute home path (Linux)'
 # flattened path does.
 probe '-Users-someone-work-project/state.json' 'encoded home path (macOS)'
 probe 'projects/-home-someone-work-project/log' 'encoded home path (Linux)'
+# ...and with the home root BELOW the filesystem root (#126), the two layouts that issue measured
+# passing green: a home under `/var/home/`, and the macOS data-volume path a resolved path prints.
+# Neither fixture carries `/Users/` or `/home/`, and neither has a separator in front of its root
+# component, so only the widened intermediate-component part of the arm can catch them.
+probe 'projects/-var-home-someone-work-proj/session.jsonl' 'encoded home path below the root (var/home)'
+probe '-System-Volumes-Data-Users-someone-proj' 'encoded home path below the root (data volume)'
 probe 'someone@example.invalid'             'e-mail address'
 probe 'run ~/.local/bin/mytool'             'personal bin path'
 probe 'CFG=$HOME/.config/gh-someone'        'personal tool config dir'
@@ -456,10 +477,13 @@ probe "date TZ=Europe/Somewhere"            'hardcoded timezone'
 # And the other direction for the same arm: the encoded form is a hyphen-separated word sequence,
 # so the bounds must not red on ordinary hyphenated English or on a double-dash long flag. A
 # SINGLE-dash long option is deliberately not in this fixture, because it does red and check.sh
-# says why. No pin is needed on this one — "the arm was deleted" is already excluded by the two
-# red probes above, so green here can only mean the bounds held.
+# says why. No pin is needed on this one — "the arm was deleted" is already excluded by the red
+# probes above, so green here can only mean the bounds held. The last two phrases pin the bound
+# the #126 widening must keep: a hyphenated phrase with SEVERAL words before the root, and a
+# double-dash flag with a word before it, both of which a start-of-token bound that let the
+# intermediate components begin anywhere would red.
 printf '%s\n' 'a per-users-quota note, a nav-home-link class, --users-file and --home-dir' \
-  > docs/_probe.md
+  'the site-wide-nav-home-link and --no-home-dir' > docs/_probe.md
 expect_pass "leak: hyphenated prose and double-dash long flags are not encoded home paths"
 rm -f docs/_probe.md
 
@@ -1414,7 +1438,46 @@ expect_pass "check 10b: a letter suffix on an existing number stays green"
 rm -f "$TESTS_DIR/t1z-probe.sh"
 git checkout -- "$RUNNER"
 
-# 36 — this file's own entry arms (#136): the run marker and the leftover-fixture refusal. They are
+# 37 — check 15, section cross-references (#213). 37a is the issue's own kill test: a reference in
+# the core renumbered past its last subsection, the edit shape that breaks these for real.
+perl -pi -e 's/§5\.11/§5.12/' "$CORE"
+expect_fail "a dangling section cross-reference in the core" "§5.12"
+git checkout -- "$CORE"
+# 37b — the same in an untracked file, resolving against neither its own headings nor the core's.
+mkdir -p docs
+printf 'see §42.7 for the details\n' > docs/_probe.md
+expect_fail "a dangling section cross-reference in an untracked file" "docs/_probe.md:1: §42.7"
+# 37c — ...and resolved by a heading of the file's own, including a bare section with a trailing
+# sentence dot, which is not part of the number.
+printf '## 42. A probe\n\n### 42.7 Its subsection\n\nsee §42.7, and all of §42.\n' > docs/_probe.md
+expect_pass "a section cross-reference resolved by the file's own heading"
+rm -f docs/_probe.md
+# 37d — the scan cannot run: a markdown file it cannot open (a dangling symlink) is a red, never a
+# file quietly skipped.
+ln -s "$SCRATCH/no-such-file" docs/_probe.md
+expect_fail "check 15 fails LOUDLY when its scan cannot run (not open)" "check 15) could not run"
+rm -f docs/_probe.md
+rmdir docs 2>/dev/null || true
+# 37e — an untracked local skill is none of this check's business, like checks 1, 2, 5 and 14;
+# 37b is the counter-test that keeps the exemption from reaching any other untracked file.
+mkdir -p .claude/skills/_probe-local
+printf -- '---\nname: _probe-local\ndescription: A local skill.\n---\n\nsee §42.7\n' \
+  > .claude/skills/_probe-local/SKILL.md
+expect_pass "a dangling reference in an untracked local skill stays green"
+rm -rf .claude/skills/_probe-local
+# 37f — the fail-closed arms: a core with no numbered heading, a core that is gone, and a listing
+# that matched no markdown file at all.
+perl -pi -e 's/^(#{1,4}) +([0-9])/$1 x$2/' "$CORE"
+expect_fail "check 15 fails LOUDLY when the core has no numbered heading" \
+  "check 15) found no numbered heading"
+git checkout -- "$CORE"
+rm "$CORE"
+expect_fail "check 15 fails LOUDLY when the core is missing" "cannot find the core it resolves against"
+git checkout -- "$CORE"
+GIT_LITERAL_PATHSPECS=1 expect_fail "check 15 fails LOUDLY when it lists no markdown file" \
+  "check 15) found no markdown file to read"
+
+# 36 —this file's own entry arms (#136): the run marker and the leftover-fixture refusal. They are
 # not gate assertions, so they are proven by running this script a second time, NESTED, and reading
 # how it refuses. Every nested run below must refuse before it arms a trap or mutates anything,
 # because a nested run that got past its entry guards would start a second full run over this

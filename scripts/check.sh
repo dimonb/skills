@@ -3,7 +3,8 @@
 #
 # 1. every shell script parses (untracked too, except under a project skills dir)
 # 2. every SKILL.md has name+description frontmatter, and its name matches its directory (ditto)
-# 3. every plugin manifest is valid JSON, both manifests exist, names agree with the dir
+# 3. every plugin manifest is valid JSON, both manifests exist, names agree with the dir, and the
+#    two manifests of a plugin declare the same version
 # 4. marketplace entries resolve, and both manifests offer the same plugins as plugins/ on disk
 # 5. dogfooding: every COMMITTED entry in a project skills dir is a symlink into plugins/; both
 #    agents linked to every packaged skill, that link resolving inside plugins/ staged or not;
@@ -22,6 +23,8 @@
 #     push trigger stays unfiltered, the backstop that filter rests on
 # 14. no pgrep/pkill selects by parent (-P / --parent) without a pattern: on macOS that form
 #     lists every process on the machine
+# 15. every section cross-reference (a section sign and a number) in a markdown file names a
+#     numbered heading that exists, in that file or in ship's core SKILL.md
 set -uo pipefail
 cd "$(dirname "$0")/.."
 ROOT_P=$(pwd -P)          # physical repo root; see the symlink containment check below
@@ -116,12 +119,27 @@ done < <(git $GIT_Q ls-files --cached --others --exclude-standard '*SKILL.md')
 for d in plugins/*/; do
   [ -d "$d" ] || continue
   p=${d%/}; name=$(basename "$p")
+  vers=""
   for m in "$p/.claude-plugin/plugin.json" "$p/.codex-plugin/plugin.json"; do
     if [ ! -f "$m" ]; then fail "missing manifest: $m"; continue; fi
     python3 -c 'import json,sys; json.load(open(sys.argv[1]))' "$m" \
       || { fail "invalid JSON: $m"; continue; }
     got=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1])).get("name",""))' "$m")
     [ "$got" = "$name" ] || fail "manifest name '$got' != directory '$name': $m"
+    # 3d — the version (#20). An installed plugin is cached by its DECLARED version, so the two
+    # agents' manifests carrying different ones is one plugin at two versions, drifting apart with
+    # nothing to notice. Each must declare one, and the two must be the same string.
+    #
+    # What this does NOT assert, so a green gate is not read as more: that a change to a plugin
+    # bumped its version. That comparison needs a merge base and a judgement about what counts as a
+    # change, and it stays a release practice rather than a gate rule, so a merged change can still
+    # reach nobody who already installed the plugin until someone bumps the number.
+    ver=$(python3 -c 'import json,sys; v=json.load(open(sys.argv[1])).get("version",""); print(v if isinstance(v,str) else "")' "$m")
+    if [ -z "$ver" ]; then fail "manifest declares no version string: $m"; continue; fi
+    if [ -z "$vers" ]; then vers=$ver
+    elif [ "$ver" != "$vers" ]; then
+      fail "the two manifests of plugin '$name' carry different versions: '$vers' and '$ver' ($m)"
+    fi
   done
   [ -d "$p/skills" ] || fail "plugin has no skills/ directory: $p"
   # A plugin may hold MANY skills; require at least one.
@@ -248,7 +266,7 @@ while IFS= read -r e; do
   packaged=""
   for s in plugins/*/skills/"$(basename "$e")"/SKILL.md; do [ -f "$s" ] && packaged=1; done
   [ -n "$packaged" ] && continue
-  echo "note: untracked entry $e is local state; checks 1, 2 and 5 ignore it"
+  echo "note: untracked entry $e is local state; checks 1, 2, 5, 14 and 15 ignore it"
 done <<< "$untracked_skills"
 
 # A SKILL.md anywhere but plugins/ is a duplicated source of truth (tracked or not). The two
@@ -408,13 +426,19 @@ deny="$deny"'|\.local/bin/|\.config/(gh|glab)-[a-zA-Z0-9._-]+'
 # `/home/dir` encodes, so a leak gate should err that way. At least one name character must
 # follow, so a bare `-Users-` is not a hit.
 #
-# Two limits taken deliberately, stated so the next editor does not read the bound as wider than
-# it is. There is no trailing-separator anchor, because an encoded home directory with nothing
-# after it still discloses the username. And unlike the slash arms, which match `/home/` at any
-# depth, this one sees only a home root that is the FIRST path component: a layout that puts the
-# home root below the filesystem root encodes without a separator in front of the root component,
-# so the slash arm catches that shape and this arm does not.
-deny="$deny"'|(^|[^A-Za-z0-9-])-(Users|home)-[a-zA-Z0-9._]+'
+# The home root need not be the FIRST path component (#126), just as the slash arms match `/home/`
+# at any depth: `/var/home/<name>` flattens to `-var-home-<name>` and the macOS data-volume path
+# `/System/Volumes/Data/Users/<name>` to `-System-Volumes-Data-Users-<name>`. So any number of
+# encoded components may sit between the token's start and the root, each a `-` and a name. The
+# token's start keeps the bound above, which is what still rejects a hyphenated phrase: in
+# `nav-home-link` the word before the root has no `-` of its own in front of it.
+#
+# What the widening costs, taken knowingly: a single-dash option with a word in front of the root
+# (`-no-home-dir`) now reds, where only `-home-dir` did before. It is the same shape as
+# `/no/home/dir` encoded, so it errs the way this arm already errs, and nothing in the tree
+# matches it. One limit stays: there is no trailing-separator anchor, because an encoded home
+# directory with nothing after it still discloses the username.
+deny="$deny"'|(^|[^A-Za-z0-9-])(-[a-zA-Z0-9._]+)*-(Users|home)-[a-zA-Z0-9._]+'
 deny="$deny"'|(ghp|gho|ghu|ghs|ghr)_[A-Za-z0-9]{16,}|glpat-[A-Za-z0-9_-]{16,}'
 deny="$deny"'|-----BEGIN [A-Z ]*PRIVATE KEY-----|xox[baprs]-[A-Za-z0-9-]{10,}'
 deny="$deny"'|TZ=[A-Za-z]+/[A-Za-z_]+'
@@ -1088,6 +1112,77 @@ else
       echo "FAIL: pgrep/pkill with -P/--parent and no pattern (on macOS it lists EVERY process;"
       echo "      use: ps -A -o pid= -o ppid= | awk -v p=\"\$pid\" '\$2 == p { print \$1 }'):"
       printf '%s\n' "$pg_hits"; rc=1
+    fi
+  fi
+fi
+
+# ------------------ 15. every section cross-reference names a heading that exists
+# ship's core SKILL.md is a numbered document, and the other markdown files here cite it and
+# themselves by section — `§5.11`, `core §7.B`, `ship's §2.8`. A dangling one is the defect
+# AGENTS.md names for a stale flag or state name: an agent follows the pointer, finds nothing, and
+# proceeds on whatever it inferred. Inserting or renumbering a section is exactly the edit that
+# breaks them, and nothing else here would notice (#213).
+#
+# What it asserts: every `§N`, `§N.M` or `§N.A` in a markdown file (tracked or untracked, minus an
+# untracked local skill, the file set of checks 1 and 2) is the number of a `#`-to-`####` heading in
+# THAT file or in the core. A trailing sentence dot is not part of the number (`see §7.`).
+#
+# What it does not, so a green gate is not read as more: it resolves against the union of the two
+# heading sets, never against the file a reference means. A shipyard file citing ship's `§3` is
+# satisfied by a `## 3.` of its own, and a `core §N` is satisfied by a same-numbered heading in the
+# citing file. It checks that the section EXISTS, not that it still says what the citation claims.
+# It reads markdown only: the `§N` in a shell comment (this file's header cites its own checks that
+# way) is not read. And a numbered `#` line inside a fenced code block counts as a heading.
+#
+# Fails CLOSED: an errored listing, an empty one, a core with no numbered heading, a scan that could
+# not run, and a scan that found no reference at all each red, so "compared nothing" is never OK.
+xr_files=$(git $GIT_Q ls-files --cached --others --exclude-standard '*.md'); xr_rc=$?
+if [ "$xr_rc" -ne 0 ]; then
+  fail "could not list markdown files for the section cross-reference check (check 15) (git ls-files rc=$xr_rc)"
+elif [ ! -f "$core" ]; then
+  fail "the section cross-reference check (check 15) cannot find the core it resolves against: $core"
+else
+  xr_list=()
+  while IFS= read -r f; do
+    [ -n "$f" ] || continue
+    untracked_local_skill "$f" && continue
+    xr_list+=("$f")
+  done <<< "$xr_files"
+  if [ "${#xr_list[@]}" -eq 0 ]; then
+    fail "the section cross-reference check (check 15) found no markdown file to read (moved? renamed?)"
+  else
+    xr_out=$(python3 - "$core" "${xr_list[@]}" <<'PY' 2>&1
+import re, sys
+HEAD = re.compile(r'^#{1,4} +([0-9]+(?:\.[0-9A-Z]+)*)\.?(?:\s|$)')
+REF = re.compile('§([0-9]+(?:\\.[0-9A-Z]+)*)')
+def heads(p):
+    with open(p, encoding='utf-8', errors='replace') as f:
+        return {m.group(1) for m in map(HEAD.match, f) if m}
+core = heads(sys.argv[1])
+if not core:
+    print("NOHEAD"); sys.exit(0)
+refs = 0
+for p in sys.argv[2:]:
+    known = heads(p) | core
+    with open(p, encoding='utf-8', errors='replace') as f:
+        for i, line in enumerate(f, 1):
+            for m in REF.finditer(line):
+                refs += 1
+                if m.group(1) not in known:
+                    print("DANGLING %s:%d: §%s" % (p, i, m.group(1)))
+if refs == 0:
+    print("NOREF")
+PY
+    ); xr_py=$?
+    if [ "$xr_py" -ne 0 ]; then
+      fail "the section cross-reference check (check 15) could not run (python3 rc=$xr_py): $xr_out"
+    elif printf '%s\n' "$xr_out" | grep -qx NOHEAD; then
+      fail "the section cross-reference check (check 15) found no numbered heading in $core"
+    elif printf '%s\n' "$xr_out" | grep -qx NOREF; then
+      fail "the section cross-reference check (check 15) found no section reference in any markdown file (moved? renamed?)"
+    elif printf '%s\n' "$xr_out" | grep -q '^DANGLING'; then
+      echo "FAIL: dangling section cross-reference (no such numbered heading in the file or in $core):"
+      printf '%s\n' "$xr_out" | sed -n 's/^DANGLING /  /p'; rc=1
     fi
   fi
 fi
