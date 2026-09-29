@@ -428,7 +428,7 @@ b_tick() { # [<VAR=value> ...] -- <slot> ...
   # safe; the production default is untouched in shipyard-report.sh. It goes before ${envs}, not
   # after, so a case that wants its own value still overrides it.
   env SHIPYARD_MOTION_INTERVAL="${SHIPYARD_MOTION_INTERVAL:-0.01}" SHIPYARD_STALL_SECS=100000 SHIPYARD_BACKEND=tmux SHIPYARD_SESSION=t17b ${envs[@]+"${envs[@]}"} \
-    bash "$FARM/shipyard-report.sh" ${slots[@]+"${slots[@]}"} 2>/dev/null
+    "${T17_BASH:-bash}" "$FARM/shipyard-report.sh" ${slots[@]+"${slots[@]}"} 2>"${T17_ERR:-/dev/null}"
 }
 
 # --- B1/B2: one tick is not enough, two are; and the argv carries no flags ------------------
@@ -875,6 +875,36 @@ ok "B24: ...pointing at the file, not at an answer"    1 "$(printf '%s' "$b24b" 
 ok "B24: ...and not promising the answer command"      0 "$(printf '%s' "$b24b" | grep -c 'the escalation block below carries the command')"
 ok "B24: ...while the escalation block still names it" 1 "$(printf '%s' "$b24b" | grep -c 'unreadable record\] `83-1.json`')"
 ok "B24: ...and nothing was torn down"                 0 "$(grep -c . "$DOWN_CALLS")"
+
+# --- B25: the HELD and AWAITING REMOVAL short entries under /bin/bash (#277's review) ----------
+# B21 and B22 drive both short entries, and the unsettled-record key that feeds HELD's, through a
+# modern bash on PATH. The report runs on stock macOS /bin/bash 3.2, and t19's floor reaches only
+# the NO AGENT short entry, so these two were executed under the floor by nothing. Vacuous where
+# /bin/bash is 5.x, as t19 and t13 say of their own floor sections.
+b_reset; rm -f "$B_GIT/ship-escalations/report-episodes"
+b_slot 84 884 ready-to-merge
+printf '1 ship-79\n' >"$B_WINS"; printf 'ship-79\n' >"$B_ENUM"
+printf '884\tMERGED\n' >"$B_STATES"
+printf '{"kind":"question","status":"pending","slot":"84"}\n' >"$B_GIT/ship-escalations/84-1.json"
+T17_BASH=/bin/bash T17_ERR="$T17TMP/floor-held-1.err" b_tick -- --only-changed 84 >/dev/null
+T17_BASH=/bin/bash T17_ERR="$T17TMP/floor-held-2.err" b_tick -- --only-changed 84 >/dev/null
+b25a=$(T17_BASH=/bin/bash T17_ERR="$T17TMP/floor-held-3.err" b_tick -- --only-changed 84)
+ok "B25: under /bin/bash, HELD's second tick is the short entry" 1 \
+   "$(printf '%s' "$b25a" | grep -c '^- `84` — STILL held by the same 1 unsettled record(s), .* tick 2')"
+ok "B25: ...and no tick wrote to stderr"               "" \
+   "$(cat "$T17TMP/floor-held-1.err" "$T17TMP/floor-held-2.err" "$T17TMP/floor-held-3.err")"
+rm -f "$B_GIT/ship-escalations/84-1.json"
+b_reset; rm -f "$B_GIT/ship-escalations/report-episodes"; printf '1\n' >"$DOWN_RC_FILE"
+b_slot 85 885 done
+printf '885\tMERGED\n' >"$B_STATES"
+T17_BASH=/bin/bash T17_ERR="$T17TMP/floor-refused-1.err" b_tick -- --only-changed 85 >/dev/null
+T17_BASH=/bin/bash T17_ERR="$T17TMP/floor-refused-2.err" b_tick -- --only-changed 85 >/dev/null
+b25b=$(T17_BASH=/bin/bash T17_ERR="$T17TMP/floor-refused-3.err" b_tick -- --only-changed 85)
+ok "B25: under /bin/bash, AWAITING REMOVAL's second tick is the short entry" 1 \
+   "$(printf '%s' "$b25b" | grep -c '^- `85` — STILL refused for the same reason, .* tick 2')"
+ok "B25: ...and no tick wrote to stderr"               "" \
+   "$(cat "$T17TMP/floor-refused-1.err" "$T17TMP/floor-refused-2.err" "$T17TMP/floor-refused-3.err")"
+printf '0\n' >"$DOWN_RC_FILE"
 
 printf '\n%s: %d checks, %d failures\n' "$(basename "$0")" "$CHECKS" "$FAILURES"
 [ "$FAILURES" -eq 0 ]
