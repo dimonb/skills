@@ -176,6 +176,45 @@ After the MR exists, `.diff_refs.base_sha` should equal the base tip as of branc
 base has since moved and the MR shows conflicts, **rebase onto the new base** rather than
 merging the base into the branch.
 
+### Closing patterns — the description and every commit (core §7.G)
+
+GitLab closes an issue from the MR description on merge **and** from any commit message that lands
+on the default branch, while `autoclose_referenced_issues` is on (§9). Its default pattern takes
+`close`, `closes`, `closed`, `closing`, `fix`, `fixes`, `fixed`, `fixing`, `resolve`, `resolves`,
+`resolved`, `resolving`, `implement`, `implements`, `implemented`, `implementing` — any case, an
+optional colon, an optional `issue` or `issues` — and then a **list** of references (`#N`,
+`group/project#N`, the issue's URL) joined by commas or `and`, so one keyword can close several
+issues. An instance administrator can replace the pattern; a project whose issues close on words
+not listed here has one, and its administrator is the only source for it.
+
+```bash
+unset OAUTH_TOKEN; export GITLAB_HOST=<host>
+
+# the texts the merge reads: the MR description, and every commit the MR carries as pushed
+glab api "projects/$PROJECT/merge_requests/IID" | jq -r .description
+glab api --paginate "projects/$PROJECT/merge_requests/IID/commits" \
+  | jq -r '.[] | "=== \(.id)\n\(.message)"'
+
+# the closing patterns in a text on stdin, each with the whole reference list it names
+REF='([[:alnum:]_./-]*#[0-9]+|https?://[^[:space:]]+/-/issues/[0-9]+)'
+grep -oiE "(^|[^[:alnum:]_])(clos(e[sd]?|ing)|fix(e[sd]|ing)?|resolv(e[sd]?|ing)|implement(s|ed|ing)?):?[[:space:]]+(issues?[[:space:]]+)?$REF([[:space:]]*,?[[:space:]]*(and[[:space:]]+)?$REF)*"
+
+# what a merge would write: merge_method, whether squash is offered, and the squash template
+glab api "projects/$PROJECT" | jq '{merge_method, squash_option, squash_commit_template,
+  autoclose_referenced_issues}'
+```
+
+Where step 5 of the core check asks for a squash with the description, the merge that honours it
+sets both fields explicitly rather than trusting the template:
+
+```bash
+glab api --method PUT "projects/$PROJECT/merge_requests/IID/merge" \
+  -f squash=true -f "squash_commit_message=$(cat "$BODY")"
+```
+
+with `$BODY` holding the MR description. A reworded pushed commit (core §7.G step 4) goes up with
+`--force-with-lease` added to the push — only where that step allows a rewrite at all.
+
 ## 7. Notes, discussions and replies
 
 GitLab splits these two ways, and the split matters for the merge gate.
