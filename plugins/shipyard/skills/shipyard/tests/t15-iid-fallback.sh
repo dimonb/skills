@@ -29,6 +29,16 @@
 #      terminal is still up must keep its number, or the column blanks at the exact moment the
 #      slot graph needs `merged` to conclude. Review measured `--state open` shipping 9/9 green
 #      here before this case existed, which is #124's own disguise reinstated by one word.
+#   6. (#143) the base branch comes from shipyard_default_ref, and its "cannot say" (rc 1) means
+#      the forge is NOT asked — an empty base used to mean "nothing to exclude";
+#   7. (#143) the branch name is not the child: a MERGED/CLOSED candidate must have this
+#      worktree's HEAD as its head (a relaunch on a reused name keeps its old PR's number off the
+#      row even when that head is an ancestor), an OPEN one must be HEAD or an ancestor of it and
+#      wins over any other, and a fork's same-named branch is never a candidate;
+#   8. (#143) a forge CLI that hangs is killed at SHIPYARD_FORGE_TIMEOUT and the report still
+#      renders, rather than withholding the tick;
+#   9. (#143) a slot with no terminal costs no forge call — unless its stage says the teardown may
+#      be due, where lock 1 needs the forge's answer.
 #
 # The rig is t13-wait.sh's: exported shell functions shadow `git`, `tmux` and `gh`, which works
 # where a fake binary on PATH does not because shipyard-lib.sh prepends the system PATH over
@@ -79,24 +89,52 @@ mkdir -p "$FAKE_ROOT" "$FAKE_GIT/ship-escalations"
 #     answer rather than a blank. Git discovery walks up, so `rev-parse` there returns the
 #     SUPERVISOR's branch; this fixture gives that branch a PR (555) so a regression renders the
 #     supervisor's own change as the slot's instead of merely blanking the column.
-for s in 51 52 53 54 55 56; do mkdir -p "$FAKE_ROOT/.claude/worktrees/ship-$s/.pipeline-state"; done
+# 57: no base branch resolvable at all (no origin/HEAD, no usable upstream, no origin/main|master)
+#     -> the forge is not asked. The old guard read that empty answer as "nothing to exclude".
+# 58: a relaunch on a REUSED branch name: the only candidate is MERGED with a head that is an
+#     ancestor of HEAD but not HEAD -> not this child's PR, so no number. The kept-branch restart
+#     path; an ancestry test alone would admit it and paint the old `merged` over a live child.
+# 59: a FORK's open PR on the same branch name, listed first, then the child's own MERGED PR whose
+#     head is HEAD -> the fork is dropped and the child's merged PR keeps its number.
+# 60: a MERGED candidate on HEAD listed first, then an OPEN one whose head is an ancestor of HEAD
+#     -> the OPEN one wins.
+# 61: an OPEN candidate whose head is NOT in this worktree's history -> rejected.
+# 62: the CLI hangs -> killed at SHIPYARD_FORGE_TIMEOUT, no number, and the report still renders.
+# 63: no terminal, no stage -> the forge is never asked about its branch.
+# 64: no terminal, stage `done`, no number in the state file -> the teardown arm does ask.
+for s in 51 52 53 54 55 56 57 58 59 60 61 62 63 64; do mkdir -p "$FAKE_ROOT/.claude/worktrees/ship-$s/.pipeline-state"; done
 # The registered set: every slot EXCEPT 56. Physical paths, because the guard compares against
 # `pwd -P` and $TMPDIR is a symlink on macOS — a logical path here would make the guard reject
 # every slot and the suite would pass for the wrong reason (measured: it reds 4 checks).
 WT_LIST=""
-for s in 51 52 53 54 55; do
+for s in 51 52 53 54 55 57 58 59 60 61 62 63 64; do
   p=$(cd "$FAKE_ROOT/.claude/worktrees/ship-$s" && pwd -P)
   WT_LIST="${WT_LIST}worktree $p
 "
 done
 printf '{"pr_number":902,"state":"impl-review"}\n' \
   >"$FAKE_ROOT/.claude/worktrees/ship-52/.pipeline-state/PR-902.json"
+printf '{"state":"done"}\n' >"$FAKE_ROOT/.claude/worktrees/ship-64/.pipeline-state/ISSUE-64.json"
 export FAKE_ROOT FAKE_GIT GH_CALLS WT_LIST
 
 git() {
   local dir=""
   if [ "${1:-}" = "-C" ]; then dir="$2"; shift 2; fi
+  # Slot 57's repository can name no base branch: every tier of shipyard_default_ref fails there.
+  case "$dir:$*" in
+    *ship-57:"symbolic-ref --quiet --short refs/remotes/origin/HEAD") return 1 ;;
+    *ship-57:"symbolic-ref --quiet --short HEAD") printf 'feat/golf\n'; return 0 ;;
+    *ship-57:"rev-parse --abbrev-ref @{upstream}") return 128 ;;
+    # Only the resolver's ref probes fail. HEAD still resolves, so the resolver is the one thing
+    # standing between this slot and a query: a HEAD lookup failing too would mask its removal.
+    *ship-57:"rev-parse --verify --quiet "*"^{commit}") return 1 ;;
+  esac
   case "$*" in
+    # Every worktree's HEAD is `h<slot>`, which is what a candidate's head is compared against.
+    "rev-parse --verify --quiet HEAD") printf 'h%s\n' "${dir##*ship-}"; return 0 ;;
+    # Ancestry, as the fixtures below need it: `anc-*` heads are in the history, anything else not.
+    "merge-base --is-ancestor "*)
+      case "$3" in anc-*) return 0 ;; *) return 1 ;; esac ;;
     "rev-parse --show-toplevel")  printf '%s\n' "$FAKE_ROOT"; return 0 ;;
     "rev-parse --git-common-dir") printf '%s\n' "$FAKE_GIT";  return 0 ;;
     "remote get-url origin")      printf 'https://github.com/example/example.git\n'; return 0 ;;
@@ -109,6 +147,14 @@ git() {
         *ship-53) printf 'main\n' ;;        # the base branch itself
         *ship-54) printf 'feat/delta\n' ;;
         *ship-55) printf 'HEAD\n' ;;        # a worktree that has not branched yet
+        *ship-57) printf 'feat/golf\n' ;;
+        *ship-58) printf 'feat/hotel\n' ;;
+        *ship-59) printf 'feat/india\n' ;;
+        *ship-60) printf 'feat/juliet\n' ;;
+        *ship-61) printf 'feat/kilo\n' ;;
+        *ship-62) printf 'feat/lima\n' ;;
+        *ship-63) printf 'feat/mike\n' ;;
+        *ship-64) printf 'feat/november\n' ;;
         # Slot 56 and anything else: git walked UP and answered with the SUPERVISOR's branch,
         # which is what a stray directory really produces. Never reached if the guard holds.
         *)        printf 'feat/supervisors-own-branch\n' ;;
@@ -120,7 +166,8 @@ git() {
 
 tmux() {
   case "${1:-}" in
-    list-windows) printf '1 ship-51\n2 ship-52\n3 ship-53\n4 ship-54\n5 ship-55\n6 ship-56\n'; return 0 ;;
+    # 63 and 64 have no terminal.
+    list-windows) printf '1 ship-51\n2 ship-52\n3 ship-53\n4 ship-54\n5 ship-55\n6 ship-56\n7 ship-57\n8 ship-58\n9 ship-59\n10 ship-60\n11 ship-61\n12 ship-62\n'; return 0 ;;
     has-session)  return 0 ;;
     capture-pane) printf '⏺ working\n'; return 0 ;;
   esac
@@ -140,14 +187,25 @@ gh() {
     *"pr list"*)
       printf '%s\n' "$*" >>"$GH_CALLS"
       case "$*" in
-        *"--head feat/alpha"*) out='[{"number":777}]' ;;
-        *"--head feat/bravo"*) out='[{"number":999}]' ;;
+        *"--head feat/alpha"*) out='[{"number":777,"state":"OPEN","headRefOid":"h51","isCrossRepository":false}]' ;;
+        *"--head feat/bravo"*) out='[{"number":999,"state":"OPEN","headRefOid":"h52","isCrossRepository":false}]' ;;
         # A real CLI that cannot authenticate or is pointed at the wrong repository answers with
         # prose, not a number. Shaped as JSON so it survives the --jq the caller really runs.
-        *"--head feat/delta"*) out='[{"number":"error: could not resolve to a Repository"}]' ;;
+        *"--head feat/delta"*) out='[{"number":"error: could not resolve to a Repository","state":"OPEN","headRefOid":"h54","isCrossRepository":false}]' ;;
         # The supervisor's own branch HAS a PR. That is what makes slot 56 a wrong-answer test
         # rather than a blank-column one: without the registration guard the row renders `!555`.
-        *"--head feat/supervisors-own-branch"*) out='[{"number":555}]' ;;
+        *"--head feat/supervisors-own-branch"*) out='[{"number":555,"state":"OPEN","headRefOid":"h56","isCrossRepository":false}]' ;;
+        *"--head feat/golf"*) out='[{"number":571,"state":"OPEN","headRefOid":"h57","isCrossRepository":false}]' ;;
+        *"--head feat/hotel"*) out='[{"number":581,"state":"MERGED","headRefOid":"anc-old","isCrossRepository":false}]' ;;
+        *"--head feat/india"*) out='[{"number":591,"state":"OPEN","headRefOid":"h59","isCrossRepository":true},{"number":592,"state":"MERGED","headRefOid":"h59","isCrossRepository":false}]' ;;
+        *"--head feat/juliet"*) out='[{"number":601,"state":"MERGED","headRefOid":"h60","isCrossRepository":false},{"number":602,"state":"OPEN","headRefOid":"anc-60","isCrossRepository":false}]' ;;
+        *"--head feat/kilo"*) out='[{"number":611,"state":"OPEN","headRefOid":"elsewhere","isCrossRepository":false}]' ;;
+        # A hung CLI. Its sleep does not hold stdout: a real hung `gh` is ONE process, which the
+        # TERM kills with its pipe; a fake's child would outlive the killed function and keep the
+        # caller's $( ) open, which tests the fixture rather than the report.
+        *"--head feat/lima"*) sleep 60 </dev/null >/dev/null 2>&1; out='[{"number":621,"state":"OPEN","headRefOid":"h62","isCrossRepository":false}]' ;;
+        *"--head feat/mike"*) out='[{"number":631,"state":"OPEN","headRefOid":"h63","isCrossRepository":false}]' ;;
+        *"--head feat/november"*) out='[{"number":641,"state":"MERGED","headRefOid":"h64","isCrossRepository":false}]' ;;
         *) out='[]' ;;
       esac ;;
     *"pr view"*) printf 'OPEN\n'; return 0 ;;
@@ -163,8 +221,14 @@ printf '%s\n' "$(date +%s)" >"$FAKE_GIT/ship-escalations/report-tick"
 # eighteen seconds of a nineteen-second file. The faked `capture-pane` above returns a fixed
 # string, so both captures are identical at any interval and nothing below reads the ▶️/⏸
 # column; production's three-second default is untouched (#203).
+# SHIPYARD_FORGE_TIMEOUT: slot 62's fake hangs for sixty seconds, so the report finishing well
+# inside that is what proves the call was killed. SHIPYARD_AUTODOWN=0: slot 64 reaches the teardown
+# arm, and this file asks what that arm QUERIES, never what it removes.
+t0=$(date +%s)
 out=$(SHIPYARD_MOTION_INTERVAL="${SHIPYARD_MOTION_INTERVAL:-0.01}" SHIPYARD_STALL_SECS=100000 SHIPYARD_BACKEND=tmux SHIPYARD_SESSION=t15ex \
-        bash "$REPORT" 51 52 53 54 55 56 2>/dev/null)
+        SHIPYARD_FORGE_TIMEOUT=2 SHIPYARD_AUTODOWN=0 \
+        bash "$REPORT" 51 52 53 54 55 56 57 58 59 60 61 62 63 64 2>/dev/null)
+elapsed=$(( $(date +%s) - t0 ))
 
 # 1 — the whole point: a child that wrote nothing still gets its PR number.
 ok "51: the forge supplies the number no state file held" 1 \
@@ -210,6 +274,43 @@ ok "56: ...so the supervisor's own PR is not shown as the slot's" 0 \
 ok "56: ...and the column says so honestly"         1 \
    "$(printf '%s' "$out" | grep -c '^| 56 | — .*no MR yet')"
 
+# 8 — #143: no base branch means no question, rather than an unguarded one.
+ok "57: an unresolvable base branch means the forge is not asked" 0 \
+   "$(grep -c -- '--head feat/golf' "$GH_CALLS")"
+ok "57: ...and the column says so honestly"         1 \
+   "$(printf '%s' "$out" | grep -c '^| 57 | — .*no MR yet')"
+
+# 9 — #143: the branch name is not the child.
+ok "58: a merged PR whose head is only an ANCESTOR of HEAD is not this child's" 1 \
+   "$(printf '%s' "$out" | grep -c '^| 58 | — .*no MR yet')"
+ok "59: a fork's same-named PR is dropped"          0 \
+   "$(printf '%s' "$out" | grep -c '^| 59 | !591 |')"
+ok "59: ...and the child's own merged PR on HEAD keeps its number" 1 \
+   "$(printf '%s' "$out" | grep -c '^| 59 | !592 |')"
+ok "60: an open candidate wins over a merged one"   1 \
+   "$(printf '%s' "$out" | grep -c '^| 60 | !602 |')"
+ok "61: an open PR outside this worktree's history is rejected" 1 \
+   "$(printf '%s' "$out" | grep -c '^| 61 | — .*no MR yet')"
+
+# 10 — #143: a hung CLI costs its deadline, not the tick.
+ok "62: the hung call was made"                     1 \
+   "$(grep -c -- '--head feat/lima' "$GH_CALLS")"
+ok "62: ...killed, so the report finished long before the fake's 60s" 1 \
+   "$([ "$elapsed" -lt 30 ] && echo 1 || echo 0)"
+ok "62: ...and its row still rendered, blank"       1 \
+   "$(printf '%s' "$out" | grep -c '^| 62 | — .*no MR yet')"
+
+# 11 — #143: a slot with no terminal is not charged a forge call...
+ok "63: a gone slot is never asked about"           0 \
+   "$(grep -c -- '--head feat/mike' "$GH_CALLS")"
+ok "63: ...and still renders its row"               1 \
+   "$(printf '%s' "$out" | grep -c '^| 63 | — | — | ⛔ no terminal')"
+# ...unless its stage says the teardown may be due, where lock 1 needs `merged`.
+ok "64: a gone slot at a terminal stage IS asked"   1 \
+   "$(grep -c -- '--head feat/november' "$GH_CALLS")"
+ok "64: ...and its row carries the number"          1 \
+   "$(printf '%s' "$out" | grep -c '^| 64 | !641 |')"
+
 # 7 — the flags themselves. The call log holds the whole argv, so the three that carry meaning are
 # pinned here rather than left to the fake, which answers on `--head` alone and would keep
 # reporting green through a silent change to any of them.
@@ -220,12 +321,13 @@ ok "56: ...and the column says so honestly"         1 \
 # if one call quietly stopped happening.
 ok "every query asks for a PR in ANY state"         0 \
    "$(grep -v -- '--state all' "$GH_CALLS" | grep -c .)"
-ok "...and for the number field"                    0 \
-   "$(grep -v -- '--json number' "$GH_CALLS" | grep -c .)"
-ok "...and takes only the first"                    0 \
-   "$(grep -v -- '--limit 1' "$GH_CALLS" | grep -c .)"
-# ...and the log is non-empty, so the three checks above cannot pass vacuously over no calls.
-ok "the log they read is not empty"                 2 \
+ok "...and for the fields the choice among candidates reads" 0 \
+   "$(grep -v -- '--json number,state,headRefOid,isCrossRepository' "$GH_CALLS" | grep -c .)"
+ok "...and for several candidates, not one"         0 \
+   "$(grep -v -- '--limit 10 ' "$GH_CALLS" | grep -c .)"
+# ...and the log holds exactly the slots that should reach the forge — 51 54 58 59 60 61 62 64 —
+# so the checks above cannot pass vacuously over no calls.
+ok "the log they read holds the expected queries"   8 \
    "$(grep -c . "$GH_CALLS")"
 
 unset -f git tmux gh

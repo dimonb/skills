@@ -96,6 +96,8 @@
 #   SHIPYARD_AUTODOWN_TICKS
 #                       consecutive `merged` ticks required (default and minimum: 2)
 #   SHIPYARD_CTX_WINDOW context window in tokens, overriding the inference in ctx_window
+#   SHIPYARD_FORGE_TIMEOUT
+#                       seconds one gh/glab call may take before it is killed (default: 20)
 #   CLAUDE_CONFIG_DIR / CLAUDE_HOME
 #                       where a child's transcript is looked up (default: $HOME/.claude);
 #                       propagated to children by shipyard_env_preamble when set here
@@ -113,11 +115,6 @@ DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 . "$DIR/shipyard-ctx.sh"
 
 ROOT=$(git rev-parse --show-toplevel 2>/dev/null || pwd)
-# Resolved ONCE, here, because slot_iid_forge() below runs inside a $( ) per slot and could never
-# keep a cache of its own. Empty is a legitimate answer (no origin/HEAD ref, or a fake git in the
-# test rig); the one caller treats empty as "no base branch to exclude" and asks the forge anyway.
-DEFAULT_BRANCH=$(git -C "$ROOT" symbolic-ref --quiet --short refs/remotes/origin/HEAD 2>/dev/null \
-  | sed 's#^origin/##')
 shipyard_backend_check || exit 1
 CONTAINER=$(shipyard_container)
 KIND=$(shipyard_container_kind)
@@ -281,6 +278,13 @@ STALL_SECS="${SHIPYARD_STALL_SECS:-1800}"   # 30 min of no movement, idle, nothi
 # exists to avoid rather than to enable.
 MOTION_INTERVAL=$(knob_interval "${SHIPYARD_MOTION_INTERVAL:-}" 3) \
   || echo "warning: SHIPYARD_MOTION_INTERVAL is not a usable positive number — using 3" >&2
+# How long one forge CLI call may take before forge_bounded kills it (#143). Read here, once per
+# run, for the same reason as the ctx check below: every caller runs inside a per-slot $( ), where
+# a warning would repeat once per slot. Whole seconds; zero is refused, since it would kill every
+# call before it could answer.
+FORGE_TIMEOUT=$(knob_uint "${SHIPYARD_FORGE_TIMEOUT:-}" 20) && [ "$FORGE_TIMEOUT" != 0 ] \
+  || { FORGE_TIMEOUT=20
+       echo "warning: SHIPYARD_FORGE_TIMEOUT is not a usable positive whole number — using 20" >&2; }
 # ENSURE, not just resolve: if the directory is missing the stall table cannot be
 # written, `since` resets to now on every run, and the watchdog silently never
 # fires. A watchdog that fails closed is worse than none — it looks armed.
@@ -704,6 +708,44 @@ forge() {
   esac
 }
 
+# Run a forge CLI with a deadline of $FORGE_TIMEOUT seconds; rc is the command's own, or the
+# signal's when the watchdog killed it. `gh` and `glab` can hang — bad network, or a client with
+# no credentials stalled on a prompt — and one hung call withholds the WHOLE tick's report, which
+# on an `--only-changed` monitor is indistinguishable from a quiet tick (#143).
+#
+# PURE BASH, not `timeout(1)`: macOS ships no `timeout`, bash 3.2 must run this, and an external
+# wrapper would exec the binary past the shell functions the test rigs shadow `gh` with.
+#
+# THE WATCHDOG POLLS in short sleeps rather than sleeping the whole deadline. The first cut slept
+# $FORGE_TIMEOUT in the background and killed that sleep from a TERM trap on cancel, and a cancel
+# landing between the sleep's fork and the trap learning its pid left the full-length sleep behind:
+# measured, two of them after one t15 run. Now the most a cancel can orphan is one 0.2s sleep.
+# Its output goes to /dev/null because it runs inside the caller's $( ), whose pipe it would
+# otherwise hold open. PID REUSE: the watchdog is still this shell's unreaped child when it is
+# cancelled, so that kill cannot land elsewhere; the command is unreaped for as long as this shell
+# waits on it, so the deadline kill can only miss if the deadline falls in the instant between that
+# wait returning and the cancel. The deadline has a one-second grain ($SECONDS), and the poll costs
+# five forks a second only while a call is running — one at a time per report.
+# What it does NOT reach: a grandchild the command spawned, which the TERM to the command itself
+# does not signal.
+forge_bounded() {
+  local pid wd rc
+  "$@" &
+  pid=$!
+  ( end=$((SECONDS + FORGE_TIMEOUT))
+    while [ "$SECONDS" -lt "$end" ]; do sleep 0.2; done
+    kill -TERM "$pid" ) </dev/null >/dev/null 2>&1 &
+  wd=$!
+  wait "$pid"; rc=$?
+  kill -TERM "$wd" 2>/dev/null
+  wait "$wd" 2>/dev/null
+  return "$rc"
+}
+
+# How many PR/MR candidates slot_iid_forge asks for per branch. More than one because the branch
+# name alone does not identify the child (see there); ten covers any plausible reuse of one name.
+FORGE_CANDIDATES=10
+
 # Ask the FORGE which PR/MR has this slot's branch as its head. The fallback that needs no
 # cooperation from the child, and the reason it exists: every source above is ship's own state
 # file, and a child that writes one late — or not at all — leaves this column blank for exactly
@@ -717,11 +759,13 @@ forge() {
 # opens the PR", which is exactly the assumption #124 falsified. With the column blind, the
 # `completed` glyph could never fire for any state-file-less child either.
 #
-# COST: one forge call per slot per tick, and only for a slot no state file could answer for.
+# COST: at most one forge call per slot per tick, bounded by $FORGE_TIMEOUT, and only for a slot no
+# state file could answer for and whose row can use the answer — a live one, or a gone one whose
+# stage makes its teardown due (the loop below says which; #143).
 # ORDER: last. Every cheaper source wins first — including GitLab's slot-is-the-iid rule, which is
 # a heuristic rather than an exact answer (see slot_iid). This is a fallback, never a substitute.
 slot_iid_forge() {
-  local slot="$1" wt physical br v
+  local slot="$1" wt physical br base head v st oid list first=""
   wt="$ROOT/.claude/worktrees/ship-$slot"
   [ -d "$wt" ] || return 0
   # A DIRECTORY IS NOT A WORKTREE, and the difference is a wrong answer rather than a blank. Git
@@ -738,27 +782,74 @@ slot_iid_forge() {
   # No branch, a detached HEAD (a child that has not branched yet), or the base branch itself:
   # there is no question to ask, and asking one about the base branch invites a wrong answer.
   case "$br" in ''|HEAD) return 0 ;; esac
-  [ -n "$DEFAULT_BRANCH" ] && [ "$br" = "$DEFAULT_BRANCH" ] && return 0
+  # THE BASE BRANCH COMES FROM THE SKILL'S RESOLVER (shipyard_default_ref, shipyard-lib.sh), asked
+  # about THIS worktree. rc 1 means it cannot say which branch is the base, and that is "cannot
+  # ask", never "nothing to exclude": an unguarded query is exactly the wrong answer the guard
+  # exists for (#143). The ref is `<remote>/<branch>`, and a remote's own name may hold a slash, so
+  # the branch is matched as a SUFFIX of it. That can match too much (a slot on `main` when the
+  # base is `release/main`) and never too little, so its error is a blank column rather than a
+  # question about the base branch.
+  base=$(shipyard_default_ref "$wt") || return 0
+  case "$base" in "$br"|*/"$br") return 0 ;; esac
+  head=$(git -C "$wt" rev-parse --verify --quiet HEAD 2>/dev/null) || return 0
   # BOTH arms ask the same question, and the two CLIs spell it differently in ways that are easy to
   # get backwards. Verified against the installed clients rather than reasoned about:
   #   * state — `gh` defaults to OPEN and takes `--state all`; `glab` also defaults to opened, and
   #     `-A/--all` is its opt-in (`glab mr list --help`, 1.90). Merged must be included or a merged
   #     change whose terminal is still up loses its number at the exact moment the graph needs
   #     `merged` to conclude — #124's own symptom, reintroduced.
-  #   * count — `--limit 1` and `-P 1`. glab's per-page default is 30, i.e. 30 records fetched to
-  #     read one integer.
+  #   * count — FORGE_CANDIDATES, not one, because the branch NAME binds the answer to nothing
+  #     about this child (below) and the choice among the candidates is made here.
   #   * cwd — both run inside the same subshell `cd "$ROOT"` as mr_state(), so each resolves the
   #     project from the remote rather than from wherever the monitor was started.
   #   * stderr — the redirect wraps the whole pipeline, jq included, so a non-JSON banner cannot
   #     put `parse error:` outside the single buffered block this report promises.
+  #   * time — the CLI is bounded by forge_bounded: one that hangs (network, or an unauthenticated
+  #     client stalled on a prompt) would otherwise withhold the whole tick's report, which on an
+  #     `--only-changed` monitor reads exactly like a quiet tick.
+  #
+  # Each candidate comes back as one `<number> <STATE> <head sha>` line, and a FORK's is dropped in
+  # the query: `--head` filters on the ref name alone (`gh pr list --help`: "<owner>:<branch>"
+  # syntax is not supported), so in a public repo a fork's `feat/alpha` is a candidate on equal
+  # footing with the child's own. glab reports the same fact as a source project that is not the
+  # target project.
   if [ "$(forge)" = github ]; then
-    v=$( (cd "$ROOT" 2>/dev/null && unset GITHUB_TOKEN \
-      && gh pr list --head "$br" --state all --limit 1 --json number --jq '.[0].number // empty') 2>/dev/null)
+    list=$( (cd "$ROOT" 2>/dev/null && unset GITHUB_TOKEN \
+      && forge_bounded gh pr list --head "$br" --state all --limit "$FORGE_CANDIDATES" \
+           --json number,state,headRefOid,isCrossRepository \
+           --jq '.[] | select(.isCrossRepository | not) | "\(.number) \(.state) \(.headRefOid)"') 2>/dev/null)
   else
-    v=$( (cd "$ROOT" 2>/dev/null \
-      && OAUTH_TOKEN= glab mr list --source-branch "$br" --all -P 1 -F json | jq -r '.[0].iid // empty') 2>/dev/null)
+    list=$( (cd "$ROOT" 2>/dev/null \
+      && forge_bounded env OAUTH_TOKEN= glab mr list --source-branch "$br" --all -P "$FORGE_CANDIDATES" -F json \
+      | jq -r '.[] | select(.source_project_id == .target_project_id)
+                   | "\(.iid) \(.state | ascii_upcase) \(.sha)"') 2>/dev/null)
   fi
-  printf '%s' "$v"
+  # THE NAME IS NOT THE CHILD, so a candidate must be tied to this worktree's own history. Before
+  # #138 an iid could only come from ship's state file; nothing re-established that after it. Two
+  # rules, and the stricter one is for the candidate that could paint a live child finished:
+  #   * OPEN — its head must be this worktree's HEAD or an ancestor of it (a child may carry
+  #     commits it has not pushed yet). An open candidate that matches wins outright.
+  #   * MERGED or CLOSED — its head must BE this worktree's HEAD. A slot relaunched on a reused
+  #     branch name has moved past its old PR or never had it; an ancestry test alone still admits
+  #     the kept-branch restart path, and that PR's `merged` would render over a live child. A
+  #     child whose change merged leaves HEAD where it pushed it, so its own PR still matches and
+  #     keeps its number for the slot graph.
+  # No match is an empty answer and the column blanks — the honest reading of "not this child's
+  # PR". A head sha this repository does not hold fails the ancestry test the same way.
+  while read -r v st oid; do
+    case "$v" in ''|*[!0-9]*) continue ;; esac
+    case "$oid" in ''|-*) continue ;; esac
+    case "$st" in
+      OPEN|OPENED)
+        if [ "$oid" = "$head" ] || git -C "$wt" merge-base --is-ancestor "$oid" "$head" 2>/dev/null; then
+          printf '%s' "$v"; return 0
+        fi ;;
+      *) [ -z "$first" ] && [ "$oid" = "$head" ] && first="$v" ;;
+    esac
+  done <<EOV
+$list
+EOV
+  printf '%s' "$first"
 }
 
 # The MR/PR number for a slot, or empty when the change has not opened one yet.
@@ -786,8 +877,12 @@ slot_iid_forge() {
 # `_syg_pr_known`, advancing the graph for a slot that has no PR. Guarding one arm of four is the
 # enumerable shape that comes back; guarding the exit also lets a junk state-file value fall
 # THROUGH to the forge, which is the arm most likely to hold the real number.
+#
+# `slot_iid <slot> local` stops before the forge arm. The loop below asks that first, for every
+# slot, and asks the forge only where a row can use the answer: a live slot, and a gone slot whose
+# stage says its teardown may be due (#143). A slot already known to be dead costs no round trip.
 slot_iid() {
-  local slot="$1" sd f v=""
+  local slot="$1" mode="${2:-}" sd f v=""
   sd="$ROOT/.claude/worktrees/ship-$slot/.pipeline-state"
   f=$(ls -1 "$sd"/*.json 2>/dev/null | tail -1)
   [ -n "$f" ] && v=$(jq -r '.pr_number // .pr // .iid // .mr_iid // empty' "$f" 2>/dev/null)
@@ -797,6 +892,7 @@ slot_iid() {
   case "$v" in ''|*[!0-9]*) v="" ;; *) printf '%s' "$v"; return ;; esac
   # Only GitLab may fall back to the slot itself.
   if [[ "$slot" =~ ^[0-9]+$ ]] && [ "$(forge)" = gitlab ]; then printf '%s' "$slot"; return; fi
+  [ "$mode" = local ] && return 0
   v=$(slot_iid_forge "$slot")
   case "$v" in ''|*[!0-9]*) return 0 ;; esac
   printf '%s' "$v"
@@ -814,14 +910,14 @@ mr_state() {
     # machine, so everywhere else gh ran unauthenticated, every state came back `?`, `?`
     # counts as in-flight below, and the monitor loop could never terminate.
     st=$( (cd "$ROOT" 2>/dev/null && unset GITHUB_TOKEN \
-      && gh pr view "$iid" --json state --jq '.state') 2>/dev/null)
+      && forge_bounded gh pr view "$iid" --json state --jq '.state') 2>/dev/null)
     case "$st" in
       OPEN) printf 'opened' ;; MERGED) printf 'merged' ;; CLOSED) printf 'closed' ;;
       *) printf '?' ;;
     esac
     return
   fi
-  st=$(OAUTH_TOKEN= glab mr view "$iid" -F json 2>/dev/null | jq -r '.state // "?"')
+  st=$(forge_bounded env OAUTH_TOKEN= glab mr view "$iid" -F json 2>/dev/null | jq -r '.state // "?"')
   [ -z "$st" ] && st="?"
   printf '%s' "$st"
 }
@@ -1083,7 +1179,9 @@ ctx_check_env
 for slot in "${SLOTS[@]}"; do
   [ -z "$slot" ] && continue
   addr=$(shipyard_slot_addr "$slot")
-  iid=$(slot_iid "$slot")
+  # The state file only, here: the forge arm waits until the row is known to be able to use it —
+  # below the no-terminal `continue` for a live slot, and inside the teardown arm for a gone one.
+  iid=$(slot_iid "$slot" local)
   mr_label="—"; [ -n "$iid" ] && mr_label="!$iid"
   pend=$(slot_pending "$slot")
   # The esc COLUMN's count and the teardown's HOLD are different questions and are read from
@@ -1111,6 +1209,8 @@ for slot in "${SLOTS[@]}"; do
     gone_note=""; gone_before=${#REAP_REFUSED[@]}; gone_held=${#REAP_HELD[@]}
     case "$gone_stage" in
       done|ready-to-merge)
+        # The one gone-slot row that uses more than the label: lock 1 needs the forge's `merged`.
+        [ -z "$iid" ] && iid=$(slot_iid "$slot") && [ -n "$iid" ] && mr_label="!$iid"
         gone_state="no MR yet"
         [ -n "$iid" ] && gone_state=$(mr_state "$iid")
         if autodown_consider "$slot" "$iid" "$gone_state" "$gone_stage" "" "$unsettled"; then
@@ -1136,6 +1236,13 @@ for slot in "${SLOTS[@]}"; do
     # is that the lookup failed, not that the child ended.
     GONE="$GONE $slot"
     continue
+  fi
+
+  # A LIVE slot the state file could not answer for asks the forge now, and only now — the same
+  # principle as the graph subprocess below: a row known to be dead is never charged for it (#143).
+  if [ -z "$iid" ]; then
+    iid=$(slot_iid "$slot")
+    [ -n "$iid" ] && mr_label="!$iid"
   fi
 
   # IS THE AGENT STILL IN THE TERMINAL? A terminal outliving its agent reads, from the screen, as a
