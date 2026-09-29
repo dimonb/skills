@@ -1375,6 +1375,24 @@ produced one false test result during development. Do not pipe status through a 
 * **Text the record did not write is quoted in it** — the agenda and every participant's
   message — so a line of it that looks like a heading cannot become a section of the record.
 
+## Known limits
+
+Residuals a review found in code the change under review did not write, that fail the
+ordinary-use test (ship's §5.11): recorded here rather than filed. Each names what would make it
+an ordinary-use failure, and so fileable.
+
+* **KL-1** — `_keeper_live` reads `state/keeper.pid` twice (once through `_keeper_pid`, once for
+  the start time), so a concurrent `_keeper_ensure` rewriting the file between the reads can pair
+  one keeper's pid with another's start time. It fails closed: the pairing is not vouched for, a
+  spare keeper is forked and the old one steps down. `lib/up.sh:131`. Found by the review of #257.
+  Promote when two verbs on one room (`up`, `relaunch`) running at once are observed to report
+  "no live keeper" over a live one, or to leave two keepers running.
+* **KL-2** — the keeper's identity check compares two `ps -o lstart=` renderings, and on Linux
+  procps derives `lstart` from boot time plus start ticks, which is unverified to be stable to the
+  second between calls. A shift fails closed (the keeper reads as absent). `lib/up.sh:94`. Found by
+  the review of #257. Promote on a CI flake in t9g's "vouched for" rows on the Linux runner, or a
+  report of `decide` saying "no live keeper" over a live one on Linux.
+
 ## Files
 
 | file | role |
