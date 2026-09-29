@@ -290,7 +290,7 @@ echo "--- H. a --hold room takes the marker too, while its owner is still holdin
 # The placement of the teardown check is what this case pins, and nothing else in the suite can
 # see it. Every other room in this file is DETACHED — `mkroom_faked` sets no _KEEPER_OWNER_HOLD,
 # so its keepers have no canary and fall straight through to `sleep 5`. A `--hold` keeper takes
-# the other branch: it blocks in `read -t 5` on the canary and `continue`s on every timeout, so a
+# the other branch: it blocks for up to a poll in the canary wait and `continue`s on every timeout, so a
 # teardown check placed below that read is not merely late, it is NEVER REACHED — the marker
 # would sit on disk for the life of the room while `decide` exited 0 saying the seats were going.
 # Measured by mutation through the shipped `up --hold` + `decide` path, where the mutant's exit
@@ -671,6 +671,37 @@ ok "...leaving the file, since the keeper is still there" yes "$([ -e "$RP2/stat
 kill_keeper "$RP2/state/keeper.pid"; wait_gone "$(kpid_of "$RP2/state/keeper.pid")" "$PATIENCE" >/dev/null
 ( SKILL="$SKILL"; . "$SKILL/lib/up.sh"; ct_kill() { :; }; _keeper_ensure "$RP2" a b )
 ok "a new keeper clears a leftover reaping file as it starts" no "$([ -e "$RP2/state/reaping" ] && echo yes || echo no)"
+# The real verb into that refusal (#291's review): P pins the helper's return code, and nothing
+# drove `relaunch` into its `if ! _keeper_await_reap` branch, whose `return 1` could be dropped
+# with the suite green — the verb would fall through to `_keeper_ensure` and the launch. The
+# ceiling is the COUNCIL_RELAUNCH_REAP_CEILING knob, so this waits 0.3 s rather than 30.
+RP3_REPO="$COUNCIL_TEST_ROOT/t26p3-repo"; rm -rf "$RP3_REPO"; mkdir -p "$RP3_REPO" || exit 1
+( cd "$RP3_REPO" && git init -q . \
+  && COUNCIL_BACKEND=none-for-tests bash "$CLI" --room t26p3 --me codex up \
+       --scenario debate --agents claude,codex --cwd . "does relaunch refuse a reap that outlasts it?" ) \
+  >"$COUNCIL_TEST_ROOT/t26p3-up.log" 2>&1
+RP3="$RP3_REPO/.git/council/t26p3"
+if [ ! -f "$RP3/roster.json" ]; then
+  echo "  FAIL P: up did not build a room"; sed -n '1,20p' "$COUNCIL_TEST_ROOT/t26p3-up.log"; FAILURES=$((FAILURES + 1))
+else
+  ROOM_KEEPERS+=("$RP3/state/keeper.pid")
+  KP3=$(kpid_of "$RP3/state/keeper.pid")
+  printf 'teardown\n' > "$RP3/state/reaping"
+  rc=0
+  ( cd "$RP3_REPO" && COUNCIL_RELAUNCH_REAP_CEILING=3 COUNCIL_BACKEND=none-for-tests \
+      bash "$CLI" --room t26p3 relaunch claude ) >"$COUNCIL_TEST_ROOT/t26p3-relaunch.log" 2>&1 || rc=$?
+  ok "relaunch over a reap that outlasts the ceiling refuses" 1 "$rc"
+  ok "...stating the ceiling it waited, in tenths of a second" yes \
+     "$(grep -qF 'still alive after 0.3 s' "$COUNCIL_TEST_ROOT/t26p3-relaunch.log" && echo yes || echo no)"
+  ok "...naming the file it waited on" yes \
+     "$(grep -q "refusing .*/t26p3/state/reaping says a reap is in flight" "$COUNCIL_TEST_ROOT/t26p3-relaunch.log" && echo yes || echo no)"
+  # Not only no `relaunched:` line: the test backend makes a launch fail at rc 1 too, so the
+  # discriminator is that nothing past the refusal was attempted — no launcher write, no terminal.
+  ok "...and launching nothing" no \
+     "$(grep -qE 'relaunched:|terminal closed|council relaunch: could not' "$COUNCIL_TEST_ROOT/t26p3-relaunch.log" && echo yes || echo no)"
+  ok "...and the keeper is the one that was there, untouched" yes \
+     "$([ -n "$KP3" ] && [ "$(kpid_of "$RP3/state/keeper.pid")" = "$KP3" ] && kill -0 "$KP3" 2>/dev/null && echo yes || echo no)"
+fi
 
 # ================================================================================================
 echo "--- Q. a request cancelled between the keeper's check and its rename is not reaped ---"

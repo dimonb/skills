@@ -112,11 +112,15 @@ done
 if want 2 "recv --timeout with no value" env COUNCIL_ROOM="$RM" COUNCIL_ME=a bash "$CLI" recv --timeout; then
   says 'timeout needs' "recv's refusal does not name --timeout"
 fi
-# c_send is reached by v_send and by nothing else from the CLI, so its own guard is asked directly.
-if want 2 "c_send --text with no value" env COUNCIL_ROOM="$RM" COUNCIL_ME=a \
-     bash -c '. "$1/lib/lib.sh"; c_send --text' _ "$SKILL"; then
-  says 'text needs a value' "c_send's refusal does not name --text"
-fi
+# c_send is reached by v_send and by nothing else from the CLI, so its own guards are asked
+# directly, one per option its guard arm (lib.sh, `--act|--refs|--to|--text`) lists. The list
+# below is a copy of that arm, and nothing keeps the two in step.
+for o in --act --refs --to --text; do
+  if want 2 "c_send $o with no value" env COUNCIL_ROOM="$RM" COUNCIL_ME=a \
+       bash -c '. "$1/lib/lib.sh"; c_send "$2"' _ "$SKILL" "$o"; then
+    says "${o#--} needs a value" "c_send's refusal does not name $o"
+  fi
+done
 
 [ "$fail" = 0 ] && echo "t20 PASS" || echo "t20 FAIL"
 exit $fail

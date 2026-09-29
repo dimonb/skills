@@ -14,6 +14,10 @@ SHIPYARD_CONTINUITY_SCRIPT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/shipya
 # shipyard-lib.sh, because the watcher runs this file as its own process.
 # shellcheck source=agent-adapters.sh
 . "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/agent-adapters.sh"
+# The owner canary's EOF detection, and the macOS select edge it works around (#275), live in
+# shared/canary (vendored here as canary.sh), which council's `--hold` keeper uses too (#279).
+# shellcheck source=canary.sh
+. "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/canary.sh"
 
 # The placeholder this client renders in an EMPTY composer. Deliberately not a shared constant:
 # it answers a stricter question than "is this a composer line" — whether the box holds anybody's
@@ -386,7 +390,7 @@ shipyard_continuity_control_check() {
 shipyard_continuity_pause() {
   local cfd="$1" control="$2" ack="$3" token="$4" i=0
   while [ "$i" -lt "$SHIPYARD_CONTINUITY_SLICES" ]; do
-    shipyard_continuity_owner_gone "$cfd" "$SHIPYARD_CONTINUITY_SLICE" || return 1
+    canary_owner_gone "$cfd" "$SHIPYARD_CONTINUITY_SLICE" || return 1
     shipyard_continuity_control_check "$control" "$ack" "$token" && return 2
     i=$((i + 1))
   done
@@ -409,67 +413,6 @@ shipyard_continuity_slices() {
     n = int(i / 0.25); if (n * 0.25 < i) n++
     printf "%d %.6f\n", n, i / n }' 2>/dev/null) || return 0
   read -r SHIPYARD_CONTINUITY_SLICES SHIPYARD_CONTINUITY_SLICE <<<"$split"
-}
-
-# The canary SENTINEL (owner-hold path only): a process substitution, so a child in this watcher's
-# own process group, that blocks in a plain `read` on the canary and writes one `eof` line into an
-# anonymous pipe when that read ends. Stray bytes on the canary are read and ignored, so the line
-# means EOF — every writer gone — or a failed read, which is treated as EOF, as the direct read was
-# before #275. Sets SHIPYARD_CONTINUITY_SENTINEL_FD to the pipe's read end; returns 1, leaving it
-# empty, when the pipe cannot be made. The `2>/dev/null` is scoped by the braces: on a bare `exec`
-# it would stay on the watcher shell and silence its log's stderr from then on.
-#
-# Why the watcher does not simply `read -t` the canary itself (#275). On macOS, select() readiness
-# for EOF on a FIFO can be LOST: when the last writer closes just as a select on the read end
-# times out, that select reports a timeout, and in every stuck watcher observed each later `read -t`
-# timed out too, although a plain read() on the same fd returned 0 at once, on every attempt. So a
-# watcher whose owner died at that instant polled forever. Measured with a perl probe on the
-# watcher's own inherited fd, with no writer open anywhere: a select probe saw the fd unreadable
-# from the second poll on, and a blocking sysread returned EOF immediately. The sentinel's read is the
-# blocking kind, and what the watcher selects on is DATA in a pipe, which does not have that edge.
-#
-# THE RESIDUAL: this rests on the blocking read() path seeing FIFO EOF, which was measured on the
-# platform where the select edge was found, not proven from kernel source. A blocked read has no
-# timeout to race, which is the part of the failure that was observed, but a lost wakeup for a
-# blocked reader would still leave the sentinel, and so the watcher, waiting. Nothing here detects
-# that case.
-shipyard_continuity_sentinel_start() {
-  local cfd="$1"
-  SHIPYARD_CONTINUITY_SENTINEL_FD=""
-  { exec {SHIPYARD_CONTINUITY_SENTINEL_FD}< <(
-      while read -r -u "$cfd" _ 2>/dev/null; do :; done
-      printf 'eof\n'); } 2>/dev/null || { SHIPYARD_CONTINUITY_SENTINEL_FD=""; return 1; }
-}
-
-# The inter-poll wait, doubling as owner-death detection ON THE OWNER-HOLD PATH ONLY. With no
-# canary fd (the historical detached watcher, and every agterm-session watcher) it is a plain
-# sleep and nothing changes. With one, the owner's two states are told apart WITHOUT
-# `$PPID`/`kill -0` (both read a reparented process as alive), through the sentinel above: a
-# `read -t` on the sentinel's pipe that times out (rc > 128) means the sentinel is still blocked
-# on the canary, so a writer (the live owner) still holds it; an `eof` line means every writer is
-# gone and the owner has died, and it arrives AT ONCE, so the reap is immediate rather than a poll
-# interval late. A sentinel pipe that ends WITHOUT that line means the sentinel itself was
-# signalled, not that the owner died: its pipe is dropped, this poll sleeps out its interval, and
-# the next poll starts a new sentinel. If no sentinel can be started, the canary is read directly,
-# as before #275, which is right except for the select edge described above.
-# Returns 0 to keep looping, 1 when the owner is gone.
-shipyard_continuity_owner_gone() {
-  local cfd="$1" interval="$2" rc line=""
-  if [ -z "$cfd" ]; then sleep "$interval"; return 0; fi
-  if [ -z "${SHIPYARD_CONTINUITY_SENTINEL_FD:-}" ] \
-    && ! shipyard_continuity_sentinel_start "$cfd"; then
-    read -r -t "$interval" -u "$cfd" _ 2>/dev/null; rc=$?
-    [ "$rc" -eq 0 ] && return 0
-    [ "$rc" -gt 128 ] && return 0
-    return 1
-  fi
-  read -r -t "$interval" -u "$SHIPYARD_CONTINUITY_SENTINEL_FD" line 2>/dev/null; rc=$?
-  [ "$rc" -gt 128 ] && return 0
-  [ "$rc" -eq 0 ] && [ "$line" = eof ] && return 1
-  { exec {SHIPYARD_CONTINUITY_SENTINEL_FD}<&-; } 2>/dev/null || true
-  SHIPYARD_CONTINUITY_SENTINEL_FD=""
-  sleep "$interval"
-  return 0
 }
 
 # Reap this watcher's own process group. The owner-hold launch put the watcher in its OWN group
@@ -508,10 +451,10 @@ shipyard_continuity_watch() {
   [ -z "$cfd" ] || cleanup="$cleanup; shipyard_continuity_reap_group"
   trap "$cleanup" EXIT
   trap 'exit 0' INT TERM
-  SHIPYARD_CONTINUITY_SENTINEL_FD=""
+  CANARY_SENTINEL_FD=""; CANARY_SENTINEL_PID=""
   # Started before the first poll so its read is already blocked when an owner dies straight after
   # start, the case #275 measured. A failure here is retried by the first poll.
-  [ -z "$cfd" ] || shipyard_continuity_sentinel_start "$cfd" || true
+  [ -z "$cfd" ] || canary_sentinel_start "$cfd" || true
   shipyard_continuity_reset
   SHIPYARD_CONTINUITY_ACKED_NONCE=""
   shipyard_continuity_slices "$interval"

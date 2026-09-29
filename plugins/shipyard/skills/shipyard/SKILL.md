@@ -977,6 +977,37 @@ Directives are `kind: directive`, `status: sent` — the report's `esc` column a
 monitor both skip them, so telling a child something never looks like an open escalation.
 `bash <SKILL>/shipyard-tell.sh --list` shows what you have sent.
 
+### When a merge changes the ship skill, tell every running child
+
+A child's worktree is branched from the base branch at launch, and a child that loads `ship` from
+its worktree follows that copy for its whole run. A change to the ship skill that merges afterwards — its
+`SKILL.md` or a reference file it reads — never reaches it on its own: the child runs the old rule
+to the end, and nothing on its screen or in its state file shows that it is doing so.
+
+So **whenever a merge you see changes the ship skill, send every running child one directive**
+through `shipyard-tell.sh`, and send it **before that child reaches the stage the changed section
+governs**. In practice that means as soon as you see the merge, not at the next convenient tick:
+the report's stage column says where each child is, and a child already inside that stage gets
+the directive at once, so it applies the rule from the next point it can. The directive:
+
+* **names the changed section** by its number and heading, and the PR/MR that changed it;
+* **states what the section now requires**, in a sentence or two the child can act on without
+  reading the diff — the directive is the whole instruction, since the child's worktree does not
+  have the new text to look up;
+* is **one directive per child per change**, not a stream: several changes merged together go in
+  one directive.
+
+Every running child is the recipient, including one you think will never reach that stage — a
+fix round or a re-entry can take it there, and a directive it does not need costs it one line.
+A child launched after the merge needs none when it loads `ship` from its worktree, which already
+carries the new text. One that resolves `ship` from a user-level install instead — an `agy` child
+in a repo without its own copy (*An `agy` child*, above) — runs whatever that install holds, so it
+gets the directive whenever it was launched.
+
+Measured: a slot launched twelve minutes before a change to ship's deferral rule merged ran the old
+rule to the end and filed two issues, one of which the new rule would have sent mostly to a Known
+limits entry instead.
+
 ## Step 5. Diagnose a child that looks stalled
 
 **Several different failures wear the same face.** A child at its context ceiling, a child
@@ -1510,6 +1541,9 @@ collide with it.
   merge, ship's own stage and a corroborated-absent terminal all agree; it never forces, and
   what it declines it names. A slot whose terminal is still up is never torn down for you:
   `shipyard-down.sh <slot>` is how it goes.
+* A merge that changes the ship skill does not reach a child already running: send every running
+  child one directive naming the changed section and what it now requires, before it reaches the
+  stage that section governs (Step 4).
 * glab: `OAUTH_TOKEN` must be unset (the scripts do that themselves); the host comes from
   the origin remote.
 * The scripts are runnable by hand from a shell too — nothing here needs the skill runtime

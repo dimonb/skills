@@ -548,6 +548,21 @@ jq '.round_deadline_ms=1' "$R9/roster.json" > "$R9/r.tmp" && mv "$R9/r.tmp" "$R9
 sleep 0.1
 [ "$(bar "$R9")" = closed ] || { echo "FAIL a two-seat room whose partner never speaks froze: $(bar "$R9")"; fail=1; }
 echo "the 2x backstop closes a two-seat round with one position, and not before twice the deadline"
+# THE DEFAULT (#274). Every roundtable fixture sets round_deadline_ms, so the fallback c_barrier
+# reads for a roster WITHOUT the field never ran. These rooms drop it and bracket the default
+# (600000) from both sides: the backstop at twice it, and the deadline with a quorum.
+nodl() { jq 'del(.round_deadline_ms)' "$1/roster.json" > "$1/r.tmp" && mv "$1/r.tmp" "$1/roster.json"; }
+mk_t7i "$R9" $(( _t7i_now - 4 * _t7i_d )) a b; nodl "$R9"; pos_t7i "$R9" a $(( _t7i_now - 3 * _t7i_d ))
+[ "$(bar "$R9")" = closed ] || { echo "FAIL no round_deadline_ms: the backstop did not fire at 3x the default: $(bar "$R9")"; fail=1; }
+mk_t7i "$R9" $(( _t7i_now - 4 * _t7i_d )) a b; nodl "$R9"; pos_t7i "$R9" a $(( _t7i_now - 3 * _t7i_d / 2 ))
+[ "$(bar "$R9")" = open ] || { echo "FAIL no round_deadline_ms: the backstop fired at 1.5x the default: $(bar "$R9")"; fail=1; }
+mk_t7i "$R9" $(( _t7i_now - 4 * _t7i_d )) a b c; nodl "$R9"
+pos_t7i "$R9" a $(( _t7i_now - 700000 )); pos_t7i "$R9" b $(( _t7i_now - 700000 ))
+[ "$(bar "$R9")" = closed ] || { echo "FAIL no round_deadline_ms: a quorum 700s old did not close on the default deadline: $(bar "$R9")"; fail=1; }
+mk_t7i "$R9" $(( _t7i_now - 4 * _t7i_d )) a b c; nodl "$R9"
+pos_t7i "$R9" a $(( _t7i_now - 500000 )); pos_t7i "$R9" b $(( _t7i_now - 500000 ))
+[ "$(bar "$R9")" = open ] || { echo "FAIL no round_deadline_ms: a quorum 500s old closed before the default deadline: $(bar "$R9")"; fail=1; }
+echo "a roster without round_deadline_ms falls back to the 600000 ms default"
 
 # THE ANCHOR (#165). `sent_ms` is the message's own claim. A position stamped `1` — a harness
 # writing seconds for milliseconds does it by accident — in a room created just now must not
@@ -581,7 +596,7 @@ echo "the deadline anchor counts roster seats only and never reads earlier than 
 # THE ROOMS THIS FILE ADDED ARE ITS OWN TO REMOVE. `run-all.sh` gives every test one shared root
 # and clears it only when the whole run ends, so a room left here outlives this file and sits
 # under every test that follows. This file used to leave two; the barrier work added several,
-# and the four `--full` tests that run afterwards are timing tests measuring wall clock. Removing
+# and the `--full` tests that run afterwards are timing tests measuring wall clock. Removing
 # them also stops their keepers, which poll `while [ -d "$room" ]`. R and R2 are left alone: they
 # predate this work, and changing what they leave behind is not this change's business.
 rm -rf "$R3" "$R4" "$R5" "$R6" "$R7" "$R8" "$R9"

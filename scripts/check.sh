@@ -58,6 +58,7 @@ shared/flow/tests
 shared/adapters/tests
 shared/policy/tests
 shared/knobs/tests
+shared/canary/tests
 plugins/shipyard/skills/shipyard/tests
 plugins/council/skills/council/tests'
 

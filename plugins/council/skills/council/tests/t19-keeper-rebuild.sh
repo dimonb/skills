@@ -226,8 +226,8 @@ echo "── case D: a superseded --hold keeper reaps NOTHING ──"
 # directory is asserted present throughout. And the owner blocks in `wait` on the keeper, which is
 # its only child — so it holds the canary write end for the keeper's entire life and the read
 # cannot EOF before the keeper is already gone. (That same `wait` is why the owner is not checked
-# for liveness afterwards: it returns the moment the keeper exits, and a direct child that has
-# exited is a zombie `kill -0` still reports as alive.)
+# for liveness afterwards: it returns the moment the keeper exits, so the owner is expected to be
+# gone, and once bash has reaped it the pid is free for reuse and `kill -0` on it proves nothing.)
 MARK_D="$ROOT/D"; mkdir -p "$MARK_D"; ROOM_D="$ROOT/room-d"
 OWNER="$ROOT/owner.sh"
 cat > "$OWNER" <<'OWNER_EOF'
@@ -273,10 +273,12 @@ ok "the pid file still names it" "$e1" "$(read_pid "$ROOM_E/state/keeper.pid")"
 
 # E1: drive _keeper_loop itself, so what is measured is the rule and not a fork race. The file
 # names a different, DEAD pid; the loop must return rather than keep the room. Its return is
-# observed through a MARKER and not through `kill -0`: this subshell is a direct child of the test
-# shell, so once it exits it is a zombie until reaped — and `kill -0` on a zombie SUCCEEDS, which
-# would read as "still keeping the room" forever. Every other process here is a keeper forked
-# inside a subshell that then exited, so it reparents and `kill -0` tells the truth about it.
+# observed through a MARKER and not through `kill -0`. Bash reaps this subshell as soon as it exits
+# (measured on 3.2 and 5.3, even while the test shell is blocked in a `$( wait_file ... )`), and a
+# reaped pid is free for the OS to hand to an unrelated process, which `kill -0` would report as
+# still keeping the room. The marker is written by the loop's own return, which a reused pid cannot
+# fake. The keepers checked elsewhere with `kill -0` carry the same reuse caveat; their windows are
+# seconds, so it is accepted there.
 E1_DONE="$ROOT/e1.stepped-down"
 ( SKILL="$SKILL"; . "$SKILL/lib/up.sh"
   _keeper_loop "$ROOM_E" "$ROOM_E/state/keeper.pid" "" 0.5 a b; printf 'yes' > "$E1_DONE" ) >/dev/null 2>&1 &
@@ -287,8 +289,9 @@ ok "a loop whose file names another pid steps down, dead or not" yes "$(wait_fil
 # then hangs — no summary, no EXIT trap, keepers and $ROOT left behind — until run-all.sh's ceiling
 # group-kills it ten minutes later, and only if timeout(1) is installed, which stock macOS lacks.
 # Measured on a build with the step-down removed. A signal first turns that into a six-second red.
-# On the success path the pid is an unreaped child, so the kill is a harmless no-op.
-kill "$e_loop" 2>/dev/null; wait "$e_loop" 2>/dev/null
+# On the success path the marker is there and nothing is signalled: bash has already reaped the
+# subshell, so its pid may no longer be ours. `wait` still returns the recorded status.
+[ -e "$E1_DONE" ] || kill "$e_loop" 2>/dev/null; wait "$e_loop" 2>/dev/null
 
 # E2: the real replacement path, end to end — `_keeper_ensure` over a stale pid file must leave a
 # keeper that is still there a poll later.

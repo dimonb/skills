@@ -27,7 +27,7 @@
 # check-test proves check.sh's STATIC assertions fire, so it must not itself be gated on a test
 # suite passing, nor pay those suites' runtime on every one of its ~60 probes. The deliberate
 # exceptions all use `make check` on purpose: the final "green after restore" check, and the probes
-# that prove `make check` actually RUNS each suite it names (30, 30b, 30c, 30d, 30e) — one per
+# that prove `make check` actually RUNS each suite it names (the 30* probes) — one per
 # suite in the `check:` recipe, because check 12 accepts either Makefile target and so cannot see
 # a suite that has quietly moved out of the per-commit gate.
 set -uo pipefail
@@ -72,7 +72,7 @@ PROBE_FILES=(
   shared/driver/tests/_probe-unreg.sh plugins/shipyard/skills/shipyard/tests/_probe-unreg.sh
   shared/flow/tests/_probe-unreg.sh shared/flow/extra.sh
   shared/adapters/tests/_probe-unreg.sh shared/policy/tests/_probe-unreg.sh
-  shared/knobs/tests/_probe-unreg.sh
+  shared/knobs/tests/_probe-unreg.sh shared/canary/tests/_probe-unreg.sh
   plugins/shipyard/skills/shipyard/tests/t1-probe-dup.sh "$TESTS_DIR/t1z-probe.sh"
   plugins/_probe-scratch plugins/_probe-scratch-empty
   plugins/ship/skills/ship/references/_probe-scratch plugins/ship/skills/ship/references/_probe-dangling.md
@@ -743,6 +743,12 @@ expect_fail "knobs test on disk but not registered in run-all.sh" \
   "test on disk but not registered in"
 rm -f shared/knobs/tests/_probe-unreg.sh
 
+# 15h — ...and for the CANARY suite (#279), by 15g's rule.
+printf '#!/usr/bin/env bash\ntrue\n' > shared/canary/tests/_probe-unreg.sh
+expect_fail "canary test on disk but not registered in run-all.sh" \
+  "test on disk but not registered in"
+rm -f shared/canary/tests/_probe-unreg.sh
+
 # 16 — and check 10 must say it cannot find the list, rather than comparing the files on disk
 # against an empty set. BOTH assignments are renamed: renaming only `tests=(` leaves the `--full`
 # `tests+=(` line, whose four names extract fine, so the probe would land on the unregistered arm
@@ -1088,6 +1094,17 @@ else
   pass=$((pass+1))
 fi
 git checkout -- shared/knobs/tests/t-knobs.sh
+
+# 30f — ...and `make check` RUNS the canary suite (#279), by 30e's rule, in the change that added it.
+printf '#!/usr/bin/env bash\nexit 1\n' > shared/canary/tests/t-canary.sh
+if make check >"$SCRATCH/out" 2>&1; then
+  echo "NOT CAUGHT: make check does not run the canary suite (a canary failure did not red it)"
+  nocatch=$((nocatch+1))
+else
+  echo "caught:     make check runs the canary suite  ->  a failing canary test reds make check"
+  pass=$((pass+1))
+fi
+git checkout -- shared/canary/tests/t-canary.sh
 
 # 31 — the mirror of 30 for the STATIC gate: `make check` must also invoke scripts/check.sh, not
 # only the fast test suites. When this suite switched its ~60 probes from `make check` to
@@ -1560,6 +1577,28 @@ printf '#!/usr/bin/env bash\nexit 0\nkids=$("$d/a b/%s" -P "$x" sleep)\n' "$PG" 
 expect_pass "check 14: a quoted command path holding a space WITH a pattern stays green"
 printf '#!/usr/bin/env bash\nexit 0\nkids=$(%s -P "$x" "/opt/a b/%s")\n' "$PG" "$PG" > "$SH_PROBE"
 expect_pass "check 14: a quoted path holding a space as the pattern stays green"
+# 34e10 — unquote()'s escape and depth branches (#278's review): removing any one of them flipped
+# no probe above. Each probe below changes its verdict under exactly its own branch's removal.
+# A backslash outside quotes escapes the quote after it, so the words stay two and the pattern
+# stays a pattern...
+printf '#!/usr/bin/env bash\nexit 0\nkids=$(%s -P \\"$x\\" sleep)\n' "$PG" > "$SH_PROBE"
+expect_pass "check 14: an escaped quote outside quotes does not open a span"
+# ...a backslash inside double quotes escapes the quote after it, in both directions...
+printf '#!/usr/bin/env bash\nexit 0\nkids=$(%s -P "$x\\" sleep")\n' "$PG" > "$SH_PROBE"
+expect_fail "check 14: an escaped quote inside double quotes does not close the span" \
+  "pgrep/pkill with -P/--parent and no pattern"
+printf '#!/usr/bin/env bash\nexit 0\nkids=$(%s -P "$x\\"" sleep)\n' "$PG" > "$SH_PROBE"
+expect_pass "check 14: a span closed after an escaped quote leaves the pattern outside it"
+# ...a quote left open at the end of the line keeps the rest of it as one word...
+printf '#!/usr/bin/env bash\nexit 0\nkids=$(%s -P "$x sleep\n")\n' "$PG" > "$SH_PROBE"
+expect_fail "check 14: an unterminated quote swallows the rest of the line" \
+  "pgrep/pkill with -P/--parent and no pattern"
+# ...a `$(` inside single quotes is not a command substitution...
+printf '#!/usr/bin/env bash\nexit 0\nkids=$(%s -P \047$(\047 sleep)\n' "$PG" > "$SH_PROBE"
+expect_pass "check 14: a \$( inside single quotes opens no nested span"
+# ...and a `)` inside quotes at depth zero does not end anything.
+printf '#!/usr/bin/env bash\nexit 0\nkids=$(%s -P "a)" sleep)\n' "$PG" > "$SH_PROBE"
+expect_pass "check 14: a ) inside quotes at depth zero closes nothing"
 rm -f "$SH_PROBE"
 
 # 34f — check 14's fail-closed arms, in the shapes 14a and 14b use. The listing errors with its
