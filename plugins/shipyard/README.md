@@ -312,8 +312,9 @@ unsupported setup, not by ordinary use. Each names what would make it a defect w
 - **KL-3 — the continuity watcher's start path is measured under bash 5, not 3.2.** For a Codex
   parent on agterm the report calls `shipyard_continuity_start` in-process, so under `/bin/bash`
   3.2. The macOS CI job runs t7 and t21 with their test bodies in the runner's bash 5, so only the
-  watcher their fake agtermctl launches runs under 3.2; the job's other steps use the tmux backend,
-  where the start path returns at once. It uses no bash-4 construct today.
+  watcher their fake agtermctl launches runs under 3.2; the job's other shipyard steps use the tmux
+  backend, where the start path returns at once, and its shared-module steps never reach it. It
+  uses no bash-4 construct today.
   `plugins/shipyard/skills/shipyard/shipyard-continuity.sh:1172`. Found by the review of #340.
   *Promote when* a bash-4 construct lands in that start path, or a Codex parent on agterm reports a
   watcher that never started.
@@ -376,7 +377,7 @@ unsupported setup, not by ordinary use. Each names what would make it a defect w
   wait reds it only while that default's polls finish inside 10 s; on a box loaded past that, the
   mutant survives. That loses coverage and never causes a false red. An evidence-ended hold was tried
   in #311 and reverted for its fork cost under load.
-  `plugins/shipyard/skills/shipyard/tests/t7-continuity.sh:749`, against
+  `plugins/shipyard/skills/shipyard/tests/t7-continuity.sh:751`, against
   `plugins/shipyard/skills/shipyard/shipyard-continuity.sh:1233`. Found by the review of #311.
   *Promote when* someone lowers the stop's wait or the case's hold, or a mutation run by hand shows
   the mutant surviving on an idle box (no automated run applies it): then the hold ends on the stop

@@ -48,18 +48,18 @@ check:
 # So the thing to watch is no longer the total: it is whether a file you are adding lands in the
 # top few. The longest file is `t19-occupant`, at ~143s alone at load ~24, with `t17-autodown`
 # (~43s) and `t16-tell-knobs` (~35s) timed in the same sitting. It was ~115s after #290 and ~102s
-# before it, at loads not recorded, so the rise mixes load with #269's three added compaction runs;
-# tracing compact.sh puts those at ~13s, run side by side, the longest because it waits out the
-# loop's five-second poll. Most of its time is shipyard-compact.sh's fixed sleeps, paid once per run of that
-# script. t16 is close to irreducible: the remaining time is three confirmation windows whose
-# DURATIONS are what its assertions check.
+# before it, at loads not recorded, so the rise mixes load with #269's three added compaction runs.
+# Those run side by side, and compact.sh's fixed sleeps put the longest at ~13s (1+1+3+3+5, summed
+# from the script, not timed): it waits out the loop's five-second poll. Most of t19's time is those
+# fixed sleeps, paid once per run of that script. t16 is close to irreducible: the remaining time is
+# three confirmation windows whose DURATIONS are what its assertions check.
 #
 # AND THE TARGET IS NOT MET, SO SAY SO HERE RATHER THAN LEAVE IT TO BE INFERRED. #203 wanted
 # `make check` + `make test` comfortably under a minute; at #203's time they were ~2:20 together,
-# against the earlier 2:10 figure, and a figure taken on a quiet box is what would settle it now. The remaining
-# lever is that this recipe runs the two slow suites ONE AFTER THE OTHER even though each now
-# fans out internally — overlapping them would cost roughly the longer of the two instead of the
-# sum. It was not taken: each already fans out to min(nproc, 8), so running both at once
+# against the earlier 2:10 figure, and a figure taken on a quiet box is what would settle it now.
+# The remaining lever is that this recipe runs the two slow suites ONE AFTER THE OTHER even though
+# each now fans out internally — overlapping them would cost roughly the longer of the two instead
+# of the sum. It was not taken: each already fans out to min(nproc, 8), so running both at once
 # oversubscribes the box, and this change has already measured what an oversubscribed box does
 # to this suite (see the keeper-period note in council's tests/_helpers.sh). That is a judgement,
 # not a measurement — if someone measures it and it holds, the minute is reachable.
