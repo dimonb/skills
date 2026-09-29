@@ -979,8 +979,8 @@ monitor both skip them, so telling a child something never looks like an open es
 
 ### When a merge changes the ship skill, tell every running child
 
-A child's worktree is branched from the base branch at launch, and the child follows the copy of
-`ship` in that worktree for its whole run. A change to the ship skill that merges afterwards — its
+A child's worktree is branched from the base branch at launch, and a child that loads `ship` from
+its worktree follows that copy for its whole run. A change to the ship skill that merges afterwards — its
 `SKILL.md` or a reference file it reads — never reaches it on its own: the child runs the old rule
 to the end, and nothing on its screen or in its state file shows that it is doing so.
 
@@ -999,7 +999,10 @@ the directive at once, so it applies the rule from the next point it can. The di
 
 Every running child is the recipient, including one you think will never reach that stage — a
 fix round or a re-entry can take it there, and a directive it does not need costs it one line.
-A child launched after the merge needs none: its worktree already carries the new text.
+A child launched after the merge needs none when it loads `ship` from its worktree, which already
+carries the new text. One that resolves `ship` from a user-level install instead — an `agy` child
+in a repo without its own copy (*An `agy` child*, above) — runs whatever that install holds, so it
+gets the directive whenever it was launched.
 
 Measured: a slot launched twelve minutes before a change to ship's deferral rule merged ran the old
 rule to the end and filed two issues, one of which the new rule would have sent mostly to a Known
