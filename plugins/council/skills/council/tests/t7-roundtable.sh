@@ -548,6 +548,21 @@ jq '.round_deadline_ms=1' "$R9/roster.json" > "$R9/r.tmp" && mv "$R9/r.tmp" "$R9
 sleep 0.1
 [ "$(bar "$R9")" = closed ] || { echo "FAIL a two-seat room whose partner never speaks froze: $(bar "$R9")"; fail=1; }
 echo "the 2x backstop closes a two-seat round with one position, and not before twice the deadline"
+# THE DEFAULT (#274). Every roundtable fixture sets round_deadline_ms, so the fallback c_barrier
+# reads for a roster WITHOUT the field never ran. These rooms drop it and bracket the default
+# (600000) from both sides: the backstop at twice it, and the deadline with a quorum.
+nodl() { jq 'del(.round_deadline_ms)' "$1/roster.json" > "$1/r.tmp" && mv "$1/r.tmp" "$1/roster.json"; }
+mk_t7i "$R9" $(( _t7i_now - 4 * _t7i_d )) a b; nodl "$R9"; pos_t7i "$R9" a $(( _t7i_now - 3 * _t7i_d ))
+[ "$(bar "$R9")" = closed ] || { echo "FAIL no round_deadline_ms: the backstop did not fire at 3x the default: $(bar "$R9")"; fail=1; }
+mk_t7i "$R9" $(( _t7i_now - 4 * _t7i_d )) a b; nodl "$R9"; pos_t7i "$R9" a $(( _t7i_now - 3 * _t7i_d / 2 ))
+[ "$(bar "$R9")" = open ] || { echo "FAIL no round_deadline_ms: the backstop fired at 1.5x the default: $(bar "$R9")"; fail=1; }
+mk_t7i "$R9" $(( _t7i_now - 4 * _t7i_d )) a b c; nodl "$R9"
+pos_t7i "$R9" a $(( _t7i_now - 700000 )); pos_t7i "$R9" b $(( _t7i_now - 700000 ))
+[ "$(bar "$R9")" = closed ] || { echo "FAIL no round_deadline_ms: a quorum 700s old did not close on the default deadline: $(bar "$R9")"; fail=1; }
+mk_t7i "$R9" $(( _t7i_now - 4 * _t7i_d )) a b c; nodl "$R9"
+pos_t7i "$R9" a $(( _t7i_now - 500000 )); pos_t7i "$R9" b $(( _t7i_now - 500000 ))
+[ "$(bar "$R9")" = open ] || { echo "FAIL no round_deadline_ms: a quorum 500s old closed before the default deadline: $(bar "$R9")"; fail=1; }
+echo "a roster without round_deadline_ms falls back to the 600000 ms default"
 
 # THE ANCHOR (#165). `sent_ms` is the message's own claim. A position stamped `1` — a harness
 # writing seconds for milliseconds does it by accident — in a room created just now must not
