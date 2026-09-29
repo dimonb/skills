@@ -182,8 +182,9 @@ GitLab closes an issue from any commit message pushed to the default branch, and
 from the MR's title, its description **and every commit message in the MR** — the source-branch
 commits as pushed, whatever the merge method and whatever the squash commit message says — while
 `autoclose_referenced_issues` is on (§9); while it is off none of this closes anything (core §7.G
-step 5, the *nothing will close it* case). So, with it on, no merge keeps a commit's keyword from closing its
-issue: rewording the commit is the only fix (core §7.G step 5, the *none exists* case). Its default pattern takes
+step 5, the *nothing will close it* case). So, with it on, no merge method keeps a commit's keyword
+from closing its issue, and the fix is to change the message — by rewording the commit where step 4
+allows it (core §7.G step 5, the *none exists* case). Its default pattern takes
 `close`, `closes`, `closed`, `closing`, `fix`, `fixes`, `fixed`, `fixing`, `resolve`, `resolves`,
 `resolved`, `resolving`, `implement`, `implements`, `implemented`, `implementing` — any case, an
 optional colon, an optional `issue` or `issues` — and then a **list** of references (`#N`,
@@ -203,7 +204,7 @@ glab api --paginate "projects/$PROJECT/merge_requests/IID/commits" \
 REF='([[:alnum:]_./-]*#[0-9]+|https?://[^[:space:]]+/-/issues/[0-9]+)'
 grep -oiE "(^|[^[:alnum:]_])(clos(e[sd]?|ing)|fix(e[sd]|ing)?|resolv(e[sd]?|ing)|implement(s|ed|ing)?):?[[:space:]]+(issues?[[:space:]]+)?$REF([[:space:]]*,?[[:space:]]*(and[[:space:]]+)?$REF)*"
 
-# the one setting that decides whether any of it closes
+# the setting that decides whether any of it closes, for a merge into the default branch
 glab api "projects/$PROJECT" | jq .autoclose_referenced_issues
 ```
 

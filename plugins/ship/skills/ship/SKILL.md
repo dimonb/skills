@@ -1775,6 +1775,9 @@ description closes — the change's own and the sweep's — actually closed (clo
 with its evidence, if the reference did not do it) and that no issue off that list closed (reopen
 one that did, with a comment saying why), then `record state=done`, stop the watch,
 schedule nothing more.
+Where step 5 of the closing-keyword check says ship does not merge, it does not: it hands over as
+under `no-merge` above, with that line in the record, and records `state=ready-to-merge`, never
+`done`.
 
 If the forge refuses the merge because the **project** requires approvals, do NOT attempt to
 self-approve or work around it — and do NOT sit there polling. That is a project-configuration
