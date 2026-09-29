@@ -145,8 +145,8 @@ mailbox of a run already in flight.
 `shared/<mod>/`, vendored into both plugins and held byte-identical by the gate (`shared/driver`
 the terminal backend, `shared/adapters` per-agent-kind launch and client knowledge,
 `shared/policy` escalation disposition, `shared/flow` the step graph, among others). The vendoring
-exists because a Codex plugin cannot depend on another plugin, so a symlink cannot cross that boundary;
-`scripts/sync-driver.sh` writes the copies and the drift check reds if any diverges.
+exists because a Codex plugin cannot depend on another plugin, so a symlink cannot cross that
+boundary; `scripts/sync-driver.sh` writes the copies and the drift check reds if any diverges.
 
 **The rule: what BOTH skills need goes into the shared engine, so each skill stays as thin as it
 can be.** A skill should hold its own operator surface and its own policy, and as little else as
