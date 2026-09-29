@@ -635,7 +635,8 @@ _keeper_ensure() { # <room-dir> <peer>...
   # mystifying "the suite hangs" during development.
   ( exec >/dev/null 2>&1 <&-
     [ -n "$cw" ] && exec {cw}>&-      # the keeper never writes the canary; only the owner keeps that end
-    CANARY_SENTINEL_FD=""; CANARY_SENTINEL_PID=""   # none yet; the stop below must not act on an inherited value
+    # No sentinel yet: the stop below must never act on a value this subshell inherited.
+    CANARY_SENTINEL_FD=""; CANARY_SENTINEL_PID=""
     for p in "$@"; do exec {fd}<> "$room/bell/$p.fifo"; done
     _keeper_loop "$room" "$keep" "$cr" "$poll" "$@"
     # The canary sentinel holds every fd this keeper had open, the bell fifos included, until the

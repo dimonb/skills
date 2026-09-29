@@ -389,8 +389,9 @@ run by hand, gated by nothing, for as long as it existed (#111).
 `make check` also runs the suites its `check:` recipe lists — today every suite under `shared/`,
 all fast and pure — so a regression in any of them reds a commit. What keeps a suite in that recipe
 rather than only in `test:` is one `scripts/check-test.sh` probe per suite (the 30* family), added
-by hand with the suite; nothing checks that a new shared suite got one. CI runs `make check` and `make test` in one workflow
-(`.github/workflows/ci.yml`) on every push to `main` and every pull request — plus, in a macOS job
+by hand with the suite; nothing checks that a new shared suite got one. CI runs `make check` and
+`make test` in one workflow (`.github/workflows/ci.yml`) on every push to `main` and every pull
+request — plus, in a macOS job
 of the same workflow, the test files that run shipyard code under /bin/bash, whose 3.2 floor is
 vacuous on Linux (the job lists them; `scripts/check.sh` check 16 reds when a test naming
 `/bin/bash` on a line it runs is missing from it, and a floor reached through a variable set
