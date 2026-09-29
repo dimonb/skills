@@ -19,8 +19,12 @@ name: check-test
 #
 # ON A PUSH TO `main` IT RUNS UNCONDITIONALLY, with no filter at all. That is the backstop: a
 # filter that turns out to be too narrow costs one late red at merge rather than a silent gap.
-# `scripts/check.sh` check 13 reads this block by trigger and reds a `push:` that is missing or
-# that carries a path filter, so adding one to spare docs pushes the run is a red, not a gap.
+# `scripts/check.sh` check 13 reads this block by trigger and reds a `push:` that is missing, that
+# carries any key but `branches:`, or whose `branches:` is not exactly `'main'`; and a
+# `pull_request:` carrying any key but `paths:`, or a `paths:` entry it cannot read or that is
+# negated. Every entry is a quoted block item and no key carries a value on its own line, since
+# those are the only shapes it reads. So adding a filter to spare docs pushes the run, or narrowing
+# pull requests by branch or type, is a red, not a gap.
 #
 # THE FILTER IS DERIVED, NOT GUESSED. It is `$GUARDED` from scripts/check-test.sh with each
 # directory spelt `<dir>/**`, PLUS `docs/**`. `scripts/check.sh` check 13 asserts the `$GUARDED`
@@ -50,7 +54,8 @@ name: check-test
 
 on:
   push:
-    branches: [main]
+    branches:
+      - 'main'
   pull_request:
     paths:
       - '.claude/**'

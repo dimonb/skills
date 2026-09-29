@@ -78,6 +78,9 @@ PROBE_FILES=(
   plugins/ship/skills/ship/references/_probe-scratch plugins/ship/skills/ship/references/_probe-dangling.md
   plugins/ship/skills/ship/references/_probe-ignored.md
   plugins/_probe-link
+  # No probe writes this any more (#58); a run of the version before, killed inside 36g, did, and
+  # listing it keeps that one leftover named and recoverable rather than a bare `BASELINE DIRTY`.
+  docs/_probe-note.md
 )
 
 # THE RUN MARKER (#136). While a run is in flight its probes are in the tree, and from outside a
@@ -108,9 +111,7 @@ restore() {
   done
   # shellcheck disable=SC2086
   git checkout -- $GUARDED 2>/dev/null || true
-  # docs/_probe-note.md is removed but is not in PROBE_FILES: 36g needs a gate-reddening file that
-  # the leftover arm does not count as a fixture.
-  rm -rf "${PROBE_FILES[@]}" docs/_probe-note.md ${SCRATCH:+"$SCRATCH"} 2>/dev/null || true
+  rm -rf "${PROBE_FILES[@]}" ${SCRATCH:+"$SCRATCH"} 2>/dev/null || true
   rmdir docs 2>/dev/null || true
   # Last, so the marker says "in progress" for as long as anything of this run is in the tree.
   rm -f "$MARKER"
@@ -1251,23 +1252,23 @@ git checkout -- scripts/check-test.sh
 # 33d — the backstop (#215): a `paths:` list under `push:` makes the run on main conditional. The
 # flat scrape this replaced read the new entry as one more pull-request filter entry and said
 # nothing. Every pull-request entry stays in place, so only the push arm can fire.
-perl -0pi -e "s{(\n  push:\n    branches: \\[main\\]\n)}{\$1    paths:\n      - 'docs/**'\n}" .github/workflows/check-test.yml
+perl -0pi -e "s{(\n  push:\n    branches:\n      - 'main'\n)}{\$1    paths:\n      - 'docs/**'\n}" .github/workflows/check-test.yml
 expect_fail "check 13: a path filter under push: is refused" \
   "filters its push: trigger by paths"
 git checkout -- .github/workflows/check-test.yml
 # 33d2 — the same filter in flow style, which a block reader would read as an unfiltered push...
-perl -0pi -e "s{\n  push:\n    branches: \\[main\\]\n}{\n  push: {branches: [main], paths: ['docs/**']}\n}" .github/workflows/check-test.yml
+perl -0pi -e "s{\n  push:\n    branches:\n      - 'main'\n}{\n  push: {branches: [main], paths: ['docs/**']}\n}" .github/workflows/check-test.yml
 expect_fail "check 13: a flow-style push: trigger is refused" \
   "writes its push: trigger in flow style"
 git checkout -- .github/workflows/check-test.yml
 # 33d3 — ...and under a quoted key, which a reader of bare keys would file under `branches:`.
-perl -0pi -e "s{(\n  push:\n    branches: \\[main\\]\n)}{\$1    \"paths\":\n      - 'docs/**'\n}" .github/workflows/check-test.yml
+perl -0pi -e "s{(\n  push:\n    branches:\n      - 'main'\n)}{\$1    \"paths\":\n      - 'docs/**'\n}" .github/workflows/check-test.yml
 expect_fail "check 13: a quoted paths key under push: is read as the key it is" \
   "filters its push: trigger by paths"
 git checkout -- .github/workflows/check-test.yml
 # 33d4 — and the flow mapping moved to the line below its event, where it is neither a key nor an
 # item: a line the reader cannot place reds instead of being skipped.
-perl -0pi -e "s{\n  push:\n    branches: \\[main\\]\n}{\n  push:\n    {branches: [main], paths: ['docs/**']}\n}" .github/workflows/check-test.yml
+perl -0pi -e "s{\n  push:\n    branches:\n      - 'main'\n}{\n  push:\n    {branches: [main], paths: ['docs/**']}\n}" .github/workflows/check-test.yml
 expect_fail "check 13: a line under push: that is neither a key nor an item is refused" \
   "cannot read as a key or a list item"
 git checkout -- .github/workflows/check-test.yml
@@ -1283,9 +1284,95 @@ expect_fail "check 13: an event line it cannot name is refused" \
   "has an event under on: that check 13 cannot read"
 git checkout -- .github/workflows/check-test.yml
 # 33e — and the backstop removed outright.
-perl -0pi -e 's{\n  push:\n    branches: \[main\]\n}{\n}' .github/workflows/check-test.yml
+perl -0pi -e 's{\n  push:\n    branches:\n      - \x27main\x27\n}{\n}' .github/workflows/check-test.yml
 expect_fail "check 13: a workflow with no push: trigger reds" \
   "has no push: trigger"
+git checkout -- .github/workflows/check-test.yml
+# 33i — the key allowlist (#58). Each key below narrows when the job runs and passed green while
+# check 13 read only the keys it was written about. `branches:` stays in place under push: in the
+# first two, so the must-name-main arm cannot claim the red.
+perl -0pi -e "s{(\n  push:\n    branches:\n      - 'main'\n)}{\$1    branches-ignore:\n      - 'main'\n}" .github/workflows/check-test.yml
+expect_fail "check 13: branches-ignore under push: is refused" \
+  "push: trigger carries branches-ignore"
+git checkout -- .github/workflows/check-test.yml
+perl -0pi -e "s{(\n  push:\n    branches:\n      - 'main'\n)}{\$1    tags:\n      - 'v*'\n}" .github/workflows/check-test.yml
+expect_fail "check 13: tags under push: is refused" \
+  "push: trigger carries tags"
+git checkout -- .github/workflows/check-test.yml
+perl -0pi -e "s{(\n  pull_request:\n)}{\$1    branches:\n      - 'release'\n}" .github/workflows/check-test.yml
+expect_fail "check 13: branches under pull_request: is refused" \
+  "pull_request: trigger carries branches"
+git checkout -- .github/workflows/check-test.yml
+perl -0pi -e "s{(\n  pull_request:\n)}{\$1    types:\n      - 'closed'\n}" .github/workflows/check-test.yml
+expect_fail "check 13: types under pull_request: is refused" \
+  "pull_request: trigger carries types"
+git checkout -- .github/workflows/check-test.yml
+# 33j — push: branches: is exactly main. A list without it, spelt as a near miss so that a match
+# loosened to a substring would pass it; one that excludes it again; and an entry beside it the
+# reader cannot read (unquoted), which only the count of `-` lines sees.
+perl -0pi -e "s{(\n  push:\n    branches:\n      - )'main'\n}{\$1'main-old'\n}" .github/workflows/check-test.yml
+expect_fail "check 13: a push: branches list without main reds" \
+  "push: trigger does not name 'main'"
+git checkout -- .github/workflows/check-test.yml
+perl -0pi -e "s{(\n  push:\n    branches:\n      - 'main'\n)}{\$1      - '!main'\n}" .github/workflows/check-test.yml
+expect_fail "check 13: a negated pattern under push: branches reds" \
+  "push: branches: carries an entry other than 'main'"
+git checkout -- .github/workflows/check-test.yml
+perl -0pi -e "s{(\n  push:\n    branches:\n      - 'main'\n)}{\$1      - release\n}" .github/workflows/check-test.yml
+expect_fail "check 13: an unreadable entry beside main under push: branches reds" \
+  "push: branches: carries an entry other than 'main'"
+git checkout -- .github/workflows/check-test.yml
+# 33k — a value on the key's own line: `>-` makes the list below it a string to YAML, yet its
+# `- 'main'` would read as an item. Nothing else reds here.
+perl -0pi -e "s{(\n  push:\n    branches:)\n}{\$1 >-\n}" .github/workflows/check-test.yml
+expect_fail "check 13: a key under push: with a value on its own line is refused" \
+  "with a value on the key's own line"
+git checkout -- .github/workflows/check-test.yml
+# 33k2 — the same under pull_request:, where the list below still reads as a complete filter.
+perl -0pi -e "s{(\n  pull_request:\n    paths:)\n}{\$1 >-\n}" .github/workflows/check-test.yml
+expect_fail "check 13: a key under pull_request: with a value on its own line is refused" \
+  "under its pull_request: trigger with a value on the key's own line"
+git checkout -- .github/workflows/check-test.yml
+# 33j4 — a YAML escape: `'main''x'` is main'x, a branch that is not main. An item regex that stops at
+# the first closing quote would read it as `main`.
+perl -0pi -e "s{(\n  push:\n    branches:\n      - )'main'\n}{\$1'main''x'\n}" .github/workflows/check-test.yml
+expect_fail "check 13: an escaped quote in the only push: branch is not read as main" \
+  "push: trigger does not name 'main'"
+git checkout -- .github/workflows/check-test.yml
+# 33l — the pull-request filter reads every entry or reds: an unquoted one beside the complete
+# list, where the coverage loop stays green because every entry $GUARDED derives is still there...
+perl -0pi -e "s{(\n *- 'docs/\\*\\*'\n)}{\$1      - scripts/extra/**\n}" .github/workflows/check-test.yml
+expect_fail "check 13: an unreadable pull_request: paths: entry is refused" \
+  "has an entry check 13 cannot read"
+git checkout -- .github/workflows/check-test.yml
+# 33l2 — ...and a negated one, which takes a guarded tree back out of a list that still names it.
+perl -0pi -e "s{(\n *- 'docs/\\*\\*'\n)}{\$1      - '!scripts/**'\n}" .github/workflows/check-test.yml
+expect_fail "check 13: a negated pull_request: paths: entry is refused" \
+  "pull_request: paths: carries a negated pattern"
+git checkout -- .github/workflows/check-test.yml
+# 33l3 — the same negation spelt as a double-quoted escape (`\x21` is `!`), which a reader that read
+# a backslash inside double quotes would take for a plain entry.
+perl -0pi -e "s{(\n *- 'docs/\\*\\*'\n)}{\$1      - \"\\\\x21scripts/**\"\n}" .github/workflows/check-test.yml
+expect_fail "check 13: an escaped double-quoted pull_request: paths: entry is not read" \
+  "has an entry check 13 cannot read"
+git checkout -- .github/workflows/check-test.yml
+# 33l4 — a tab inside the quotes is part of the value, but the reader's rows are tab-separated, so a
+# reader that kept it would split `scripts/**` back off it and read a path the filter does not hold.
+perl -0pi -e "s{(\n *- 'docs/\\*\\*'\n)}{\$1      - 'scripts/**\t'\n}" .github/workflows/check-test.yml
+expect_fail "check 13: a tab inside a quoted pull_request: paths: entry is not read" \
+  "has an entry check 13 cannot read"
+git checkout -- .github/workflows/check-test.yml
+# 33n — a line break awk does not split on (a lone CR) hides a second entry behind a comment.
+perl -0pi -e "s{(\n  push:\n    branches:\n      - 'main')\n}{\$1 #\r      - '!main'\n}" .github/workflows/check-test.yml
+expect_fail "check 13: a line break other than LF is refused" \
+  "contains a line break other than LF"
+git checkout -- .github/workflows/check-test.yml
+# 33o — a key written twice under one event: parsers disagree on which copy wins, and one that keeps
+# the last would run check-test on `docs/**` alone. This reader credits both lists, so the coverage
+# loop stays green and nothing else reds.
+perl -0pi -e "s{(\n *- 'docs/\\*\\*'\n)}{\$1    paths:\n      - 'docs/**'\n}" .github/workflows/check-test.yml
+expect_fail "check 13: a repeated key under pull_request: is refused" \
+  "repeats pull_request.paths"
 git checkout -- .github/workflows/check-test.yml
 # 33f — an entry under ANOTHER trigger cannot stand in for one missing from the pull-request
 # filter. Under the flat scrape this line was read as coverage, so dropping `shared/**` from
@@ -1590,22 +1677,40 @@ REFS=plugins/ship/skills/ship/references
 mkdir -p plugins/_probe-scratch-empty plugins/_probe-scratch "$REFS/_probe-scratch"
 printf '*\n' > plugins/_probe-scratch/.gitignore
 printf 'notes\n' > plugins/_probe-scratch/notes.md
-printf '/%s/_probe-ignored.md\n' "$REFS" > "$SCRATCH/probe-exclude"
+# The setting lives in this process's environment only, never in any config file. It REPLACES the
+# excludes file git would otherwise read, so that file is seeded with the one the baseline run saw
+# -- the configured `core.excludesFile`, else git's default location -- and the probe line is
+# appended to it (#58): without the seed, a file the user's own ignore rules hide (an ignored
+# `references/todo.local.md` naming a state) would reappear for this run alone and red it with
+# nothing wrong in the repo. For the same reason a `GIT_CONFIG_COUNT` the caller already passes is
+# extended, not overwritten.
+user_excl=$(git config --path core.excludesFile 2>/dev/null) \
+  || user_excl="${XDG_CONFIG_HOME:-$HOME/.config}/git/ignore"
+{
+  if [ -f "$user_excl" ]; then cat "$user_excl"; echo; fi
+  printf '/%s/_probe-ignored.md\n' "$REFS"
+} > "$SCRATCH/probe-exclude"
 printf 'Stages: need-issue then ready-to-merge.\n' > "$REFS/_probe-ignored.md"
 printf '*\n' > "$REFS/_probe-scratch/.gitignore"
 printf 'Stages: need-issue then ready-to-merge.\n' > "$REFS/_probe-scratch/notes.md"
-GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=core.excludesFile GIT_CONFIG_VALUE_0="$SCRATCH/probe-exclude" \
-  expect_pass "an empty or ignored scratch directory under plugins/ stays green"
+cfg_n=${GIT_CONFIG_COUNT:-0}
+case $cfg_n in ''|*[!0-9]*) cfg_n=0 ;; esac
+cfg_prev=${GIT_CONFIG_COUNT-unset}
+export GIT_CONFIG_COUNT=$((cfg_n + 1)) "GIT_CONFIG_KEY_$cfg_n=core.excludesFile" \
+  "GIT_CONFIG_VALUE_$cfg_n=$SCRATCH/probe-exclude"
+expect_pass "an empty or ignored scratch directory under plugins/ stays green"
+unset "GIT_CONFIG_KEY_$cfg_n" "GIT_CONFIG_VALUE_$cfg_n"
+if [ "$cfg_prev" = unset ]; then unset GIT_CONFIG_COUNT; else export GIT_CONFIG_COUNT="$cfg_prev"; fi
 rm -rf plugins/_probe-scratch-empty plugins/_probe-scratch "$REFS/_probe-scratch" "$REFS/_probe-ignored.md"
 
 # 36 — this file's own entry arms (#136): the run marker and the leftover-fixture refusal. They are
 # not gate assertions, so they are proven by running this script a second time, NESTED, and reading
 # how it refuses. Every nested run below must refuse before it arms a trap or mutates anything,
 # because a nested run that got past its entry guards would start a second full run over this
-# tree. So each one without --recover (which never reaches a run) is given a file that reds the
-# gate — a non-Latin file under `docs/`, the exact state #136 measured — which makes a
-# broken arm fall to another refusal, or to `BASELINE DIRTY`, and report here as a wrong arm
-# rather than run.
+# tree. So each one without --recover (which never reaches a run) is given a non-Latin byte that
+# reds the gate — in a file under `docs/`, the exact state #136 measured, or in 36g inside its own
+# Makefile edit — which makes a broken arm fall to another refusal, or to `BASELINE DIRTY`, and
+# report here as a wrong arm rather than run.
 # $1 label, $2 the exit status wanted, $3 a fixed string the nested output must contain, then the
 # nested run's arguments.
 expect_nested() {
@@ -1667,16 +1772,17 @@ printf '# probe\n' >> Makefile
 expect_nested "--recover refuses changes nothing marks as check-test's" 2 "not assumed to be check-test's" --recover
 git checkout -- Makefile
 # 36g — a dead run's marker with an edit under $GUARDED and NO probe fixture: the refusal names the
-# run but says the edit may be the user's own. The gate-reddening file here is deliberately not a
-# probe fixture, so the fixture branch cannot claim the output.
-mkdir -p docs
-printf 'probe \320\226\n' > docs/_probe-note.md
+# run but says the edit may be the user's own. The gate-reddening byte rides IN that edit (#58), so
+# no probe fixture exists for the fixture branch to claim the output with, and nothing untracked is
+# left for a SIGKILL here to strand: the Makefile is under $GUARDED, so the next run's dirty-tree
+# refusal names it and --recover restores it. A separate untracked note file did both jobs before and
+# was neither listed by that refusal nor by --recover.
 ( : ) & dead=$!; wait "$dead"
 printf 'pid=%s\nstarted=probe\n' "$dead" > "$MARKER"
-printf '# probe\n' >> Makefile
+printf '# probe \320\226\n' >> Makefile
 expect_nested "a dead run's marker without a fixture does not claim the edit" 2 "no probe fixture was found"
 git checkout -- Makefile
-rm -f "$MARKER" docs/_probe-note.md
+rm -f "$MARKER"
 expect_nested "--recover with nothing to recover" 0 "nothing to recover" --recover
 rmdir docs 2>/dev/null || true
 # Not probed: the `note:` line for a stale marker over a clean tree. A nested run there passes every

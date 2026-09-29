@@ -34,11 +34,14 @@ repo's. Anything else you keep there untracked — a scratch directory, a local 
 whatever another tool left behind — is your business: **every check but the two repo-wide scans
 ignores it**, so its frontmatter, its name and its scripts are not the gate's concern, and it draws
 a note rather than a failure. The two repo-wide scans still read it, deliberately: a leak or a
-non-Latin script reds the gate wherever it sits, including in a file you never meant to commit.
+non-Latin script reds the gate wherever it sits, including in a file you never meant to commit,
+unless that file is git-ignored.
 
 That carve-out costs no coverage of anything this repo ships, because everything it ships lives
-under `plugins/`, which is checked in full, untracked files included. Failing on incidental local
-state only ever blocked unrelated commits. One consequence worth knowing: `make check-test`
+under `plugins/`, which is checked in full, untracked files included unless git-ignored: every
+check that lists its files through git skips an ignored one as git does, the two repo-wide scans
+included, since `git grep --untracked` honours `.gitignore` too. Failing on incidental local state
+only ever blocked unrelated commits. One consequence worth knowing: `make check-test`
 restores with `git checkout --`, so it refuses to run at all while any untracked file sits under
 the paths it guards — `make check` is fine, but move your scratch directory before running the
 other one. While it runs, its probes are in the tree, and a live probe looks exactly like one a
