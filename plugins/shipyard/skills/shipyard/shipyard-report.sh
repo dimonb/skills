@@ -1241,6 +1241,14 @@ GONE=""      # slots this tick rendered `⛔ no terminal`; consulted by the tail
 # which is the worse trade. t2-window.sh pins this call site, above the loop, for both reasons.
 ctx_check_env
 
+# The slot graph's refusal, reported ONCE per run (#338). On a Mac with no bash >= 5 the graph
+# refuses for every live slot, and it used to print its two-line refusal once per slot per tick
+# while every row read a plain `active`. The loop below keeps the graph's first refusal line and
+# the count of slots it refused, and the one line after the loop names both. It goes to stderr,
+# like ctx_check_env's line above and for the same reason: it is printed before --only-changed
+# decides anything, so a quiet tick still carries it, as the per-slot lines it replaces did.
+GRAPH_FAIL=""; GRAPH_FAIL_N=0
+
 for slot in "${SLOTS[@]}"; do
   [ -z "$slot" ] && continue
   addr=$(shipyard_slot_addr "$slot")
@@ -1353,12 +1361,29 @@ for slot in "${SLOTS[@]}"; do
   # (t7) while the guard needs bash >= 5; it is spawned only here, for a LIVE slot, never on the
   # no-terminal path that exits above. The facts it reads are the ones already resolved just above,
   # so it adds no forge call.
-  read -r phase verdict <<<"$(bash "$DIR/shipyard-slot-graph.sh" slot "$iid" "$state" "$stage" "$addr")"
+  #
+  # Its stdout and stderr come back in ONE capture, stderr lines prefixed `E `, so a refusal can be
+  # counted here rather than printed per slot (#338) without a temp file. The answer line is
+  # "<phase> <verdict>", and no phase starts with `E `. Stderr from a graph that DID answer is
+  # passed through to this script's stderr as before.
+  graph_out=$( { bash "$DIR/shipyard-slot-graph.sh" slot "$iid" "$state" "$stage" "$addr" 2>&1 1>&3 3>&- \
+                 | sed 's/^/E /'; } 3>&1 )
+  graph_err=$(printf '%s\n' "$graph_out" | sed -n 's/^E //p')
+  phase=""; verdict=""
+  read -r phase verdict <<<"$(printf '%s\n' "$graph_out" | grep -v '^E ' | head -n 1)"
   # Fail-safe if the graph could not answer: it fails loudly with EMPTY stdout (a missing bash 5, or
   # an unloadable flow.sh — it never emits a misleading phase), so an empty verdict defaults to
   # `active` (never falsely `completed`) and the empty phase is not `torn-down`, so the slot is still
-  # counted in flight below (never dropped).
-  [ -n "$verdict" ] || verdict=active
+  # counted in flight below (never dropped). The glyph cannot say more than `active`, so the ROW
+  # says it (`completion unreadable` in its state cell) and the run's one stderr line says why.
+  graph_unread=0
+  if [ -z "$verdict" ]; then
+    graph_unread=1; verdict=active; GRAPH_FAIL_N=$((GRAPH_FAIL_N+1))
+    [ -n "$GRAPH_FAIL" ] || GRAPH_FAIL=$(printf '%s\n' "$graph_err" | head -n 1)
+    [ -n "$GRAPH_FAIL" ] || GRAPH_FAIL="shipyard-slot-graph: no answer and no message"
+  elif [ -n "$graph_err" ]; then
+    printf '%s\n' "$graph_err" >&2
+  fi
 
   # --- a merged slot tears itself down (#181) --------------------------------
   # Placed HERE, before the in-flight count and before the ctx/stall work: a slot this tick
@@ -1694,7 +1719,11 @@ for slot in "${SLOTS[@]}"; do
   else                                    shipyard_note "$slot" "$verdict"
   fi
 
-  ROWS+=("| $slot | $mr_label | $addr | $run | $state / $stage | $esc | $ctx | ${line} |")
+  # A slot whose phase the graph could not read says so in its state cell (#338): its glyph falls
+  # back to `active`, and a bare `active` would read as a slot known not to be finished.
+  cell="$state / $stage"
+  [ "$graph_unread" = 1 ] && cell="$cell · completion unreadable"
+  ROWS+=("| $slot | $mr_label | $addr | $run | $cell | $esc | $ctx | ${line} |")
   # No $run and no $line here on purpose — see the --only-changed note in the header. $wait_class
   # IS meaningful: entering or leaving a stated wait is exactly the tick worth breaking silence
   # for, and it is the news the first time it appears, which is why it is not left to the (now
@@ -1702,9 +1731,21 @@ for slot in "${SLOTS[@]}"; do
   # bypasses the filter while it holds, so only the signature can make its ending news. `fna=` is
   # there for a FINISHED slot whose agent exited: it gets no 💀 block and no bypass, so without it
   # that death would change nothing the filter sees and the monitor would never print it.
-  SIG+=("$slot|$mr_label|term=1|$state|$stage|$pend/$badrec|$sig_band|$wait_class|$reap_note|noagent=$noagent|fna=$finished_noagent|unread=$unread")
+  # `graph=` is there so the tick the slot graph starts or stops answering is news (#338).
+  SIG+=("$slot|$mr_label|term=1|$state|$stage|$pend/$badrec|$sig_band|$wait_class|$reap_note|noagent=$noagent|fna=$finished_noagent|unread=$unread|graph=$graph_unread")
   :
 done
+
+# The graph's refusal, once for the whole run (see GRAPH_FAIL above the loop). One line: the count,
+# the graph's own first line, and, for the missing-interpreter refusal, the remedy the plugin
+# README's Requirements entry states.
+if [ "$GRAPH_FAIL_N" -gt 0 ]; then
+  graph_hint=""
+  case "$GRAPH_FAIL" in
+    *"needs bash >= 5"*) graph_hint=" (install a bash >= 5 beside macOS's /bin/bash, e.g. brew install bash; see the shipyard README, Requirements)" ;;
+  esac
+  echo "shipyard-report: the slot graph could not answer for $GRAPH_FAIL_N live slot(s) — their completion cannot be read, so they show as active: ${GRAPH_FAIL}${graph_hint}" >&2
+fi
 
 # Every report-* file lives in the mailbox every child can write, so each is written by rename
 # through policy_mailbox_write and never opened with `>`: a FIFO planted at any of them blocked the

@@ -195,6 +195,15 @@ starts nothing.
 ## Requirements
 
 - `git`, `bash`, `jq`, and either an agterm app or `tmux`.
+- **A bash 5 or newer on the machine**, at `/opt/homebrew/bin/bash`, `/usr/local/bin/bash` or
+  `/usr/bin/bash`, or as the first `bash` on the `PATH` shipyard builds (`shipyard-lib.sh` puts
+  Homebrew, MacPorts, `/usr/local/bin`, `/usr/bin` and `/bin` ahead of yours, so on a Mac a bash 5
+  that lives only in a directory of your own `PATH` is not found — link it into one of those). The status report itself runs under macOS's stock
+  `/bin/bash` 3.2, but the slot graph it consults for each live slot, `shipyard-slot-graph.sh`,
+  re-executes itself in a bash >= 5 and refuses without one. On a stock Mac install one beside
+  the system bash (`brew install bash`); do not replace `/bin/bash`. Without it the report still
+  runs, but no slot's completion can be read: every live row says `completion unreadable`, its
+  glyph stays `active`, and each report run prints one stderr line saying so.
 - A `ship` skill in the repo — see above.
 - The CLI matching the parent runtime on `PATH`: `claude` for Claude Code or `codex` for Codex
   (`agy` when `SHIPYARD_AGENT=agy`, with the repo's `ship` skill under `.agents/skills/`).
@@ -277,3 +286,34 @@ and get different skills. `SHIPYARD_ENV_SCRUB` overrides the set removed from th
 defaults strip the runtimes' session identities, including Claude Code's messaging socket.
 Override that one only if you know why. `SHIPYARD_DRY=1` prints everything a child would get
 and starts nothing.
+
+## Known limits
+
+Limits a review found and recorded rather than filed: each is reachable only by a later edit or an
+unsupported setup, not by ordinary use. Each names what would make it a defect worth an issue.
+
+- **KL-1 — t15's failing floor arm is exercised by no automated run.** When
+  `SHIPYARD_TEST_BASH32` names an interpreter that is not a bash 3.x, t15 fails rather than
+  skipping; the macOS CI job always names a real 3.2 and the Linux job never sets it, so no run
+  takes that arm, and the floors in t-policy and t-adapters lean on it.
+  `plugins/shipyard/skills/shipyard/tests/t15-iid-fallback.sh:487`. Found by the review of #336
+  (#337). *Promote when* an edit to the failing arm itself or to the 3.x detection above it is
+  proposed, or a macOS runner image whose `/bin/bash` is not 3.x is announced: then the arm needs a
+  CI step asserting it fails.
+- **KL-2 — the helpers the report spawns are measured under bash 5 in CI, not 3.2.** The report
+  starts `shipyard-slot-graph.sh`, `shipyard-escalations.sh` and `shipyard-down.sh` as
+  `bash <script>`, and `shipyard-lib.sh` puts the Homebrew prefix first on `PATH`, so wherever a
+  bash 5 is installed there (the CI job, and a Homebrew or `/usr/local` install as the Requirements
+  above describe) they run under it. A Mac with no bash 5 on that `PATH` runs them under 3.2,
+  where the escalations block would vanish silently (its stderr goes to `/dev/null`) if that script ever used a bash-4 construct; it
+  uses none today. `plugins/shipyard/skills/shipyard/shipyard-report.sh:2317`. Found by the review
+  of #336 (#337). *Promote when* a bash-4 construct lands in `shipyard-escalations.sh` or
+  `shipyard-down.sh`, or when bash 5 stops being a requirement.
+- **KL-3 — the continuity watcher's start path is measured under bash 5, not 3.2.** For a Codex
+  parent on agterm the report calls `shipyard_continuity_start` in-process, so under `/bin/bash`
+  3.2. The macOS CI job runs t7 and t21 with their test bodies in the runner's bash 5, so only the
+  watcher their fake agtermctl launches runs under 3.2; t15, t19 and t13 use the tmux backend, where
+  the start path returns at once. It uses no bash-4 construct today.
+  `plugins/shipyard/skills/shipyard/shipyard-continuity.sh:1172`. Found by the review of #340.
+  *Promote when* a bash-4 construct lands in that start path, or a Codex parent on agterm reports a
+  watcher that never started.

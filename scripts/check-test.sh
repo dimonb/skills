@@ -1768,6 +1768,56 @@ unset "GIT_CONFIG_KEY_$cfg_n" "GIT_CONFIG_VALUE_$cfg_n"
 if [ "$cfg_prev" = unset ]; then unset GIT_CONFIG_COUNT; else export GIT_CONFIG_COUNT="$cfg_prev"; fi
 rm -rf plugins/_probe-scratch-empty plugins/_probe-scratch "$REFS/_probe-scratch" "$REFS/_probe-ignored.md"
 
+# 39 — check 16, the macOS floor job against the tests that need it (#337). 39a is the issue's own
+# kill test: a floor test the job stops running. 39b-39d, 39h and 39i pin what the derivation counts
+# and what it does not; 39e-39g are the fail-closed arms.
+FLWF=.github/workflows/ci.yml
+FLT=plugins/shipyard/skills/shipyard/tests/t1-totals.sh
+perl -pi -e 's{^(\s*run: )bash (plugins/shipyard/skills/shipyard/tests/t19-occupant\.sh)\s*$}{$1true $2\n}' "$FLWF"
+expect_fail "a floor test the macOS job does not run" \
+  "t19-occupant.sh runs code under /bin/bash, which is 5.x on Linux, but the macOS bash32-floor job"
+git checkout -- "$FLWF"
+# 39b — a test outside the job that starts running code under /bin/bash reds...
+printf '/bin/bash -c true\n' >> "$FLT"
+expect_fail "a new /bin/bash line in a test the job does not run" "t1-totals.sh runs code under /bin/bash"
+git checkout -- "$FLT"
+# 39c — ...unless that line says it is not a floor, where it is written.
+printf '/bin/bash -c true   # floor-exempt: probe\n' >> "$FLT"
+expect_pass "a /bin/bash line marked floor-exempt stays green"
+git checkout -- "$FLT"
+# 39d — a re-exec candidate list, a comment and a message name the path without running it there.
+printf 'for c in /opt/homebrew/bin/bash /usr/bin/bash; do :; done\n# runs under /bin/bash\necho "stock /bin/bash is 3.2"\n' >> "$FLT"
+expect_pass "a re-exec candidate, a comment and an echo naming /bin/bash stay green"
+git checkout -- "$FLT"
+# 39h — a floor line followed by more than a pipe buffer of text is still derived. The derivation's
+# last stage used to be `grep -q`, whose early exit SIGPIPEs the stage feeding it under pipefail, so
+# a file like t7 (its match 30 KB from the end) dropped out about three runs in ten. About 1.3 MB of
+# live lines after the match puts it past GNU grep's read buffer as well as BSD grep's (80 KB still
+# passed under GNU `-q` every time), so a return to `-q` reds here on either platform.
+perl -0pi -e 's{\A(#![^\n]*\n)}{$1/bin/bash -c true\n}' "$FLT"
+perl -e 'print ": padding line so the floor match sits far from the end of the file\n" x 20000' >> "$FLT"
+expect_fail "a floor line far from the end of a test is still derived" "t1-totals.sh runs code under /bin/bash"
+git checkout -- "$FLT"
+# 39i — the `${X:-/bin/bash}` default is a floor too: it is how t15 picks its interpreter.
+printf 'b=${SOME_BASH:-/bin/bash}\n' >> "$FLT"
+expect_fail "a \${X:-/bin/bash} default in a test the job does not run" "t1-totals.sh runs code under /bin/bash"
+git checkout -- "$FLT"
+# 39e — a job step naming a file that is not there.
+perl -pi -e 's{tests/t19-occupant\.sh}{tests/t19-gone.sh}' "$FLWF"
+expect_fail "the macOS job runs a test that does not exist" \
+  "runs a test that does not exist: plugins/shipyard/skills/shipyard/tests/t19-gone.sh"
+git checkout -- "$FLWF"
+# 39f — the job renamed: nothing to compare against is a red, never a pass.
+perl -pi -e 's{^  bash32-floor:}{  bash32-floor-renamed:}' "$FLWF"
+expect_fail "check 16 fails LOUDLY when it finds no floor job" 'check 16) found no `run: bash <path>` step'
+git checkout -- "$FLWF"
+# 39g — the derivation matches nothing: a floor check that found no floor test compared nothing.
+cp scripts/check.sh "$SCRATCH/check16.bak"
+perl -pi -e 's{\)/bin/bash\(\[}{)/bin/NO-SUCH-BASH([}' scripts/check.sh
+expect_fail "check 16 fails LOUDLY when it derives no floor test" \
+  "check 16) found no test that runs anything under /bin/bash"
+cp "$SCRATCH/check16.bak" scripts/check.sh
+
 # 36 — this file's own entry arms (#136): the run marker and the leftover-fixture refusal. They are
 # not gate assertions, so they are proven by running this script a second time, NESTED, and reading
 # how it refuses. Every nested run below must refuse before it arms a trap or mutates anything,
