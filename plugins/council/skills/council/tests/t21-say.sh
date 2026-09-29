@@ -94,8 +94,8 @@ SESSIONS_RC="$ROOT/sessions-rc"             # ...and the status it exits with
 OCC="$ROOT/occupant"                        # one ct_occupant answer per line: agent|none|- (no verdict)
 OCC_N="$ROOT/occupant-n"                    # how many occupant reads have been taken
 
-# The rest of the shipped skill, linked in, so \`council.sh say\` itself can run over this shadow
-# (case 5e). Only lib/term.sh is replaced.
+# The rest of the shipped skill, linked in, so `council.sh say` itself can run over this shadow
+# (case 5f). Only lib/term.sh is replaced.
 for e in "$REAL_SKILL"/*; do
   case "${e##*/}" in lib|tests) ;; *) ln -s "$e" "$SHADOW/${e##*/}" ;; esac
 done
