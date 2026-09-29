@@ -364,3 +364,36 @@ wait, so the brief is the only place this can be prevented.
 
 For the supervisor: the standing orders now defer to the skill's cap — "no new issues for
 pre-existing findings, except when the candidate home is already past its cap".
+
+## Retro 10 — 2026-09-29, after #313 #310 #316
+
+Batch: 3 PRs, 3 issues closed (#312 #58 #143), 2 opened (#314 #317); open count 21 → 20. The
+#212 slot asked before creating a real security advisory on a public repo and was told to keep the
+verification a tabletop walk-through — the escalation boundary working as written.
+
+### Went well
+
+* **The retro-9 cap rule was obeyed on its first chance** — #316's slot filed #317 instead of
+  homing three more scenarios on a collector already past its cap, and said which cap sent it.
+* **A long gate change held its tail** — #310 closed at check-test 202/0 after four rounds, with
+  the one blocker in prose.
+
+### Went badly
+
+* **The count barely moves: review keeps finding pre-existing defects next to the change.** Each
+  merge closes its issue and opens a residual one, correctly by the ladder. The residuals are real
+  and the filing is right; the supervisor has to schedule them while the area is warm.
+* **Four review rounds chased one reader's parser disagreements one shape at a time.** #310's
+  check-13 reader was patched for escapes, tabs in quotes, exotic line breaks, repeated keys and
+  keyed values, and round four still found a second `on:` and a multi-document file. Each round
+  fixed the shape it was shown; none asked whether the reader should refuse shapes it cannot read.
+
+### Change
+
+In `ship` (next PR): **when consecutive fix rounds each find a NEW input the same reader or
+predicate misreads, stop adding cases.** From the second such round, the fix is to make the reader
+refuse any input outside the shape it was written for — fail closed, naming the shape — or, if
+refusing would red legitimate input, to escalate the design question. Enumerating shapes is a
+treadmill whose length the reviewer controls, not the author.
+
+For the supervisor: run a residual issue in the next slot of the same area, before it cools.
