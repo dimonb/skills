@@ -92,10 +92,28 @@ tmux() {
       esac
       return 0 ;;
     # FAKE_PANE serves a committed capture instead; FAKE_PANE_AFTER replaces it once the compact
-    # command has been typed, which is the one transition the compaction cases below need.
+    # command has been typed. Two optional frames split that transition for the cases that pin
+    # WHERE the not-done observations are taken: FAKE_PANE_TYPED while the command is typed and
+    # not yet submitted (no Enter or KPEnter logged after it), and FAKE_PANE_UNDONE for
+    # FAKE_UNDONE_READS captures after the submit, once FAKE_UNDONE_SKIP of them have gone by,
+    # counted in FAKE_UNDONE_FILE. With either set, a
+    # typed-but-unsent capture that has no frame of its own serves FAKE_PANE, so the count starts at
+    # the submit and not at the typing.
     capture-pane)
       if [ -z "${FAKE_PANE:-}" ]; then printf 'some earlier output\n> \n'
-      elif [ -n "${FAKE_PANE_AFTER:-}" ] && grep -qF -- '/compact' "$KEYS" 2>/dev/null; then cat "$FAKE_PANE_AFTER"
+      elif [ -n "${FAKE_PANE_AFTER:-}" ] && grep -qF -- '/compact' "$KEYS" 2>/dev/null; then
+        sent=yes
+        awk '/\/compact/ { c = 1; next } c && / (KP)?Enter$/ { s = 1 } END { exit !s }' "$KEYS" || sent=no
+        if [ "$sent" = no ] && [ -n "${FAKE_PANE_TYPED:-}" ]; then cat "$FAKE_PANE_TYPED"
+        elif [ "$sent" = no ] && [ "${FAKE_UNDONE_READS:-0}" -gt 0 ]; then cat "$FAKE_PANE"
+        else
+          n=$(cat "${FAKE_UNDONE_FILE:-/dev/null}" 2>/dev/null); n=${n:-0}
+          [ "${FAKE_UNDONE_READS:-0}" -gt 0 ] && echo $((n + 1)) > "$FAKE_UNDONE_FILE"
+          if [ "$n" -ge "${FAKE_UNDONE_SKIP:-0}" ] \
+             && [ "$n" -lt $(( ${FAKE_UNDONE_SKIP:-0} + ${FAKE_UNDONE_READS:-0} )) ]; then
+            cat "$FAKE_PANE_UNDONE"
+          else cat "$FAKE_PANE_AFTER"; fi
+        fi
       else cat "$FAKE_PANE"; fi
       return 0 ;;
   esac
@@ -181,7 +199,7 @@ ok "...without the full steps"                         no  "$(has "$(noagent "$o
 ok "...and still no nudge or compaction command"       no  "$(has "$(noagent "$out")" 'bash .*shipyard-\(tell\|compact\)\.sh ')"
 # THE SAME TWO TICKS UNDER /bin/bash (#232). episode() is reached through a no-agent (or held, or
 # refused) slot, and its previous-row branch and the NO AGENT short entry only on a second tick —
-# the held and refused short entries are not driven here. The report runs on stock macOS
+# the held and refused short entries are t17 B25's. The report runs on stock macOS
 # /bin/bash 3.2 — so this is where that floor is executed. Vacuous where /bin/bash is 5.x, as t13's
 # floor section says of its own checks.
 rm -f "$MB/report-sig" "$MB/report-stall" "$MB/report-episodes"
@@ -312,6 +330,35 @@ wait "$co1" "$co2" "$co3"
 ok "an earlier compaction on screen is not this one"        "4|no"  "$(cat "$TMP/co-stale")"
 ok "first kind: idle, then finished, reads finished"        "0|yes" "$(cat "$TMP/co-first")"
 ok "second kind: idle, then finished, reads finished"       "0|yes" "$(cat "$TMP/co-second")"
+
+# WHERE THE NOT-DONE OBSERVATIONS ARE TAKEN (#290's review). Every case above starts idle, so the
+# baseline read alone sees not-done and the later observations could each be deleted with this file
+# green. These three start under a STALE finished line, so the only not-done frame is the one the
+# case serves at a single point: the typed-but-unsent frame, submit()'s own capture, or the wait
+# loop's first poll. Each succeeds only if the observation at that point is still there. The
+# compacting capture stands in for any frame that reads not-done. The loop case needs a timeout
+# past the loop's five-second poll, so it runs beside the other two rather than after them.
+compact_seq() { # <tag> <typed-or-empty> <undone-reads> [<skip> <timeout>] -> "<rc>|<finished?>" in $TMP/co-<tag>
+  local rc=0 out
+  : > "$TMP/keys-$1"; : > "$TMP/undone-$1"
+  out=$(KEYS="$TMP/keys-$1" FAKE_PANE="$PANES/pane-claude-compacted.txt" \
+        FAKE_PANE_TYPED="${2:+$PANES/pane-$2.txt}" FAKE_PANE_AFTER="$PANES/pane-claude-compacted.txt" \
+        FAKE_PANE_UNDONE="$PANES/pane-claude-compacting.txt" FAKE_UNDONE_READS="$3" \
+        FAKE_UNDONE_FILE="$TMP/undone-$1" FAKE_UNDONE_SKIP="${4:-0}" \
+        SHIPYARD_MOTION_INTERVAL=0.01 SHIPYARD_BACKEND=tmux SHIPYARD_SESSION=t19ex \
+        bash "$COMPACT" 42 --no-resume --timeout "${5:-1}" 2>&1) || rc=$?
+  printf '%s|%s' "$rc" "$(has "$out" '^compacted after')" > "$TMP/co-$1"
+}
+compact_seq typed claude-compacting 0 &
+cs1=$!
+compact_seq submit "" 1 &
+cs2=$!
+compact_seq loop "" 1 1 10 &
+cs3=$!
+wait "$cs1" "$cs2" "$cs3"
+ok "stale, then a not-done typed frame, then finished: reads finished" "0|yes" "$(cat "$TMP/co-typed")"
+ok "stale, then not-done at submit's capture, then finished: reads finished" "0|yes" "$(cat "$TMP/co-submit")"
+ok "stale, then not-done at the loop's first poll, then finished: reads finished" "0|yes" "$(cat "$TMP/co-loop")"
 
 printf '\n'
 if [ "$FAILURES" -eq 0 ]; then
