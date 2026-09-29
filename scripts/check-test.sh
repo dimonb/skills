@@ -76,7 +76,7 @@ PROBE_FILES=(
   plugins/shipyard/skills/shipyard/tests/t1-probe-dup.sh "$TESTS_DIR/t1z-probe.sh"
   plugins/_probe-scratch plugins/_probe-scratch-empty
   plugins/ship/skills/ship/references/_probe-scratch plugins/ship/skills/ship/references/_probe-dangling.md
-  plugins/ship/skills/ship/references/.gitignore plugins/ship/skills/ship/references/_probe-ignored.md
+  plugins/ship/skills/ship/references/_probe-ignored.md
   plugins/_probe-link
 )
 
@@ -1570,7 +1570,9 @@ unset GIT_INDEX_FILE
 # directories), and one whose own `.gitignore` ignores everything in it — the escape hatch a raw
 # glob never honoured; either reds a checks 3 and 4 that went back to `plugins/*/`. Under
 # references/, every fixture carries a real state name, in two places that prove different things:
-#   * directly under it, ignored by an untracked `.gitignore` beside it. This is the one a check 6
+#   * directly under it, ignored through `core.excludesFile` pointed at a file in $SCRATCH for this
+#     one run, so no ignore file lands in the tree -- a `references/.gitignore` is a name a person
+#     might keep there, and `--recover` removes every path in PROBE_FILES. This is the one a check 6
 #     that went back to its `references/*.md` glob would red on;
 #   * in a subdirectory, ignored by its own `.gitignore`. The glob never reached there, so this one
 #     proves only that the recursive git pathspec honours `--exclude-standard`.
@@ -1588,12 +1590,13 @@ REFS=plugins/ship/skills/ship/references
 mkdir -p plugins/_probe-scratch-empty plugins/_probe-scratch "$REFS/_probe-scratch"
 printf '*\n' > plugins/_probe-scratch/.gitignore
 printf 'notes\n' > plugins/_probe-scratch/notes.md
-printf '.gitignore\n_probe-ignored.md\n' > "$REFS/.gitignore"
+printf '/%s/_probe-ignored.md\n' "$REFS" > "$SCRATCH/probe-exclude"
 printf 'Stages: need-issue then ready-to-merge.\n' > "$REFS/_probe-ignored.md"
 printf '*\n' > "$REFS/_probe-scratch/.gitignore"
 printf 'Stages: need-issue then ready-to-merge.\n' > "$REFS/_probe-scratch/notes.md"
-expect_pass "an empty or ignored scratch directory under plugins/ stays green"
-rm -rf plugins/_probe-scratch-empty plugins/_probe-scratch "$REFS/_probe-scratch" "$REFS/.gitignore" "$REFS/_probe-ignored.md"
+GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=core.excludesFile GIT_CONFIG_VALUE_0="$SCRATCH/probe-exclude" \
+  expect_pass "an empty or ignored scratch directory under plugins/ stays green"
+rm -rf plugins/_probe-scratch-empty plugins/_probe-scratch "$REFS/_probe-scratch" "$REFS/_probe-ignored.md"
 
 # 36 — this file's own entry arms (#136): the run marker and the leftover-fixture refusal. They are
 # not gate assertions, so they are proven by running this script a second time, NESTED, and reading
