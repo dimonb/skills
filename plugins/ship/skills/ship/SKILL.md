@@ -1204,6 +1204,17 @@ round 3: …
   which is also where this rule is reconciled with fixing a one-line defect in place.
   **Watch the diff size across rounds** — a diff growing while under review is this rule
   being broken.
+- **A reader that keeps misreading new inputs is narrowed, not extended.** When consecutive fix
+  rounds each confirm a NEW input that the same reader or predicate misreads — a parser, a
+  matcher, a classifier, a guard — stop adding cases from the second such round. That round's fix
+  makes the reader refuse any input outside the shape it was written for: it fails closed, with a
+  message naming the shape it accepts. The predicate check (§5.5) then lists the inputs the
+  refusal newly rejects. Where one of them is legitimate input the reader must accept, refusing is
+  not a fix this round can make: the design question goes to `needs-human` as a blocker ship
+  chooses not to fix (below). Enumerating shapes is a treadmill whose length the reviewer
+  controls, not the author. Measured: a gate's reader was patched for escapes, tabs in quotes,
+  unusual line breaks, repeated keys and keyed values over four rounds, and round four still found
+  two more shapes. No round asked whether the reader should refuse what it cannot read.
 - **Prose is ONE pass, after the code stops moving.** Docs, spec artifacts, task lists,
   comments and any archived copy get a single claims-versus-implementation check at the end
   of the stage, not an axis in every round. Run against a moving implementation, that class
