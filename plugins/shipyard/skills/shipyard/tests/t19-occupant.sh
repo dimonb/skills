@@ -219,6 +219,23 @@ printf '%s\n' "$(( $(date +%s) - 7200 ))" >"$MB/report-tick"
 out=$(run_report --only-changed)
 ok "after a supervision gap: full again"               2 "$(noagent "$out" | grep -c 'on both reads of this tick')"
 
+printf '\n── a finished slot with an open escalation ──\n'
+# #270: the finished-with-no-agent exemption set the row back to idle and relied on the class to
+# relabel it, and an open escalation holds the class back, so the row read `⏸ idle/wait (no agent)`
+# for a concluded change. The row takes the label now; the class stays held back, so the escalation
+# block, not WAITING FOR YOU, is where the slot is listed — as for any escalated slot (t13 run B).
+cat >"$MB/45-1.json" <<'ESCEOF'
+{"id":"45-1","slot":"45","kind":"question","text":"which option?","context":"",
+ "worktree":"","created_at":"2026-09-11T00:00:00Z","status":"pending","notified":false,
+ "answer":null,"answered_at":null}
+ESCEOF
+out=$(run_report)
+ok "45 (finished, no agent, escalation open) reads finished" "✅ finished (no agent)" "$(row "$out" 45)"
+ok "...its esc column shows the question"                   yes "$(has "$out" '^| 45 .*⚠️ 1')"
+ok "...it is not under WAITING FOR YOU: its question is"    ""  "$(block "$out" '🙋 WAITING FOR YOU')"
+ok "...and not under NO AGENT either"                       "41 46" "$(block "$out" '💀 NO AGENT')"
+rm -f "$MB/45-1.json"
+
 run_tell() { # <args...> -> output, then "rc=<n>"
   local out rc=0
   : > "$KEYS"; : > "$C44"

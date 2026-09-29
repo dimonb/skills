@@ -431,7 +431,10 @@ drv_signal() {
 #     its `exec` of the agent, and on tmux for an agent a wrapper script runs WITHOUT exec (the
 #     shell is then the process-group leader tmux names). Both launchers that use this driver exec
 #     the agent — though on tmux the launcher itself is started through tmux's `default-shell -c`,
-#     so that shell must hand off to it too (measured for zsh only). Measured for a real launcher
+#     so that shell must hand off to it too. It does for zsh, bash (3.2 and 5), macOS `/bin/sh` and
+#     dash: measured on a private tmux socket with each set as `default-shell` and a one-word
+#     quoted launcher that execs, the pane's pid became the launcher's command itself, with no shell
+#     left above it. fish, ksh and tcsh were not measured. Measured for a real launcher
 #     with a zsh login profile, the pre-exec `none` lasts under 0.3s on both backends; a caller
 #     that alarms on `none` should still require it on more than one read, spaced wider than that.
 #     `drv_no_agent` below is that rule for a caller with nothing else to do between the reads.

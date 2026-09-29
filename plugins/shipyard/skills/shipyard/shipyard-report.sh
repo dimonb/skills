@@ -183,6 +183,25 @@ EOF
 fi
 
 TAB=$(printf '\t')
+
+# ep_fp <text> — a fingerprint to compare, never printed. Read by the stall clock's `slot_sig` (a
+# screen change must move it, or the clock carries `since` across real motion and can raise a false
+# 🛑 STALLED) and by the episode table's `fp` (a held or refused block whose text moved prints in full
+# again). Each tool is tried only where it answers with a hash, and POSIX `cksum` closes the chain:
+# with `md5` and `md5sum` both missing, the old `md5 || md5sum | cut` pipeline exited as `cut` did —
+# 0, with an empty hash — so every text fingerprinted to "" and every reader went blind to change.
+# Spaces become `-`: `slot_sig` is split on `|` and the episode row on tabs, so a space would be
+# harmless, but a hash is one token here.
+ep_fp() {
+  local h=""
+  if command -v md5 >/dev/null 2>&1; then h=$(printf '%s' "$1" | md5 -q 2>/dev/null) || h=""; fi
+  if [ -z "$h" ] && command -v md5sum >/dev/null 2>&1; then
+    h=$(printf '%s' "$1" | md5sum 2>/dev/null) || h=""
+    h=${h%% *}
+  fi
+  [ -n "$h" ] || h=$(printf '%s' "$1" | cksum 2>/dev/null) || h=""
+  printf '%s' "${h// /-}"
+}
 # "May an absence be believed?" is `shipyard_signal_class` in shipyard-backend.sh — same facts
 # (did enumeration answer; does the pin name another backend; does it still list the slot), one
 # implementation. Which classes it returns, and to which call shape, is listed at that function;
@@ -639,6 +658,20 @@ UNSCALED=()   # "<slot>|<display>" — a ctx figure with no window to assert it 
 # This is also the honest answer to an operator-initiated PAUSE, and it needs nothing from the pane:
 # the parent's own absence is a parent-side fact, recorded here as it happens rather than re-derived
 # afterwards from a child's screen.
+#
+# A RESIDUAL, NOT CLOSED: $TICKFILE lives in the mailbox every child can write, so writing an old
+# epoch into it forges a gap. A gap restarts every stall clock and ends every episode, so a child
+# that forges one before every tick keeps every slot's 🛑 STALLED and 🛑 UNREADABLE, its own
+# included, from ever firing, and every episode-tracked block (💀 NO AGENT, held, refused) from ever
+# reaching its later-tick entry. That cannot be prevented from here: every file this script could
+# keep instead is equally writable by a child on the same account. So it is made SELF-REVEALING
+# instead: a gap tick bypasses --only-changed (the silence test below requires `GAP = 0`) and prints
+# the resumed-after notice, which names a rewritten tick file among the causes it lists — a list of
+# examples, not a closed set. A forged gap before every tick therefore prints the full table and
+# that notice on every tick, which a fleet whose monitor period is under the stall threshold never
+# does; with a longer period every honest tick does the same, and there a forgery is hidden behind
+# the misconfiguration. A FUTURE epoch is refused (`RUN_EPOCH -gt prev_tick`), and an unparseable one claims
+# no gap, so neither can be used to fake one.
 RUN_EPOCH=$(date +%s)
 GAP=0
 if [ -n "$TICKFILE" ] && [ -f "$TICKFILE" ]; then
@@ -1300,11 +1333,22 @@ for slot in "${SLOTS[@]}"; do
      && [ "$(shipyard_wait_state "$b" "$phase" "$stage" 2>/dev/null | cut -f2)" = finished ]; then
     noagent=0; finished_noagent=1; run="⏸ idle/wait"
   fi
-  # `$pend = 0` for the same reason the stall condition below carries it: a slot with an open
-  # escalation is already accounted for by the esc column and the escalation block, and it is
-  # asking for something. Without this guard such a slot could be printed under "a stated,
-  # self-healing wait ... Do not nudge" while a child is in fact blocked on an unanswered question.
-  if [ "$run" = "⏸ idle/wait" ] && [ "$pend" = 0 ]; then
+  # WHICH ANSWERS AN OPEN QUESTION HOLDS BACK. A slot with an open escalation is already accounted
+  # for by the esc column and the escalation block, and it is asking for something, so nothing
+  # classifies it: no ⏳ / ✅ / 🙋 block, no class in the signature, no clock rebase. Without that it
+  # could be printed under "a stated, self-healing wait ... Do not nudge" while a child is in fact
+  # blocked on an unanswered question. Its ROW still takes an attention class's label, because the
+  # row is the only place a finished slot's state shows, and `⏸ idle/wait (no agent)` for a
+  # concluded change whose agent exited is a misread (#270). The label is not in the signature, and
+  # every branch below that `$run` gates also requires `pend = 0`.
+  #
+  # An UNREADABLE record (#296) holds back the `wait` kind only: the record may be exactly the
+  # question the child waits on, so the slot falls through to the stall clock like any unexplained
+  # idle one. The ATTENTION classes (`finished`, `needs_human`) still classify, because dropping
+  # them loses the ✅ / 🙋 line and arms a false 🛑 STALLED whose remedy includes compaction (tried in
+  # #296 and reverted). The stall guard itself does NOT take the unreadable count — that would
+  # silence the stall alarm for the very slot this reroutes.
+  if [ "$run" = "⏸ idle/wait" ]; then
     wait_line=$(shipyard_wait_state "$b" "$phase" "$stage" 2>/dev/null) || wait_line=""
     if [ -n "$wait_line" ]; then
       wait_kind=$(printf '%s' "$wait_line" | cut -f1)
@@ -1312,6 +1356,10 @@ for slot in "${SLOTS[@]}"; do
       wait_label=$(printf '%s' "$wait_line" | cut -f3)
       wait_action=$(printf '%s' "$wait_line" | cut -f4)
       run="$wait_label"
+      if [ "$pend" != 0 ] || { [ "$wait_kind" = wait ] && [ "$badrec" != 0 ]; }; then
+        [ "$wait_kind" = wait ] && run="⏸ idle/wait"
+        wait_kind=""; wait_class=""; wait_label=""; wait_action=""
+      fi
     fi
   fi
   if [ "$finished_noagent" = 1 ]; then
@@ -1333,7 +1381,7 @@ for slot in "${SLOTS[@]}"; do
   # iid lookup fails), so an INTERMITTENT forge rebased the clock of a child that had not moved and
   # the alarm could need eight consecutive good reads to fire. A sustained outage was harmless; a
   # flaky one disarmed it. The clock measures the child: its stage, its open escalations, its screen.
-  slot_sig="$stage|$pend|$(printf '%s' "$b" | md5 -q 2>/dev/null || printf '%s' "$b" | md5sum | cut -d" " -f1)"
+  slot_sig="$stage|$pend|$(ep_fp "$b")"
   now_epoch=$(date +%s)
   since=""; fired_epoch=""; fired_at=""; firings=0; last_fired=""; prev=""
   if [ -n "$STALLFILE" ] && [ -f "$STALLFILE" ]; then
@@ -1565,11 +1613,6 @@ HELD_EP=()      # parallel to REAP_HELD
 REFUSED_EP=()   # parallel to REAP_REFUSED
 EP_NOW_ISO=$(shipyard_now)
 
-# ep_fp <text> — a fingerprint to compare, never printed.
-ep_fp() {
-  printf '%s' "$1" | md5 -q 2>/dev/null || printf '%s' "$1" | md5sum | cut -d" " -f1
-}
-
 # episode <block> <slot> <fp> — sets EP_OUT to "<full>|<ticks>|<minutes>|<HH:MM>" and appends this
 # tick's row to EP_ROWS. It prints nothing, and it is never called inside `$( )`, because the append
 # would then be lost.
@@ -1773,7 +1816,11 @@ fi
     echo
     echo "_supervision resumed after $((GAP/60)) min with nothing watching — every stall clock was"
     echo "restarted from now, because a figure measured across that gap is one this report cannot"
-    echo "justify. If the fleet was paused on purpose, this line is the whole of the news._"
+    echo "justify. If the fleet was paused on purpose, this line is the whole of the news. If it was"
+    echo "not, causes include a machine that slept, a stopped monitor or one whose period is longer"
+    echo "than the stall threshold, report runs that never stamped their tick (a crash, a failed"
+    echo "write, a tick that found no slots), and a rewritten \`report-tick\` in the mailbox — which"
+    echo "any child can do._"
   fi
   if [ "${#STALLED[@]}" -gt 0 ]; then
     # Split by shape — see "a stall is an EPISODE" above for the three shapes and the two constants.
