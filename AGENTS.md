@@ -144,7 +144,7 @@ mailbox of a run already in flight.
 `shipyard` and `council` sit on a **shared engine**: one canonical module per concern under
 `shared/<mod>/`, vendored into both plugins and held byte-identical by the gate (`shared/driver`
 the terminal backend, `shared/adapters` per-agent-kind launch and client knowledge,
-`shared/policy` escalation disposition, `shared/flow` the step graph). The vendoring exists
+`shared/policy` escalation disposition, `shared/flow` the step graph, among others). The vendoring exists
 because a Codex plugin cannot depend on another plugin, so a symlink cannot cross that boundary;
 `scripts/sync-driver.sh` writes the copies and the drift check reds if any diverges.
 
@@ -386,8 +386,10 @@ classes are live history rather than theory: `shared/policy/tests` was missing f
 from both targets from the day it landed, so it ran in no automated invocation at all — green when
 run by hand, gated by nothing, for as long as it existed (#111).
 
-`make check` also runs the driver, flow, adapter and policy suites (all fast and pure), so a
-regression in any of the four reds a commit. CI runs `make check` and `make test` in one workflow
+`make check` also runs the suites its `check:` recipe lists — today every suite under `shared/`,
+all fast and pure — so a regression in any of them reds a commit. What keeps a suite in that recipe
+rather than only in `test:` is one `scripts/check-test.sh` probe per suite (the 30* family), added
+by hand with the suite; nothing checks that a new shared suite got one. CI runs `make check` and `make test` in one workflow
 (`.github/workflows/ci.yml`) on every push to `main` and every pull request — plus, in a macOS job
 of the same workflow, the test files that run shipyard code under /bin/bash, whose 3.2 floor is
 vacuous on Linux (the job lists them; `scripts/check.sh` check 16 reds when a test naming

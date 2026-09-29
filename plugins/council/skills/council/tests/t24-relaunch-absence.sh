@@ -204,7 +204,7 @@ ok "4b: ...saying the pin and the record disagree" yes  "$(has "$out" 'pin and i
 ok "4b: ...naming the pin's backend"               yes  "$(has "$out" 'the pin says agterm')"
 ok "4b: ...and the recorded one"                   yes  "$(has "$out" 'launched on tmux\.')"
 ok "4b: ...and NOT offering the pin's backend"     no   "$(has "$out" 'COUNCIL_BACKEND=agterm')"
-ok "4b: ...ending on what it means if pinning fails" yes "$(has "$out" 'really gone')"
+ok "4b: ...and what it means if pinning fails"     yes  "$(has "$out" 'really gone')"
 if [ -n "$LRF_SAVED" ]; then cp "$LRF_SAVED" "$LRF"; else rm -f "$LRF"; fi
 
 printf '\nt24-relaunch-absence: %s checks, %s\n' "$CHECKS" \

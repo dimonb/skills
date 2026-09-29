@@ -5,8 +5,9 @@
 # (scripts/check.sh, check 11) fails if any copy drifts from this file.
 #
 # Source only, never execute. Sourced into a shell that may run `set -u`, so every optional
-# variable is read as `${VAR:-}`. Needs bash >= 4.4: `{var}` redirections, and `$!` naming a
-# process substitution's pid.
+# variable is read as `${VAR:-}`. Needs bash >= 4.4 to CALL: `{var}` redirections, and `$!` naming a
+# process substitution's pid. It must still PARSE under bash 3.2: shipyard-continuity.sh sources it,
+# and shipyard's report sources that under /bin/bash 3.2 (see shipyard's README, Known limits KL-3).
 #
 # WHAT THIS IS FOR. Both skills bind a background process to the life of an owner through a canary:
 # the owner holds a FIFO's write end, the watching process inherits its read end, and every writer
@@ -26,7 +27,7 @@
 # stuck keeper in `read_builtin -> shtimer_select -> pselect`, system-wide `lsof` showed the canary
 # held by the keeper's read end alone, and each was still polling 33 s after its owner died.
 #
-# So the watching process never selects on the canary. A SENTINEL — a process substitution, so a
+# So while a sentinel runs, the watching process does not select on the canary. A SENTINEL — a process substitution, so a
 # child in the caller's own process group — blocks in a plain `read` on it and writes one `eof`
 # line into an anonymous pipe when that read ends, and the caller's `read -t` waits on that pipe.
 # The sentinel's read is the blocking kind, and what the caller selects on is DATA in a pipe, which

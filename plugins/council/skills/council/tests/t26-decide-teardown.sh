@@ -290,7 +290,7 @@ echo "--- H. a --hold room takes the marker too, while its owner is still holdin
 # The placement of the teardown check is what this case pins, and nothing else in the suite can
 # see it. Every other room in this file is DETACHED — `mkroom_faked` sets no _KEEPER_OWNER_HOLD,
 # so its keepers have no canary and fall straight through to `sleep 5`. A `--hold` keeper takes
-# the other branch: it blocks in `read -t 5` on the canary and `continue`s on every timeout, so a
+# the other branch: it blocks for up to a poll in the canary wait and `continue`s on every timeout, so a
 # teardown check placed below that read is not merely late, it is NEVER REACHED — the marker
 # would sit on disk for the life of the room while `decide` exited 0 saying the seats were going.
 # Measured by mutation through the shipped `up --hold` + `decide` path, where the mutant's exit

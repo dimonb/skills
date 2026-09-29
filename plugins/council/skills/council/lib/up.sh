@@ -419,9 +419,10 @@ _canary_fifo() { # <room> -> a freshly created fifo path on stdout, or rc 1
 # ends apart: it waits up to one poll and answers "still held" while a writer (the live owner) holds
 # the pipe, and "gone" at once when every writer is gone, so reaping is immediate rather than one
 # poll interval late. A stray byte on the canary is the owner alive too — nothing writes here
-# today, but a stray write must never be mistaken for death. It does NOT `read -t` the canary
-# itself: on macOS that select-based wait can lose the EOF for good when the owner dies as a
-# timeout fires, and a keeper then polled for ever (#279, measured; the module says how).
+# today, but a stray write must never be mistaken for death. While its sentinel runs it does not
+# `read -t` the canary itself: on macOS that select-based wait can lose the EOF for good when the
+# owner dies as a timeout fires, and a keeper then polled for ever (#279, measured; the module says
+# how). Only when no sentinel can be started does it fall back to reading the canary directly.
 #
 # THE REBUILD TRIGGER. `[ -d "$room" ]` alone cannot tell a room from a room rebuilt at the same
 # path: `rm -rf` then `_mkroom` wipes the pid file and forks a SECOND keeper, and the first, back
@@ -538,7 +539,7 @@ _keeper_loop() { # <room> <pid-file> <canary-read-fd-or-empty> <poll-interval> <
       _keeper_reap "$room" "$@"
       return 0
     fi
-    # THE SAME `$poll` as the `read -t` above, deliberately — this is the detached room's view of
+    # THE SAME `$poll` as the canary wait above, deliberately — this is the detached room's view of
     # the one keeper period, not a second constant that happens to match. Do not give it its own
     # knob or its own literal: the header says why.
     sleep "$poll"
@@ -634,6 +635,7 @@ _keeper_ensure() { # <room-dir> <peer>...
   # mystifying "the suite hangs" during development.
   ( exec >/dev/null 2>&1 <&-
     [ -n "$cw" ] && exec {cw}>&-      # the keeper never writes the canary; only the owner keeps that end
+    CANARY_SENTINEL_FD=""; CANARY_SENTINEL_PID=""   # none yet; the stop below must not act on an inherited value
     for p in "$@"; do exec {fd}<> "$room/bell/$p.fifo"; done
     _keeper_loop "$room" "$keep" "$cr" "$poll" "$@"
     # The canary sentinel holds every fd this keeper had open, the bell fifos included, until the
