@@ -328,3 +328,39 @@ collector.
 
 For the supervisor: schedule the collectors (#269, #119, #270) as clusters now, so their homed
 findings are worked rather than kept.
+
+## Retro 9 — 2026-09-29, after #307 #308 #309 #311
+
+Batch: 4 PRs; #270 closed with its piece B, the gate-abstain and report leftovers landed, and the
+collector rule from retro 8 shipped as #308. The #212 disclosure question went to a three-seat
+council and came back unanimous in 13 turns.
+
+### Went well
+
+* **The revert rule held under pressure** — #311's own round-2 test fix introduced a blocker, and
+  the slot reverted it to the last clean line instead of stacking a fix on the fix.
+* **The chrome rule was applied unprompted** — the Codex goal-line read in #311 was anchored on
+  captured panes, not on reasoning about what the client renders.
+* **Council sharpened rather than averaged** — objections moved the #212 rule from "a public ID
+  exists" to "equivalent public detail exists", and from binary visibility to a
+  confidential-at-birth default on the forge that splits tracker and code audiences.
+
+### Went badly
+
+* **A subagent's permission prompt stalled a slot silently.** A review subagent shell-copied its
+  own saved tool output; the path resolves through a symlinked config directory, so the harness
+  raised a sensitive-file prompt. The parent waited on the subagent, the subagent waited on a
+  human, and nothing escalated — it was found only by reading the screen.
+* **The supervisor's own orders overrode the new cap.** #311's slot homed three more residuals on
+  #269 while noting #269 was past its five-scenario cap — because the launch orders said "no new
+  issues". Retro 8's rule said prefer a focused new issue past the cap; the orders won.
+
+### Change
+
+In `ship` (next PR): **a review subagent reads its own saved output with the file-read tool and
+writes scratch with the file-write tool — never by shelling a copy of harness-owned paths** — and a
+brief that launches subagents says so. A subagent stuck on a prompt is invisible to the parent's
+wait, so the brief is the only place this can be prevented.
+
+For the supervisor: the standing orders now defer to the skill's cap — "no new issues for
+pre-existing findings, except when the candidate home is already past its cap".
