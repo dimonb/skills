@@ -990,6 +990,30 @@ _council_elsewhere_remedy() { # <pad>
     echo "${pad}$ROOM/state/container-<that backend> — and re-run. Never remove the other one." >&2
     return 0
   fi
+  # THE PIN IS NOT BELIEVED OVER A LAUNCH RECORD THAT CONTRADICTS IT (#67). The remedy below tells
+  # the operator to pin the backend the pin names, and following it on a pin that was hand-edited or
+  # stray-written sends `down --purge` to an empty container: nothing closes, and the launch record
+  # and the room are deleted while the real seats keep running. The record keeps the backend each
+  # seat was LAUNCHED on (lib/launch-record.sh). When its launched seats name a backend set that
+  # differs from the pin, both are printed and no backend is offered. A room with no readable
+  # record keeps the old sentence: there is nothing to check the pin against, so it says the same
+  # as before. The record is as writable as the pin, so this catches one stray write, not two
+  # coordinated ones. Each recorded backend is flattened to printable ASCII before it is printed,
+  # as lib/term.sh flattens the same record's values for its operator lines: `.backend` is any
+  # string a seat wrote, and these lines reach the terminal of whoever ran `say`, `relaunch` or `down`.
+  local rec recorded=""
+  if [ -n "$pin" ] && command -v lr_read >/dev/null 2>&1 && rec=$(lr_read 2>/dev/null); then
+    recorded=$(printf '%s' "$rec" | jq -r '[ .seats[]? | select(type == "object" and .launched == true)
+                 | .backend | select(type == "string") | gsub("[^ -~]"; "?") ] | unique | join(" and ")' 2>/dev/null) \
+      || recorded=""
+  fi
+  if [ -n "$recorded" ] && [ "$recorded" != "$pin" ]; then
+    echo "${pad}The room's pin and its launch record disagree: the pin says $pin, and the launch" >&2
+    echo "${pad}record says its seats were launched on $recorded. One of them is wrong, so no" >&2
+    echo "${pad}backend is offered here. Find the seats first: \`tmux ls\` and \`agtermctl tree\`." >&2
+    echo "${pad}Then pin the backend that holds them for this shell (COUNCIL_BACKEND=<it>) and re-run." >&2
+    return 0
+  fi
   echo "$pad\`COUNCIL_BACKEND=auto\` decides per PROCESS, so one failed socket probe" >&2
   echo "${pad}sends this run to the other backend, where this room's container is" >&2
   echo "${pad}empty for entirely correct reasons." >&2

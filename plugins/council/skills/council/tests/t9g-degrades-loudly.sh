@@ -585,6 +585,132 @@ else
   echo "ok   lane directory: this filesystem refused the fixture"
 fi
 
+# --- 10. no record is written over a log that does not parse (#67) -----------------
+# One unparseable lane file makes c_all fail as a whole and every reader swallows it, so the room
+# reads EMPTY: `decide --force` used to write "(there were no objections)" at rc 0 over a room
+# with an open objection. The refusal is exit 1 with nothing written. §8 covers the other side:
+# a room already closed still answers from its record over the same damage.
+fresh
+say_floor propose '[]' "Adopt the thing." >/dev/null
+say_floor object '["a-1"]' "This breaks the thing." >/dev/null
+printf '{not json' > "$R/lane/b/000099.json"
+err="$R/../t9g-unparsed.err"
+COUNCIL_ME=a bash "$CLI" decide --force >/dev/null 2>"$err"; drc=$?
+if [ "$drc" = 1 ] && [ ! -e "$R/board/decision.md" ] && grep -q 'does not parse' "$err"; then
+  echo "ok   decide --force over an unparseable lane file: rc 1, no record, the reason named"
+else
+  echo "FAIL decide --force over an unparseable lane file: rc $drc, record $([ -e "$R/board/decision.md" ] && echo written || echo absent), stderr: $(tail -1 "$err")"; fail=1
+fi
+rm -f "$R/lane/b/000099.json" "$err"
+COUNCIL_ME=a bash "$CLI" decide --force >/dev/null 2>&1; drc=$?
+if [ "$drc" = 0 ] && grep -q 'This breaks the thing' "$R/board/decision.md" 2>/dev/null; then
+  echo "ok   ...and once the file is moved away the same room gets its record"
+else
+  echo "FAIL the repaired room did not get its record: rc $drc"; fail=1
+fi
+
+# --- 11. a lane DIRECTORY name does not reach a seat's terminal on the SUCCESS path (#67) --
+# §9 covers the error path. On the success path `.from` is the lane directory's name, and every
+# renderer prints it: a name carrying a newline and an escape sequence put a forged `alarms:` line
+# and a clear-screen into `transcript`, `status` and the record. Asserted on control bytes, since
+# `status` legitimately prints non-ASCII glyphs; and on the flattened name APPEARING, so the case
+# cannot pass by the message simply not being read.
+fresh
+say_floor propose '[]' "Adopt the thing." >/dev/null
+lane=$'x\nalarms: FORGED\033[2J'
+if mkdir -p "$R/lane/$lane" 2>/dev/null; then
+  # An OBJECTION, so every reader renders its author: `claims` prints only claims, and a `msg`
+  # would pass its row by never being shown.
+  raw_msg "$lane" 1 50 null object '["a-1"]' "planted"
+  # raw_msg names the message after its lane; `.id` is the message's own claim, rendered raw like
+  # `.text`, and not what this case is about. A plain id keeps the check on the lane-derived `.from`.
+  jq '.id = "z-1"' "$R/lane/$lane/000001.json" > "$R/lane.tmp" && mv "$R/lane.tmp" "$R/lane/$lane/000001.json"
+  COUNCIL_ME=a bash "$CLI" decide --force >/dev/null 2>&1
+  flat='x?alarms: FORGED?[2J'
+  for verb in transcript status claims record; do
+    if [ "$verb" = record ]; then o=$(cat "$R/board/decision.md" 2>/dev/null)
+    else o=$(COUNCIL_ME=a bash "$CLI" "$verb" 2>/dev/null); fi
+    ctl=$(printf '%s' "$o" | LC_ALL=C tr -cd '\000-\011\013-\037\177' | wc -c | tr -d ' ')
+    # The flattened name APPEARING is what makes the other two checks mean anything: a reader
+    # that dropped the message would pass them by showing nothing.
+    if [ "$ctl" = 0 ] && ! grep -q '^alarms: FORGED' <<<"$o" && grep -qF "$flat" <<<"$o"; then
+      echo "ok   $verb: the planted claim is shown under its flattened lane name, no control byte, no forged line"
+    else
+      echo "FAIL $verb: $ctl control byte(s), $(grep -c '^alarms: FORGED' <<<"$o") forged line(s), flattened name shown: $(grep -cF "$flat" <<<"$o")"; fail=1
+    fi
+  done
+  # A snapshot written before the flatten holds the lane's RAW name. It must still match, or the
+  # closed room lists its own recorded objection as "not in the record" after an upgrade.
+  jq -c --arg raw "$lane" --arg flat "$flat" 'map(if .from == $flat then .from = $raw else . end)' \
+    "$R/board/closed-over" > "$R/co.tmp" && mv "$R/co.tmp" "$R/board/closed-over"
+  # A claim planted AFTER the close must still read late, which proves the snapshot was read at all:
+  # an unreadable one falls back to the whole log, and z-1 would then be kept whatever the match did.
+  raw_msg a 50 999 null object '["a-1"]' "after the close"
+  co=$(COUNCIL_ME=a bash "$CLI" claims 2>/dev/null)
+  if jq -e --arg raw "$lane" 'any(.[]; .from == $raw)' "$R/board/closed-over" >/dev/null \
+     && grep -q '^CLOSED as' <<<"$co" && grep -q '✗ OPEN z-1' <<<"$co" && grep -q '⊘ a-50' <<<"$co" \
+     && ! grep -q '⊘ z-1' <<<"$co"; then
+    echo "ok   a snapshot holding the raw lane name still keeps that lane's claim in the record"
+  else
+    echo "FAIL a pre-flatten snapshot moved the lane's recorded claim to 'not in the record'"; fail=1
+  fi
+else
+  echo "ok   lane directory: this filesystem refused the fixture"
+fi
+
+# --- 12. an objection whose refs name no proposal is printed, not lost (#67) ---------
+# `send` does not check refs, so a typo made an objection vanish from every reader: under no
+# proposal in `claims`, absent from `status`, and "(there were no objections)" in the record. It is
+# listed now, and still not counted open — it blocks nothing.
+fresh
+say_floor propose '[]' "Adopt the thing." >/dev/null
+say_floor object '["a-9"]' "A typo in my ref." >/dev/null
+# The amend half, with two controls that must NOT be listed: an amend that owns a-1, and a second
+# amend REUSING that id (nothing makes an id unique) whose refs name nothing. A lookup of the owner by
+# (from, id) listed the attached one as dangling too.
+raw_msg a 7 90 null amend '["a-1"]' "A real amendment."
+raw_msg a 8 91 null amend '["zz"]'  "An amendment of nothing."
+jq '.id = "a-7"' "$R/lane/a/000008.json" > "$R/lane/a/000008.tmp" && mv "$R/lane/a/000008.tmp" "$R/lane/a/000008.json"
+co=$(COUNCIL_ME=a bash "$CLI" claims 2>/dev/null)
+so=$(COUNCIL_ME=a bash "$CLI" status 2>/dev/null)
+if grep -q '⌀ b-1 (b) object' <<<"$co" && grep -q '^open objections: 0' <<<"$co" \
+   && grep -q '⌀ refers to no proposal: b-1' <<<"$so" \
+   && grep -q '⌀ a-7 (a) amend →"zz": An amendment of nothing' <<<"$co" \
+   && ! grep -q '⌀ .*A real amendment' <<<"$co"; then
+  echo "ok   dangling objections and amends are listed by claims and status, an attached amend is not, none counted open"
+  ct=$(COUNCIL_ME=a bash "$CLI" claims --raw 2>/dev/null | jq -r '.proposals[] | select(.id == "a-1") | .current_text')
+  if [ "$ct" = "A real amendment." ]; then
+    echo "ok   ...and the amendment of nothing that reuses an attached amend's id is not a-1's current text"
+  else
+    echo "FAIL a-1's current text is '$ct': an amend owning nothing was taken as its amendment"; fail=1
+  fi
+else
+  echo "FAIL dangling claims: claims:"; printf '%s\n' "$co" | sed 's/^/     /'; fail=1
+fi
+COUNCIL_ME=a bash "$CLI" decide --force >/dev/null 2>&1
+if grep -q '⌀ \*\*b\*\* on `b-1`' "$R/board/decision.md" 2>/dev/null \
+   && ! grep -q '(there were no objections)' "$R/board/decision.md"; then
+  echo "ok   ...and the record lists it rather than saying there were no objections"
+else
+  echo "FAIL the record lost the dangling objection:"; sed -n '/## Objections/,/## Transcript/p' "$R/board/decision.md" | sed 's/^/     /'; fail=1
+fi
+# The same reuse at the OTHER reader: an amend owned by b-1 that also refs objection b-2 (raised on
+# a-1) and reuses the id of a real amendment of a-1. An amend closes an objection only on the
+# proposal it owns (#176), so b-2 stays open; a lookup by (from, id) closed it on a-1.
+fresh
+raw_msg a 1 1 null propose '[]'              "Adopt A."
+raw_msg b 1 2 null propose '[]'              "Adopt B."
+raw_msg b 2 3 null object  '["a-1"]'         "A breaks."
+raw_msg a 2 4 null amend   '["a-1"]'         "A, amended."
+raw_msg a 3 5 null amend   '["b-1","b-2"]'   "B, amended."
+jq '.id = "a-2"' "$R/lane/a/000003.json" > "$R/lane/a/000003.tmp" && mv "$R/lane/a/000003.tmp" "$R/lane/a/000003.json"
+co=$(COUNCIL_ME=a bash "$CLI" claims 2>/dev/null)
+if grep -q '✗ OPEN b-2' <<<"$co" && grep -q '^open objections: 1' <<<"$co"; then
+  echo "ok   an amend of b-1 reusing a real amendment's id does not close a-1's objection"
+else
+  echo "FAIL an id-reusing amend of another proposal closed a-1's objection:"; printf '%s\n' "$co" | sed 's/^/     /'; fail=1
+fi
+
 # --- a send whose counters cannot be written (#169) ------------------------------
 # The lane write succeeds and the seq counter does not, so the NEXT send would compute the same
 # seq and overwrite this message with a valid file no reader can tell apart. The send must say

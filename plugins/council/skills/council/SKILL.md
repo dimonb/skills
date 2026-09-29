@@ -221,8 +221,8 @@ and the lanes are room state like any other. Three routes were measured and are 
 `lib/claims.jq`:
 - a lane file with a chosen lamport that takes a kept message's place;
 - a pair appended to the snapshot;
-- a dropped proposal that a forward reference pointed at. That one can leave an objection printed
-  nowhere.
+- a dropped proposal that a forward reference pointed at. That one leaves an objection attached to
+  no proposal, so it is not counted open.
 Each needs a write the lanes or the snapshot show. None is new ground: before this change, one
 legal post-close `send --hand --act overrule` silenced the same OPEN line, and that is now
 refused or listed apart. A pair duplicated in the log before the close is rendered twice in the
@@ -231,10 +231,17 @@ no snapshot is read over the whole log, as before. That is a room older than thi
 `decide` reports on stderr. `decide --force` on a room already recorded `unresolved` rewrites the
 record over the whole log and takes a new snapshot, so the late claims are then in the record.
 
+An objection whose references name no proposal, or an amend that owns none (it names no proposal,
+directly or through an objection it references; `lib/claims.jq` has the rule) — the dropped-proposal
+route above, or simply a typo in a ref, which `send` does not check — is listed rather than lost: in its own section of `claims`
+and as a `⌀ refers to no proposal` line of `status`, and such an objection in the record's
+Objections section too. It blocks nothing and is never counted open.
+
 `council.sh decide` **refuses** a room that is not ready. `--force` writes an honest
 `unresolved` record listing what is still open — a valid outcome, not a failure to hide.
 
-`--force` is not unconditional. Two conditions refuse it:
+`--force` is not unconditional. Two conditions about the room's state refuse it (a third, a lane
+file that does not parse, is under "A lane file that does not parse" below):
 
 * **while a room is still open**, if its **roster** cannot be read, `decide` refuses with
   **exit 1** and writes nothing, `--force` included, because there is then no participant list
@@ -329,20 +336,22 @@ covered this case too. Re-forcing a closed room whose roster is broken is not so
 
 **A lane file that does not parse is a different case, and a worse one.** The readers that glob
 the whole log on every call — `order`, `transcript`, `claims`, `verdict`, `status` — report the
-room as EMPTY rather than as broken, and `decide --force` will write a record over it saying
-there were no objections. (A participant's view of the first three, and of `status`'s display
+room as EMPTY rather than as broken. `decide` refuses such a room with **exit 1** and writes
+nothing, `--force` included, and says a lane file does not parse; an already-decided room still
+answers 3 from its record first. (A participant's view of the first three, and of `status`'s display
 half, is cut further by an open barrier round; see Modes. That does not change this paragraph:
 an unreadable lane file empties them all either way.) Only
 the diagnostic on stderr says otherwise, and it is the thing to act on. Treat a `council:` line
 about a log that could not be read as invalidating every other answer in the same breath.
 
-That is a known remainder rather than a design. Three designs were tried on this branch and
-this is the second of them — the one that ships. The first, dropping the bad file and reading
-the rest, turned "unreadable" into "silently incomplete"; the third, giving the reader a second
-exit status, made a room that had already CLOSED stop reporting itself closed. Both were
-reverted. `lib/lib.sh`'s `c_all` carries the account, and a fourth attempt has to let the
-record answer before the log does — `v_verdict` now does exactly that, and it is why a closed
-room survives both an unreadable log and an unreadable roster.
+The readers' empty answer is a known remainder rather than a design. Three designs of the reader
+were tried and this is the second of them — the one that ships. The first, dropping the bad file
+and reading the rest, turned "unreadable" into "silently incomplete"; the third, giving the reader
+a second exit status, made a room that had already CLOSED stop reporting itself closed. Both were
+reverted. `lib/lib.sh`'s `c_all` carries the account. The `decide` refusal is the fourth, and it
+leaves the reader alone: it is a separate check that gates only the record write, after the
+record has answered — `v_verdict` reads the record first, which is why a closed room survives
+both an unreadable log and an unreadable roster.
 
 **The two causes differ for participants:**
 
@@ -542,7 +551,7 @@ launched. The three answers that are not a plain corroborated absence:
 
 | class | what it does |
 |---|---|
-| `elsewhere` | **Refuses, exit 4.** The room's pin records that these seats were launched on the *other* backend. `COUNCIL_BACKEND=auto` resolves per process, so one failed socket probe sends a run to the backend where this room's container is empty for entirely correct reasons — the close then reaches nothing, and the launch starts a **second** agent for the same peer name while the live one keeps running. Both write the same lane and claim the same seat, and no verb can tell them apart. The message names the backend to pin — or, when the room pins **both** backends, says one pin is stale and names the file to remove once that backend shows none of the room's seats (no verb clears a pin in this state: `down --purge` is refused on it). |
+| `elsewhere` | **Refuses, exit 4.** The room's pin records that these seats were launched on the *other* backend. `COUNCIL_BACKEND=auto` resolves per process, so one failed socket probe sends a run to the backend where this room's container is empty for entirely correct reasons — the close then reaches nothing, and the launch starts a **second** agent for the same peer name while the live one keeps running. Both write the same lane and claim the same seat, and no verb can tell them apart. The message names the backend to pin — or, when the room pins **both** backends, says one pin is stale and names the file to remove once that backend shows none of the room's seats (no verb clears a pin in this state: `down --purge` is refused on it). When the room's launch record says its seats were launched on a different backend than the pin names, the message prints both and offers neither, since one of them is wrong. |
 | `unreachable` | Says so and **continues**. A question the backend would not answer is not authority to refuse a documented recovery — but the close prints nothing either way, so it cannot tell you whether it restarted a dead seat or killed a live one. |
 | `listed` | Says the seat is **alive** and **continues**. That is an ordinary reason to be here ("killed to pick up new permissions"); it is a statement of what is about to happen, not a refusal. |
 
@@ -553,7 +562,8 @@ because on the wrong backend it destroys more than `relaunch` does. Every close 
 container and prints nothing, the keeper that rings the still-running seats is stopped, and
 `--purge` deletes the container pin and the launch record, which are the only records of where
 those seats run. On `elsewhere` it therefore **refuses, exit 4**, plain or `--purge`: nothing is
-closed, the keeper stays up, nothing is deleted, and the message names the backend to pin. On
+closed, the keeper stays up, nothing is deleted, and the message names the backend to pin (or, where
+the launch record contradicts the pin, prints both and names neither). On
 `unreachable` it says the closes cannot reach any seat still running there and **continues**, as
 `relaunch` does. A room-level question has no seat of its own to find listed, so `listed` does
 not arise.

@@ -1106,9 +1106,15 @@ c_all() {
   # case-insensitive filesystem. Anyone reopening this should start from that, and should
   # expect the validation -- not the substitution -- to be where the difficulty is.
   #
-  # The derived value is only ever printed and compared here, never used as a path, and the
-  # glob cannot produce `..` or a dotfile, so it is a real directory name under `lane/`. A
-  # future use of it AS A PATH would need c_drain's reasoning about `..` re-done from scratch.
+  # The derived value is never used as a path, and the glob cannot produce `..` or a dotfile. It IS
+  # printed -- `transcript`, `status`, `claims` and the decision record all render it -- and a lane
+  # directory's name is anything a peer's `mkdir` chose, so it is FLATTENED here: every character
+  # outside printable ASCII becomes `?` (#67). Before that a lane named with a newline and an escape
+  # sequence put a forged `alarms:` line and a clear-screen into every seat's terminal, while this
+  # same function's error path already whitelisted the identical bytes. `?` rather than deletion,
+  # so a flattened name can never collapse onto a participant's: `?` fails the name shape c_peers
+  # and c_round0_authors test, so such a lane stays nobody's. A future use of the value AS A PATH
+  # would need c_drain's reasoning about `..` re-done from scratch, and the raw name besides.
   #
   # Same document gate as c_drain, for the same reason and one more: every caller of c_all
   # swallows its exit status (`c_all || true`), because an empty room is a normal state, so ONE
@@ -1144,10 +1150,10 @@ c_all() {
   # message at a time, because c_drain reads only what is NEW and moves its cursor past the bad
   # file; that is where issue #67's point 4 is fixed, and it is the only place the trade pays.
   #
-  # SO A CORRUPT LANE FILE STILL READS AS AN EMPTY ROOM HERE, and `decide --force` will still
-  # write a record over it. That is a known remainder, disclosed on the pull request, and it is
-  # the state `origin/main` is in. It is left rather than fixed because BOTH available fixes
-  # were tried on this branch and both were worse:
+  # SO A CORRUPT LANE FILE STILL READS AS AN EMPTY ROOM HERE. `decide` no longer writes a record
+  # over it: c_log_parses, below, refuses the write (#67) without touching this function's exit
+  # status. Every other reader still sees an empty room with the diagnostic beside it. That is left
+  # rather than fixed HERE because both fixes of this function were tried and both were worse:
   #
   #   * Dropping the unparseable file and reading the rest turned "unreadable" into "silently
   #     INCOMPLETE": an objection whose file had one bad byte simply vanished, `claims` said
@@ -1170,10 +1176,11 @@ c_all() {
   # this function is not the only source of truth about a room: the RECORD is, and it never
   # passes through here. `v_verdict` now reads the record FIRST, which is what a fourth attempt
   # has to build on; without that, any propagation from here silences a room that has already
-  # closed, and it will do so through whichever door is left unguarded.
+  # closed, and it will do so through whichever door is left unguarded. Attempt 4 is
+  # c_log_parses: it propagates nothing from here, and gates only the record write in v_decide.
   local prog='[ inputs
       | select(type == "object")
-      | .from = (input_filename | split("/") | .[-2]) ]
+      | .from = (input_filename | split("/") | .[-2] | gsub("[^ -~]"; "?")) ]
     | _untrusted | sort_by(.lamport, .from)[]'
   #
   # jq's own message names the offending file, which is the useful part, and it is NOT safe to
@@ -1212,6 +1219,22 @@ c_all() {
   # the difference -- see above. The diagnostic is the whole signal, which is why it survives
   # and why it is sanitised rather than suppressed.
   return 1
+}
+
+# Does every lane file c_all would read PARSE? rc 0 when they all do, and for a room with no lane
+# file at all (an empty room is a normal state); rc 1 when any does not. Prints nothing: c_all's own
+# diagnostic, which the caller has already triggered, names the file.
+#
+# This is the fourth attempt c_all's header asks for, and it is shaped by the other three: it does
+# not change c_all's exit status, it does not drop or retry a file, and its ONE caller is v_decide,
+# AFTER the verdict dispatch -- so a room whose record is on disk still answers from the record, and
+# only the record WRITE is refused. It costs one jq over the log per `decide`, never per reader call.
+# The lane set is c_all's glob, so the two cannot disagree about which files are the log.
+c_log_parses() {
+  local -a files=(); local f
+  for f in "$ROOM"/lane/*/[0-9]*.json; do [ -e "$f" ] && files+=("$f"); done
+  [ "${#files[@]}" -gt 0 ] || return 0
+  jq -n 'inputs | empty' "${files[@]}" >/dev/null 2>&1
 }
 
 # --- canonicalisation ----------------------------------------------------------
