@@ -291,3 +291,40 @@ commit message that still carries a closing keyword for that issue (or, where re
 not allowed, says in the hand-off record that the merger must squash with the PR body) — and the
 hand-off checks both the description and the commit messages for closing keywords against the
 list of issues the change actually closes.
+
+Shipped in #303 (Closes #302). First merge through the corrected helper (#299) carried exactly its
+three `Closes` lines.
+
+## Retro 8 — 2026-09-29, after #299 #303 #304 #305
+
+Batch: 4 PRs, 8 issues closed (#215 #136 #272 #302 #213 #126 #20 #163), open count 28 → 21. A
+second shared usage-limit stop idled both slots for ~60 min; both resumed on one directive each.
+
+### Went well
+
+* **The scope check split a change before it grew** — #58's slot proposed two PRs on its own and
+  the first is running at a reviewable size.
+* **The squash-body fix held** on its first use, and #303 hardened `ship` for the GitLab case the
+  review surfaced (squash there does not stop a commit keyword either).
+* **A new destructive path was held back on purpose** (#305: autodown on live idle terminals left
+  refusing, the design recorded on #156 for an owner decision).
+
+### Went badly
+
+* **Rung 2 is building collectors.** The issues children home findings onto keep growing and never
+  close: #269 now carries 9 comments, #119 7, #156 and #270 4 each — the same shape #206 had before
+  it was closed with a condition. A home with no close condition is a place findings go to wait.
+* **Context at hand-off is high** (#305 at ~48%) for medium changes — partly the three-round habit,
+  partly carrying every optional through the PR.
+
+### Change
+
+In `ship` (next PR): **home a finding only on an issue that says what closes it.** Before rung 2
+adds a scenario to an open issue, check that the issue states a close condition (a checklist, an
+acceptance line, or an explicit "close when …"); if it does not, add one in the same comment. When a
+candidate already carries more than five homed scenarios, prefer fixing the finding in place
+(rung 1) or grouping it into a new focused issue with its own close condition over growing the
+collector.
+
+For the supervisor: schedule the collectors (#269, #119, #270) as clusters now, so their homed
+findings are worked rather than kept.
