@@ -371,10 +371,11 @@ close sweep closes (§7.G step 4). Intake is not the last read: a parallel run c
 scenario onto #N after it, so §7.G reads the comments again before handing off or merging.
 
 **A closing keyword belongs in the PR/MR description, never in a commit message.** A commit message
-that lands on the default branch closes what it names just as the description does — a squash
-merge can fold every commit message into its body, and a merge commit or a rebase brings the
-commits themselves — so a keyword there closes the issue whatever the description says. Commit
-messages reference an issue without the keyword (`Refs #N`, in the form the repo uses). When a
+in the change can close what it names just as the description does — a squash merge can fold
+every commit message into its body, a merge commit or a rebase brings the commits themselves, and a
+forge may read the change's commits when it merges (the reference file says which) — so a keyword
+there can close the issue whatever the description says. Commit messages reference an issue
+without the keyword (`Refs #N`, in the form the repo uses). When a
 change downgrades #N from `Closes` to a reference, check the branch's commit messages for a
 closing keyword on #N as well; §7.G's closing-keyword check is where that is enforced. Measured: a
 change downgraded an issue to `Refs` in its description while an early commit still said `Closes`,
@@ -1714,51 +1715,62 @@ repo's own form, with the same evidence. Where it keeps nothing, there is nothin
 
 #### The closing-keyword check — what the merge will actually close
 
-The description is not the only thing a merge reads for closing keywords: every commit message it
-lands on the default branch is read too (§3.2). So once the sweep has settled the list of issues
-this change closes — its own that pass §3.2, plus the sweep's GONE ones — check that the merge will
-close exactly that list.
+The description is not the only thing a merge reads for closing keywords: commit messages are read
+too (§3.2), and so is the title where the forge reads it — which texts, and when, differs by forge,
+and the reference file says. So once the sweep has settled the list of issues this change closes —
+its own that pass §3.2, plus the sweep's GONE ones — check that the merge will close exactly that
+list.
 
-1. **Collect every closing keyword** in the PR/MR description and in the message of every commit
-   the merge would bring — the commits on the source branch that are not on the base branch. The
-   reference file has the query and the forge's own keyword forms. Match every form the forge
+1. **Collect every closing keyword** in the PR/MR title, its description, and the message of every
+   commit the merge would bring — the commits on the source branch that are not on the base branch.
+   The reference file has the query and the forge's own keyword forms. Match every form the forge
    honours — any case, with or without a colon, and each issue reference form it resolves to this
-   repo — not only `Closes #N`.
+   repo — not only `Closes #N`. A keyword in the title is fixed like one in the description.
 2. **Compare both directions against the list.** Every issue on the list has its own closing line
-   in the description. No closing keyword anywhere — description or commit — names an issue off
-   the list.
+   in the description. No closing keyword anywhere — title, description or commit — names an issue
+   off the list.
 3. **A mismatch in the description** is fixed by editing the description, which moves no code.
 4. **A commit message naming an issue off the list is reworded** so it references the issue
    without the keyword. An unpushed commit is reworded freely. A pushed one is reworded only where
    rewriting the branch's pushed history is allowed — the repo's law, or the user's go-ahead for
    this run, permits force-pushing the change's own branch, and nobody else has built on it — since
    §11 otherwise forbids it. A reword that leaves the tree byte-identical to the reviewed head moves
-   no code, so the review verdict carries to the new head (§5.10); confirm the trees match before
-   pushing, and re-read the checks on the new head (§10).
+   no code — what invalidates a round is unreviewed code, not the head moving (§3.3) — so the
+   review verdict carries to the new head; record the new head in the ledger (§5.10), confirm the
+   trees match before pushing, and re-read the checks on the new head (§10).
 5. **Where rewriting is not allowed, leave the commits and say so in the hand-off record**, on a
-   line of its own: each commit sha, the issue its message would close, and that the merge must be
-   a **squash whose commit message is the PR/MR description** — a merge commit, a rebase merge, or
-   a squash that keeps the commit messages would close it. Where ship merges itself (§2.6), it
-   merges that way or not at all. Where the forge's settings offer no such merge (the reference
-   file reads them), step 4's reword is the only fix, and the go-ahead it needs is escalated.
+   line of its own: each commit sha and the issue its message would close. What else the line says
+   depends on whether the forge offers a merge that keeps that message from closing the issue — the
+   reference file says, and reads the settings that decide it:
+   - **Nothing will close it** — the forge's auto-close setting is off: the line says so, and the
+     merge is not held for it.
+   - **Such a merge exists** (on GitHub, a squash whose subject is the PR title and whose body is the
+     PR description): the line says the merge must be that one, subject and body both, and names the
+     strategies that would close the issue.
+     Where ship merges itself (§2.6), it merges that way or not at all.
+   - **None exists** (on GitLab the merge closes what any commit of the MR names, however it is
+     merged; or the repo's settings disable the one that would help): step 4's reword is the only
+     fix. Escalate for the go-ahead it needs; without one the line says plainly that the merge will
+     close the issue, and ship does not merge it itself.
 6. **Record the result** as one line of the hand-off record — which issues the description closes,
-   and either that no commit message carries a closing keyword off the list or what step 4 or 5
-   did about each one. Like the sweep, the check is bound to the head it ran on: any later push or
+   and either that no title, description or commit message carries a closing keyword off the list,
+   or what step 3, 4 or 5 did about each one. Like the sweep, the check is bound to the head it ran on: any later push or
    description edit re-runs it.
 
 **Where policy says `no-merge` (the default): STOP here and hand over.** Post a record of the
 end state — what was reviewed, at which heads, how many rounds and what they cost (every
 stage's `Spend:` line, §5.9, summed), checks green, anything
 deliberately deferred and the open issue each unfixed finding went to (§5.9), the close sweep's
-line, the closing-keyword check's line (with any squash instruction step 5 of that check
-requires) — and end the loop with
+line, the closing-keyword check's line (with whatever step 5 of that check requires it to say) —
+and end the loop with
 `record state=ready-to-merge`. That last record is the one a supervisor reads to know the change
 is waiting on a person rather than still working. Say what is *holding*, not that everything is
 fine: "holding for the go-ahead" is the status. Do not phrase it in a
 way that invites someone to read a clean self-review as an approval.
 
 **Where policy says `merge`** and the gate fully passes: merge with the strategy the repo
-uses, delete the source branch if that is the convention, verify that every issue the
+uses — or the one the closing-keyword check's step 5 requires, and not at all where it says ship
+does not merge — delete the source branch if that is the convention, verify that every issue the
 description closes — the change's own and the sweep's — actually closed (close it explicitly,
 with its evidence, if the reference did not do it) and that no issue off that list closed (reopen
 one that did, with a comment saying why), then `record state=done`, stop the watch,
@@ -1914,9 +1926,9 @@ change whose run was still in progress. Poll until nothing is pending or running
 - **The close sweep closes only on a reproduction attempt that failed** (§7.G) — never on
   reasoning alone — and through the change's own closing lines, so a merge closes it.
 - **Closing keywords go in the description, never in a commit message** (§3.2), and the hand-off
-  checks both against the exact list of issues the change closes (§7.G); a stale one in a pushed
-  commit is reworded where history may be rewritten, else the record asks for a squash with the
-  description.
+  checks title, description and commits against the exact list of issues the change closes (§7.G);
+  a stale one in a pushed commit is reworded where history may be rewritten, else the record names
+  the merge that avoids the close, or says that none does.
 - **Labels are chosen by the forge's own label descriptions**, not by name similarity (§2.7).
 - **Never resolve another person's thread** (§8); reply with the fix or the rationale.
 - **Never self-approve; never merge without policy** (§2.6, §10).
