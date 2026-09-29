@@ -202,14 +202,7 @@ _flow_drive_node() {
   # `adp_delivery_verdict`'s question, and this interpreter does not ask it yet. The policy is not
   # consulted: its one remedy, `resume`, re-polls without re-sending, which cannot bring back a
   # send that failed. So a `policy` on_block parks, and a goto/close on_block runs as declared.
-  # done_when is still asked first, once, with no signal, so a node whose fact already holds
-  # completes even though its send failed. That covers `artifact`, `check` and `budget 0`. A
-  # `signal <x>` predicate is never met here, since no signal is read, and such a node parks.
-  # That is the side that tells the operator.
   if [ -n "$enter" ] && { ! drv_tell "$session" "$enter" || ! drv_submit "$session"; }; then
-    if _flow_pred_met "" 0 "${_FLOW_DONE_WHEN[$node]:-}"; then
-      _FLOW_OUTCOME=done; _FLOW_SIG=""; return 0
-    fi
     _FLOW_OUTCOME=block; _FLOW_SIG="unknown|undelivered"
     return 0
   fi

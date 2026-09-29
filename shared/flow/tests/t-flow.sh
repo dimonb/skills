@@ -251,8 +251,7 @@ ok "a cycle trips the node budget"              65 "$cycle_rc"
 # A send that failed is a block at once. It used to be polled through: a failed type skipped the
 # submit silently and a failed submit was discarded, so the node waited out FLOW_MAX_POLLS and then
 # blocked as a timeout. The poll count is asserted through a `check` predicate's counter, which
-# every poll bumps. A failed send evaluates done_when exactly once, with no poll, so 1 means the
-# node asked its predicate and never polled.
+# every poll bumps, so zero means the node never polled.
 printf '\n── a failed send, a failed emit, a missed lookup ──\n'
 send_case() { # <VAR=VAL>... -> "<rc>|<polls>|<park line>"
   local rc=0; reset_counter; : > "$PARK"; : > "$TELLLOG"
@@ -262,9 +261,9 @@ send_case() { # <VAR=VAL>... -> "<rc>|<polls>|<park line>"
     FAKE_SIG="live|busy" FLOW_SESSION=s FLOW_PARK_FILE="$PARK" FLOW_MAX_POLLS=50 flow_run n ) 2>/dev/null || rc=$?
   printf '%s|%s|%s' "$rc" "$(cat "$CNT")" "$(grep -c 'signal: unknown|undelivered' "$PARK")"
 }
-ok "a failed type parks at once, naming the failed send"   "10|1|1" "$(send_case FAKE_TELL_RC=1)"
+ok "a failed type parks at once, naming the failed send"   "10|0|1" "$(send_case FAKE_TELL_RC=1)"
 ok "...and is never followed by a submit"                  0 "$(grep -c '^SUBMIT' "$TELLLOG")"
-ok "a failed submit parks at once too"                     "10|1|1" "$(send_case FAKE_SUBMIT_RC=1)"
+ok "a failed submit parks at once too"                     "10|0|1" "$(send_case FAKE_SUBMIT_RC=1)"
 ok "a send that went through still polls (control)"        "10|50|0" "$(send_case)"
 gotofail_rc=0
 ( flow_reset
@@ -297,13 +296,6 @@ unk_case() { # <signal> -> "<rc>|<polls>|<park token>"
 }
 ok "...so the node polls its whole budget, then parks"      "10|4|unknown|timeout" "$(unk_case 'unknown|unknown')"
 ok "a busy node's timeout still says live"                  "10|4|live|timeout"    "$(unk_case 'live|busy')"
-# A failed send does not override a fact that already holds: the node completes.
-done_rc=0
-( flow_reset
-  : > "$TMP/already-there"
-  flow_node n --enter "go" --done-when "artifact $TMP/already-there" --on-block policy --on-done close
-  FAKE_TELL_RC=1 FLOW_SESSION=s FLOW_PARK_FILE="$PARK" flow_run n ) 2>/dev/null || done_rc=$?
-ok "a failed send on a node already done completes it"     0 "$done_rc"
 
 # --- 7b. flow_phase: session-less graph evaluation (the authority mode, FLOW-04) --------------
 # The complement of flow_run: no session, no agent, no side effect — walk the declared graph and

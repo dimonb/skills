@@ -65,8 +65,8 @@
 #    down by calling `shipyard-down.sh` — unchanged, with no flags and never `--force`, so every
 #    gate that protects a worktree is the one that runs. A live terminal is never torn down here.
 #    An open escalation HOLDS it: a child that stopped to ask is still owed the answer, and
-#    removing its worktree makes the answer undeliverable. See the block where SHIPYARD_AUTODOWN is read for every lock and why
-#    `closed` is not a trigger. It is the one thing here that REMOVES A SLOT rather than
+#    removing its worktree makes the answer undeliverable. See the block where SHIPYARD_AUTODOWN
+#    is read for every lock and why `closed` is not a trigger. It is the one thing here that REMOVES A SLOT rather than
 #    observing it; the script's other side effects are its own mailbox bookkeeping
 #    (report-sig / -stall / -tick / -merged / -episodes), the agterm sidebar glyphs it repaints, the pending
 #    notices its escalation tail closes, and the Codex parent continuity watcher it re-arms. What it removed, refused or held each get their
@@ -1078,7 +1078,7 @@ for slot in "${SLOTS[@]}"; do
         gone_state="no MR yet"
         [ -n "$iid" ] && gone_state=$(mr_state "$iid")
         if autodown_consider "$slot" "$iid" "$gone_state" "$gone_stage" "" "$unsettled"; then
-          ROWS+=("| $slot | $mr_label | — | 🧹 torn down | $gone_state / $gone_stage | $esc | — | terminal and worktree removed |")
+          ROWS+=("| $slot | $mr_label | — | 🧹 torn down | $gone_state / $gone_stage | $esc | — | worktree removed (terminal already gone) |")
           SIG+=("$slot|$mr_label|term=0|$gone_state|$gone_stage|$pend/$badrec|reaped")
           continue
         fi
@@ -1161,10 +1161,11 @@ for slot in "${SLOTS[@]}"; do
   # Cleared every iteration, not just assigned: these are plain shell variables in one long
   # loop, so a value left over from the previous slot would otherwise decide this one's row.
   reap_note=""; before_refused=${#REAP_REFUSED[@]}; before_held=${#REAP_HELD[@]}
-  # A slot reaching here has a terminal, so lock 3 refuses it and this call only keeps the
-  # consecutive-merged count and the HELD bookkeeping current. The success branch is kept so the
-  # row and the SIG stay right if lock 3 ever passes a live terminal again (#156 carries that
-  # design); until then it cannot run.
+  # A slot reaching here has a terminal, so lock 3 refuses it, and this call only keeps the
+  # consecutive-merged count current: lock 3 returns before the escalation check, so a live slot
+  # is never in the HELD block (its question still shows in the escalation block). The success
+  # branch is kept so the row and the SIG stay right if lock 3 ever passes a live terminal again
+  # (#156 carries that design); until then it cannot run.
   if autodown_consider "$slot" "$iid" "$state" "$stage" "$addr" "$unsettled"; then
     # The row says what happened to a terminal that WAS live when this tick began, so the
     # teardown is never silent, and the SIG carries `term=0` — a teardown is news, and it is

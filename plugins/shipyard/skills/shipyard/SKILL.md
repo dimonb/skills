@@ -170,10 +170,12 @@ mode launches nothing: `bash <SKILL>/shipyard-report.sh` with no arguments finds
 list in the command).
 
 **It is not read-only, and this section used to say it was.** Discovery mode reaches the same
-per-slot code a named run does, so a slot that is merged, finished, gate-clear and whose terminal
-is already gone is TORN DOWN by it — its worktree removed — exactly as described in Step 6. That is the intended
-behaviour, not an accident; what was wrong was a heading promising a monitor. `SHIPYARD_AUTODOWN=0`
-removes the teardown.
+per-slot code a named run does, teardown included (Step 6). In practice the teardown almost never
+fires here. Discovery mode lists the slots that have a live terminal, and a live terminal is never
+torn down, so it acts only on a slot whose terminal disappears between the listing and the lookup.
+A finished slot whose terminal is already gone is not listed at all, so its worktree needs a named
+run (`shipyard-report.sh <slot>`) or `shipyard-down.sh <slot>`. What discovery mode always does is
+write, and the paragraph below says what. `SHIPYARD_AUTODOWN=0` removes the teardown.
 
 It does NOT make a run inert, and the first draft of this very paragraph claimed it did. With the
 teardown off the report still writes its mailbox bookkeeping files — including **truncating**
@@ -374,8 +376,7 @@ so do not plan on driving it from here.
   terminal, its terminal already gone, and clear through `shipyard-down.sh`'s own content gate.
   That removes the worktree, so arming this loop arms that. A live terminal is never torn down by
   it. An open escalation holds it, and anything it declines is named in its own block with the
-  exact command. Step 6 has every
-  lock and the reasoning; `SHIPYARD_AUTODOWN=0` turns it off;
+  exact command. Step 6 has every lock and the reasoning; `SHIPYARD_AUTODOWN=0` turns it off;
 * whole report in one block → Monitor batches it into one notification;
 * exit 0 = nothing in flight **and** no open escalation → stop the loop; exit 1 = work
   is still open, **or this run could not tell**. Those two share an exit code deliberately: the
@@ -1305,7 +1306,9 @@ and the slot tears itself down on the next tick. A record the report cannot PARS
 cannot be answered — the block names the file to look at, and the escalation view lists it as an
 unreadable record but can offer no reply for it, so the remedy is the file (#197).
 
-This applies to `/shipyard` with no arguments too — discovery mode reaches the same code.
+This applies to `/shipyard` with no arguments too, since discovery mode reaches the same code. But
+discovery mode lists only slots that still have a terminal, and those are never torn down, so a
+finished slot whose terminal is gone is reaped only by a monitor that names it (Step 0).
 
 Why those conditions and not simply `merged`: **merged is not "child done"**. The forge state
 says one PR ended, and a child is still posting its record and writing its state file after
