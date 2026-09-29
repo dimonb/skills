@@ -450,15 +450,18 @@ clean round, never by anything external:
 | implementation diff, clean impl round, archive due and not in the diff | `archive` |
 | implementation diff, clean impl round, archive in the diff or not applicable | `ready-to-merge` |
 | any stage, blockers survived `max-rounds` and the prose round is not available to them (§5.7: not eligible, or already taken) | `needs-human` |
-| any stage, a `withheld` entry still `held` (§5.12) that this invocation does not release, and the stage has a clean round or an escalation recorded | `needs-human`, after finishing the stage's collecting step (§7.C step 5 / §7.E step 6) where no record of that stage carries its §5.9 marker, and then §5.12 step 4 for it: post the stub where its record's marker shows it missing, and convert to draft |
+| any stage, a `withheld` entry still `held` (§5.12) that this invocation does not release, and the stage has a clean round or an escalation recorded | `needs-human`, after finishing the stage's collecting step (§7.C step 5 / §7.E step 6) where the stage has a clean round that no other row re-opens and no record of that stage carries its §5.9 marker, and then §5.12 step 4 for it: where no record or comment on the PR/MR carries the stub, post it — in the stage record the collecting step posts, and otherwise (a close-sweep entry, or a stage whose collecting step was skipped) as a stub-only comment — and convert to draft |
 
-A row that starts "any stage" takes precedence over every row that does not, and a clean-round
-row whose stage record is missing takes precedence over the rows that advance past that stage.
+A row that starts "any stage" takes precedence over every row that does not. A clean-round row
+whose stage record is missing takes precedence over the rows that advance past that stage, and
+yields to the rows that re-open it — code landed after the clean round, or a sizing raise. "Its
+§5.9 marker" is the marker for that stage at the head the clean round reviewed, or at a head
+whose tree is identical to it (§7.G's reword); a record for an earlier tree does not count.
 **A crash between a clean round and its stage's collecting step** is what those rows exist for:
 the ledger says clean, but the ladder was never worked and the record never posted, so the
-stage's deferrals would reach no issue and the stage would look as if it never ran (§5.9). A held entry whose
-stage has neither recorded is not that row: the stage resumes, and §5.12 step 4 runs when it
-ends.
+stage's deferrals would reach no issue and the stage would look as if it never ran (§5.9). A
+held entry whose stage has neither recorded is not that row: the stage resumes, and §5.12 step 4
+runs when it ends.
 
 **What invalidates a round is unreviewed CODE landing after it, not the head moving.** The
 archive commit (§7.F) moves the head by design and is exempt; so is a pure fix push, which
@@ -588,7 +591,7 @@ passes it — the absent file does not fail safe, it fails open.)
     { "id": "sweep-1", "source": "close-sweep", "issue": 57, "evidence": "…",
       "reason": "…", "channel": "…", "private_ref": null, "verified": false,
       "sightings": ["<head sha>"], "status": "held|released", "released_by": null,
-      "exposed": false }
+      "match_reason": null, "covers_issue": false, "exposed": false }
   ],
   "swept": [ { "trigger": 1, "sha": "819f7d74...", "note": "drops a column that encoded authorization" } ],
   "external_threads_grace": { "since": "2026-08-23T10:30:00Z", "thread_ids": ["abc"] },
@@ -1141,22 +1144,22 @@ round 3: …
 - **The stage clears when a round returns zero confirmed blocking findings** and every axis it
   dispatched returned a body — the write-back's `clean: true` (above). A blocker the disclosure
   screen withheld (§5.12) does not count against that. It leaves `open` with `status: withheld`,
-  is not carried into later briefs. **Every later finding is matched against every `withheld`
-  entry, held or released, by the dedupe rule (§5.4: file, line ±3, category, summary
+  is not carried into later briefs. **Every later finding is matched against every review-finding
+  `withheld` entry, held or released, by the dedupe rule (§5.4: file, line ±3, category, summary
   similarity), not by fingerprint alone,** since a fix push shifts lines and a fresh reviewer
   words it differently. A close-sweep entry (§7.G step 2) is keyed by its issue number instead,
-  and is outside this matching. A match is withheld, never fixed or published in this change, and it goes
-  to a verifier whatever its severity and its `disclosure`: §5.5's skeptic for a blocker, and the
-  disclosure-only verifier (§5.4) for any other match, dispatched for it even where the match is
-  an optional at `disclosure: none` that would otherwise get no verifier. That verifier is given
-  the detail of every entry it matched and rules in `match` (§5.5) **same**, naming the entry,
-  **distinct**, or **cannot tell**. A match with no ruling is `cannot tell`, and ship never
-  rules one itself. Same as any one of them: it is recorded as a sighting on that entry (the head
-  sha), with no new entry, channel record or hold, so a released entry stays released. Distinct
-  from all, or cannot tell: its own `withheld` entry with its own detail and `matches` links,
-  status `held`, counted in the stub and needing its own release. So releasing one entry never
-  covers another. A withheld finding holds the change through its own entry and §10 instead, so
-  the stage does not spend rounds re-confirming a finding it may not fix. Record it against the
+  and is outside this matching. A match is withheld, never fixed or published in this change,
+  and it goes to a verifier whatever its severity and its `disclosure`: §5.5's skeptic for a
+  blocker, and the disclosure-only verifier (§5.4) for any other match, dispatched for it even
+  where the match is an optional at `disclosure: none` that would otherwise get no verifier.
+  That verifier is given the detail of every entry it matched and rules in `match` (§5.5) **same**,
+  naming the entry, **distinct**, or **cannot tell**. A match with no ruling is `cannot tell`, and
+  ship never rules one itself. Same as any one of them: it is recorded as a sighting on that entry
+  (the head sha), with no new entry, channel record or hold, so a released entry stays released.
+  Distinct from all, or cannot tell: its own `withheld` entry with its own detail and `matches`
+  links, status `held`, counted in the stub and needing its own release. So releasing one entry
+  never covers another. A withheld finding holds the change through its own entry and §10 instead,
+  so the stage does not spend rounds re-confirming a finding it may not fix. Record it against the
   head sha and move on. A clean round is a snapshot of that round, **not proof
   the diff is clean** — the same engine over the same bytes disagrees with itself at
   multi-thousand-line scale (one measured case: round 63 clean, round 64 four new findings
@@ -1359,8 +1362,8 @@ Spend: 2 rounds, 9 agents (5 axis, 4 verifier), ~380k tokens (round 2 not report
   disclosure screen withholds (§5.12) is not in this batch at all, not even as `file:line`. It is
   counted on the `Withheld:` line.
 - **Withheld findings**: ONE line, the stub of §5.12 — a count, the entry ids, the reason and the
-  status, and nothing else. A stage that withheld nothing says `Withheld: none`, for the same reason as the
-  `Deferred:` line.
+  status, and nothing else. A stage that withheld nothing says `Withheld: none`, for the same
+  reason as the `Deferred:` line.
 - **Deferred findings**: ONE line giving the disposition by rung (§5.11) — how many were fixed
   in the change, which open issues received a scenario, which issues were created. Numbers and
   issue references, never contents: the reasons live in the ledger and in the created issue.
@@ -1691,10 +1694,9 @@ private-GitHub case is trigger 2 and needs no verifier:
    entry. `<ref>` is the advisory's `GHSA-…` id on GitHub and the confidential issue's `#<iid>`
    on GitLab. The entry id is the entry's ledger `id` (§4), of the `<stage>-<n>` shape
    (`sweep-<n>` for a close-sweep entry, §7.G), which names no file or component; a release names
-   it (step 4). The stub carries a count, the entry
-   ids, the reason and the status, and nothing else. There is no file, no line, no payload, no
-   scenario, and no title that describes the defect. A private reference is fine to include, because only people with access
-   can open it.
+   it (step 4). The stub carries a count, the entry ids, the reason and the status, and nothing
+   else. There is no file, no line, no payload, no scenario, and no title that describes the
+   defect. A private reference is fine to include, because only people with access can open it.
 4. **It holds the change, whatever its severity.** Withholding never releases a merge. A
    `withheld` entry whose status is `held` counts as a blocker for §10. The finding is not fixed
    or tested in this change, because the fix, its test and its commit message would publish the
@@ -1713,12 +1715,13 @@ private-GitHub case is trigger 2 and needs no verifier:
    were already held when that invocation started. An entry it does not name stays held, and so
    does one created during the invocation. A release that names no id releases nothing, and the
    run reports that and the ids still held. So a relayed or earlier "release" cannot clear an
-   entry no human was shown. A release lifts the hold on §10, and undoes the draft this step set unless another
-   stop still requires it (§5.9). It does nothing else. The finding stays unfixed and unpublished in this
-   change, and its `open` entry stays `withheld`. Fixing it is a separate change, which the human
-   starts once disclosure is settled. Where the finding went to a private channel, that record
-   keeps it. Where it is ledger only, the git-ignored state file is its only copy, and that file
-   goes with the worktree, so the release says the human has taken the detail out of it.
+   entry no human was shown. A release lifts the hold on §10, and undoes the draft this step set
+   unless another stop still requires it (§5.9). It does nothing else. The finding stays unfixed
+   and unpublished in this change, and its `open` entry stays `withheld`. Fixing it is a separate
+   change, which the human starts once disclosure is settled. Where the finding went to a
+   private channel, that record keeps it. Where it is ledger only, the git-ignored state file is
+   its only copy, and that file goes with the worktree, so the release says the human has taken
+   the detail out of it.
 
    The release is recorded as `status: released` with `released_by`. A supervisor
    that launched the run releases it only by relaying the human's own words, never on its own
@@ -2021,13 +2024,20 @@ happens to notice. The sweep is what makes the backlog shrink as well as grow.
    names only the issue and its verdict, and the evidence is withheld through §5.12 like a review
    finding's detail — ledger, private channel, stub and hold. Its `withheld` entry carries
    `source: "close-sweep"` and `issue: <N>`, and **the issue number is its key**. A later sweep
-   whose verdict on the same issue trips again is a sighting on that entry, never a new entry, so
-   a released entry stays released. §5.7's file/line matching does not apply to a sweep entry in
-   either direction: a review finding is not matched against it, and it is not matched against a
-   review finding's entry. A review finding about the same defect therefore gets its own entry
-   and its own release, which fails closed. §5.12 step 4 runs at the hand-off for a held sweep
-   entry: its stub goes in the hand-off record, the PR/MR turns draft, and the run records
-   `needs-human` rather than `ready-to-merge`.
+   whose verdict on the same issue trips again goes to a verifier given each entry for that issue
+   and their evidence, which rules as §5.7's matching does. **Same** as one of them: a sighting on
+   it, so a released entry stays released. **Distinct**, or **cannot tell**: a new held
+   `sweep-<n>` entry for that issue, with its own channel record and the verifier's stated reason
+   in its `match_reason`, so the human releasing it sees why. That field stays in the ledger and
+   the channel record, and the stub never shows it. The issue body is peer-writable, and an
+   edited body must not silence the hold. A release that says its entry covers the issue
+   (`covers_issue: true`) makes every later trip on that issue a sighting on it. §5.7's
+   file/line matching does not apply to a sweep entry in either direction: a review finding is
+   not matched against it, and it is not matched against a review finding's entry. A review
+   finding about the same defect therefore gets its own entry and its own release, which fails
+   closed. §5.12 step 4 runs at the hand-off for a held sweep entry: its stub goes in the
+   hand-off record, the PR/MR turns draft, and the run records `needs-human` rather than
+   `ready-to-merge`.
 3. **Never close on reasoning alone.** "This diff looks like it fixes that" is not evidence, and
    neither is a verifier's opinion without the attempt it made. Only **GONE** with its evidence
    leads to a close; REPRODUCES and UNVERIFIED both leave the issue open, and a verdict whose
