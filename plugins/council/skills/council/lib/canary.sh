@@ -28,8 +28,9 @@
 # held by the keeper's read end alone, and each was still polling 33 s after its owner died.
 #
 # So while a sentinel runs, the watching process does not select on the canary. A SENTINEL — a
-# process substitution, so a child in the caller's own process group — blocks in a plain `read` on it and writes one `eof`
-# line into an anonymous pipe when that read ends, and the caller's `read -t` waits on that pipe.
+# process substitution, so a child in the caller's own process group — blocks in a plain `read`
+# on it and writes one `eof` line into an anonymous pipe when that read ends, and the caller's
+# `read -t` waits on that pipe.
 # The sentinel's read is the blocking kind, and what the caller selects on is DATA in a pipe, which
 # does not have that edge.
 #
