@@ -360,6 +360,11 @@ so do not plan on driving it from here.
   slot worktree's own branch; only when neither can answer does the column say `no MR yet`. The
   one slot that skips the forge is a numeric GitLab one, where the slot already IS the iid;
   a numeric GitHub slot is an issue number, so it goes through both sources like any other.
+  The forge's answer counts only when it is tied to the worktree's own history and, for a merged
+  or closed one, to a merge after the slot's launch record; one that fails reads `!N?` — the
+  number the forge names for that branch, **unverified**, with `no MR yet` as its state. Nothing
+  decides on it (not the state, the slot graph or a teardown), so a head moved on the forge and
+  never pulled shows its number without it ever painting a live child finished;
   The stage column gets no such fallback: no forge knows whether a child is at `apply` or
   `impl-review`, so a `—` there means the child has not recorded a stage, and `ship` §2.8 is
   what makes it do so;

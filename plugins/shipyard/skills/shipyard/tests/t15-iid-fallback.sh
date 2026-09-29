@@ -39,22 +39,33 @@
 #      renders, rather than withholding the tick;
 #   9. (#143) a slot with no terminal costs no forge call — unless its stage says the teardown may
 #      be due, where lock 1 needs the forge's answer.
+#  10. (#317) a merged or closed candidate that stopped being open BEFORE the slot's launch record
+#      says it was launched is not this child's — the kept-branch relaunch before its first
+#      commit, whose HEAD is still the old PR's head — while no launch record skips that test;
+#  11. (#317) a candidate that fails is shown as an ANNOTATION, `!N?`, and never reaches mr_state:
+#      the head moved on the forge, the reused name and the relaunch all render the forge's number
+#      marked unverified instead of a blank, and none of them can paint a live child finished;
+#  12. (#317) the GitLab arm, in a second report run over a gitlab origin with a `glab` fake: a
+#      fork is dropped, an open MR whose head is an ancestor wins, a merged one on HEAD keeps its
+#      number, a merged one from before the launch is an annotation, and a numeric slot is its own
+#      iid without a forge call.
 #
-# The rig is t13-wait.sh's: exported shell functions shadow `git`, `tmux` and `gh`, which works
-# where a fake binary on PATH does not because shipyard-lib.sh prepends the system PATH over
+# The rig is t13-wait.sh's: exported shell functions shadow `git`, `tmux`, `gh` and `glab`, which
+# works where a fake binary on PATH does not because shipyard-lib.sh prepends the system PATH over
 # anything a test puts in front. Cost: the report sleeps once per slot for its motion diff, which
 # in production is three seconds and was once almost all of this file's measured time. The run
-# below sets SHIPYARD_MOTION_INTERVAL (#203) and says there why that changes no answer here. The suite is still in `make test` rather than the per-commit gate.
+# below sets SHIPYARD_MOTION_INTERVAL (#203) and says there why that changes no
+# answer here. The suite is still in `make test` rather than the per-commit gate.
 #
 # WHAT A GREEN RUN DOES NOT PROVE, stated so it is not read as more than it is. The `gh` fake
 # honours `--jq` by piping its canned JSON through real jq, so the filter in shipyard-report.sh is
 # genuinely exercised — but nothing here proves the `--json`/`--state`/`--limit` flags are spelled
 # the way the real CLI wants them, and nothing here calls a real forge. A flag typo ships green.
-# The GitLab branch of the fallback is not exercised at all: this rig is GitHub-only, because the
-# forge is derived from the origin remote and one report run cannot be both. That gap covers the
-# `glab mr list --source-branch` call AND the `return` slot_iid()'s GitLab shortcut now needs —
-# without it a numeric GitLab slot would print the slot and then fall through, concatenating two
-# numbers into an iid that is neither. Delete that `return` and every suite here stays green.
+# The `glab` fake's JSON carries the field names a real `glab mr list -F json` (1.90) returned
+# when #317 ran one against a public project — `iid`, `state` in lower case, `sha`, the two project
+# ids, `merged_at` with milliseconds and `closed_at` null on a merge — so the filter is exercised
+# against that shape; a later glab that renames a field still ships green here. Real `gh`'s built-in
+# jq is gojq, not the jq the fake pipes through; `try`, `sub` and `fromdateiso8601` were run on both.
 set -uo pipefail
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SKILL_DIR="$(cd "$DIR/.." && pwd)"
@@ -91,22 +102,37 @@ mkdir -p "$FAKE_ROOT" "$FAKE_GIT/ship-escalations"
 # 57: no base branch resolvable at all (no origin/HEAD, no usable upstream, no origin/main|master)
 #     -> the forge is not asked. The old guard read that empty answer as "nothing to exclude".
 # 58: a relaunch on a REUSED branch name: the only candidate is MERGED with a head that is an
-#     ancestor of HEAD but not HEAD -> not this child's PR, so no number. The kept-branch restart
-#     path; an ancestry test alone would admit it and paint the old `merged` over a live child.
+#     ancestor of HEAD but not HEAD -> not this child's PR, so no iid, only the `!581?`
+#     annotation. The kept-branch restart path; an ancestry test alone would admit it and paint
+#     the old `merged` over a live child.
 # 59: a FORK's open PR on the same branch name, listed first, then the child's own MERGED PR whose
-#     head is HEAD -> the fork is dropped and the child's merged PR keeps its number.
+#     head is HEAD and which merged AFTER the slot's launch record -> the fork is dropped and the
+#     child's merged PR keeps its number.
 # 60: a MERGED candidate on HEAD listed first, then an OPEN one whose head is an ancestor of HEAD
 #     -> the OPEN one wins.
-# 61: an OPEN candidate whose head is NOT in this worktree's history -> rejected.
+# 61: an OPEN candidate whose head is NOT in this worktree's history — a head moved on the forge
+#     and never pulled -> no iid, only the `!611?` annotation.
 # 62: the CLI hangs -> killed at SHIPYARD_FORGE_TIMEOUT, no number, and the report still renders.
 # 63: no terminal, no stage -> the forge is never asked about its branch.
-# 64: no terminal, stage `done`, no number in the state file -> the teardown arm does ask.
-for s in 51 52 53 54 55 56 57 58 59 60 61 62 63 64; do mkdir -p "$FAKE_ROOT/.claude/worktrees/ship-$s/.pipeline-state"; done
+# 64: no terminal, stage `done`, no number in the state file -> the teardown arm does ask, and
+#     with NO launch record the merge time is not tested, so its merged PR keeps its number.
+# 65: a kept-branch relaunch before its first commit: the only candidate is MERGED on HEAD, and
+#     it merged BEFORE the slot's launch record -> no iid, only the `!651?` annotation.
+GH_SLOTS="51 52 53 54 55 56 57 58 59 60 61 62 63 64 65"
+# The GitLab run's slots (case 12). Non-numeric but one, because a numeric GitLab slot IS its iid
+# and never reaches the forge — which is what 71 pins.
+#   gfork:   a fork's opened MR listed first, then the child's own merged one on HEAD -> the latter;
+#   ganc:    a merged MR on HEAD, then an opened one whose head is an ancestor -> the opened one;
+#   gold:    a merged MR on HEAD that merged before the launch record -> annotation only;
+#   71:      numeric -> `!71`, and glab is never asked about its branch.
+GL_SLOTS="gfork ganc gold 71"
+for s in $GH_SLOTS $GL_SLOTS; do mkdir -p "$FAKE_ROOT/.claude/worktrees/ship-$s/.pipeline-state"; done
 # The registered set: every slot EXCEPT 56. Physical paths, because the guard compares against
 # `pwd -P` and $TMPDIR is a symlink on macOS — a logical path here would make the guard reject
 # every slot and the suite would pass for the wrong reason (measured: it reds 4 checks).
 WT_LIST=""
-for s in 51 52 53 54 55 57 58 59 60 61 62 63 64; do
+for s in $GH_SLOTS $GL_SLOTS; do
+  [ "$s" = 56 ] && continue
   p=$(cd "$FAKE_ROOT/.claude/worktrees/ship-$s" && pwd -P)
   WT_LIST="${WT_LIST}worktree $p
 "
@@ -114,7 +140,15 @@ done
 printf '{"pr_number":902,"state":"impl-review"}\n' \
   >"$FAKE_ROOT/.claude/worktrees/ship-52/.pipeline-state/PR-902.json"
 printf '{"state":"done"}\n' >"$FAKE_ROOT/.claude/worktrees/ship-64/.pipeline-state/ISSUE-64.json"
-export FAKE_ROOT FAKE_GIT GH_CALLS WT_LIST
+# Launch records, in the shape shipyard-launch.sh writes. Every merge time below is either
+# 2026-01-01 (before a launch) or 2026-06-01 (after one); the launches are all 2026-03-01.
+for s in 59 60 65 gfork ganc gold; do
+  printf '{"id":"launch-%s","slot":"%s","kind":"launch","status":"info","started_at":"2026-03-01T00:00:00Z"}\n' "$s" "$s" \
+    >"$FAKE_GIT/ship-escalations/launch-$s.json"
+done
+GH_VIEWS="$T15TMP/gh-views"; GLAB_CALLS="$T15TMP/glab-calls"; : > "$GH_VIEWS"; : > "$GLAB_CALLS"
+FAKE_ORIGIN='https://github.com/example/example.git'
+export FAKE_ROOT FAKE_GIT GH_CALLS GH_VIEWS GLAB_CALLS WT_LIST FAKE_ORIGIN
 
 git() {
   local dir=""
@@ -136,7 +170,7 @@ git() {
       case "$3" in anc-*) return 0 ;; *) return 1 ;; esac ;;
     "rev-parse --show-toplevel")  printf '%s\n' "$FAKE_ROOT"; return 0 ;;
     "rev-parse --git-common-dir") printf '%s\n' "$FAKE_GIT";  return 0 ;;
-    "remote get-url origin")      printf 'https://github.com/example/example.git\n'; return 0 ;;
+    "remote get-url origin")      printf '%s\n' "$FAKE_ORIGIN"; return 0 ;;
     "symbolic-ref --quiet --short refs/remotes/origin/HEAD") printf 'origin/main\n'; return 0 ;;
     "worktree list --porcelain")  printf '%s' "$WT_LIST"; return 0 ;;
     "rev-parse --abbrev-ref HEAD")
@@ -154,6 +188,11 @@ git() {
         *ship-62) printf 'feat/lima\n' ;;
         *ship-63) printf 'feat/mike\n' ;;
         *ship-64) printf 'feat/november\n' ;;
+        *ship-65) printf 'feat/oscar\n' ;;
+        *ship-gfork) printf 'feat/gl-fork\n' ;;
+        *ship-ganc)  printf 'feat/gl-anc\n' ;;
+        *ship-gold)  printf 'feat/gl-old\n' ;;
+        *ship-71)    printf 'feat/gl-numeric\n' ;;
         # Slot 56 and anything else: git walked UP and answered with the SUPERVISOR's branch,
         # which is what a stray directory really produces. Never reached if the guard holds.
         *)        printf 'feat/supervisors-own-branch\n' ;;
@@ -166,7 +205,7 @@ git() {
 tmux() {
   case "${1:-}" in
     # 63 and 64 have no terminal.
-    list-windows) printf '1 ship-51\n2 ship-52\n3 ship-53\n4 ship-54\n5 ship-55\n6 ship-56\n7 ship-57\n8 ship-58\n9 ship-59\n10 ship-60\n11 ship-61\n12 ship-62\n'; return 0 ;;
+    list-windows) printf '1 ship-51\n2 ship-52\n3 ship-53\n4 ship-54\n5 ship-55\n6 ship-56\n7 ship-57\n8 ship-58\n9 ship-59\n10 ship-60\n11 ship-61\n12 ship-62\n13 ship-65\n14 ship-gfork\n15 ship-ganc\n16 ship-gold\n17 ship-71\n'; return 0 ;;
     has-session)  return 0 ;;
     capture-pane) printf '⏺ working\n'; return 0 ;;
   esac
@@ -184,7 +223,8 @@ gh() {
   done
   case "$*" in
     *"pr list"*)
-      printf '%s\n' "$*" >>"$GH_CALLS"
+      # One line per call: the report's --jq filter spans several lines.
+      a="$*"; printf '%s\n' "${a//$'\n'/ }" >>"$GH_CALLS"
       case "$*" in
         *"--head feat/alpha"*) out='[{"number":777,"state":"OPEN","headRefOid":"h51","isCrossRepository":false}]' ;;
         *"--head feat/bravo"*) out='[{"number":999,"state":"OPEN","headRefOid":"h52","isCrossRepository":false}]' ;;
@@ -195,25 +235,47 @@ gh() {
         # rather than a blank-column one: without the registration guard the row renders `!555`.
         *"--head feat/supervisors-own-branch"*) out='[{"number":555,"state":"OPEN","headRefOid":"h56","isCrossRepository":false}]' ;;
         *"--head feat/golf"*) out='[{"number":571,"state":"OPEN","headRefOid":"h57","isCrossRepository":false}]' ;;
-        *"--head feat/hotel"*) out='[{"number":581,"state":"MERGED","headRefOid":"anc-old","isCrossRepository":false}]' ;;
-        *"--head feat/india"*) out='[{"number":591,"state":"OPEN","headRefOid":"h59","isCrossRepository":true},{"number":592,"state":"MERGED","headRefOid":"h59","isCrossRepository":false}]' ;;
-        *"--head feat/juliet"*) out='[{"number":601,"state":"MERGED","headRefOid":"h60","isCrossRepository":false},{"number":602,"state":"OPEN","headRefOid":"anc-60","isCrossRepository":false}]' ;;
+        *"--head feat/hotel"*) out='[{"number":581,"state":"MERGED","headRefOid":"anc-old","isCrossRepository":false,"closedAt":"2026-06-01T00:00:00Z"}]' ;;
+        *"--head feat/india"*) out='[{"number":591,"state":"OPEN","headRefOid":"h59","isCrossRepository":true,"closedAt":null},{"number":592,"state":"MERGED","headRefOid":"h59","isCrossRepository":false,"closedAt":"2026-06-01T00:00:00Z"}]' ;;
+        *"--head feat/juliet"*) out='[{"number":601,"state":"MERGED","headRefOid":"h60","isCrossRepository":false,"closedAt":"2026-06-01T00:00:00Z"},{"number":602,"state":"OPEN","headRefOid":"anc-60","isCrossRepository":false,"closedAt":null}]' ;;
         *"--head feat/kilo"*) out='[{"number":611,"state":"OPEN","headRefOid":"elsewhere","isCrossRepository":false}]' ;;
         # A hung CLI. Its sleep does not hold stdout: a real hung `gh` is ONE process, which the
         # TERM kills with its pipe; a fake's child would outlive the killed function and keep the
         # caller's $( ) open, which tests the fixture rather than the report.
         *"--head feat/lima"*) sleep 60 </dev/null >/dev/null 2>&1; out='[{"number":621,"state":"OPEN","headRefOid":"h62","isCrossRepository":false}]' ;;
         *"--head feat/mike"*) out='[{"number":631,"state":"OPEN","headRefOid":"h63","isCrossRepository":false}]' ;;
-        *"--head feat/november"*) out='[{"number":641,"state":"MERGED","headRefOid":"h64","isCrossRepository":false}]' ;;
+        *"--head feat/november"*) out='[{"number":641,"state":"MERGED","headRefOid":"h64","isCrossRepository":false,"closedAt":"2026-01-01T00:00:00Z"}]' ;;
+        # Merged on HEAD, but before the slot's launch record: the kept-branch relaunch.
+        *"--head feat/oscar"*) out='[{"number":651,"state":"MERGED","headRefOid":"h65","isCrossRepository":false,"closedAt":"2026-01-01T00:00:00Z"}]' ;;
         *) out='[]' ;;
       esac ;;
-    *"pr view"*) printf 'OPEN\n'; return 0 ;;
+    # Logged, so an annotation reaching mr_state is provable: none may ever be asked about.
+    *"pr view"*) printf '%s\n' "$*" >>"$GH_VIEWS"; printf 'OPEN\n'; return 0 ;;
     *) return 0 ;;
   esac
   if [ -n "$filter" ]; then printf '%s' "$out" | jq -r "$filter" 2>/dev/null
   else printf '%s\n' "$out"; fi
 }
-export -f git tmux gh
+
+# The GitLab arm's fake. Its JSON is shaped as a real `glab mr list -F json` answered (see the
+# header): lower-case state, `merged_at` with milliseconds, `closed_at` null on a merge. No `--jq`:
+# the report pipes glab's stdout through real jq itself. `mr view` is logged like `pr view`.
+glab() {
+  case "$*" in
+    *"mr list"*)
+      printf '%s\n' "$*" >>"$GLAB_CALLS"
+      case "$*" in
+        *"--source-branch feat/gl-fork "*) printf '%s\n' '[{"iid":811,"state":"opened","sha":"hgfork","source_project_id":2,"target_project_id":1,"merged_at":null,"closed_at":null},{"iid":812,"state":"merged","sha":"hgfork","source_project_id":1,"target_project_id":1,"merged_at":"2026-06-01T00:00:00.213Z","closed_at":null}]' ;;
+        *"--source-branch feat/gl-anc "*) printf '%s\n' '[{"iid":821,"state":"merged","sha":"hganc","source_project_id":1,"target_project_id":1,"merged_at":"2026-06-01T00:00:00.213Z","closed_at":null},{"iid":822,"state":"opened","sha":"anc-ganc","source_project_id":1,"target_project_id":1,"merged_at":null,"closed_at":null}]' ;;
+        *"--source-branch feat/gl-old "*) printf '%s\n' '[{"iid":831,"state":"merged","sha":"hgold","source_project_id":1,"target_project_id":1,"merged_at":"2026-01-01T00:00:00.213Z","closed_at":null}]' ;;
+        *"--source-branch feat/gl-numeric "*) printf '%s\n' '[{"iid":841,"state":"opened","sha":"h71","source_project_id":1,"target_project_id":1,"merged_at":null,"closed_at":null}]' ;;
+        *) printf '[]\n' ;;
+      esac ;;
+    *"mr view"*) printf '%s\n' "$*" >>"$GH_VIEWS"; printf '{"state":"opened"}\n' ;;
+  esac
+  return 0
+}
+export -f git tmux gh glab
 
 printf '%s\n' "$(date +%s)" >"$FAKE_GIT/ship-escalations/report-tick"
 # SHIPYARD_MOTION_INTERVAL: the report waits between two captures for every live slot, which at the
@@ -226,7 +288,7 @@ printf '%s\n' "$(date +%s)" >"$FAKE_GIT/ship-escalations/report-tick"
 t0=$(date +%s)
 out=$(SHIPYARD_MOTION_INTERVAL="${SHIPYARD_MOTION_INTERVAL:-0.01}" SHIPYARD_STALL_SECS=100000 SHIPYARD_BACKEND=tmux SHIPYARD_SESSION=t15ex \
         SHIPYARD_FORGE_TIMEOUT=2 SHIPYARD_AUTODOWN=0 \
-        bash "$REPORT" 51 52 53 54 55 56 57 58 59 60 61 62 63 64 2>/dev/null)
+        bash "$REPORT" $GH_SLOTS 2>/dev/null)
 elapsed=$(( $(date +%s) - t0 ))
 
 # 1 — the whole point: a child that wrote nothing still gets its PR number.
@@ -280,16 +342,26 @@ ok "57: ...and the column says so honestly"         1 \
    "$(printf '%s' "$out" | grep -c '^| 57 | — .*no MR yet')"
 
 # 9 — #143: the branch name is not the child.
+# 58 and 61 fail every rule, so each is the forge's number marked unverified, `!N?`, over a state
+# of `no MR yet`: mr_state was not asked, which the `pr view` log below proves for all three.
 ok "58: a merged PR whose head is only an ANCESTOR of HEAD is not this child's" 1 \
-   "$(printf '%s' "$out" | grep -c '^| 58 | — .*no MR yet')"
+   "$(printf '%s' "$out" | grep -c '^| 58 | !581? | .*no MR yet')"
 ok "59: a fork's same-named PR is dropped"          0 \
    "$(printf '%s' "$out" | grep -c '^| 59 | !591 |')"
 ok "59: ...and the child's own merged PR on HEAD keeps its number" 1 \
    "$(printf '%s' "$out" | grep -c '^| 59 | !592 |')"
 ok "60: an open candidate wins over a merged one"   1 \
    "$(printf '%s' "$out" | grep -c '^| 60 | !602 |')"
-ok "61: an open PR outside this worktree's history is rejected" 1 \
-   "$(printf '%s' "$out" | grep -c '^| 61 | — .*no MR yet')"
+ok "61: an open PR outside this worktree's history is only an annotation" 1 \
+   "$(printf '%s' "$out" | grep -c '^| 61 | !611? | .*no MR yet')"
+
+# 10 — #317: a merge from before the launch is the old PR of a kept-branch relaunch.
+ok "65: a merged PR on HEAD that merged before the launch is only an annotation" 1 \
+   "$(printf '%s' "$out" | grep -c '^| 65 | !651? | .*no MR yet')"
+ok "...and no annotation ever reached mr_state"     0 \
+   "$(grep -cE 'pr view (581|611|651)( |$)' "$GH_VIEWS")"
+ok "...while a verified number did, so that log is not empty" 1 \
+   "$(grep -cE 'pr view 777( |$)' "$GH_VIEWS")"
 
 # 10 — #143: a hung CLI costs its deadline, not the tick.
 ok "62: the hung call was made"                     1 \
@@ -307,7 +379,9 @@ ok "63: ...and still renders its row"               1 \
 # ...unless its stage says the teardown may be due, where lock 1 needs `merged`.
 ok "64: a gone slot at a terminal stage IS asked"   1 \
    "$(grep -c -- '--head feat/november' "$GH_CALLS")"
-ok "64: ...and its row carries the number"          1 \
+# Its PR merged "before" a launch — but it has no launch record, so that test is skipped: a blank
+# here would take the `merged` a finished child's teardown needs.
+ok "64: ...and its row carries the number, with no launch record to test against" 1 \
    "$(printf '%s' "$out" | grep -c '^| 64 | !641 |')"
 
 # The forge deadline's PRODUCTION default, asserted rather than trusted: the run above shrinks it,
@@ -330,15 +404,45 @@ ok "...and a zero deadline is refused, with a warning" 1 \
 ok "every query asks for a PR in ANY state"         0 \
    "$(grep -v -- '--state all' "$GH_CALLS" | grep -c .)"
 ok "...and for the fields the choice among candidates reads" 0 \
-   "$(grep -v -- '--json number,state,headRefOid,isCrossRepository' "$GH_CALLS" | grep -c .)"
+   "$(grep -v -- '--json number,state,headRefOid,isCrossRepository,closedAt' "$GH_CALLS" | grep -c .)"
 ok "...and for several candidates, not one"         0 \
    "$(grep -v -- '--limit 10 ' "$GH_CALLS" | grep -c .)"
-# ...and the log holds exactly the slots that should reach the forge — 51 54 58 59 60 61 62 64 —
-# so the checks above cannot pass vacuously over no calls.
-ok "the log they read holds the expected queries"   8 \
+# ...and the log holds exactly the slots that should reach the forge — 51 54 58 59 60 61 62 64 65
+# — so the checks above cannot pass vacuously over no calls.
+ok "the log they read holds the expected queries"   9 \
    "$(grep -c . "$GH_CALLS")"
 
-unset -f git tmux gh
+# 12 — #317: the GitLab arm, in its own run, because the forge is derived from the origin remote.
+FAKE_ORIGIN='https://gitlab.com/example/example.git'; export FAKE_ORIGIN
+: > "$GH_VIEWS"
+glout=$(SHIPYARD_MOTION_INTERVAL="${SHIPYARD_MOTION_INTERVAL:-0.01}" SHIPYARD_STALL_SECS=100000 SHIPYARD_BACKEND=tmux SHIPYARD_SESSION=t15ex \
+          SHIPYARD_FORGE_TIMEOUT=2 SHIPYARD_AUTODOWN=0 \
+          bash "$REPORT" $GL_SLOTS 2>/dev/null)
+ok "gitlab: a fork's MR is dropped"                 0 \
+   "$(printf '%s' "$glout" | grep -c '^| gfork | !811')"
+ok "gitlab: ...and the child's own merged MR on HEAD keeps its number" 1 \
+   "$(printf '%s' "$glout" | grep -c '^| gfork | !812 |')"
+ok "gitlab: an opened MR whose head is an ancestor wins" 1 \
+   "$(printf '%s' "$glout" | grep -c '^| ganc | !822 |')"
+ok "gitlab: ...and its state is read from glab"     1 \
+   "$(printf '%s' "$glout" | grep -c '^| ganc .*opened /')"
+ok "gitlab: a merge from before the launch is only an annotation" 1 \
+   "$(printf '%s' "$glout" | grep -c '^| gold | !831? | .*no MR yet')"
+ok "gitlab: ...which never reached mr_state"        0 \
+   "$(grep -cE 'mr view 831( |$)' "$GH_VIEWS")"
+# The shortcut itself: without it the slot reaches glab and renders 841. Its `return` is NOT pinned,
+# and cannot be from a report run: the loop asks `slot_iid <slot> local` first, which stops before
+# the forge arm, so a numeric GitLab slot never makes the second call the `return` guards.
+ok "gitlab: a numeric slot is its own iid"          1 \
+   "$(printf '%s' "$glout" | grep -c '^| 71 | !71 |')"
+ok "gitlab: ...and glab is never asked about its branch" 0 \
+   "$(grep -c -- '--source-branch feat/gl-numeric' "$GLAB_CALLS")"
+ok "gitlab: every query asks for any state, several candidates, as JSON" 0 \
+   "$(grep -v -- '--all -P 10 -F json' "$GLAB_CALLS" | grep -c .)"
+ok "gitlab: ...over the three non-numeric slots"    3 \
+   "$(grep -c . "$GLAB_CALLS")"
+
+unset -f git tmux gh glab
 if [ "$FAILURES" -eq 0 ]; then
   printf 't15-iid-fallback: %d checks, all passed\n' "$CHECKS"; exit 0
 fi
