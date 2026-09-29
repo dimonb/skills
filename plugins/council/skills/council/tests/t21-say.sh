@@ -251,6 +251,37 @@ ok "2b2: both pinned -> still exit 4"             4   "$(rc_of "$out")"
 ok "2b2: ...saying one pin is stale"              yes "$(has "$out" 'so one pin is stale')"
 ok "2b2: ...naming the stale file to remove"      yes "$(has "$out" 'container-<that backend>')"
 ok "2b2: ...and not the looping pin-the-other"    no  "$(has "$out" 'COUNCIL_BACKEND=agterm')"
+# 2b3. A pin the launch record contradicts (#67, #333): the seats were launched on tmux and the pin
+#      says agterm. `say` prints the same remedy `down` does (t30 2b), so it must name both backends
+#      and offer neither, or following it sends the operator's next verb to an empty container. The
+#      record goes into a mailbox of this case's own, scoped to the subshell, so nothing here writes
+#      where a real room's record lives. The room has no `created_ms`, so the record binds to "".
+LR_MB="$ROOT/lr-mailbox"; LR_ROOM=$(cd "$ROOM" && pwd -P)
+lr_seed() { # <backend of claude> <backend of codex> -> this room's launch record, both seats launched
+  mkdir -p "$LR_MB"
+  jq -n --arg room "$LR_ROOM" --arg a "$1" --arg b "$2" \
+    '{room: $room, created_ms: "", generation: 1,
+      seats: {claude: {backend: $a, container: "c", name: "n", handle: "%1", launched: true, generation: 1},
+              codex:  {backend: $b, container: "c", name: "n", handle: "%2", launched: true, generation: 1}}}' \
+    >"$LR_MB/council-launch-${LR_ROOM##*/}"
+}
+reset; : >"$PINS/container-agterm"; : >"$SESSIONS"; printf '0\n' >"$SESSIONS_RC"; lr_seed tmux tmux
+out=$( export POLICY_MAILBOX_DIR="$LR_MB"; FAKE_TYPE_RC=1 run_say codex 'hello' )
+ok "2b3: pin and record disagree -> still exit 4"  4   "$(rc_of "$out")"
+ok "2b3: ...saying the pin and the record disagree" yes "$(has "$out" 'pin and its launch record disagree')"
+ok "2b3: ...naming the pin's backend"             yes "$(has "$out" 'the pin says agterm')"
+ok "2b3: ...and the recorded one"                 yes "$(has "$out" 'launched on tmux\.')"
+ok "2b3: ...and NOT offering the pin's backend"   no  "$(has "$out" 'COUNCIL_BACKEND=agterm')"
+# 2b4. A record whose launched seats name BOTH backends. They are joined into one string and compared
+#      with the pin as a whole, so it reads as a disagreement whichever backend is pinned: a room runs
+#      on one backend at a time, so such a record is itself contradictory and no backend is offered.
+reset; : >"$PINS/container-agterm"; : >"$SESSIONS"; printf '0\n' >"$SESSIONS_RC"; lr_seed tmux agterm
+out=$( export POLICY_MAILBOX_DIR="$LR_MB"; FAKE_TYPE_RC=1 run_say codex 'hello' )
+ok "2b4: a record naming both backends -> exit 4" 4   "$(rc_of "$out")"
+ok "2b4: ...read as a disagreement with the pin"  yes "$(has "$out" 'pin and its launch record disagree')"
+ok "2b4: ...naming both recorded backends"        yes "$(has "$out" 'launched on agterm and tmux\.')"
+ok "2b4: ...and NOT offering the pin's backend"   no  "$(has "$out" 'COUNCIL_BACKEND=agterm')"
+rm -rf "$LR_MB"
 
 # 2c. The other half: the backend did not answer at all. No pin disagreement here, so this case
 #     fails if reachability is ever dropped in favour of the pin check alone.

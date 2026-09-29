@@ -503,7 +503,12 @@ that reached a decision, not a sign that something tore it down.
 
 The mechanism, in one paragraph, because it is the kind of thing that rots silently: the owner
 holds the write end of a small **canary pipe** and the keeper inherits the read end, so the
-owner's death closes the write end and the keeper's read hits EOF. It is detected by EOF alone,
+owner's death closes the write end and a read of the canary hits EOF. That read is a blocking one
+in a small sentinel beside the keeper, and the keeper waits on the sentinel, not on the canary:
+on macOS a timed wait on the canary itself can miss the EOF for good when the owner dies as a
+timeout fires (#279; the shared `canary` module, which shipyard's watcher uses too, says how
+that was measured; only if no sentinel can be started does the keeper read the canary directly).
+It is detected by EOF alone,
 never by `$PPID` or `kill -0` — on macOS a dead owner's children reparent to `launchd`, which
 reads as "parent alive" and cannot be reaped after the fact, so death has to be *observed*, not
 polled for. The keeper runs in its own process group, so the very Ctrl-C that kills the owner
