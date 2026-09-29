@@ -122,8 +122,9 @@ shipyard_continuity_live_prompt() {
 # anchor, because nothing the assistant writes can land below the composer. The column-one
 # `• Goal paused Objective: ...` service line is NOT read: the assistant's own prose opens with the
 # same bullet, and tests/fixtures/pane-codex-goal-forged.txt captures a reply that reproduces the
-# line exactly, whose wrapped continuation also carries a footer's words in a two-space indent.
-# Both used to read as a paused goal, and the watcher then typed `/goal resume` into an empty box.
+# line exactly, and whose wrapped continuation carries a footer's words in a two-space indent. That
+# reply line read as a paused goal, and so did a wrapped prose line in the old footer arm's shape
+# (`  gpt-...Goal paused`, t7 builds one); the watcher then typed `/goal resume` into an empty box.
 # A screen whose last lines are anything else (a popup, a draft wrapping in the box) reads `none`,
 # which only ever withholds an action. The captures are described in tests/fixtures/goal.notes.
 shipyard_continuity_goal_state() {
@@ -393,8 +394,9 @@ shipyard_continuity_pause() {
 }
 
 # Split a poll interval into slices of at most 0.25 s: sets SHIPYARD_CONTINUITY_SLICES (a count)
-# and SHIPYARD_CONTINUITY_SLICE (the length each sleeps). An interval no longer than one slice, which
-# is every test suite's, stays one slice of itself, so those suites keep the wait they always had.
+# and SHIPYARD_CONTINUITY_SLICE (the length each sleeps). An interval no longer than one slice stays
+# one slice of itself: the 0.05 to 0.1 s polls the continuity suites set keep the wait they had,
+# and t7's re-arm latency case sets a long poll on purpose to run the slices.
 # What a production watcher pays for the answer time is one `sleep` fork per slice where it used to
 # pay one per interval: four a second, for the one watcher a parent session has. A value awk cannot
 # split falls back to one slice of the interval as given, the wait this replaced.
@@ -1220,13 +1222,13 @@ shipyard_continuity_stop_all() {
   state=$(shipyard_continuity_state_dir 2>/dev/null) || return 0
   lock="$state/continuity-lifecycle.lock"
   # A stop waits longer for the lock than a start does, because a start holding it may be pinging a
-  # watcher: that request's own ceiling is 70 waits of 0.1 s, past the 100 waits of 0.05 s a
-  # start allows, and a stop that gave up first returned 1 with the start's freshly published
-  # watcher left running (#270: t7's synchronized-stop case, reproduced by holding a start's
-  # publication past the 100 waits the stop then shared). The failure was never silent, since
-  # shipyard-down.sh reports it
-  # as a watcher it could not stop. Four hundred waits outlasts the ping with margin. A holder that
-  # outlasts even this, such as a hung `agtermctl session new`, still fails the stop that same way.
+  # watcher: that request's own ceiling (shipyard_continuity_request's control polls and sleep, about
+  # 7 s at their defaults) is past a start's default lock wait, and a stop that gave up first
+  # returned 1 with the start's freshly published watcher left running (#270: t7's synchronized-stop
+  # case, reproduced by holding a start's publication past the default wait the stop then shared).
+  # The failure was never silent: shipyard-down.sh reports a watcher it could not stop. Four hundred
+  # waits, about 20 s, outlasts the ping at those defaults with margin. A holder that outlasts even
+  # this, such as a hung `agtermctl session new`, still fails the stop that same way.
   shipyard_continuity_acquire_lock "$lock" 400 || return 1
   lock_token="$SHIPYARD_CONTINUITY_LOCK_TOKEN"
   lock_owner_pid="$SHIPYARD_CONTINUITY_LOCK_OWNER_PID"

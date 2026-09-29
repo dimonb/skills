@@ -717,7 +717,7 @@ reset_fake
 # the signature of a stop that gave up waiting for the lock, reproduced by holding a publication past
 # the stop's old wait. The order is now established rather than timed, and the stop's wait is longer.
 _SHIPYARD_CONTINUITY_PUBLISH_DELAY=t7-hold:publish
-_SHIPYARD_CONTINUITY_PUBLICATION_POLLS=40
+_SHIPYARD_CONTINUITY_PUBLICATION_POLLS=600   # the watcher waits out the held publication
 export _SHIPYARD_CONTINUITY_PUBLISH_DELAY _SHIPYARD_CONTINUITY_PUBLICATION_POLLS
 shipyard_continuity_start agterm >"$TMP/racing-start" 2>&1 & racing_start=$!
 check yes "$(await_hold publish)" "start reached its publication point inside the lock"
@@ -732,6 +732,10 @@ while [ "$claims" -lt 2 ] && [ "$n" -lt $((HOLD_SECS * 20)) ]; do
   n=$((n + 1))
 done
 check 2 "$claims" "stop is waiting on the lock the publishing start holds"
+# Held past the start's default lock wait (100 polls, measured at about 8 s on an idle box) before
+# release, so the stop's own longer wait is what this case proves: with the stop back on the default
+# it gives up while the start still holds the lock, and the checks below red.
+command sleep 10
 release_hold publish
 racing_start_rc=0; reap_job "$racing_start" || racing_start_rc=$?
 racing_stop_rc=0; reap_job "$racing_stop" || racing_stop_rc=$?
@@ -763,9 +767,12 @@ check 0 "$rearm_rc" "re-arm against a healthy watcher succeeds"
 if [ "$rearm_secs" -le 4 ]; then rearm_fast=yes; else rearm_fast="no (${rearm_secs}s)"; fi
 check yes "$rearm_fast" "re-arm is answered within slices, not after the 8 s poll"
 rearm_ack=$(find "$_SHIPYARD_CONTINUITY_DIR" -name 'continuity-*.ack' -print -quit)
-rearm_inode=$(ls -i "$rearm_ack" 2>/dev/null | awk '{print $1}')
+# Replace the answered ack with a marker: a watcher that re-acknowledged the same ping on every slice
+# would write its ack over it within a second. Content, not the inode, since a filesystem may hand
+# a rewrite back the inode it just freed.
+[ -z "$rearm_ack" ] || printf '%s\n' t7-marker >"$rearm_ack"
 command sleep 1
-check "$rearm_inode" "$(ls -i "$rearm_ack" 2>/dev/null | awk '{print $1}')" \
+check t7-marker "$(cat "$rearm_ack" 2>/dev/null)" \
   "an answered ping is not re-acknowledged every slice"
 rearm_t0=$(date +%s)
 rearm_stop_rc=0

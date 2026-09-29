@@ -669,9 +669,10 @@ UNSCALED=()   # "<slot>|<display>" — a ctx figure with no window to assert it 
 # the resumed-after notice, which names a rewritten tick file among the causes it lists — a list of
 # examples, not a closed set. A forged gap before every tick therefore prints the full table and
 # that notice on every tick. The honest ways to do the same, named here, all leave the tick unstamped
-# within the stall threshold: a monitor period longer than the threshold, or a stamp that fails on
-# every run, whether the write to $TICKFILE fails (it is silent) or the report dies before reaching
-# it. There every honest tick looks the same, and a forgery hides behind that fault. A FUTURE epoch
+# within the stall threshold: a monitor period longer than the threshold, a run that itself takes
+# longer than it (the stamp is this run's start, $RUN_EPOCH), or a stamp that fails on every run,
+# whether the write to $TICKFILE fails (it is silent) or the report dies before reaching it. There
+# every honest tick looks the same, and a forgery hides behind that fault. A FUTURE epoch
 # is refused (`RUN_EPOCH -gt prev_tick`), and an unparseable one claims no gap, so neither can be
 # used to fake one.
 RUN_EPOCH=$(date +%s)
