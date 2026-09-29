@@ -560,8 +560,8 @@ adp_delivery_verdict() {
 # --- the sampling loop both send verbs run --------------------------------------
 # `shipyard tell` and `council say` ask the same question after a send: did a turn start, or did
 # the client queue it? Each used to carry its own copy of the loop below and of the census, with
-# the same algorithm and different spacing (#163). The rule is `adp_delivery_verdict` above; these
-# three functions only sample and summarise it. Each caller keeps its own knobs, the warnings that
+# the same algorithm and different spacing (#163). The rule is `adp_delivery_verdict` above; the
+# functions below only sample and summarise it. Each caller keeps its own knobs, the warnings that
 # name them, its exit codes and its sentences, because those are its own vocabulary: a slot and a
 # child, a seat and a participant.
 

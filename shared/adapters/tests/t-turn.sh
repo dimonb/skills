@@ -30,7 +30,9 @@
 #
 # WHAT IS NOT COVERED, so a green run is never read as more than it is:
 #   * NOTHING ANYWHERE ASSERTS WHAT THE CALLERS DO WITH THESE FUNCTIONS. Specifically unguarded:
-#     the `unconfirmed` -> exit 6 mapping, the knob validation, the empty-verdict arm, the reply path's closing message, and the three-state mid-turn guard.
+#     the `unconfirmed` -> exit 6 mapping, the knob validation, the empty-verdict arm, the reply
+#     path's closing message, and the three-state mid-turn guard. (The loop and census those
+#     callers share are covered, in section 4a.)
 #     Stated as the property rather than as a list of script names on purpose — the list version
 #     said no test referenced those scripts at all, and went stale twice without anything saying
 #     so. The rig it called deferred now exists: the shipyard suite drives whole caller scripts

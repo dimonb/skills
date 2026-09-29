@@ -61,11 +61,11 @@
 #  * open escalations are appended, so a question raised between fast-monitor
 #    ticks still shows up here;
 #  * a slot whose PR/MR has read `merged` on $SHIPYARD_AUTODOWN_TICKS consecutive ticks, whose
-#    ship stage is terminal and whose terminal nobody is at, is torn down by calling
-#    `shipyard-down.sh` — unchanged, with no flags and never `--force`, so every gate that
-#    protects a worktree is the one that runs. An open escalation HOLDS it: a child that stopped
-#    to ask is idle because it is waiting for you, and destroying it makes the answer
-#    undeliverable. See the block where SHIPYARD_AUTODOWN is read for every lock and why
+#    ship stage is terminal and whose terminal is gone (the backend corroborates it), is torn
+#    down by calling `shipyard-down.sh` — unchanged, with no flags and never `--force`, so every
+#    gate that protects a worktree is the one that runs. A live terminal is never torn down here.
+#    An open escalation HOLDS it: a child that stopped to ask is still owed the answer, and
+#    removing its worktree makes the answer undeliverable. See the block where SHIPYARD_AUTODOWN is read for every lock and why
 #    `closed` is not a trigger. It is the one thing here that REMOVES A SLOT rather than
 #    observing it; the script's other side effects are its own mailbox bookkeeping
 #    (report-sig / -stall / -tick / -merged / -episodes), the agterm sidebar glyphs it repaints, the pending
@@ -91,7 +91,7 @@
 #   SHIPYARD_STALL_SECS motionless seconds before the stall block fires (default: 1800)
 #   SHIPYARD_AUTODOWN   1 (default) tears a finished slot down through shipyard-down.sh once
 #                       its PR/MR has read `merged` on enough consecutive ticks, ship's stage
-#                       is terminal and nobody is at the terminal; 0 leaves teardown entirely
+#                       is terminal and its terminal is gone (corroborated); 0 leaves teardown entirely
 #                       manual. See the block where this is read for every lock
 #   SHIPYARD_AUTODOWN_TICKS
 #                       consecutive `merged` ticks required (default and minimum: 2)
@@ -1066,8 +1066,8 @@ for slot in "${SLOTS[@]}"; do
   if [ -z "$addr" ]; then
     # A slot with no terminal but a worktree still on disk is the shape that ACCUMULATES: it
     # is not enumerated in discovery mode, so only a named-slot monitor ever sees it again.
-    # Ask the locks about it before writing it off — the answer is the same teardown,
-    # and lock 3 takes its absence arm here rather than its idle one. The stage is read first
+    # Ask the locks about it before writing it off — the answer is the same teardown, and this
+    # is the one shape lock 3 can pass: a corroborated absence. The stage is read first
     # and the forge only if it is terminal, so a gone slot whose child never finished costs no
     # query. The row itself is unchanged: this branch reports a missing terminal, and saying
     # more about a slot the backend could not resolve is what #139 is about.
@@ -1161,6 +1161,10 @@ for slot in "${SLOTS[@]}"; do
   # Cleared every iteration, not just assigned: these are plain shell variables in one long
   # loop, so a value left over from the previous slot would otherwise decide this one's row.
   reap_note=""; before_refused=${#REAP_REFUSED[@]}; before_held=${#REAP_HELD[@]}
+  # A slot reaching here has a terminal, so lock 3 refuses it and this call only keeps the
+  # consecutive-merged count and the HELD bookkeeping current. The success branch is kept so the
+  # row and the SIG stay right if lock 3 ever passes a live terminal again (#156 carries that
+  # design); until then it cannot run.
   if autodown_consider "$slot" "$iid" "$state" "$stage" "$addr" "$unsettled"; then
     # The row says what happened to a terminal that WAS live when this tick began, so the
     # teardown is never silent, and the SIG carries `term=0` — a teardown is news, and it is
@@ -1964,8 +1968,8 @@ EOF
     echo "### 🧹 TORN DOWN — merged, finished, and gate clear"
     for x in "${REAPED[@]}"; do
       sl=${x%%|*}; rest=${x#*|}; mr=${rest%%|*}; rest=${rest#*|}; n=${rest%%|*}; drc=${rest#*|}
-      echo "- \`$sl\` ($mr) — \`merged\` on $n consecutive ticks, ship's stage terminal, nobody at the terminal,"
-      echo "  and the content gate proved the branch's content is in the base branch. Terminal and worktree are gone."
+      echo "- \`$sl\` ($mr) — \`merged\` on $n consecutive ticks, ship's stage terminal, its terminal already gone,"
+      echo "  and the content gate proved the branch's content is in the base branch. The worktree is gone."
       echo "  The BRANCH is untouched: \`git branch -D\` it when you are done with it (see SKILL.md on why not \`-d\`)."
       # A teardown that removed the slot and THEN failed its fleet-level bookkeeping is reported
       # as what it is. The slot is gone either way — the worktree test in autodown_consider

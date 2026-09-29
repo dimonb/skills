@@ -170,8 +170,8 @@ mode launches nothing: `bash <SKILL>/shipyard-report.sh` with no arguments finds
 list in the command).
 
 **It is not read-only, and this section used to say it was.** Discovery mode reaches the same
-per-slot code a named run does, so a slot that is merged, finished, unattended and gate-clear is
-TORN DOWN by it — terminal and worktree — exactly as described in Step 6. That is the intended
+per-slot code a named run does, so a slot that is merged, finished, gate-clear and whose terminal
+is already gone is TORN DOWN by it — its worktree removed — exactly as described in Step 6. That is the intended
 behaviour, not an accident; what was wrong was a heading promising a monitor. `SHIPYARD_AUTODOWN=0`
 removes the teardown.
 
@@ -373,8 +373,8 @@ so do not plan on driving it from here.
 * **and it TEARS DOWN a slot that is finished** — merged on consecutive ticks, ship's stage
   terminal, its terminal already gone, and clear through `shipyard-down.sh`'s own content gate.
   That removes the worktree, so arming this loop arms that. A live terminal is never torn down by
-  it. An open escalation holds
-  it, and anything it declines is named in its own block with the exact command. Step 6 has every
+  it. An open escalation holds it, and anything it declines is named in its own block with the
+  exact command. Step 6 has every
   lock and the reasoning; `SHIPYARD_AUTODOWN=0` turns it off;
 * whole report in one block → Monitor batches it into one notification;
 * exit 0 = nothing in flight **and** no open escalation → stop the loop; exit 1 = work
@@ -1375,7 +1375,7 @@ starts a fresh watcher for its own parent session.
 | slot | terminal/worktree key (number or slug) |
 | MR | `!<number>` once the MR/PR exists |
 | term | tmux window index, or the agterm session-id prefix |
-| session | ▶️ running / ⏸ idle-wait (snapshot diff) / ⛔ no terminal — or, when a motionless slot's reason is known, `⏳ rate-limited`, `⏳ overloaded`, `✅ finished` or `🙋 needs you` (Step 2). `🧹 torn down` means this tick removed the slot's worktree, and its terminal if one was still there (Step 6) — it is the report's own act, not something the child did to itself. `❔ unreadable` means a capture came back empty this tick: no motion verdict, and STALLED does not fire on it; the clock keeps its start across it (a supervision gap still restarts it), and a slot that is unreadable and has not been seen to move for longer than the stall threshold (with no open escalation) raises its own 🛑 UNREADABLE block, which names the backend read as what failed and bypasses `--only-changed` |
+| session | ▶️ running / ⏸ idle-wait (snapshot diff) / ⛔ no terminal — or, when a motionless slot's reason is known, `⏳ rate-limited`, `⏳ overloaded`, `✅ finished` or `🙋 needs you` (Step 2). `🧹 torn down` means this tick removed the slot's worktree, whose terminal was already gone (Step 6) — it is the report's own act, not something the child did to itself. `❔ unreadable` means a capture came back empty this tick: no motion verdict, and STALLED does not fire on it; the clock keeps its start across it (a supervision gap still restarts it), and a slot that is unreadable and has not been seen to move for longer than the stall threshold (with no open escalation) raises its own 🛑 UNREADABLE block, which names the backend read as what failed and bypasses `--only-changed` |
 | MR state / stage | forge state (opened/merged/closed) + ship's pipeline stage |
 | esc | open escalations for this slot |
 | ctx | child context usage as `<pct>% · <tokens>`, read from its transcript; `⚠️` ≥65%, `🛑` ≥80%. A bare `<pct>%` is the client's own footer figure, used when no transcript was found. Two non-readings, neither meaning healthy: `—` = nothing measurable yet; `❓` = no window this script can defend asserting the figure against, in two forms with different remedies — `❓ <=92% · 185k` is a bound over the sizes it knows — not a ceiling on the truth — fixed by naming the window with `SHIPYARD_CTX_WINDOW`; `❓ 1240k` is past every window it knows, fixed by a new `CTX_WINDOWS` entry (Step 5) |
@@ -1432,9 +1432,10 @@ collide with it.
 ## Reminders
 
 * Do not tear a terminal/worktree down before the MR is actually merged — ship re-wakes
-  itself and continues after an idle pause (Step 6). The report will do it for you once the
-  merge, ship's own stage and an idle-or-corroborated-absent terminal all agree; it never
-  forces, and what it declines it names.
+  itself and continues after an idle pause (Step 6). The report will do it for you only once the
+  merge, ship's own stage and a corroborated-absent terminal all agree; it never forces, and
+  what it declines it names. A slot whose terminal is still up is never torn down for you:
+  `shipyard-down.sh <slot>` is how it goes.
 * glab: `OAUTH_TOKEN` must be unset (the scripts do that themselves); the host comes from
   the origin remote.
 * The scripts are runnable by hand from a shell too — nothing here needs the skill runtime

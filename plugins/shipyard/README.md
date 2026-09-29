@@ -230,8 +230,8 @@ read `merged` on `SHIPYARD_AUTODOWN_TICKS` consecutive ticks (default and minimu
 stage is terminal, its terminal is gone (and the backend corroborates that) and no escalation is
 open, the report calls `shipyard-down.sh` — unchanged, with no flags and never `--force` — which
 removes the worktree. A slot whose terminal is still up is never torn down automatically, whatever
-its screen shows; `shipyard-down.sh <slot>` stays the way to finish it. **The branch is never touched**, so the work is recoverable from it either
-way. Anything the gate declines is named in its own block with the exact command; a slot held by an
+its screen shows; `shipyard-down.sh <slot>` stays the way to finish it. **The branch is never
+touched**, so the work is recoverable from it either way. Anything the gate declines is named in its own block with the exact command; a slot held by an
 open question gets its own block naming the records that hold it. Set it to `0` to keep teardown entirely manual; that also makes a
 no-argument `/shipyard` run non-destructive — though not inert: the report still writes its
 mailbox bookkeeping (truncating the consecutive-merged counts — with the teardown off, all of

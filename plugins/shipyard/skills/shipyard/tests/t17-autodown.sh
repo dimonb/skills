@@ -349,7 +349,7 @@ B_ROOT="$T17TMP/b/repo"; B_GIT="$T17TMP/b/gitdir"
 B_STATES="$T17TMP/b/forge-states"   # <iid> TAB OPEN|MERGED|CLOSED, rewritten per tick
 B_WINS="$T17TMP/b/wins"             # drv_target's window list
 B_ENUM="$T17TMP/b/enum"             # drv_sessions' answer
-B_SCREEN="$T17TMP/b/screen"         # what capture-pane returns, read only while a terminal is up (B4, B23)
+B_SCREEN="$T17TMP/b/screen"         # what capture-pane returns, read only while a terminal is up
 mkdir -p "$B_ROOT" "$B_GIT/ship-escalations" "$T17TMP/b"
 printf '\xe2\x9d\xaf \n' >"$B_SCREEN"   # a composer glyph on the last line, the shape the old idle read wanted
 export B_ROOT B_GIT B_STATES B_WINS B_ENUM B_SCREEN

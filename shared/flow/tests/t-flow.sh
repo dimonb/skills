@@ -251,7 +251,8 @@ ok "a cycle trips the node budget"              65 "$cycle_rc"
 # A send that failed is a block at once. It used to be polled through: a failed type skipped the
 # submit silently and a failed submit was discarded, so the node waited out FLOW_MAX_POLLS and then
 # blocked as a timeout. The poll count is asserted through a `check` predicate's counter, which
-# every poll bumps, so zero means the node never polled.
+# every poll bumps. A failed send evaluates done_when exactly once, with no poll, so 1 means the
+# node asked its predicate and never polled.
 printf '\n── a failed send, a failed emit, a missed lookup ──\n'
 send_case() { # <VAR=VAL>... -> "<rc>|<polls>|<park line>"
   local rc=0; reset_counter; : > "$PARK"; : > "$TELLLOG"
@@ -261,13 +262,13 @@ send_case() { # <VAR=VAL>... -> "<rc>|<polls>|<park line>"
     FAKE_SIG="live|busy" FLOW_SESSION=s FLOW_PARK_FILE="$PARK" FLOW_MAX_POLLS=50 flow_run n ) 2>/dev/null || rc=$?
   printf '%s|%s|%s' "$rc" "$(cat "$CNT")" "$(grep -c 'signal: unknown|undelivered' "$PARK")"
 }
-ok "a failed type parks at once, naming the failed send"   "10|0|1" "$(send_case FAKE_TELL_RC=1)"
+ok "a failed type parks at once, naming the failed send"   "10|1|1" "$(send_case FAKE_TELL_RC=1)"
 ok "...and is never followed by a submit"                  0 "$(grep -c '^SUBMIT' "$TELLLOG")"
-ok "a failed submit parks at once too"                     "10|0|1" "$(send_case FAKE_SUBMIT_RC=1)"
+ok "a failed submit parks at once too"                     "10|1|1" "$(send_case FAKE_SUBMIT_RC=1)"
 ok "a send that went through still polls (control)"        "10|50|0" "$(send_case)"
 gotofail_rc=0
 ( flow_reset
-  flow_node n --enter "go" --done-when 'budget 0' --on-block goto:alt
+  flow_node n --enter "go" --done-when 'check false' --on-block goto:alt
   flow_node alt --done-when 'budget 0' --emit "$TMP/alt-ran" --on-done close
   rm -f "$TMP/alt-ran"
   FAKE_TELL_RC=1 FLOW_SESSION=s flow_run n ) 2>/dev/null || gotofail_rc=$?
@@ -283,14 +284,26 @@ emitfail_rc=0
 ok "an emit that cannot be written is not a clean close"   68 "$emitfail_rc"
 ok "...and the run does not transition past it"            1 "$([ -f "$TMP/after-ran" ]; echo $?)"
 # The driver now reads a missed lookup it cannot corroborate as `unknown|unknown`, never `dead`.
-# The interpreter must treat that as no evidence and keep polling, not as a stop.
-unk_rc=0
-( flow_reset
-  flow_node n --done-when "artifact $TMP/never3" --on-block goto:stop3
-  flow_node stop3 --done-when 'budget 0' --emit "$TMP/stop3-sig" --on-done close
-  FAKE_SIG="unknown|unknown" FLOW_SESSION=s FLOW_MAX_POLLS=4 flow_run n ) 2>/dev/null || unk_rc=$?
+# The interpreter must treat that as no evidence and keep polling, not as a stop. The polls are
+# counted, since an immediate block and a budget-exhausted one both end in the same park, and the
+# timeout token must not claim a liveness no sample observed.
 ok "an unknown signal is not a stall"                       1 "$(_flow_stalled 'unknown|unknown'; echo $?)"
-ok "...so the node blocks only when its budget runs out"   "0|0" "$unk_rc|$([ -f "$TMP/stop3-sig" ]; echo $?)"
+unk_case() { # <signal> -> "<rc>|<polls>|<park token>"
+  local rc=0; reset_counter; : > "$PARK"
+  ( flow_reset
+    flow_node n --done-when 'check _probe_after 999' --on-block policy
+    FAKE_SIG="$1" FLOW_SESSION=s FLOW_PARK_FILE="$PARK" FLOW_MAX_POLLS=4 flow_run n ) 2>/dev/null || rc=$?
+  printf '%s|%s|%s' "$rc" "$(cat "$CNT")" "$(sed -n 's/.*(signal: \(.*\)).*/\1/p' "$PARK")"
+}
+ok "...so the node polls its whole budget, then parks"      "10|4|unknown|timeout" "$(unk_case 'unknown|unknown')"
+ok "a busy node's timeout still says live"                  "10|4|live|timeout"    "$(unk_case 'live|busy')"
+# A failed send does not override a fact that already holds: the node completes.
+done_rc=0
+( flow_reset
+  : > "$TMP/already-there"
+  flow_node n --enter "go" --done-when "artifact $TMP/already-there" --on-block policy --on-done close
+  FAKE_TELL_RC=1 FLOW_SESSION=s FLOW_PARK_FILE="$PARK" flow_run n ) 2>/dev/null || done_rc=$?
+ok "a failed send on a node already done completes it"     0 "$done_rc"
 
 # --- 7b. flow_phase: session-less graph evaluation (the authority mode, FLOW-04) --------------
 # The complement of flow_run: no session, no agent, no side effect — walk the declared graph and

@@ -478,9 +478,11 @@ drv_occupant() {
 #
 # The two-read rule stated at `drv_occupant`, in one place (#163): `shipyard tell`, `shipyard
 # compact` and `council say` each carried a copy, with different spacing. The spacing stays each
-# caller's, since it is a per-skill knob. It must be wider than the pre-exec window measured above,
-# which every value the callers' knobs admit is. An unusable value falls back to one second rather
-# than to no pause: without the pause, two reads inside one launch's pre-exec window would call a
+# caller's, since it is a per-skill knob. It must be wider than the pre-exec window measured above.
+# The defaults are (shipyard's 3s, council's fixed 1s), but nothing here enforces a floor: a caller
+# knob set below the window, such as SHIPYARD_MOTION_INTERVAL=0.1, is passed through as set. Only
+# an unusable value — empty, zero, non-numeric — falls back, to one second rather than to no
+# pause, since without the pause two reads inside one launch's pre-exec window would call a
 # healthy launch agentless. (A caller that interleaves the reads with other work, as shipyard's
 # report does, calls `drv_occupant` itself.)
 #

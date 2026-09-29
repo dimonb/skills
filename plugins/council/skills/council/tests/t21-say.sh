@@ -93,6 +93,7 @@ SESSIONS="$ROOT/sessions"                   # what ct_sessions prints
 SESSIONS_RC="$ROOT/sessions-rc"             # ...and the status it exits with
 OCC="$ROOT/occupant"                        # one drv_occupant answer per line: agent|none|- (no verdict)
 OCC_N="$ROOT/occupant-n"                    # how many occupant reads have been taken
+OCC_NAMES="$ROOT/occupant-names"            # the session name each occupant read was handed
 
 # The rest of the shipped skill, linked in, so `council.sh say` itself can run over this shadow
 # (case 5f). Only lib/term.sh is replaced.
@@ -136,6 +137,7 @@ drv_occupant() {
   local n v
   [ -f "$OCC" ] || return 1
   n=\$(cat "$OCC_N" 2>/dev/null); n=\$(( \${n:-0} + 1 )); printf '%s\n' "\$n" >"$OCC_N"
+  printf '%s\n' "\$1" >>"$OCC_NAMES"
   v=\$(sed -n "\${n}p" "$OCC"); [ -n "\$v" ] || v=\$(tail -1 "$OCC")
   [ "\$v" = - ] && return 1
   printf '%s' "\$v"
@@ -178,7 +180,7 @@ run_say() { # <peer> <text> -> stdout+stderr, then a last line "rc=<n>"
   out=$( SKILL="$SHADOW" council_say "$1" "$2" 2>&1 ) || rc=$?
   printf '%s\nrc=%s\n' "$out" "$rc"
 }
-reset() { rm -f "$PANES"/* "$NCALLS" "$TYPED" "$SUBMITTED" "$SESSIONS" "$SESSIONS_RC" "$PINS"/container-* "$OCC" "$OCC_N"; }
+reset() { rm -f "$PANES"/* "$NCALLS" "$TYPED" "$SUBMITTED" "$SESSIONS" "$SESSIONS_RC" "$PINS"/container-* "$OCC" "$OCC_N" "$OCC_NAMES"; }
 rc_of() { printf '%s' "$1" | sed -n 's/^rc=//p' | tail -1; }
 
 # ============================================================ 1. IS THERE SUCH A SEAT? (#29)
@@ -553,6 +555,10 @@ ok "6a: no agent on two reads -> exit 8"       8   "$(rc_of "$out")"
 ok "6a: ...saying the agent is not running"    yes "$(has "$out" 'agent launched into it is not running')"
 ok "6a: ...and pointing at relaunch"           yes "$(has "$out" 'council.sh relaunch codex')"
 ok "6a: ...having read it twice"               2   "$(cat "$OCC_N" 2>/dev/null)"
+# By the seat's SESSION name, which is what the real driver looks up: a helper that bypassed
+# `ct_no_agent` would hand it the bare peer name, which names no session and never reads `none`.
+ok "6a: ...both by the seat's session name"      "council-demo-codex council-demo-codex" \
+   "$(tr '\n' ' ' <"$OCC_NAMES" 2>/dev/null | sed 's/ $//')"
 ok "6a: ...and typed nothing"                  ""  "$(cat "$TYPED" 2>/dev/null)"
 ok "6a: ...and recorded no send"               3   "$(said_files)"
 # One `none` is a launch caught before its `exec`; the second read is what keeps a seat that is
