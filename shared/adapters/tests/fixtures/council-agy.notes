@@ -6,5 +6,6 @@ agy (alice): launched with --dangerously-skip-permissions, so it does not prompt
           A room itself no longer needs it — the protocol arrives as an argument
           and the agenda and record are verbs — but files a participant opens
           OUTSIDE the room still do.
-          The first launch in a directory agy has not seen also asks you to trust
-          it; the flag does not answer that one for you.
+          The first launch in a directory agy has not seen also asks whether to
+          trust it; the flag does not answer that one. The supervising session
+          answers it in place, after reading the screen.

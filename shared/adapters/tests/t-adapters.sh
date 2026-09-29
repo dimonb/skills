@@ -224,8 +224,8 @@ case "$codex_ref" in *"$PROTO"*) ok "codex does not render ADP_PROTOCOL itself" 
 
 # --- 8. notes, skill refs, parent detection ----------------------------------------------
 printf '\n── identity and notes ──\n'
-# claude's and codex's notes are byte-identical to what council printed before this module
-# existed. agy's are the ONE piece of user-visible text this change rewords: the note said
+# claude's notes are byte-identical to what council printed before this module existed, and
+# codex's and agy's now name who answers the trust prompt. agy's were reworded once before: they said
 # "council-launched sessions" and "The room", and a shared module may not name one of its
 # callers. The substance is asserted separately below, because a golden alone would not notice
 # the reword dropping the thing the note exists to say.
@@ -233,7 +233,7 @@ for k in agy claude codex; do
   ok "adp_notes for '$k' matches its golden" "$(cat "$FIX/council-$k.notes")" "$(adp_notes "$k" alice)"
 done
 agy_note=$(adp_notes agy alice)
-for phrase in "--dangerously-skip-permissions" "file-access prompt" "always" "asks you to trust"; do
+for phrase in "--dangerously-skip-permissions" "file-access prompt" "always" "asks whether to" "supervising session"; do
   case "$agy_note" in *"$phrase"*) ok "the agy note still says [$phrase]" yes yes ;;
                       *)           ok "the agy note still says [$phrase]" yes no ;; esac
 done

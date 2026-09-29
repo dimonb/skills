@@ -206,8 +206,10 @@ adp_notes() {
   case "$kind" in
     claude) : ;;
     codex)
-      printf 'codex (%s): the first launch in an unfamiliar directory asks you to trust it.\n' "$label"
-      printf '            until you answer, the participant holds the floor and looks wedged.\n'
+      printf 'codex (%s): the first launch in an unfamiliar directory asks whether to trust it.\n' "$label"
+      printf '            the supervising session answers it in place, after reading the screen:\n'
+      printf '            an update menu can come first, with "Update now" pre-selected.\n'
+      printf '            until it is answered, the participant holds the floor and looks wedged.\n'
       ;;
     agy)
       printf 'agy (%s): launched with --dangerously-skip-permissions, so it does not prompt.\n' "$label"
@@ -218,8 +220,9 @@ adp_notes() {
       printf '          A room itself no longer needs it — the protocol arrives as an argument\n'
       printf '          and the agenda and record are verbs — but files a participant opens\n'
       printf '          OUTSIDE the room still do.\n'
-      printf '          The first launch in a directory agy has not seen also asks you to trust\n'
-      printf '          it; the flag does not answer that one for you.\n'
+      printf '          The first launch in a directory agy has not seen also asks whether to\n'
+      printf '          trust it; the flag does not answer that one. The supervising session\n'
+      printf '          answers it in place, after reading the screen.\n'
       ;;
     *) return 1 ;;
   esac

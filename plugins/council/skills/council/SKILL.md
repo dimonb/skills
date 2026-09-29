@@ -807,10 +807,18 @@ rule above is about agents that ask per file.
 **Both `codex` and `agy` also gate the first launch in an unfamiliar directory on a
 trust-this-directory prompt** — the blanket flag does not answer that one — and until it is
 answered the participant holds the floor while looking, from the room, exactly like a wedged
-session. `up` prints the caveat for each adapter; `status` flags a long-held floor. Answer it
-once per directory — **in place**, never with `relaunch`, which would only produce the same
-prompt again with the seat's reading of the argument thrown away. `status`'s `STALL` line says
-so, because this is the distinction it used to guess at.
+session. `up` prints the caveat for each adapter; `status` flags a long-held floor. **You — the
+session that ran `up` — answer it**, not the human: once per directory, **in place**, never with
+`relaunch`, which would only produce the same prompt again with the seat's reading of the
+argument thrown away. `status`'s `STALL` line says so, because this is the distinction it used
+to guess at.
+
+Answering it is reading first. `council.sh terminals` names the backend, and the seat's session
+is `council-<room>-<peer>`: read its screen, and select the option by its label rather than by
+pressing Enter. On codex the trust menu pre-selects `Yes, continue`, but an **update menu** can
+sit in front of it with `Update now` pre-selected — a blind Enter there downloads and runs an
+installer. Choose `Skip` on that one. Hand a prompt to the human only when it is not the
+directory-trust question, or when answering it grants more than that directory.
 
 `codex queue --thread` looks like a native way to wake a busy Codex participant. It is
 not: it accepts the message, prints `Queued message …`, returns 0 — and delivered it
@@ -1352,7 +1360,7 @@ produced one false test result during development. Do not pipe status through a 
   launched with permissions skipped and no longer prompts at all. Otherwise it is a context
   ceiling, or a process that is simply gone. The room cannot tell the difference — `status`
   can only tell you the floor has been held a long time. **A prompt and a dead seat need
-  opposite fixes.** Answer a prompt *in that participant's terminal*, where it carries on
+  opposite fixes.** Answer a prompt yourself, *in that participant's terminal*, where it carries on
   with its context intact: restarting closes the very terminal holding the prompt, and the
   fresh session stops at the same one. A context ceiling, or a seat that is genuinely gone,
   is `council.sh relaunch <peer>`.
