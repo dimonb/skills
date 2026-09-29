@@ -85,7 +85,11 @@ returned() { case "$1" in *HUNG) printf no ;; *) printf yes ;; esac; }
 rc_of() { case "$1" in *HUNG) printf HUNG ;; *) printf '%s' "${1##*rc=}" ;; esac; }
 regular() { [ -f "$1" ] && [ ! -p "$1" ] && printf yes || printf no; }
 leftover() { ls -A "$STATE" | grep -c '\.tmp\.\|continuity-log\.' ; }
-SECS=20
+# The bound tells a hung opener from a slow one, and a hung opener never returns, so any finite
+# bound separates them: it costs its full length only on a real hang. 20 s was once exceeded, in
+# t20-mailbox-fifo.sh by a case that passed alone, under a full parallel run, so it is sized for a
+# loaded box, not a quiet one.
+SECS=60
 
 # A fake agtermctl just capable enough for a watcher to start and stay healthy: `session new` runs
 # the command in the background, and every read fails, which the watcher tolerates (it heartbeats
