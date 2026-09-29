@@ -1510,9 +1510,14 @@ council_relaunch() {
   # dead-keeper condition: the live keeper still inside its poll window is real, and losing that
   # case costs a relaunched seat.
   rm -f "$(_keeper_teardown_file "$ROOM")"
-  if ! _keeper_await_reap "$ROOM"; then
+  # The wait's ceiling in deciseconds. Thirty seconds is the production answer and is not being
+  # changed — the knob exists so the suite can reach the refusal below without waiting it out.
+  local reap_ceil
+  reap_ceil=$(knob_uint "${COUNCIL_RELAUNCH_REAP_CEILING:-}" 300) \
+    || echo "council relaunch: COUNCIL_RELAUNCH_REAP_CEILING is not a usable whole number — using 300" >&2
+  if ! _keeper_await_reap "$ROOM" "$reap_ceil"; then
     echo "council relaunch: refusing — $(_keeper_reaping_file "$ROOM") says a reap is in flight, and" >&2
-    echo "                  the keeper it would belong to is still alive after 30 s. Starting '$peer'" >&2
+    echo "                  the keeper it would belong to is still alive after $((reap_ceil / 10)) s. Starting '$peer'" >&2
     echo "                  now could leave the room without a keeper, or be closed by that reap." >&2
     echo "                  Nothing was launched. If no close is in progress, the file is left over:" >&2
     echo "                  remove $(_keeper_reaping_file "$ROOM") and run relaunch again." >&2

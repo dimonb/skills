@@ -435,7 +435,8 @@ Three consequences worth knowing:
   renaming it to `state/reaping`, and writes that file itself before an owner-death reap, so a
   running reap is visible. `relaunch` waits while that file exists and the keeper it names is
   alive, then starts a fresh keeper and the seat. A reap takes well under a second for three seats
-  on a live tmux backend. If a reap is still running after 30 seconds, `relaunch` refuses and
+  on a live tmux backend. If a reap is still running after 30 seconds (the
+  `COUNCIL_RELAUNCH_REAP_CEILING` knob, in deciseconds, default 300), `relaunch` refuses and
   launches nothing, and saying so is safer than launching a seat that reap may then close. The
   wait depends on the keeper being alive, not on the file, so a keeper killed mid-reap by `down`
   does not hold the next `relaunch` up. Two limits. First, an owner-death reap (`up --hold`) is

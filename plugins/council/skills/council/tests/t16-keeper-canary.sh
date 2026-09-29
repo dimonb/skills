@@ -274,6 +274,10 @@ echo "── case G: the PRODUCTION default is still five seconds (acceptance) �
 # all. Case F above is the same idiom with the same limit.
 ok "the keeper poll still defaults to 5s in production" 1 \
    "$(grep -Fc 'knob_interval "${COUNCIL_KEEPER_POLL_INTERVAL:-}" 5' "$SKILL/lib/up.sh")"
+# The same idiom for relaunch's wait on a reap in flight (t26 case P drives the knob): thirty
+# seconds, in deciseconds, with the same limit.
+ok "relaunch's reap wait still defaults to 30s in production" 1 \
+   "$(grep -Fc 'knob_uint "${COUNCIL_RELAUNCH_REAP_CEILING:-}" 300' "$SKILL/lib/up.sh")"
 
 printf '\n'
 if [ "$FAILURES" -eq 0 ]; then echo "t16 PASS ($CHECKS checks)"; else echo "t16 FAIL ($FAILURES/$CHECKS)"; exit 1; fi
