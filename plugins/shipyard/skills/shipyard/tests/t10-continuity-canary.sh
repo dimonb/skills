@@ -156,7 +156,7 @@ ok "watcher group differs from owner group" yes \
 # used to red with the watcher really still running: orphaned, alone in its group, its canary
 # `read -t` timing out on every poll though no process held the write end. The cause was macOS losing
 # select() readiness for FIFO EOF when the owner died as the watcher's first select timed out;
-# shipyard_continuity_sentinel_start says what the watcher waits on instead. The kill still lands
+# canary_sentinel_start (shared/canary) says what the watcher waits on instead. The kill still lands
 # straight after `ready`, with no settle pause: a pause would make this pass by hiding exactly that.
 # This case is NOT a practical guard for that fix. Against the old code it redded about 1 run in 400
 # of an instrumented loop on macOS, and it cannot red for this cause on a platform without the edge,
@@ -235,16 +235,16 @@ ok "control: without the group flag a child survives" alive "$(wait_gone "$child
 echo "── case E: no owner-death reaping path reads \$PPID (acceptance) ──"
 # $PPID stays legitimately in shipyard_continuity_set_current_pid (the lifecycle-LOCK owner probe,
 # out of scope for #90). What must be zero is $PPID in the OWNER-DEATH REAPING path: the watch loop,
-# its canary helpers, and the owner-hold launch — all of which decide reaping from canary EOF, never
+# its canary helpers (vendored from shared/canary as canary.sh), and the owner-hold launch — all of which decide reaping from canary EOF, never
 # from a reparented process's parent. Strip comments first, or a comment EXPLAINING the absence of
 # $PPID would be flagged as its presence.
 reap_src=$(sed -n \
   -e '/^shipyard_continuity_watch() {/,/^}/p' \
-  -e '/^shipyard_continuity_owner_gone() {/,/^}/p' \
-  -e '/^shipyard_continuity_sentinel_start() {/,/^}/p' \
+  -e '/^canary_owner_gone() {/,/^}/p' \
+  -e '/^canary_sentinel_start() {/,/^}/p' \
   -e '/^shipyard_continuity_reap_group() {/,/^}/p' \
   -e '/^shipyard_continuity_start_owner_hold_locked() {/,/^}/p' \
-  "$SKILL_DIR/shipyard-continuity.sh")
+  "$SKILL_DIR/shipyard-continuity.sh" "$SKILL_DIR/canary.sh")
 ok "the reaping path was actually extracted" yes "$([ -n "$reap_src" ] && echo yes || echo no)"
 ok "reaping path (comments stripped) reads no PPID" 0 \
    "$(printf '%s\n' "$reap_src" | sed 's/#.*//' | grep -c 'PPID')"

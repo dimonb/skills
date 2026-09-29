@@ -260,6 +260,47 @@ echo "── case F: no owner-liveness path reads \$PPID (acceptance) ──"
 # use it, and a naive grep would flag exactly the lines that promise its absence. What must be
 # zero is $PPID in the CODE — reading a reparented process's parent tells you nothing on macOS.
 ok "up.sh code (comments stripped) reads no PPID" 0 "$(sed 's/#.*//' "$SKILL/lib/up.sh" | grep -c 'PPID')"
+# The canary wait itself lives in the vendored shared module (#279), so it is part of this path.
+ok "canary.sh code (comments stripped) reads no PPID" 0 "$(sed 's/#.*//' "$SKILL/lib/canary.sh" | grep -c 'PPID')"
+
+# ---------------------------------------------------------------------------------------------
+echo "── case H: a held keeper that leaves while its owner lives takes its canary sentinel with it ──"
+# The keeper waits on the canary through a sentinel (shared/canary, #279): a child in the keeper's
+# own process group, blocked in a read on the canary, holding every fd the keeper had open — the
+# bell fifos included. On an owner death it ends by itself. On the keeper's OTHER exits the owner
+# lives on, and a sentinel left behind would hold this room's bells open until that owner died.
+# Here the room directory goes while the owner holds; once the keeper has gone, nothing may be
+# left in its process group.
+#
+# The owner must OUTLIVE the keeper for this to measure anything. The shared owner above holds with
+# `wait`, which returns the moment its keeper child exits — `up --hold` does the same — and its
+# death then closes the canary, which ends a left-behind sentinel by itself, so the case would pass
+# with the stop removed. This owner holds with `exec sleep` instead: forkless, the write end kept.
+# A `sleep` never reaps, so the exited keeper stays a zombie, which `kill -0` calls alive — hence
+# the process counts below, which leave zombies out.
+live_in_group() { ps -A -o pgid= -o stat= | awk -v g="$1" '$1 == g && $2 !~ /^Z/' | wc -l | tr -d ' '; }
+OWNER_H="$ROOT/owner-h.sh"
+sed 's/^wait .*/exec sleep 600/' "$OWNER" > "$OWNER_H"
+MARK_H="$ROOT/H"; mkdir -p "$MARK_H"; ROOM_H="$ROOT/room-h"
+"$BASH" "$OWNER_H" "$SKILL" "$ROOM_H" "$MARK_H" p q &
+OWNERS+=("$!"); opid_h=$!
+ok "owner came up" yes "$(wait_file "$MARK_H/ready" 80)"
+kpid_h=$(cat "$MARK_H/keeper.pid" 2>/dev/null); [ -n "$kpid_h" ] && KEEPERS+=("$kpid_h")
+kpgid_h=$(cat "$MARK_H/keeper.pgid" 2>/dev/null)
+ok "keeper is its own group leader" "$kpid_h" "$kpgid_h"
+# One poll, so the sentinel is certainly started before the room goes.
+sleep 1
+ok "the keeper's group holds a sentinel beside it" yes \
+   "$([ -n "$kpgid_h" ] && [ "$(live_in_group "$kpgid_h")" -ge 2 ] && echo yes || echo no)"
+rm -rf "$ROOM_H"
+# Bounded like every reap wait here; it is only paid by a failing run. The keeper leaves within a
+# poll, and the sentinel is signalled as it does.
+left_h=""; for ((_i=0; _i<REAP_WAIT; _i++)); do
+  left_h=$(live_in_group "$kpgid_h"); [ "$left_h" = 0 ] && break; sleep 0.1
+done
+ok "keeper and sentinel both gone once the room directory is removed" 0 "$left_h"
+ok "...with the owner still holding the canary"     alive "$(alive "$opid_h")"
+{ kill -9 "$opid_h"; wait "$opid_h"; } 2>/dev/null
 
 # ---------------------------------------------------------------------------------------------
 echo "── case G: the PRODUCTION default is still five seconds (acceptance) ──"

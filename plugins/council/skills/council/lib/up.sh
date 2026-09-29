@@ -12,6 +12,10 @@
 # the same two answers wrong the same way — so it is one module, vendored like the rest.
 # shellcheck source=knobs.sh
 . "$(dirname "${BASH_SOURCE[0]}")/knobs.sh"
+# How a `--hold` keeper sees its owner's death on the canary — and why not with its own `read -t`
+# (#279) — is the question shipyard's owner-hold watcher asks too (#275), so it is one module.
+# shellcheck source=canary.sh
+. "$(dirname "${BASH_SOURCE[0]}")/canary.sh"
 # The default of each number written into roster.json, read from the same file its readers use.
 # shellcheck source=roster-defaults.sh
 . "$(dirname "${BASH_SOURCE[0]}")/roster-defaults.sh"
@@ -411,11 +415,13 @@ _canary_fifo() { # <room> -> a freshly created fifo path on stdout, or rc 1
 #
 # The owner is detected purely by EOF, NEVER by `$PPID`/`kill -0 $PPID`: both read a reparented
 # process (which is exactly what a dead owner leaves behind on macOS, where there are no
-# subreapers) as alive. `read -t` tells the two ends apart without ambiguity: rc > 128 is the
-# timeout, i.e. a writer (the live owner) still holds the pipe; rc 1 is EOF, i.e. every writer is
-# gone. On EOF the read returns at once, so reaping is immediate rather than one poll interval
-# late. rc 0 (a byte arrived) is the owner alive too — nothing writes here today, but a stray
-# write must never be mistaken for death.
+# subreapers) as alive. `canary_owner_gone` (shared/canary, vendored as canary.sh) tells the two
+# ends apart: it waits up to one poll and answers "still held" while a writer (the live owner) holds
+# the pipe, and "gone" at once when every writer is gone, so reaping is immediate rather than one
+# poll interval late. A stray byte on the canary is the owner alive too — nothing writes here
+# today, but a stray write must never be mistaken for death. It does NOT `read -t` the canary
+# itself: on macOS that select-based wait can lose the EOF for good when the owner dies as a
+# timeout fires, and a keeper then polled for ever (#279, measured; the module says how).
 #
 # THE REBUILD TRIGGER. `[ -d "$room" ]` alone cannot tell a room from a room rebuilt at the same
 # path: `rm -rf` then `_mkroom` wipes the pid file and forks a SECOND keeper, and the first, back
@@ -471,7 +477,7 @@ _canary_fifo() { # <room> -> a freshly created fifo path on stdout, or rc 1
 # at that line.
 #
 # THE POLL PERIOD IS ONE VALUE USED AT BOTH SITES BELOW, and it arrives as an ARGUMENT rather
-# than being read here. The two sites are the canary `read -t` (a `--hold` room) and the `sleep`
+# than being read here. The two sites are the canary wait (a `--hold` room) and the `sleep`
 # fallback (a detached one) — the same period seen from the two kinds of room, so a knob that
 # moved one and not the other would make them silently disagree about how long a keeper may take
 # to notice a teardown, which is worse than no knob at all.
@@ -484,7 +490,7 @@ _canary_fifo() { # <room> -> a freshly created fifo path on stdout, or rc 1
 # warning, and the effective value is handed down. The two test call sites in t19 pass their own.
 _keeper_loop() { # <room> <pid-file> <canary-read-fd-or-empty> <poll-interval> <peer>...
   local room="$1" keep="$2" cfd="$3" poll="$4"; shift 4
-  local rc named tdn rpn
+  local named tdn rpn
   tdn=$(_keeper_teardown_file "$room")
   rpn=$(_keeper_reaping_file "$room")
   while [ -d "$room" ]; do
@@ -504,9 +510,7 @@ _keeper_loop() { # <room> <pid-file> <canary-read-fd-or-empty> <poll-interval> <
       if [ -e "$tdn" ]; then rm -f "$tdn"; _keeper_reap "$room" "$@"; return 0; fi
     fi
     if [ -n "$cfd" ]; then
-      read -t "$poll" -u "$cfd" _ 2>/dev/null; rc=$?
-      [ "$rc" -eq 0 ] && continue
-      [ "$rc" -gt 128 ] && continue
+      canary_owner_gone "$cfd" "$poll" && continue
       # EOF: the owner is gone. Ask once more whether we are still this room's keeper, because the
       # answer decides who these terminals belong to. The guard at the top of the body cannot cover
       # this: the read above blocks for up to five seconds, and a keeper superseded DURING that
@@ -631,7 +635,12 @@ _keeper_ensure() { # <room-dir> <peer>...
   ( exec >/dev/null 2>&1 <&-
     [ -n "$cw" ] && exec {cw}>&-      # the keeper never writes the canary; only the owner keeps that end
     for p in "$@"; do exec {fd}<> "$room/bell/$p.fifo"; done
-    _keeper_loop "$room" "$keep" "$cr" "$poll" "$@" ) &
+    _keeper_loop "$room" "$keep" "$cr" "$poll" "$@"
+    # The canary sentinel holds every fd this keeper had open, the bell fifos included, until the
+    # owner dies. A keeper that stepped down, lost its directory or reaped a decided close leaves
+    # while the owner may live on, so it takes its sentinel with it. After an owner death the
+    # sentinel has already exited, and this only closes its pipe.
+    canary_sentinel_stop ) &
   pid=$!
   [ "$had_m" = 1 ] || set +m
   [ -n "$cw" ] && exec {cr}<&-        # the owner never reads the canary; keep only the write end open here

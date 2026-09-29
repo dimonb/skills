@@ -1,7 +1,7 @@
 .PHONY: check check-test test
 
 # The gate; must be green before every commit. Runs the static checks (scripts/check.sh) and then
-# every pure, fast suite — driver, flow, adapters, policy, knobs — so a regression in any of them
+# every pure, fast suite under shared/ — each one listed below — so a regression in any of them
 # reds a commit. Whole target measured at 8.9s wall, warm and otherwise idle (gate 2.4s; driver
 # 1.3s, flow 2.3s, adapters 1.9s, policy 0.9s, knobs 0.1s), and more under load — re-measured at
 # 8.9s after #203 added check 13, so that check costs nothing worth recording. The figure lives
@@ -21,8 +21,9 @@ check:
 	@bash shared/adapters/tests/run-all.sh
 	@bash shared/policy/tests/run-all.sh
 	@bash shared/knobs/tests/run-all.sh
+	@bash shared/canary/tests/run-all.sh
 
-# Every suite's fast subset — the five `make check` runs, plus shipyard and council (without
+# Every suite's fast subset — the shared/ suites `make check` runs, plus shipyard and council (without
 # council's slow `--full` load and latency runs). Run by hand to verify a change for real, like
 # `make check-test`. This is where a shipyard or council suite RUNTIME error surfaces — `make
 # check` does not run those two (only their registration and invocation are gated at commit time;
@@ -73,6 +74,7 @@ test:
 	@bash shared/adapters/tests/run-all.sh
 	@bash shared/policy/tests/run-all.sh
 	@bash shared/knobs/tests/run-all.sh
+	@bash shared/canary/tests/run-all.sh
 	@bash plugins/shipyard/skills/shipyard/tests/run-all.sh
 	@bash plugins/council/skills/council/tests/run-all.sh
 
