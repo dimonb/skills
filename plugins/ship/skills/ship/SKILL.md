@@ -1745,8 +1745,8 @@ private-GitHub case is trigger 2 and needs no verifier:
    lets the next §7.G run restore the sweep's closing keywords, as §7.G step 2 says, and with
    them what a description edit re-runs; it publishes no sweep evidence. A release does nothing
    else. The finding stays unfixed and unpublished in this change, and its `open` entry stays
-   `withheld`. Fixing it is a separate change, which the human starts once disclosure is settled. Where the finding went to a
-   private channel, that record keeps it. Where it is ledger only, the git-ignored state file is
+   `withheld`. Fixing it is a separate change, which the human starts once disclosure is
+   settled. Where the finding went to a private channel, that record keeps it. Where it is ledger only, the git-ignored state file is
    its only copy, and that file goes with the worktree, so the release says the human has taken
    the detail out of it.
 
@@ -2051,8 +2051,8 @@ happens to notice. The sweep is what makes the backlog shrink as well as grow.
    carries no evidence for that issue, nor for any other swept issue (below), and the evidence is
    withheld through §5.12 like a review finding's detail — ledger, private channel, stub and
    hold. Its `withheld` entry carries `source: "close-sweep"` and `issue: <N>`, and **the issue
-   number is its key**. A later sweep whose verdict on the same issue trips again goes to a verifier given each entry for that issue
-   and their evidence, which rules as §5.7's matching does. **Same** as one of them: a sighting on
+   number is its key**. A later sweep whose verdict on the same issue trips again goes to a
+   verifier given each entry for that issue and their evidence, which rules as §5.7's matching does. **Same** as one of them: a sighting on
    it, so a released entry stays released. **Distinct**, or **cannot tell**: a new held
    `sweep-<n>` entry for that issue, with its own channel record and the verifier's stated reason
    in its `match_reason`, so the human releasing it sees why. That field stays in the ledger and
@@ -2105,8 +2105,8 @@ happens to notice. The sweep is what makes the backlog shrink as well as grow.
    merge will not close it — the repo does not honour closing keywords, or the forge setting is off
    — ship closes it after the merge with the evidence as a comment (only the verdict and head
    sha, where step 2 kept the evidence in the ledger or a sweep entry has been withheld; the
-   reference file has the close-with-evidence query), and only where §2.6 lets ship merge at all; otherwise the hand-off
-   record names them for the person who merges — except while a sweep entry is held (step 2).
+   reference file has the close-with-evidence query), and only where §2.6 lets ship merge at
+   all; otherwise the hand-off record names them for the person who merges — except while a sweep entry is held (step 2).
 5. **Record what was examined, not only what closed** — in the state file's `close_sweep` (§4) and
    as one line of the hand-off record: the files scoped, how many examined, which close, which still
    reproduce, which are unverified. The issues left open because the reproduction still succeeded
