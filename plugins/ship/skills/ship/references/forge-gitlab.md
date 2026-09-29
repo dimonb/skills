@@ -298,10 +298,11 @@ unverified head gets merged.
 issues API and permissions documentation, and none of it has been run against a live project. Run
 the first real use with care, and read back what it made.
 
-On GitLab a withheld finding goes to a **confidential issue whatever the project's visibility**,
-unless the base branch's `SECURITY.md` explicitly authorises ordinary tracking (core §5.12). A
-project can grant tracker access without code access, so an ordinary issue can reach readers who
-could not read the code.
+Which findings are withheld, and whether a confidential issue is the channel, is core §5.12's
+to say. In short: a withheld finding goes to a **confidential issue whatever the project's
+visibility**. Where the base branch's `SECURITY.md` names a narrower audience, it goes to no issue
+at all and stays in the ledger. A project can grant tracker access without code access, so an
+ordinary issue can reach readers who could not read the code.
 
 ```bash
 unset OAUTH_TOKEN; export GITLAB_HOST=<host>
@@ -317,6 +318,9 @@ glab api --method POST "projects/$PROJECT/issues" \
 
 # read back: must print true
 glab api "projects/$PROJECT/issues/<iid>" | jq .confidential
+
+# the payload files hold the finding's detail: remove them once the call has returned
+rm -f "$ISS" "$BODY"
 ```
 
 - **Delivered** means the read-back prints `true`. Anything else means ledger only (core §5.12):
@@ -325,8 +329,8 @@ glab api "projects/$PROJECT/issues/<iid>" | jq .confidential
 - **A read-back that prints `false` is a disclosure that has already happened**, not a failed
   call. Make it confidential at once
   (`glab api --method PUT "projects/$PROJECT/issues/<iid>" -f confidential=true`), read it back
-  again, and report it as an incident in the record the run stops with (core §5.12). The stub names the incident,
-  never the finding.
+  again, and record the exposure as core §5.12 says. The stub then reads `exposure reported`,
+  never anything about the finding.
 - **A rung-2 note onto a non-confidential issue is barred** for a withheld finding (core §5.11),
   even where that issue is its natural home.
 - The issue's title is visible to everyone who can read confidential issues, which is the same

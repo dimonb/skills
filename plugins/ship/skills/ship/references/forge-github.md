@@ -300,7 +300,8 @@ Poll until nothing is `PENDING`, `QUEUED` or `IN_PROGRESS`.
 
 ## 9. Private disclosure channel (core §5.12)
 
-**The three create commands below are documentation-verified only.** They are written from
+**The two create commands below (the advisory and the report) are documentation-verified only.**
+They are written from
 GitHub's REST documentation and have not been run against a live repository. The read-only probes
 above them have been run. Run the first real use with care, and read back what it made.
 
@@ -329,13 +330,18 @@ gh api --method POST "repos/$REPO/security-advisories/reports" --input "$ADV" \
 
 # read back: a draft must print `draft`, a report `triage`
 gh api "repos/$REPO/security-advisories/<ghsa_id>" --jq .state
+
+# the payload files hold the finding's detail: remove them once the call has returned
+rm -f "$ADV" "$BODY"
 ```
 
 - **Delivered** means the create response carries a `ghsa_id` and the read-back prints the
   expected state. A report filed by an account that does not administer the repo may be
   unreadable to it afterwards. Then the create response is the only evidence, and the ledger
-  records `verified: false`. Anything else (a refusal, an error, an unexpected state) means ledger
-  only (core §5.12), and there is no retry on a public route.
+  records `verified: false`. A refusal or an error means ledger only (core §5.12), and there is
+  no retry on a public route. **A read-back showing a published state is an exposure**, not a
+  failed call: record it as core §5.12 says (`exposed: true`, stub status `exposure reported`)
+  and put it in front of the human. There is no API step that un-publishes it.
 - **Never publish the advisory**, request a CVE for it, or add collaborators to it. It stays a
   draft, and publication is a human act.
 - On a private repo, the core's visibility rule decides whether a finding is withheld at all.
