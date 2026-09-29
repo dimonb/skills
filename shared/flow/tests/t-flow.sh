@@ -97,8 +97,8 @@ ok "an unknown flow_node option is refused"  2 "$badopt_rc"
 # only the first. This list is a copy of that arm and nothing keeps the two in step. A flag dropped
 # from the guard exits 1 on the unbound `$2` under this file's `set -u`; a caller without `-u`
 # would instead have `shift 2` fail with one argument left and spin, so each call is bounded and a
-# hang reads as a kill's status. Either way it is never 2. Only a call that outlived the bound is
-# signalled: one that exited has been reaped, and its pid may no longer be ours.
+# hang reads as a kill's status. Either way it is never 2. Only a call still running at the last
+# poll is signalled: one that exited earlier has been reaped, and its pid may no longer be ours.
 for f in --enter --done-when --on-done --on-block --emit; do
   ( flow_node z "$f" ) 2>"$TMP/noval.err" & np=$!
   i=0; while kill -0 "$np" 2>/dev/null && [ "$i" -lt 50 ]; do sleep 0.1; i=$((i + 1)); done

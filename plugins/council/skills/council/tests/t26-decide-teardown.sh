@@ -691,6 +691,8 @@ else
   ( cd "$RP3_REPO" && COUNCIL_RELAUNCH_REAP_CEILING=3 COUNCIL_BACKEND=none-for-tests \
       bash "$CLI" --room t26p3 relaunch claude ) >"$COUNCIL_TEST_ROOT/t26p3-relaunch.log" 2>&1 || rc=$?
   ok "relaunch over a reap that outlasts the ceiling refuses" 1 "$rc"
+  ok "...stating the ceiling it waited, in tenths of a second" yes \
+     "$(grep -qF 'still alive after 0.3 s' "$COUNCIL_TEST_ROOT/t26p3-relaunch.log" && echo yes || echo no)"
   ok "...naming the file it waited on" yes \
      "$(grep -q "refusing .*/t26p3/state/reaping says a reap is in flight" "$COUNCIL_TEST_ROOT/t26p3-relaunch.log" && echo yes || echo no)"
   # Not only no `relaunched:` line: the test backend makes a launch fail at rc 1 too, so the

@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # run-all.sh — the council test suite. Fast ones by default; `--full` adds the load and
-# latency runs, which take minutes and are sensitive to what else is on the machine. One latency
-# file, t2c-bell, runs by default: it times a bare fifo byte against a 250 ms bar, which is
-# generous for that and does not need a quiet box. It was measured green in the default
+# latency runs, which take minutes and are sensitive to what else is on the machine. t2c-bell is a
+# latency file that runs by default all the same: it times a bare fifo byte against a 250 ms bar,
+# which is generous for that and does not need a quiet box. It was measured green in the default
 # concurrent run on macOS before it moved here; if it reds on a loaded runner, run it after the
 # concurrent batch rather than raising the bar.
 #
