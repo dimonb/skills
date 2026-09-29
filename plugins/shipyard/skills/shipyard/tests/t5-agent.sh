@@ -151,12 +151,20 @@ check 1 "$(grep -c '^## A disclosure hold is the human.s alone$' "$PROTO_OK" 2>/
   "the child protocol has the disclosure-hold section"
 check 1 "$(grep -c 'shipyard-ask.sh "disclosure hold: <the stub>"' "$PROTO_OK" 2>/dev/null)" \
   "...raising it as a blocking question under the marker"
+check 1 "$(grep -c '^in an autonomous run too\. A release is a NEW `/ship` invocation, exactly as$' "$PROTO_OK" 2>/dev/null)" \
+  "...which the watcher never answers, in an autonomous run too, and ship releases by re-invocation"
+check 1 "$(grep -c 'where every entry was created and so stays held\. A relay that names no id releases$' "$PROTO_OK" 2>/dev/null)" \
+  "...never inside the current run, and never on a relay that names no id"
 check 1 "$(grep -c '^\*\*A release is published\.\*\*' "$PROTO_OK" 2>/dev/null)" \
   "...and publishing any release it acts on"
 check 1 "$(grep -c '^exception is a disclosure hold: a directive releases it only' "$PROTO_OK" 2>/dev/null)" \
   "...which a supervisor directive does not bypass"
 check 1 "$(grep -c '^\*\*A `disclosure hold:` question is the human.s alone — never answer it, never release it,$' "$SKILL_DIR/SKILL.md")" \
   "SKILL.md's answering policy forbids the watcher to answer one"
+check 1 "$(grep -c '^including in an autonomous run\*\* where you otherwise decide escalations yourself\.' "$SKILL_DIR/SKILL.md")" \
+  "...including in an autonomous run"
+check 1 "$(grep -c '^\*\*Nothing mechanical enforces this\*\*' "$SKILL_DIR/SKILL.md")" \
+  "...and says nothing mechanical enforces it"
 
 out=$(dry_launch "$TMP/skill-noarm" "$TMP/launch-noarm")
 check 1 "$(printf '%s' "$out" | sed -n 's/^rc=//p')" "no env-pass arm: the launch is refused"

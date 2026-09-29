@@ -846,7 +846,8 @@ slot_iid_forge() {
   #     so no git evidence tells the two apart; the launch time does. It comes from the launch
   #     record (slot_launch_epoch), and either time unknown — no record, or a stamp neither side
   #     can parse — skips this test rather than failing it, because a blank there would take the
-  #     `merged` a finished child's teardown needs.
+  #     `merged` a finished child's teardown needs. A relaunch AFTER the child's own PR merged is
+  #     indistinguishable from that and reads as the annotation below (slot_launch_epoch says so).
   # A HEAD sha this repository does not hold fails the ancestry test like any other outsider.
   #
   # A CANDIDATE THAT FAILS IS NOT DISCARDED: the first one comes back as `~<number>`, an
@@ -883,11 +884,15 @@ EOV
 # its launch record's `started_at`, or 0 when that cannot be said (no record, not a regular
 # readable file, or a stamp jq cannot parse). 0 means "unknown", never "the epoch".
 #
-# The record lives in the mailbox, which the child can write. So a child can move its own launch
-# time, and what that buys it is bounded: an earlier time re-admits a candidate exactly as this
-# report did before #317, and a later one turns its own merged PR into an annotation — a slot that
-# then stays in flight, which is the loud direction. It cannot make a PR that fails the head rule
-# pass, and it cannot touch another slot's row.
+# The record lives in the mailbox, which EVERY child can write, and nothing ties launch-<slot>.json
+# to the slot it names: any child can move, forge or delete any slot's launch time, its own or a
+# peer's. What that buys is bounded the same way for either: an earlier time, or no record, gives
+# the reading this report had before #317, and a later one turns that slot's own merged PR into an
+# annotation — a slot that then stays in flight and keeps no `merged` for its teardown lock, which
+# is the loud direction. It cannot make a PR that fails the head rule pass, so the worst it buys a
+# relaunched slot is the old `merged` that #317 removed. A legitimate relaunch after the slot's own PR merged, a Step 5 recovery
+# included, moves the time later in the same way; a child that wrote its PR number into its state
+# file is untouched by either, because that file answers first.
 slot_launch_epoch() {
   local mb f e
   mb=$(shipyard_mailbox 2>/dev/null) || { printf 0; return; }
@@ -911,8 +916,7 @@ slot_launch_epoch() {
 # issue form on GitLab too — so a `#N`-launched GitLab slot returns an ISSUE number here, exactly
 # the GitHub defect above. It is left as it stands because narrowing it to the `!N` spelling is a
 # behaviour change t15's GitLab pass would have to pin first (it pins only that a numeric slot is
-# its own iid, whatever spelling launched it); filed rather than
-# guessed at. Do not read the arm as exact.
+# its own iid); filed rather than guessed at. Do not read the arm as exact.
 #
 # ONLY A NUMBER IS AN ANSWER, and that test lives HERE, at the single exit, rather than in the arm
 # that happens to have prompted it. Every arm can yield junk: `.pr_number` is hand-authored JSON

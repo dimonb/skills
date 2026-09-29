@@ -118,7 +118,9 @@ mkdir -p "$FAKE_ROOT" "$FAKE_GIT/ship-escalations"
 #     with NO launch record the merge time is not tested, so its merged PR keeps its number.
 # 65: a kept-branch relaunch before its first commit: the only candidate is MERGED on HEAD, and
 #     it merged BEFORE the slot's launch record -> no iid, only the `!651?` annotation.
-GH_SLOTS="51 52 53 54 55 56 57 58 59 60 61 62 63 64 65"
+# 66: 65's shape on the GONE-slot teardown arm (no terminal, stage `done`) -> the same annotation,
+#     so the arm that feeds lock 1 never takes an unverified number for `merged`.
+GH_SLOTS="51 52 53 54 55 56 57 58 59 60 61 62 63 64 65 66"
 # The GitLab run's slots (case 12). Non-numeric but one, because a numeric GitLab slot IS its iid
 # and never reaches the forge — which is what 71 pins.
 #   gfork:   a fork's opened MR listed first, then the child's own merged one on HEAD -> the latter;
@@ -140,9 +142,10 @@ done
 printf '{"pr_number":902,"state":"impl-review"}\n' \
   >"$FAKE_ROOT/.claude/worktrees/ship-52/.pipeline-state/PR-902.json"
 printf '{"state":"done"}\n' >"$FAKE_ROOT/.claude/worktrees/ship-64/.pipeline-state/ISSUE-64.json"
+printf '{"state":"done"}\n' >"$FAKE_ROOT/.claude/worktrees/ship-66/.pipeline-state/ISSUE-66.json"
 # Launch records, in the shape shipyard-launch.sh writes. Every merge time below is either
 # 2026-01-01 (before a launch) or 2026-06-01 (after one); the launches are all 2026-03-01.
-for s in 59 60 65 gfork ganc gold; do
+for s in 59 60 65 66 gfork ganc gold; do
   printf '{"id":"launch-%s","slot":"%s","kind":"launch","status":"info","started_at":"2026-03-01T00:00:00Z"}\n' "$s" "$s" \
     >"$FAKE_GIT/ship-escalations/launch-$s.json"
 done
@@ -189,6 +192,7 @@ git() {
         *ship-63) printf 'feat/mike\n' ;;
         *ship-64) printf 'feat/november\n' ;;
         *ship-65) printf 'feat/oscar\n' ;;
+        *ship-66) printf 'feat/papa\n' ;;
         *ship-gfork) printf 'feat/gl-fork\n' ;;
         *ship-ganc)  printf 'feat/gl-anc\n' ;;
         *ship-gold)  printf 'feat/gl-old\n' ;;
@@ -204,7 +208,7 @@ git() {
 
 tmux() {
   case "${1:-}" in
-    # 63 and 64 have no terminal.
+    # 63, 64 and 66 have no terminal.
     list-windows) printf '1 ship-51\n2 ship-52\n3 ship-53\n4 ship-54\n5 ship-55\n6 ship-56\n7 ship-57\n8 ship-58\n9 ship-59\n10 ship-60\n11 ship-61\n12 ship-62\n13 ship-65\n14 ship-gfork\n15 ship-ganc\n16 ship-gold\n17 ship-71\n'; return 0 ;;
     has-session)  return 0 ;;
     capture-pane) printf '⏺ working\n'; return 0 ;;
@@ -247,6 +251,7 @@ gh() {
         *"--head feat/november"*) out='[{"number":641,"state":"MERGED","headRefOid":"h64","isCrossRepository":false,"closedAt":"2026-01-01T00:00:00Z"}]' ;;
         # Merged on HEAD, but before the slot's launch record: the kept-branch relaunch.
         *"--head feat/oscar"*) out='[{"number":651,"state":"MERGED","headRefOid":"h65","isCrossRepository":false,"closedAt":"2026-01-01T00:00:00Z"}]' ;;
+        *"--head feat/papa"*) out='[{"number":661,"state":"MERGED","headRefOid":"h66","isCrossRepository":false,"closedAt":"2026-01-01T00:00:00Z"}]' ;;
         *) out='[]' ;;
       esac ;;
     # Logged, so an annotation reaching mr_state is provable: none may ever be asked about.
@@ -355,11 +360,11 @@ ok "60: an open candidate wins over a merged one"   1 \
 ok "61: an open PR outside this worktree's history is only an annotation" 1 \
    "$(printf '%s' "$out" | grep -c '^| 61 | !611? | .*no MR yet')"
 
-# 10 — #317: a merge from before the launch is the old PR of a kept-branch relaunch.
+# #317 — a merge from before the launch is the old PR of a kept-branch relaunch.
 ok "65: a merged PR on HEAD that merged before the launch is only an annotation" 1 \
    "$(printf '%s' "$out" | grep -c '^| 65 | !651? | .*no MR yet')"
 ok "...and no annotation ever reached mr_state"     0 \
-   "$(grep -cE 'pr view (581|611|651)( |$)' "$GH_VIEWS")"
+   "$(grep -cE 'pr view ~?(581|611|651|661)( |$)' "$GH_VIEWS")"
 ok "...while a verified number did, so that log is not empty" 1 \
    "$(grep -cE 'pr view 777( |$)' "$GH_VIEWS")"
 
@@ -383,6 +388,10 @@ ok "64: a gone slot at a terminal stage IS asked"   1 \
 # here would take the `merged` a finished child's teardown needs.
 ok "64: ...and its row carries the number, with no launch record to test against" 1 \
    "$(printf '%s' "$out" | grep -c '^| 64 | !641 |')"
+# 66 is 65 on this arm: the annotation must not become the iid lock 1 reads `merged` from. The
+# `pr view` log check above covers 661 as well.
+ok "66: a gone slot's pre-launch merge is only an annotation too" 1 \
+   "$(printf '%s' "$out" | grep -c '^| 66 | !661? | — | ⛔ no terminal')"
 
 # The forge deadline's PRODUCTION default, asserted rather than trusted: the run above shrinks it,
 # so a default quietly lowered to suit this file would stay green here and kill slow calls live.
@@ -407,12 +416,12 @@ ok "...and for the fields the choice among candidates reads" 0 \
    "$(grep -v -- '--json number,state,headRefOid,isCrossRepository,closedAt' "$GH_CALLS" | grep -c .)"
 ok "...and for several candidates, not one"         0 \
    "$(grep -v -- '--limit 10 ' "$GH_CALLS" | grep -c .)"
-# ...and the log holds exactly the slots that should reach the forge — 51 54 58 59 60 61 62 64 65
+# ...and the log holds exactly the slots that should reach the forge — 51 54 58 59 60 61 62 64 65 66
 # — so the checks above cannot pass vacuously over no calls.
-ok "the log they read holds the expected queries"   9 \
+ok "the log they read holds the expected queries"   10 \
    "$(grep -c . "$GH_CALLS")"
 
-# 12 — #317: the GitLab arm, in its own run, because the forge is derived from the origin remote.
+# #317 — the GitLab arm, in its own run, because the forge is derived from the origin remote.
 FAKE_ORIGIN='https://gitlab.com/example/example.git'; export FAKE_ORIGIN
 : > "$GH_VIEWS"
 glout=$(SHIPYARD_MOTION_INTERVAL="${SHIPYARD_MOTION_INTERVAL:-0.01}" SHIPYARD_STALL_SECS=100000 SHIPYARD_BACKEND=tmux SHIPYARD_SESSION=t15ex \
@@ -429,7 +438,7 @@ ok "gitlab: ...and its state is read from glab"     1 \
 ok "gitlab: a merge from before the launch is only an annotation" 1 \
    "$(printf '%s' "$glout" | grep -c '^| gold | !831? | .*no MR yet')"
 ok "gitlab: ...which never reached mr_state"        0 \
-   "$(grep -cE 'mr view 831( |$)' "$GH_VIEWS")"
+   "$(grep -cE 'mr view ~?831( |$)' "$GH_VIEWS")"
 # The shortcut itself: without it the slot reaches glab and renders 841. Its `return` is NOT pinned,
 # and cannot be from a report run: the loop asks `slot_iid <slot> local` first, which stops before
 # the forge arm, so a numeric GitLab slot never makes the second call the `return` guards.
