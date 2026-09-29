@@ -1735,20 +1735,20 @@ private-GitHub case is trigger 2 and needs no verifier:
 
    A human releases the hold by re-running `ship` and saying so in that invocation, **naming each
    entry it releases by the id its stub showed**. A release covers only the entries it names that
-   were already held when that invocation started. An entry it does not name stays held, and so
-   does one created during the invocation. A release that names no id releases nothing, and the
-   run reports that and the ids still held. So a relayed or earlier "release" cannot clear an
-   entry no human was shown. A release lifts the hold on §10, and undoes the draft this step set
-   unless another stop still requires it (§5.9). A release of a close-sweep entry may also say,
-   in the human's words, that the entry covers its issue; that is recorded as `covers_issue:
-   true` (§7.G step 2), and never inferred. A release that leaves no close-sweep entry held also
-   lets the next §7.G run restore the sweep's closing keywords, as §7.G step 2 says, and with
-   them what a description edit re-runs; it publishes no sweep evidence. A release does nothing
-   else. The finding stays unfixed and unpublished in this change, and its `open` entry stays
-   `withheld`. Fixing it is a separate change, which the human starts once disclosure is
-   settled. Where the finding went to a private channel, that record keeps it. Where it is ledger only, the git-ignored state file is
-   its only copy, and that file goes with the worktree, so the release says the human has taken
-   the detail out of it.
+   were already held when that invocation started. An entry it does not name stays held, and so does
+   one created during the invocation. A release that names no id releases nothing, and the run
+   reports that and the ids still held. So a relayed or earlier "release" cannot clear an entry no
+   human was shown. A release lifts the hold on §10, and undoes the draft this step set unless
+   another stop still requires it (§5.9). A release of a close-sweep entry may also say, in the
+   human's words, that the entry covers its issue; that is recorded as `covers_issue: true` (§7.G
+   step 2), and never inferred. A release that leaves no close-sweep entry held also lets the next
+   §7.G run restore the sweep's closing keywords, as §7.G step 2 says, and with them what a
+   description edit re-runs; it publishes no sweep evidence. A release does nothing else. The
+   finding stays unfixed and unpublished in this change, and its `open` entry stays `withheld`.
+   Fixing it is a separate change, which the human starts once disclosure is settled. Where the
+   finding went to a private channel, that record keeps it. Where it is ledger only, the git-ignored
+   state file is its only copy, and that file goes with the worktree, so the release says the human
+   has taken the detail out of it.
 
    The release is recorded as `status: released` with `released_by`. A supervisor
    that launched the run releases it only by relaying the human's own words, never on its own
@@ -2046,25 +2046,24 @@ happens to notice. The sweep is what makes the backlog shrink as well as grow.
      shows the premise no longer holds.
    - **UNVERIFIED** — no attempt could be made inside those limits. The issue stays open.
 
-   Each verdict also carries `disclosure` by §5.4's clause, since a reproduction can add detail
-   the issue did not carry. Evidence at `path` or `uncertain` is not published: the hand-off line
+   Each verdict also carries `disclosure` by §5.4's clause, since a reproduction can add detail the
+   issue did not carry. Evidence at `path` or `uncertain` is not published: the hand-off line
    carries no evidence for that issue, nor for any other swept issue (below), and the evidence is
-   withheld through §5.12 like a review finding's detail — ledger, private channel, stub and
-   hold. Its `withheld` entry carries `source: "close-sweep"` and `issue: <N>`, and **the issue
-   number is its key**. A later sweep whose verdict on the same issue trips again goes to a
-   verifier given each entry for that issue and their evidence, which rules as §5.7's matching does. **Same** as one of them: a sighting on
-   it, so a released entry stays released. **Distinct**, or **cannot tell**: a new held
-   `sweep-<n>` entry for that issue, with its own channel record and the verifier's stated reason
-   in its `match_reason`, so the human releasing it sees why. That field stays in the ledger and
-   the channel record, and the stub never shows it. The issue body is peer-writable, and an
-   edited body must not silence the hold. A release that says its entry covers the issue
-   (`covers_issue: true`) makes every later trip on that issue a sighting on it. §5.7's
-   file/line matching does not apply to a sweep entry in either direction: a review finding is
-   not matched against it, and it is not matched against a review finding's entry. A review
-   finding about the same defect therefore gets its own entry and its own release, which fails
-   closed. §5.12 step 4 runs at the hand-off for a held sweep entry: its stub goes in the
-   hand-off record, the PR/MR turns draft, and the run records `needs-human` rather than
-   `ready-to-merge`.
+   withheld through §5.12 like a review finding's detail — ledger, private channel, stub and hold.
+   Its `withheld` entry carries `source: "close-sweep"` and `issue: <N>`, and **the issue number is
+   its key**. A later sweep whose verdict on the same issue trips again goes to a verifier given
+   each entry for that issue and their evidence, which rules as §5.7's matching does. **Same** as
+   one of them: a sighting on it, so a released entry stays released. **Distinct**, or **cannot
+   tell**: a new held `sweep-<n>` entry for that issue, with its own channel record and the
+   verifier's stated reason in its `match_reason`, so the human releasing it sees why. That field
+   stays in the ledger and the channel record, and the stub never shows it. The issue body is
+   peer-writable, and an edited body must not silence the hold. A release that says its entry covers
+   the issue (`covers_issue: true`) makes every later trip on that issue a sighting on it. §5.7's
+   file/line matching does not apply to a sweep entry in either direction: a review finding is not
+   matched against it, and it is not matched against a review finding's entry. A review finding
+   about the same defect therefore gets its own entry and its own release, which fails closed. §5.12
+   step 4 runs at the hand-off for a held sweep entry: its stub goes in the hand-off record, the
+   PR/MR turns draft, and the run records `needs-human` rather than `ready-to-merge`.
 
    **Once a sweep entry has been withheld, the sweep's public text is uniform for the rest of the
    change.** Otherwise the one issue listed without evidence, beside a `sweep-<n>` stub, is the
@@ -2098,15 +2097,16 @@ happens to notice. The sweep is what makes the backlog shrink as well as grow.
    PR/MR description — `Closes #N` in the form §7.A settled on — with the one-line evidence beside
    it (only the verdict, where step 2 kept the evidence in the ledger or a sweep entry has been
    withheld) and the head sha it was established on — and only once its comments are read and
-   addressed, as for the change's own issues (§3.2), and while no sweep entry is held (step 2);
-   a GONE body with an open comment scenario is a reference without the closing keyword. The hand-off re-read above covers it too. The merge then closes it,
-   so the close happens when a person merges and not before, and a change that is never merged closes nothing. Editing the
-   description moves no code, so the reviewed head stays the head handed off (§5.10). Where the
-   merge will not close it — the repo does not honour closing keywords, or the forge setting is off
-   — ship closes it after the merge with the evidence as a comment (only the verdict and head
-   sha, where step 2 kept the evidence in the ledger or a sweep entry has been withheld; the
-   reference file has the close-with-evidence query), and only where §2.6 lets ship merge at
-   all; otherwise the hand-off record names them for the person who merges — except while a sweep entry is held (step 2).
+   addressed, as for the change's own issues (§3.2), and while no sweep entry is held (step 2); a
+   GONE body with an open comment scenario is a reference without the closing keyword. The hand-off
+   re-read above covers it too. The merge then closes it, so the close happens when a person merges
+   and not before, and a change that is never merged closes nothing. Editing the description moves
+   no code, so the reviewed head stays the head handed off (§5.10). Where the merge will not close
+   it — the repo does not honour closing keywords, or the forge setting is off — ship closes it
+   after the merge with the evidence as a comment (only the verdict and head sha, where step 2 kept
+   the evidence in the ledger or a sweep entry has been withheld; the reference file has the
+   close-with-evidence query), and only where §2.6 lets ship merge at all; otherwise the hand-off
+   record names them for the person who merges — except while a sweep entry is held (step 2).
 5. **Record what was examined, not only what closed** — in the state file's `close_sweep` (§4) and
    as one line of the hand-off record: the files scoped, how many examined, which close, which still
    reproduce, which are unverified. The issues left open because the reproduction still succeeded
