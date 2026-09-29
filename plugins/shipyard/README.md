@@ -317,3 +317,66 @@ unsupported setup, not by ordinary use. Each names what would make it a defect w
   `plugins/shipyard/skills/shipyard/shipyard-continuity.sh:1172`. Found by the review of #340.
   *Promote when* a bash-4 construct lands in that start path, or a Codex parent on agterm reports a
   watcher that never started.
+- **KL-4 — the stall record's `fired_epoch` and `last_fired` guards are pinned by no case.** A
+  leading-zero value in `report-stall`'s fourth or seventh field is refused through `stall_num`
+  before it reaches arithmetic, but t13's E6b corrupts them together with `since`, and a refused
+  `since` keeps the slot from stalling, so neither guard's own arithmetic is reached. Only a peer
+  write to the mailbox puts such a value there; the report writes canonical epochs.
+  `plugins/shipyard/skills/shipyard/shipyard-report.sh:1597`. Found by the review of #237.
+  *Promote when* the report itself writes a zero-padded or non-canonical number into
+  `report-stall`, or a slot is seen to lose its alarm over a malformed record.
+- **KL-5 — the `report-tick` octal refusal and the stall table's string compare are pinned by no
+  fixture.** A leading-zero tick is refused rather than read as octal (`08` would abort the whole
+  report), and the stall table matches slot names as strings so `43` and `043` stay apart. No test
+  writes such a tick or such a pair of rows. The tick is written only by the report, and launched
+  slot names carry no leading zero. `plugins/shipyard/skills/shipyard/shipyard-report.sh:688` and
+  `:1591`. Found by the review of #237. *Promote when* a writer other than the report stamps
+  `report-tick`, or slot names can begin with a zero.
+- **KL-6 — the owner-hold launch and two temp names are FIFO-tested by nothing.** t21's NOT COVERED
+  header names them: a FIFO at the owner-hold launch's log, a temp name swapped between `mktemp` and
+  its open, and the start intent's own name. The owner-hold launch is opt-in and no production path
+  arms it (SKILL.md, on `_SHIPYARD_CONTINUITY_OWNER_HOLD`); the other two need a deliberate swap
+  inside a race window. `plugins/shipyard/skills/shipyard/tests/t21-continuity-fifo.sh:15`. Found by
+  the review of #259. *Promote when* a production caller arms the owner hold: then t21's case 3
+  gains an owner-hold variant, holding the write end the way t10's owner script does.
+- **KL-7 — the canary sentinel's non-EOF branches have no test.** `shipyard_continuity_owner_gone`
+  drops a sentinel pipe that ends without an `eof` line and starts a new one on the next poll, and
+  reads the canary directly when a sentinel cannot start. Both are on the owner-hold path only, which
+  no production caller arms; the first also needs something to kill the sentinel alone, and the
+  second descriptor or process exhaustion.
+  `plugins/shipyard/skills/shipyard/shipyard-continuity.sh:456`. Found by the review of #281.
+  *Promote when* a production caller arms the owner hold. The deterministic test is in #269's
+  thread: a separate holder process for the write end, the sentinel killed alone by a pid taken
+  from a `ps -A -o pid= -o ppid=` filter (never `pgrep -P`), then the holder killed.
+- **KL-8 — two continuity readers are driven only with the plain `› cmd` spelling.** The
+  capacity-state `*)` arm and `shipyard_continuity_finish_owned`'s ownership check read the prompt
+  through `_adp_box_content`, which also accepts an NBSP-separated or `❯` prompt; t7 drives that
+  wider spelling for `prompt_empty` alone. The watcher runs for a Codex parent only, and Codex
+  captures use `› ` with a plain space; the other spellings are the Claude client's.
+  `plugins/shipyard/skills/shipyard/shipyard-continuity.sh:89` and `:265`. Found by the review of
+  #290. *Promote when* continuity runs for a Claude parent, or a Codex capture shows an NBSP or `❯`
+  prompt.
+- **KL-9 — on the kind that echoes no command, a fast compaction under a stale finished line reads
+  as a timeout.** A typed `/compact` does not retire an older `Context compacted` line there, so a
+  compaction that finishes before `submit()`'s capture about three seconds later is never seen as
+  new, and the run ends in exit 4 with no resume brief sent. It fails in the safe direction and the
+  code says so. `plugins/shipyard/skills/shipyard/shipyard-compact.sh:107`. Found by the review of
+  #290. *Promote when* a compaction of that kind that did finish is reported as exit 4, or one at
+  the ceiling completes in under about three seconds. Closing it needs evidence from that client
+  that a new compaction started, derived from a capture.
+- **KL-10 — the owner-hold watcher with more than one wait slice per interval is run by no test.**
+  The wait between polls is cut into slices of at most 0.25 s, and t10, the only suite that drives
+  the owner hold, polls at 0.1 s, a single slice; the multi-slice pause itself is run by t7 on the
+  default path. The owner hold is opt-in and no production path arms it.
+  `plugins/shipyard/skills/shipyard/shipyard-continuity.sh:403`. Found by the review of #311.
+  *Promote when* a production caller arms the owner hold: then a t10 case at a 0.6 s interval (three
+  slices) asserts owner death is reaped and a ping is answered within one slice.
+- **KL-11 — t7's synchronized-stop case pins the stop's longer lock wait only on a box fast enough.**
+  The case holds a publishing start for a fixed 10 s, so a stop put back on a start's default lock
+  wait reds it only while that default's polls finish inside 10 s; on a box loaded past that, the
+  mutant survives. That loses coverage and never causes a false red. An evidence-ended hold was tried
+  in #311 and reverted for its fork cost under load.
+  `plugins/shipyard/skills/shipyard/tests/t7-continuity.sh:749`, against
+  `plugins/shipyard/skills/shipyard/shipyard-continuity.sh:1233`. Found by the review of #311.
+  *Promote when* someone lowers the stop's wait, or CI shows the mutant surviving on an idle runner:
+  then the hold ends on the stop giving up, counted without a fork per pass.
