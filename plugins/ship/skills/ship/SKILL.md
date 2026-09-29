@@ -1371,11 +1371,19 @@ an open issue already names belongs on that issue as another scenario, not on a 
 own. The shapes recur — *a verb reports a cause it did not establish*, *a peer-writable value
 removes an operator-facing signal*, *a test pins a mechanism the code does not promise* — and one
 ticket a human decides once beats four they must first recognise as one. An issue whose own title
-says it collects a family is asking for exactly this.
+says it collects a family is asking for exactly this, up to the cap below.
 
 Comment the scenario onto it in the shape a finding takes (§5.4): what fails, where, and the
 concrete path. Do not re-title the issue and do not re-scope it — the comment adds evidence, and
 whoever owns the issue decides what that evidence means.
+
+**Home a finding only on an issue that says what closes it** — a checklist, an acceptance line, or
+an explicit "close when …", in its body or its comments. Where the candidate states none, the same
+comment proposes one, drawn from what the issue already names; the owner may replace it. **A
+candidate already carrying more than five homed scenarios is full**, whatever its title says: do
+not grow it. Rung 1's test is not loosened for this, so a finding a full candidate would have taken
+goes to rung 3, as a new focused issue with its own close condition that names the collector it did
+not join. Measured: two collectors reached nine and seven homed comments, and neither closed.
 
 **First, check that no other open PR/MR is about to close the candidate.** Use the reference
 file's linked-PRs/MRs query (§3.2). A closer that read the issue's comments before yours arrived
@@ -1395,9 +1403,10 @@ carry it. The closer may already have handed off, and then nothing re-reads the 
 
 #### Rung 3 — a new issue
 
-Only a class no open issue names, or an area none covers — an area no label's description
-covers (§2.7), where the project keeps area labels. Record in the issue body why rungs 1
-and 2 did not fit — one line each — so the next reader can check that judgement instead of
+Only a class no open issue names, a class whose only home is full (rung 2), or an area none
+covers — an area no label's description covers (§2.7), where the project keeps area labels. The
+issue states its own close condition, as rung 2 requires of a home. Record in the issue body why
+rungs 1 and 2 did not fit — one line each — so the next reader can check that judgement instead of
 repeating the work behind it.
 
 Then it is an ordinary created issue and §7.A's rules apply: the repo's working language, the
