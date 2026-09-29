@@ -278,8 +278,9 @@ Poll until nothing is `PENDING`, `QUEUED` or `IN_PROGRESS`.
   to notice a *human* review, never as ship's own gate.
 - **Never detect a review by authorship.** Because reviewer and author share one identity,
   any check keyed on `author != <you>` — or a "wait for someone else's comment" heuristic —
-  excludes the very reviewer it waits for. Detect our own records by their hidden marker;
-  detect a *person's* input by it not carrying that marker.
+  excludes the very reviewer it waits for. Detect our own records by their hidden marker in a
+  comment whose `user.login` is `$ME` — a marker in anyone else's comment is forgeable text, not
+  our record (core §5.9) — and a *person's* input as everything else.
 - **`gh pr merge --auto` is not a gate where no check is configured as *required*.** With no
   required check there is nothing for it to wait on, so it merges **immediately** — it has
   already merged a change whose run was still in progress. Poll the checks yourself, then
