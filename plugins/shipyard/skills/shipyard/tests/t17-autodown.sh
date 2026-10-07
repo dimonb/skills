@@ -708,6 +708,7 @@ ok "B15b: ...naming --unpin for a backend that is gone" 1 "$(printf '%s' "$b15b"
 ok "B15b: ...in teardown words, not a launch refusal's" 0 "$(printf '%s' "$b15b" | grep -c 'Launch on the fleet')"
 ok "B15b: ...after confirming that fleet has ended"   1 "$(printf '%s' "$b15b" | grep -c 'SHIPYARD_BACKEND=agterm bash .*shipyard-report.sh. lists no ship-')"
 ok "B15b: ...with --unpin as the human's call"         1 "$(printf '%s' "$b15b" | grep -c 'asks the human before running it')"
+ok "B15b: ...and a kept pin not removed by hand"       1 "$(printf '%s' "$b15b" | grep -c 'survives that teardown was kept: do not remove it by hand')"
 rm -f "$B_GIT/ship-escalations/container-agterm"
 
 # --- B15c: the same with this backend's pin already there, so the teardown leaves BOTH -------
