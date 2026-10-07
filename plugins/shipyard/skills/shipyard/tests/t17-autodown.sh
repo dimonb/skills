@@ -329,6 +329,8 @@ printf '%s\n' "$*" >>"$DOWN_CALLS"
 rc=$(cat "$DOWN_RC_FILE" 2>/dev/null || echo 0)
 if [ "${DOWN_REMOVE:-0}" = 1 ]; then
   rm -rf "$B_ROOT/.claude/worktrees/ship-$1"
+  # B15b: the other backend's pin appears while this teardown runs, as a status-4 down leaves it.
+  [ "${DOWN_PIN_OTHER:-0}" = 1 ] && : >"$B_GIT/ship-escalations/container-agterm"
   echo "closed t17b:1"
   echo "removed worktree $B_ROOT/.claude/worktrees/ship-$1"
   [ "$rc" != 0 ] && echo "warning: could not verify that every shipyard slot is gone" >&2
@@ -681,6 +683,52 @@ ok "B15: ...and NOT as awaiting removal"             0 "$(printf '%s' "$b15" | g
 ok "B15: ...naming the unverified cleanup"           1 "$(printf '%s' "$b15" | grep -c 'AFTER removing the slot')"
 ok "B15: ...with the right consecutive count"        1 "$(printf '%s' "$b15" | grep -c 'on 2 consecutive ticks')"
 DOWN_REMOVE=0; export DOWN_REMOVE; printf '0\n' >"$DOWN_RC_FILE"
+
+# --- B15b: the same, when the teardown leaves the OTHER backend's pin behind (#132) --------
+# Down's status-4 notice (both pinned; this backend's pin cleared, the other kept) is in the
+# output the report drops, and the generic NOTE told the operator to re-run down under this
+# backend — which meets the other pin and exits 2 every time. The NOTE must name that pin and
+# carry its remedy itself: slot 79 is named and live, so nothing-in-flight never holds and the
+# NO SIGNAL block (which prints only then) is not on screen to point at.
+b_reset
+b_slot 78 878 ready-to-merge
+mkdir -p "$B_ROOT/.claude/worktrees/ship-78"
+printf '1 ship-79\n' >"$B_WINS"; printf 'ship-79\n' >"$B_ENUM"
+printf '878\tMERGED\n' >"$B_STATES"
+b_tick -- 78 79 >/dev/null
+printf '1\n' >"$DOWN_RC_FILE"; DOWN_REMOVE=1; DOWN_PIN_OTHER=1; export DOWN_REMOVE DOWN_PIN_OTHER
+b15b=$(b_tick -- 78 79)
+ok "B15b: a removed-then-warned teardown under a second pin is still torn down" 1 \
+   "$(printf '%s' "$b15b" | grep -c 'TORN DOWN — merged, finished')"
+ok "B15b: ...its NOTE names the other backend's pin"  1 "$(printf '%s' "$b15b" | grep -c 'also holds the agterm pin')"
+ok "B15b: ...and does not advise re-running down here" 0 "$(printf '%s' "$b15b" | grep -c 'once the backend is healthy to settle it')"
+ok "B15b: ...no NO SIGNAL block is on screen to point at" 0 "$(printf '%s' "$b15b" | grep -c '🛑 NO SIGNAL')"
+ok "B15b: ...so the NOTE carries the remedy itself"   1 "$(printf '%s' "$b15b" | grep -c 'tear it down under SHIPYARD_BACKEND=agterm')"
+ok "B15b: ...naming --unpin for a backend that is gone" 1 "$(printf '%s' "$b15b" | grep -c 'shipyard-down.sh --unpin agterm')"
+ok "B15b: ...in teardown words, not a launch refusal's" 0 "$(printf '%s' "$b15b" | grep -c 'Launch on the fleet')"
+ok "B15b: ...after confirming that fleet has ended"   1 "$(printf '%s' "$b15b" | grep -c 'SHIPYARD_BACKEND=agterm bash .*shipyard-report.sh. lists no ship-')"
+ok "B15b: ...with --unpin as the human's call"         1 "$(printf '%s' "$b15b" | grep -c 'asks the human before running it')"
+ok "B15b: ...and a kept pin not removed by hand"       1 "$(printf '%s' "$b15b" | grep -c 'survives that teardown was kept: do not remove it by hand, unless')"
+ok "B15b: ...save the remedy's one exception"          1 "$(printf '%s' "$b15b" | grep -c 'could not stop a continuity watcher')"
+rm -f "$B_GIT/ship-escalations/container-agterm"
+
+# --- B15c: the same with this backend's pin already there, so the teardown leaves BOTH -------
+# The commoner shape: slots in flight on tmux keep its pin, and the other pin appears beside it.
+# Then one pin is stale and nothing says which, so the NOTE prints the both-pinned order.
+b_reset
+b_slot 77 877 ready-to-merge
+mkdir -p "$B_ROOT/.claude/worktrees/ship-77"
+: >"$B_GIT/ship-escalations/container-tmux"
+printf '877\tMERGED\n' >"$B_STATES"
+DOWN_REMOVE=0; DOWN_PIN_OTHER=0; export DOWN_REMOVE DOWN_PIN_OTHER; printf '0\n' >"$DOWN_RC_FILE"
+b_tick -- 77 79 >/dev/null
+printf '1\n' >"$DOWN_RC_FILE"; DOWN_REMOVE=1; DOWN_PIN_OTHER=1; export DOWN_REMOVE DOWN_PIN_OTHER
+b15c=$(b_tick -- 77 79)
+ok "B15c: both pins after the teardown -> torn down"   1 "$(printf '%s' "$b15c" | grep -c 'TORN DOWN — merged, finished')"
+ok "B15c: ...and the NOTE prints the both-pinned order" 1 "$(printf '%s' "$b15c" | grep -c 'Both backends are pinned in this mailbox')"
+ok "B15c: ...with its way out for a backend that is gone" 1 "$(printf '%s' "$b15c" | grep -c 'shipyard-down.sh --unpin <b>')"
+rm -f "$B_GIT/ship-escalations/container-agterm" "$B_GIT/ship-escalations/container-tmux"
+DOWN_REMOVE=0; DOWN_PIN_OTHER=0; export DOWN_REMOVE DOWN_PIN_OTHER; printf '0\n' >"$DOWN_RC_FILE"
 
 # --- B16: the counter lookup must not read another slot's row ------------------------------
 # The awk lookup replaced `grep -F "$slot<TAB>"`, which matched anywhere in the row — and rows

@@ -244,7 +244,10 @@ no_signal_block() {  # <class> <why>
       echo "  and the choice stops moving under you."
       echo "- If that fleet really is finished, the pin is stale. \`shipyard-down.sh\` clears only the pin"
       echo "  of the backend IT resolved, so pin \`SHIPYARD_BACKEND=$PINNED_ELSEWHERE\` first and then tear"
-      echo "  the slots down; a down run resolved on the other backend leaves this one in place." ;;
+      echo "  the slots down; a down run resolved on the other backend leaves this one in place."
+      echo "- If \`$PINNED_ELSEWHERE\` cannot answer at all (uninstalled, its app gone for good), nothing can prove"
+      echo "  its fleet empty: \`bash $DIR/shipyard-down.sh --unpin $PINNED_ELSEWHERE\` removes the pin only after two failed prechecks."
+      echo "  It is an operator verb: a supervising agent asks the human before running it." ;;
     listed)
       # No backend remedy: the enumeration answered, so the socket is not what failed.
       echo "- A transient lookup failure is the likeliest cause, and the next tick usually goes through."
@@ -2237,8 +2240,35 @@ EOF
       # A teardown that removed the slot and THEN failed its fleet-level bookkeeping is reported
       # as what it is. The slot is gone either way — the worktree test in autodown_consider
       # established that — but the lifecycle state it could not settle is the operator's to look at.
-      [ "$drc" = 0 ] || \
-        echo "  NOTE: it exited $drc AFTER removing the slot — its fleet-level cleanup (container pin, parent watchers) could not be verified. Re-run \`bash $DIR/shipyard-down.sh $sl\` once the backend is healthy to settle it."
+      #
+      # Re-running down under THIS backend cannot settle it while another backend is pinned: its
+      # cleanup reads that pin as `elsewhere` every time (#132). Down's own status-4 notice, which
+      # says which pin it kept, is in the captured output this block drops, so the pins are read
+      # again here and the remedy for that pin is printed in place. In place, not by pointing at the
+      # NO SIGNAL block: that block prints only once nothing is in flight, so while another slot
+      # runs it is not on screen.
+      if [ "$drc" != 0 ]; then
+        reap_pe=$(shipyard_backend_pinned_elsewhere 2>/dev/null) || reap_pe=""
+        if [ -n "$reap_pe" ]; then
+          echo "  NOTE: it exited $drc AFTER removing the slot. This mailbox also holds the $reap_pe pin, so re-running"
+          echo "  \`shipyard-down.sh\` under $(shipyard_backend) cannot settle the fleet-level cleanup: it reads that pin every time."
+          if shipyard_both_pinned; then
+            shipyard_elsewhere_remedy | sed 's/^/  /'
+          else
+            # Not the shared remedy's single-pin branch: its first lines speak to a launch.
+            echo "  Once that fleet has ended — \`SHIPYARD_BACKEND=$reap_pe bash $DIR/shipyard-report.sh\` lists no ship-* terminal"
+            echo "  and prints no NO SIGNAL block — tear it down under SHIPYARD_BACKEND=$reap_pe, which clears that pin"
+            echo "  (\`shipyard-down.sh <slot> ...\`; with no worktree left, any one slot name runs the same check)."
+            echo "  A pin that survives that teardown was kept: do not remove it by hand, unless that report was empty and"
+            echo "  down's only warning was that it could not stop a continuity watcher."
+            echo "  If $reap_pe cannot answer at all (uninstalled, its app gone for good):"
+            echo "    bash $DIR/shipyard-down.sh --unpin $reap_pe removes its pin only after two failed prechecks."
+            echo "    It is an operator verb: a supervising agent asks the human before running it."
+          fi
+        else
+          echo "  NOTE: it exited $drc AFTER removing the slot — its fleet-level cleanup (container pin, parent watchers) could not be verified. Re-run \`bash $DIR/shipyard-down.sh $sl\` once the backend is healthy to settle it."
+        fi
+      fi
     done
   fi
   # HELD is its own block, not a variant of the refusal below, because the remedy is the

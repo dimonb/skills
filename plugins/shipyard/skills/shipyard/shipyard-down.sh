@@ -9,6 +9,11 @@
 #   shipyard-down.sh <slot> [<slot> ...]     tear down, refusing anything unsafe
 #   shipyard-down.sh <slot> --force          tear down even when the gates below refuse
 #   shipyard-down.sh --list                  what is safe to tear down right now
+#   shipyard-down.sh --unpin <agterm|tmux>   remove that backend's container pin, ONLY when the
+#                                            backend fails its precheck on two reads (#132): the
+#                                            way out when the pinned backend is gone for good.
+#                                            An operator verb; a supervising agent runs it only
+#                                            on the human's go-ahead (SKILL.md).
 #
 # THIS SCRIPT IS ALSO THE AUTOMATIC PATH. shipyard-report.sh calls it, unchanged and without
 # --force, once a slot's PR/MR has read `merged` on enough consecutive ticks and the child is
@@ -37,17 +42,36 @@
 # shipyard-down-gate.sh carries the measurements behind all of it.
 #
 # Exit: 0 all requested slots are down, 1 at least one was refused or failed.
+# --unpin: 0 the pin was removed or there was none, 1 refused (the backend answered) or a usage error.
 set -uo pipefail
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# --unpin is read BEFORE the library is sourced, because the driver resolves and caches its backend
+# at source time: naming the backend here is what makes the pin path and the precheck both about
+# the one being unpinned, whatever this shell's SHIPYARD_BACKEND says. It is a mode of its own, so
+# any other argument beside it is refused rather than half-honoured.
+UNPIN=""
+if [ "${1:-}" = --unpin ]; then
+  case "${2:-}" in
+    agterm|tmux) [ $# -eq 2 ] || { echo 'usage: shipyard-down.sh --unpin <agterm|tmux>   (nothing else beside it)' >&2; exit 1; } ;;
+    *) echo 'usage: shipyard-down.sh --unpin <agterm|tmux>' >&2; exit 1 ;;
+  esac
+  UNPIN=$2; SHIPYARD_BACKEND=$2
+fi
 # shellcheck source=shipyard-lib.sh
 . "$DIR/shipyard-lib.sh"
 # shellcheck source=shipyard-down-gate.sh
 . "$DIR/shipyard-down-gate.sh"
 
+if [ -n "$UNPIN" ]; then
+  # Before the precheck below, on purpose: that check would refuse the very backend this is for.
+  shipyard_unpin_unreachable; exit $?
+fi
+
 FORCE=0; LIST=0
 declare -a SLOTS=()
 for a in "$@"; do
   case "$a" in
+    --unpin) echo 'usage: shipyard-down.sh --unpin <agterm|tmux>   (first, and nothing else beside it)' >&2; exit 1 ;;
     --force) FORCE=1 ;;
     --list)  LIST=1 ;;
     # The header block IS the help text, so print it by SHAPE rather than by line number:

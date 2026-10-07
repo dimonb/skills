@@ -556,8 +556,9 @@ shipyard_container_remedy() {
 }
 
 # shipyard_elsewhere_remedy — the operator's next move after an `elsewhere` refusal, on stdout, one
-# indented line each, so the words live here once. Every launch refusal prints it; the report and
-# the per-slot refusal print only its both-pinned branch, having single-pin words of their own.
+# indented line each, so the words live here once. Every launch refusal prints it; the report's NO
+# SIGNAL block, its autodown NOTE and the per-slot refusal print only its both-pinned branch, having
+# single-pin words of their own (the single-pin branch's first lines are about a launch).
 #
 # ONE MAILBOX RUNS ONE BACKEND AT A TIME. Its pins cannot tell two live fleets from one fleet and a
 # failed probe, so a launch is refused whether the other backend came from `auto` or was asked for
@@ -565,8 +566,9 @@ shipyard_container_remedy() {
 # (#132): one of them is stale and nothing on disk says which, so that branch prints its own order
 # — down under the backend believed stale clears that backend's pin alone — and returns before the
 # single-pin order. Either way a stale pin is cleared only in the order printed: a pin removed
-# while its fleet is live is #61 again. What this still cannot offer is a way out when the pinned
-# backend can no longer answer at all — step 1 needs it to — which #132 keeps open.
+# while its fleet is live is #61 again. When the pinned backend can no longer answer at all, steps 1
+# and 2 cannot run, and both branches end by naming `shipyard-down.sh --unpin`
+# (`shipyard_unpin_unreachable`), which removes a pin only after that backend fails two prechecks.
 shipyard_elsewhere_remedy() {
   local pin now d mb
   pin=$(shipyard_backend_pinned_elsewhere) || pin=""
@@ -586,7 +588,11 @@ shipyard_elsewhere_remedy() {
     echo "    2. SHIPYARD_BACKEND=<b> bash $d/shipyard-down.sh <slot> ... (any one slot name if no worktree is left) —"
     echo "       it clears <b>'s pin alone, keeps the other pin and every watcher, and says so;"
     echo "    3. then launch, report and tear down on the other backend as usual. A pin that survives step 2 was KEPT:"
-    echo "       <b> listed a slot or could not answer. Do not remove it by hand — go back to step 1."
+    echo "       <b> listed a slot, could not answer, or a launch record on <b> names another container that still"
+    echo "       holds (or cannot be asked about) its slot. Do not remove it by hand — go back to step 1."
+    echo "    If <b> cannot answer at all (uninstalled, its app gone for good), steps 1 and 2 cannot run:"
+    echo "    bash $d/shipyard-down.sh --unpin <b> removes its pin only after two failed prechecks."
+    echo "    It is an operator verb: an agent asks the human first."
     return 0
   else
     case "${SHIPYARD_BACKEND:-auto}" in
@@ -604,6 +610,63 @@ shipyard_elsewhere_remedy() {
   echo "    3. a pin that survives step 2 was KEPT: down could not verify the fleet, or a slot remains (it says the first"
   echo "       and not the second). Do not remove it — go back to step 1. Remove $mb/container-$pin by hand only when"
   echo "       step 1 was empty and step 2's one warning was that it could not stop a continuity watcher."
+  echo "  If $pin cannot answer at all (uninstalled, its app gone for good), steps 1 and 2 cannot run:"
+  echo "    bash $d/shipyard-down.sh --unpin $pin removes its pin only after two failed prechecks."
+  echo "    It is an operator verb: an agent asks the human first."
+}
+
+# shipyard_unpin_unreachable — `shipyard-down.sh --unpin <backend>`: remove the resolved backend's
+# pin when that backend CANNOT BE ASKED at all (#132 item 2). Exit 0 removed, or no pin to remove;
+# 1 refused. Messages on stderr. The caller resolves the named backend before sourcing this file,
+# so `_drv_pin_file` and `shipyard_backend_check` are both about it.
+#
+# WHY IT EXISTS. Every other way out of a stale pin — `shipyard_elsewhere_remedy`'s steps, the
+# last-slot cleanup's status 4 — proves the fleet empty by asking the pinned backend. When that
+# backend is uninstalled, or its app gone for good, nothing can ask it, and every launch on the
+# other backend was refused for ever with no sanctioned exit.
+#
+# THE EVIDENCE IS THIS SHELL'S OWN ENVIRONMENT, NEVER THE MAILBOX. The pin is removed only when the
+# backend's precheck fails on two reads SHIPYARD_MOTION_INTERVAL apart, so one socket blip — #61's
+# trigger — cannot clear a live fleet's pin. Launch records, worktrees and the other pin are not
+# read: they are peer-writable, and a child must not hold the switch on this. A backend that answers
+# is refused outright and pointed at the ordinary remedy, which can prove the fleet empty.
+#
+# NOTHING AUTOMATIC CALLS THIS. It is an operator verb, and SKILL.md says the supervising agent runs
+# it only on the human's go-ahead.
+#
+# THE CASE THAT STILL BYPASSES IT: a backend that fails both probes FROM THIS SHELL while a fleet is
+# alive on it from another — agtermctl missing from this PATH, AGTERM_SOCKET pointing elsewhere, jq
+# absent here, an agterm app restarted between the probes and the operator's check. The pin then
+# goes, and a later blip resolving the other backend reads an honestly empty container (#61). The
+# printed warning says to check by hand first; nothing here can.
+shipyard_unpin_unreachable() {
+  local be f iv d why=""
+  be=$(shipyard_backend)
+  d=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
+  f=$(_drv_pin_file 2>/dev/null) || {
+    echo "error: no shipyard mailbox here, so there is no pin to remove (run this from the repo)." >&2
+    return 1; }
+  if [ ! -f "$f" ]; then
+    echo "nothing to remove: this mailbox holds no $be pin ($f)." >&2
+    return 0
+  fi
+  iv=$(knob_interval "${SHIPYARD_MOTION_INTERVAL:-}" 3)
+  # The second read's own reason is kept for the removal message: the precheck fails for a missing
+  # helper (jq) as well as for a backend that is gone, and the operator must see which it was.
+  if shipyard_backend_check 2>/dev/null || { sleep "$iv"; why=$(shipyard_backend_check 2>&1); }; then
+    echo "refused: the $be backend answered its precheck, so it can still be asked whether a fleet is on it." >&2
+    echo "         Clear its pin the ordinary way, which proves the fleet empty first:" >&2
+    echo "           SHIPYARD_BACKEND=$be bash $d/shipyard-report.sh" >&2
+    echo "           SHIPYARD_BACKEND=$be bash $d/shipyard-down.sh <slot> ..." >&2
+    return 1
+  fi
+  rm -f "$f" 2>/dev/null || { echo "error: could not remove $f" >&2; return 1; }
+  echo "removed: $f — the $be backend failed its precheck on two reads ${iv}s apart." >&2
+  [ -z "$why" ] || printf '%s\n' "$why" | sed 's/^error: /         the precheck said: /; s/^       /         /' >&2
+  echo "warning: a fleet on a backend this shell cannot reach is also one shipyard cannot see. If $be may" >&2
+  echo "         still be running from another shell (agterm app open, \`tmux ls\` elsewhere), check it by hand:" >&2
+  echo "         with this pin gone, a report under the other backend can no longer refuse on its account." >&2
+  return 0
 }
 
 # shipyard_absence_report <slot> — say, on stderr, why that slot has no terminal.

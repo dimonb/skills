@@ -252,9 +252,11 @@ pin whose fleet has ended: confirm with `shipyard-report.sh` under the pinned ba
 lists no `ship-*` terminal and prints no `NO SIGNAL` block (`shipyard-down.sh --list` shows
 worktrees, not terminals), then tear down under that backend, which clears the pin once it has
 proven the fleet empty. A pin that survives the teardown was **kept** — the fleet could not be
-verified, or a slot remains — and is never removed by hand; the one exception the refusal names
-is a teardown whose only warning was a continuity watcher it could not stop. Never remove a pin
-while its fleet may be live. A dry run writes no pin.
+verified, or a slot remains — and is never removed by hand. The refusal names two ways past that:
+removing it by hand after a teardown whose only warning was a continuity watcher it could not stop,
+and `shipyard-down.sh --unpin` when the pinned backend cannot answer at all (below), which an agent
+runs only on the human's go-ahead. Never remove a pin while its fleet may be live. A dry run writes
+no pin.
 
 **Both backends pinned is refused too** (#132): one of the two is stale and nothing on disk says
 which, so the report prints `NO SIGNAL` under either backend and the order above cannot complete.
@@ -263,6 +265,16 @@ believe stale, the report must list no `ship-*` terminal, and `shipyard-down.sh`
 **that backend's pin alone** once it has answered with no slot and no launch record on it points at
 another container still holding one — the other pin, every watcher and
 the container are left, and down says so in a notice (its last-slot cleanup's status 4).
+
+**When the pinned backend cannot answer at all** (#132) — the app uninstalled, the tmux binary gone
+— neither order above can run, because both ask that backend first. `shipyard-down.sh --unpin
+<agterm|tmux>` is the way out: it removes that backend's pin **only** when the backend fails its
+precheck (`shipyard_backend_check`) on two reads `SHIPYARD_MOTION_INTERVAL` apart, and refuses,
+pointing back at the order above, when it answers. Its evidence is the running shell's own
+environment, never the mailbox. It prints what it removed and a warning: a fleet on a backend this
+shell cannot reach is also one shipyard cannot see, so a backend still alive from another shell
+(another `PATH` or `AGTERM_SOCKET`) loses its pin to this verb — check by hand first. **Nothing
+automatic calls it, and a supervising agent runs it only on the human's go-ahead.**
 
 **The admission gate — refuse a launch this machine cannot take.** Before it creates any
 worktree or terminal, `shipyard-launch.sh` runs two cheap checks, because an uncapped fleet
@@ -1422,6 +1434,7 @@ fails towards leaving a worktree alone, and the manual command below is unchange
 bash <SKILL>/shipyard-down.sh --list        # what exists and whether it is safe
 bash <SKILL>/shipyard-down.sh <slot>        # close the terminal, remove the worktree, prune
 bash <SKILL>/shipyard-down.sh <slot> --force
+bash <SKILL>/shipyard-down.sh --unpin <agterm|tmux>   # only on the human's go-ahead; see Step 1
 ```
 
 It refuses a slot with uncommitted changes, one whose content it cannot prove is already in
