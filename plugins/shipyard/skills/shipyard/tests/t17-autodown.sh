@@ -329,6 +329,8 @@ printf '%s\n' "$*" >>"$DOWN_CALLS"
 rc=$(cat "$DOWN_RC_FILE" 2>/dev/null || echo 0)
 if [ "${DOWN_REMOVE:-0}" = 1 ]; then
   rm -rf "$B_ROOT/.claude/worktrees/ship-$1"
+  # B15b: the other backend's pin appears while this teardown runs, as a status-4 down leaves it.
+  [ "${DOWN_PIN_OTHER:-0}" = 1 ] && : >"$B_GIT/ship-escalations/container-agterm"
   echo "closed t17b:1"
   echo "removed worktree $B_ROOT/.claude/worktrees/ship-$1"
   [ "$rc" != 0 ] && echo "warning: could not verify that every shipyard slot is gone" >&2
@@ -681,6 +683,25 @@ ok "B15: ...and NOT as awaiting removal"             0 "$(printf '%s' "$b15" | g
 ok "B15: ...naming the unverified cleanup"           1 "$(printf '%s' "$b15" | grep -c 'AFTER removing the slot')"
 ok "B15: ...with the right consecutive count"        1 "$(printf '%s' "$b15" | grep -c 'on 2 consecutive ticks')"
 DOWN_REMOVE=0; export DOWN_REMOVE; printf '0\n' >"$DOWN_RC_FILE"
+
+# --- B15b: the same, when the teardown leaves the OTHER backend's pin behind (#132) --------
+# Down's status-4 notice (both pinned; this backend's pin cleared, the other kept) is in the
+# output the report drops, and the generic NOTE told the operator to re-run down under this
+# backend — which meets the other pin and exits 2 every time. The NOTE must name that pin.
+b_reset
+b_slot 78 878 ready-to-merge
+mkdir -p "$B_ROOT/.claude/worktrees/ship-78"
+printf '1 ship-79\n' >"$B_WINS"; printf 'ship-79\n' >"$B_ENUM"
+printf '878\tMERGED\n' >"$B_STATES"
+b_tick -- 78 >/dev/null
+printf '1\n' >"$DOWN_RC_FILE"; DOWN_REMOVE=1; DOWN_PIN_OTHER=1; export DOWN_REMOVE DOWN_PIN_OTHER
+b15b=$(b_tick -- 78)
+ok "B15b: a removed-then-warned teardown under a second pin is still torn down" 1 \
+   "$(printf '%s' "$b15b" | grep -c 'TORN DOWN — merged, finished')"
+ok "B15b: ...its NOTE names the other backend's pin"  1 "$(printf '%s' "$b15b" | grep -c 'also holds the agterm pin')"
+ok "B15b: ...and does not advise re-running down here" 0 "$(printf '%s' "$b15b" | grep -c 'once the backend is healthy to settle it')"
+rm -f "$B_GIT/ship-escalations/container-agterm"
+DOWN_REMOVE=0; DOWN_PIN_OTHER=0; export DOWN_REMOVE DOWN_PIN_OTHER; printf '0\n' >"$DOWN_RC_FILE"
 
 # --- B16: the counter lookup must not read another slot's row ------------------------------
 # The awk lookup replaced `grep -F "$slot<TAB>"`, which matched anywhere in the row — and rows

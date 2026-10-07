@@ -264,6 +264,16 @@ believe stale, the report must list no `ship-*` terminal, and `shipyard-down.sh`
 another container still holding one — the other pin, every watcher and
 the container are left, and down says so in a notice (its last-slot cleanup's status 4).
 
+**When the pinned backend cannot answer at all** (#132) — the app uninstalled, the tmux binary gone
+— neither order above can run, because both ask that backend first. `shipyard-down.sh --unpin
+<agterm|tmux>` is the way out: it removes that backend's pin **only** when the backend fails its
+precheck (`shipyard_backend_check`) on two reads `SHIPYARD_MOTION_INTERVAL` apart, and refuses,
+pointing back at the order above, when it answers. Its evidence is the running shell's own
+environment, never the mailbox. It prints what it removed and a warning: a fleet on a backend this
+shell cannot reach is also one shipyard cannot see, so a backend still alive from another shell
+(another `PATH` or `AGTERM_SOCKET`) loses its pin to this verb — check by hand first. **Nothing
+automatic calls it, and a supervising agent runs it only on the human's go-ahead.**
+
 **The admission gate — refuse a launch this machine cannot take.** Before it creates any
 worktree or terminal, `shipyard-launch.sh` runs two cheap checks, because an uncapped fleet
 once drove a 16 GB machine into swap until macOS recycled the whole GUI session:
@@ -1552,3 +1562,24 @@ collide with it.
   named after `ship`, not after this skill, and that is deliberate: they are the protocol
   between a parent watcher and a `/ship` child, so a rename here must not touch them. A
   live run's mailbox is the one place where renaming would orphan work already in flight.
+
+## Known limits
+
+Residual review findings that are not ordinary-use failures, kept where an agent using this skill
+reads them. Each names what would make it fileable.
+
+* **KL-1** — the `container` check scans every slot still in its worktree, so a per-slot verb
+  (`down`, `tell` of slot A) can refuse because a *different* slot B sits in another container; the
+  refusal names B, so it is louder, not wrong. `shipyard-backend.sh:508`. Found in the #292 review.
+  Promote when a supervisor acting on such a refusal tears down or relaunches the wrong slot.
+* **KL-2** — the `container` check matches by terminal name, so two repos launched from one agterm
+  workspace share a container and the other repo's same-named `ship-<slot>` can raise the refusal;
+  the remedy warns about it, and matching on the recorded handle would remove it.
+  `shipyard-backend.sh:532`. Found in the #292 review. Promote when two repos sharing a workspace
+  is a supported, documented setup rather than an incidental one.
+* **KL-3** — the `container` remedy arms are asserted by no test: the report's `no_signal_block`
+  (`shipyard-report.sh:233`), the launch refusal (`shipyard-launch.sh:150`), the admission gate
+  (`shipyard-admission.sh:120`), `shipyard-down.sh --list`'s `?container`
+  (`shipyard-down.sh:127`), and the agterm branch of `shipyard_container_remedy`
+  (`shipyard-backend.sh:547`). Found in the #292 review. Promote when one of those arms prints the
+  wrong remedy or none.

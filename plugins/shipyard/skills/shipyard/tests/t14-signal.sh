@@ -305,6 +305,15 @@ ok "4a: ...and prescribes the pin, not a socket check"    yes "$(has "$out" 'SHI
 # which is the misdirection the per-class assertions exist to prevent.
 ok "4a: ...and does NOT prescribe the unreachable remedy" no  "$(has "$out" 'agtermctl version')"
 ok "4a: ...nor its second cause"                         no  "$(has "$out" 'agtermctl tree --json')"
+ok "4a: ...and names the way out if agterm is gone (#132)" yes "$(has "$out" 'shipyard-down.sh --unpin agterm')"
+
+# 4a2. Both pins (#132): the report's both-pinned arm prints the stale-pin order, never "pin the
+#      other backend", which would only move the refusal there.
+: > "$MB/container-tmux"
+out=$(run_report empty)
+ok "4a2: both pinned -> NOT exit 0"                       1   "$(rc_of "$out")"
+ok "4a2: ...with the both-pinned order"                   yes "$(has "$out" 'so one pin is stale')"
+ok "4a2: ...and not the single-pin advice"                no  "$(has "$out" 'and the choice stops moving under you')"
 
 # 4b. The backend could not be asked at all. The container pin agrees here, so this is the half a
 #     pinned backend would NOT have caught — the socket answers `version` and fails on `tree`.
@@ -317,6 +326,9 @@ ok "4b: ...saying the backend did not answer" 1 \
 ok "4b: ...and prescribes the socket check, not the pin"  yes "$(has "$out" 'agtermctl version')"
 ok "4b: ...and offers the second cause, whose socket answers fine" yes \
    "$(has "$out" 'agtermctl tree --json')"
+# The scope of that shape check changed in #292 (sessions only in the fleet's own workspace); the
+# sentence saying so is what an operator inspecting a well-formed-looking tree needs.
+ok "4b: ...scoped to this fleet's own workspace"          yes "$(has "$out" "other workspaces' sessions are not checked")"
 ok "4b: ...and does NOT prescribe the elsewhere remedy"   no  "$(has "$out" 'SHIPYARD_BACKEND=')"
 
 # 4c. THE SECOND ROUTE. Named slots skip the discovery branch entirely, render every row as
@@ -669,7 +681,65 @@ out=$( cd "$CR" || exit 99; export SHIPYARD_BACKEND=tmux
 ok "7h: both pinned: the per-slot report refuses (rc 1)"   1   "$rc"
 ok "7h: ...with the both-pinned order"                     yes "$(has "$out" 'so one pin is stale')"
 ok "7h: ...and not the looping pin-the-other"              no  "$(has "$out" 'Pin it for this shell')"
+ok "7h: ...and the third reason a pin survives step 2"     yes "$(has "$out" 'a launch record on <b> names another container')"
+ok "7h: ...and the way out when <b> cannot answer"         yes "$(has "$out" 'shipyard-down.sh --unpin <b>')"
 rm -f "$BMB"/container-*
+
+# --------------------------------------------- 8. --unpin: the way out when the pinned backend is gone (#132)
+# The real script, run in section 6's real repo (git is no longer shadowed here). agtermctl is an
+# exported function whose `version` answers per a script of outcomes, one line per call ("ok" or
+# "fail"), so each case says exactly what the two prechecks see. What is under test is the
+# two-probe rule: a backend that answers on EITHER read keeps its pin, and only two failed reads
+# remove it.
+printf '\n── 8. down --unpin ──\n'
+AT_SCRIPT="$T14TMP/at-script"; AT_CALLS="$T14TMP/at-calls"; UNPIN_LOG="$T14TMP/unpin-out"
+export AT_SCRIPT AT_CALLS
+UMB=$(cd "$CR" && cd "$(git rev-parse --git-common-dir)" && pwd -P)/ship-escalations; mkdir -p "$UMB"
+agtermctl() {
+  case "${1:-}" in
+    version)
+      local n; n=$(cat "$AT_CALLS" 2>/dev/null); n=$(( ${n:-0} + 1 )); printf '%s\n' "$n" >"$AT_CALLS"
+      [ "$(sed -n "${n}p" "$AT_SCRIPT")" = ok ] ;;
+    *) return 1 ;;
+  esac
+}
+export -f agtermctl
+unpin_run() { # <probe outcomes, space-separated> [args...] -> "<rc>|<agterm pin kept/gone>|<version calls>"; output in $UNPIN_LOG
+  local plan="$1" rc=0; shift
+  printf '%s\n' $plan >"$AT_SCRIPT"; : >"$AT_CALLS"
+  ( cd "$CR" && SHIPYARD_MOTION_INTERVAL=0.01 bash "$SKILL_DIR/shipyard-down.sh" "$@" ) >"$UNPIN_LOG" 2>&1 || rc=$?
+  printf '%s|%s|%s' "$rc" "$([ -f "$UMB/container-agterm" ] && echo kept || echo gone)" "$(cat "$AT_CALLS")"
+}
+rm -f "$UMB"/container-*; : >"$UMB/container-agterm"; : >"$UMB/container-tmux"
+ok "8a: both prechecks fail -> the agterm pin is removed" "0|gone|2" "$(unpin_run "fail fail" --unpin agterm)"
+ok "8a: ...says what it removed"                         yes "$(has "$(cat "$UNPIN_LOG")" 'removed: .*container-agterm')"
+ok "8a: ...warns that an unreachable fleet is unseen"    yes "$(has "$(cat "$UNPIN_LOG")" 'cannot reach is also one shipyard cannot see')"
+ok "8a: ...and leaves the other backend's pin alone"     yes "$([ -f "$UMB/container-tmux" ] && echo yes || echo no)"
+: >"$UMB/container-agterm"
+ok "8b: first precheck fails, second answers -> refused, pin kept" "1|kept|2" "$(unpin_run "fail ok" --unpin agterm)"
+ok "8c: the backend answers -> refused at once, pin kept"          "1|kept|1" "$(unpin_run "ok ok" --unpin agterm)"
+ok "8c: ...pointing at the ordinary remedy"              yes "$(has "$(cat "$UNPIN_LOG")" 'SHIPYARD_BACKEND=agterm bash .*shipyard-report.sh')"
+rm -f "$UMB/container-agterm"
+ok "8d: no such pin -> nothing to do, rc 0, no probe"    "0|gone|" "$(unpin_run "fail fail" --unpin agterm)"
+# Usage errors remove nothing. The probe count is not asserted: a misplaced --unpin is refused by
+# the ordinary argument loop, after the library's own `auto` resolution has asked agtermctl once.
+: >"$UMB/container-agterm"
+ok "8e: an unknown backend name is a usage error"        "1|kept" "$(unpin_run "fail fail" --unpin screen | cut -d'|' -f1,2)"
+ok "8e: ...and so is a slot beside --unpin"              "1|kept" "$(unpin_run "fail fail" --unpin agterm 41 | cut -d'|' -f1,2)"
+ok "8e: ...and --unpin anywhere but first"               "1|kept" "$(unpin_run "fail fail" 41 --unpin agterm | cut -d'|' -f1,2)"
+unset -f agtermctl
+# 8f. The down-level end of section 7's status 4, through the real script: both pinned, tmux
+#     answers with an empty session, so down clears the tmux pin alone, says so, and exits 1.
+rm -f "$UMB"/container-*; : >"$UMB/container-agterm"; : >"$UMB/container-tmux"
+tmux() { echo "can't find session: t14down" >&2; return 1; }
+export -f tmux
+rc=0
+out=$( cd "$CR" && SHIPYARD_BACKEND=tmux SHIPYARD_SESSION=t14down bash "$SKILL_DIR/shipyard-down.sh" zz9 2>&1 ) || rc=$?
+unset -f tmux
+ok "8f: down under both pins, tmux empty -> rc 1"        1   "$rc"
+ok "8f: ...prints the status-4 notice"                   yes "$(has "$out" 'both backends were pinned; the tmux pin was stale and is cleared')"
+ok "8f: ...clears the tmux pin and keeps agterm's"       "container-agterm" "$(ls -1 "$UMB" | grep '^container-' | tr '\n' ' ' | sed 's/ $//')"
+rm -f "$UMB"/container-*
 
 if [ "$FAILURES" -eq 0 ]; then
   printf 't14-signal: %d checks, all passed\n' "$CHECKS"; exit 0
