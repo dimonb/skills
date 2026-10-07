@@ -42,6 +42,7 @@
 # shipyard-down-gate.sh carries the measurements behind all of it.
 #
 # Exit: 0 all requested slots are down, 1 at least one was refused or failed.
+# --unpin: 0 the pin was removed or there was none, 1 refused (the backend answered) or a usage error.
 set -uo pipefail
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # --unpin is read BEFORE the library is sourced, because the driver resolves and caches its backend

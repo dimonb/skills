@@ -381,3 +381,21 @@ unsupported setup, not by ordinary use. Each names what would make it a defect w
   *Promote when* someone lowers the stop's wait or the case's hold, or a mutation run by hand shows
   the mutant surviving on an idle box (no automated run applies it): then the hold ends on the stop
   giving up, counted without a fork per pass.
+- **KL-12 — a per-slot verb can refuse because of a different slot in another container.** The
+  `container` check scans every slot still in its worktree, so `down` or `tell` of slot A refuses
+  when slot B sits in another container; the refusal names B, so it is louder, not wrong.
+  `plugins/shipyard/skills/shipyard/shipyard-backend.sh:508`. Found by the review of #292.
+  *Promote when* a supervisor acting on such a refusal tears down or relaunches the wrong slot.
+- **KL-13 — the `container` check matches a terminal by name, not by handle.** Two repos launched
+  from one agterm workspace share a container, so the other repo's same-named `ship-<slot>` can
+  raise the refusal; the remedy warns about it, and matching on the recorded handle would remove it.
+  `plugins/shipyard/skills/shipyard/shipyard-backend.sh:532`. Found by the review of #292.
+  *Promote when* two repos sharing one workspace becomes a documented setup rather than an
+  incidental one.
+- **KL-14 — the `container` remedy arms are asserted by no test.** The report's `no_signal_block`
+  arm, the launch refusal, the admission gate, `shipyard-down.sh --list`'s `?container`, and the
+  agterm branch of `shipyard_container_remedy` are reached by no case; only the per-slot route
+  through `shipyard_absence_report` is (t14 6f).
+  `plugins/shipyard/skills/shipyard/shipyard-report.sh:233`, `shipyard-launch.sh:150`,
+  `shipyard-admission.sh:120`, `shipyard-down.sh:128` and `shipyard-backend.sh:547`. Found by the
+  review of #292. *Promote when* one of those arms prints the wrong remedy, or none.

@@ -246,7 +246,8 @@ no_signal_block() {  # <class> <why>
       echo "  of the backend IT resolved, so pin \`SHIPYARD_BACKEND=$PINNED_ELSEWHERE\` first and then tear"
       echo "  the slots down; a down run resolved on the other backend leaves this one in place."
       echo "- If \`$PINNED_ELSEWHERE\` cannot answer at all (uninstalled, its app gone for good), nothing can prove"
-      echo "  its fleet empty: \`bash $DIR/shipyard-down.sh --unpin $PINNED_ELSEWHERE\` removes the pin only after two failed prechecks." ;;
+      echo "  its fleet empty: \`bash $DIR/shipyard-down.sh --unpin $PINNED_ELSEWHERE\` removes the pin only after two failed prechecks."
+      echo "  It is an operator verb: a supervising agent asks the human before running it." ;;
     listed)
       # No backend remedy: the enumeration answered, so the socket is not what failed.
       echo "- A transient lookup failure is the likeliest cause, and the next tick usually goes through."
@@ -2243,13 +2244,15 @@ EOF
       # Re-running down under THIS backend cannot settle it while another backend is pinned: its
       # cleanup reads that pin as `elsewhere` every time (#132). Down's own status-4 notice, which
       # says which pin it kept, is in the captured output this block drops, so the pins are read
-      # again here and the advice names the other one instead.
+      # again here and the remedy for that pin is printed in place. In place, not by pointing at the
+      # NO SIGNAL block: that block prints only once nothing is in flight, so while another slot
+      # runs it is not on screen.
       if [ "$drc" != 0 ]; then
         reap_pe=$(shipyard_backend_pinned_elsewhere 2>/dev/null) || reap_pe=""
         if [ -n "$reap_pe" ]; then
           echo "  NOTE: it exited $drc AFTER removing the slot. This mailbox also holds the $reap_pe pin, so re-running"
           echo "  \`shipyard-down.sh\` under $(shipyard_backend) cannot settle the fleet-level cleanup: it reads that pin every time."
-          echo "  Follow the remedy in the NO SIGNAL block naming $reap_pe instead, which every tick prints while that pin is there."
+          shipyard_elsewhere_remedy | sed 's/^/  /'
         else
           echo "  NOTE: it exited $drc AFTER removing the slot — its fleet-level cleanup (container pin, parent watchers) could not be verified. Re-run \`bash $DIR/shipyard-down.sh $sl\` once the backend is healthy to settle it."
         fi

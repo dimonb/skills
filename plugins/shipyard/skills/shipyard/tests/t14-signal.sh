@@ -683,6 +683,13 @@ ok "7h: ...with the both-pinned order"                     yes "$(has "$out" 'so
 ok "7h: ...and not the looping pin-the-other"              no  "$(has "$out" 'Pin it for this shell')"
 ok "7h: ...and the third reason a pin survives step 2"     yes "$(has "$out" 'a launch record on <b> names another container')"
 ok "7h: ...and the way out when <b> cannot answer"         yes "$(has "$out" 'shipyard-down.sh --unpin <b>')"
+# 7i: the single-pin order — what launch, admission and the per-slot refusals print — names the
+# same way out, for the pinned backend by name, and says it is the human's call.
+rm -f "$BMB"/container-*; : >"$BMB/container-agterm"
+out=$( export SHIPYARD_BACKEND=tmux; . "$SKILL_DIR/shipyard-backend.sh" >/dev/null 2>&1
+       DRV_CONTAINER_PIN_DIR="$BMB"; shipyard_elsewhere_remedy )
+ok "7i: the single-pin remedy names --unpin for the pinned backend" yes "$(has "$out" 'shipyard-down.sh --unpin agterm')"
+ok "7i: ...as the human's call"                            yes "$(has "$out" 'an agent asks the human first')"
 rm -f "$BMB"/container-*
 
 # --------------------------------------------- 8. --unpin: the way out when the pinned backend is gone (#132)
@@ -693,7 +700,12 @@ rm -f "$BMB"/container-*
 # remove it.
 printf '\n── 8. down --unpin ──\n'
 AT_SCRIPT="$T14TMP/at-script"; AT_CALLS="$T14TMP/at-calls"; UNPIN_LOG="$T14TMP/unpin-out"
-export AT_SCRIPT AT_CALLS
+SLEEP_LOG="$T14TMP/sleep-calls"
+export AT_SCRIPT AT_CALLS SLEEP_LOG
+# The gap between the two reads is the rule's other half — without it one blip spans both — so
+# `sleep` is shadowed by a recorder: a missing or hardcoded gap reds 8a/8b rather than passing.
+sleep() { printf '%s\n' "$*" >>"$SLEEP_LOG"; }
+export -f sleep
 UMB=$(cd "$CR" && cd "$(git rev-parse --git-common-dir)" && pwd -P)/ship-escalations; mkdir -p "$UMB"
 agtermctl() {
   case "${1:-}" in
@@ -706,7 +718,7 @@ agtermctl() {
 export -f agtermctl
 unpin_run() { # <probe outcomes, space-separated> [args...] -> "<rc>|<agterm pin kept/gone>|<version calls>"; output in $UNPIN_LOG
   local plan="$1" rc=0; shift
-  printf '%s\n' $plan >"$AT_SCRIPT"; : >"$AT_CALLS"
+  printf '%s\n' $plan >"$AT_SCRIPT"; : >"$AT_CALLS"; : >"$SLEEP_LOG"
   ( cd "$CR" && SHIPYARD_MOTION_INTERVAL=0.01 bash "$SKILL_DIR/shipyard-down.sh" "$@" ) >"$UNPIN_LOG" 2>&1 || rc=$?
   printf '%s|%s|%s' "$rc" "$([ -f "$UMB/container-agterm" ] && echo kept || echo gone)" "$(cat "$AT_CALLS")"
 }
@@ -715,9 +727,13 @@ ok "8a: both prechecks fail -> the agterm pin is removed" "0|gone|2" "$(unpin_ru
 ok "8a: ...says what it removed"                         yes "$(has "$(cat "$UNPIN_LOG")" 'removed: .*container-agterm')"
 ok "8a: ...warns that an unreachable fleet is unseen"    yes "$(has "$(cat "$UNPIN_LOG")" 'cannot reach is also one shipyard cannot see')"
 ok "8a: ...and leaves the other backend's pin alone"     yes "$([ -f "$UMB/container-tmux" ] && echo yes || echo no)"
+ok "8a: ...after one SHIPYARD_MOTION_INTERVAL gap"       "0.01" "$(cat "$SLEEP_LOG")"
+ok "8a: ...and shows what the precheck said"             yes "$(has "$(cat "$UNPIN_LOG")" 'the precheck said: no agterm is answering')"
 : >"$UMB/container-agterm"
 ok "8b: first precheck fails, second answers -> refused, pin kept" "1|kept|2" "$(unpin_run "fail ok" --unpin agterm)"
+ok "8b: ...the second read came after the gap"           "0.01" "$(cat "$SLEEP_LOG")"
 ok "8c: the backend answers -> refused at once, pin kept"          "1|kept|1" "$(unpin_run "ok ok" --unpin agterm)"
+ok "8c: ...with no gap waited"                           "" "$(cat "$SLEEP_LOG")"
 ok "8c: ...pointing at the ordinary remedy"              yes "$(has "$(cat "$UNPIN_LOG")" 'SHIPYARD_BACKEND=agterm bash .*shipyard-report.sh')"
 rm -f "$UMB/container-agterm"
 ok "8d: no such pin -> nothing to do, rc 0, no probe"    "0|gone|" "$(unpin_run "fail fail" --unpin agterm)"
@@ -727,7 +743,18 @@ ok "8d: no such pin -> nothing to do, rc 0, no probe"    "0|gone|" "$(unpin_run 
 ok "8e: an unknown backend name is a usage error"        "1|kept" "$(unpin_run "fail fail" --unpin screen | cut -d'|' -f1,2)"
 ok "8e: ...and so is a slot beside --unpin"              "1|kept" "$(unpin_run "fail fail" --unpin agterm 41 | cut -d'|' -f1,2)"
 ok "8e: ...and --unpin anywhere but first"               "1|kept" "$(unpin_run "fail fail" 41 --unpin agterm | cut -d'|' -f1,2)"
-unset -f agtermctl
+# ...refused as a usage error, not by the ordinary teardown that a deleted arm would fall into.
+ok "8e: ...which says so, rather than tearing anything down" yes "$(has "$(cat "$UNPIN_LOG")" 'usage: shipyard-down.sh --unpin')"
+# 8g. tmux, whose precheck is only `command -v tmux`: installed (a function here) -> refused.
+: >"$UMB/container-tmux"
+tmux() { return 0; }
+export -f tmux
+rc=0
+( cd "$CR" && SHIPYARD_MOTION_INTERVAL=0.01 bash "$SKILL_DIR/shipyard-down.sh" --unpin tmux ) >"$UNPIN_LOG" 2>&1 || rc=$?
+unset -f tmux
+ok "8g: --unpin tmux with tmux installed -> refused (rc 1)" 1 "$rc"
+ok "8g: ...and the tmux pin is kept"                     yes "$([ -f "$UMB/container-tmux" ] && echo yes || echo no)"
+unset -f agtermctl sleep
 # 8f. The down-level end of section 7's status 4, through the real script: both pinned, tmux
 #     answers with an empty session, so down clears the tmux pin alone, says so, and exits 1.
 rm -f "$UMB"/container-*; : >"$UMB/container-agterm"; : >"$UMB/container-tmux"

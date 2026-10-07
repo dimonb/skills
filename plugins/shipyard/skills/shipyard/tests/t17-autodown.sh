@@ -687,19 +687,23 @@ DOWN_REMOVE=0; export DOWN_REMOVE; printf '0\n' >"$DOWN_RC_FILE"
 # --- B15b: the same, when the teardown leaves the OTHER backend's pin behind (#132) --------
 # Down's status-4 notice (both pinned; this backend's pin cleared, the other kept) is in the
 # output the report drops, and the generic NOTE told the operator to re-run down under this
-# backend — which meets the other pin and exits 2 every time. The NOTE must name that pin.
+# backend — which meets the other pin and exits 2 every time. The NOTE must name that pin and
+# carry its remedy itself: slot 79 is named and live, so nothing-in-flight never holds and the
+# NO SIGNAL block (which prints only then) is not on screen to point at.
 b_reset
 b_slot 78 878 ready-to-merge
 mkdir -p "$B_ROOT/.claude/worktrees/ship-78"
 printf '1 ship-79\n' >"$B_WINS"; printf 'ship-79\n' >"$B_ENUM"
 printf '878\tMERGED\n' >"$B_STATES"
-b_tick -- 78 >/dev/null
+b_tick -- 78 79 >/dev/null
 printf '1\n' >"$DOWN_RC_FILE"; DOWN_REMOVE=1; DOWN_PIN_OTHER=1; export DOWN_REMOVE DOWN_PIN_OTHER
-b15b=$(b_tick -- 78)
+b15b=$(b_tick -- 78 79)
 ok "B15b: a removed-then-warned teardown under a second pin is still torn down" 1 \
    "$(printf '%s' "$b15b" | grep -c 'TORN DOWN — merged, finished')"
 ok "B15b: ...its NOTE names the other backend's pin"  1 "$(printf '%s' "$b15b" | grep -c 'also holds the agterm pin')"
 ok "B15b: ...and does not advise re-running down here" 0 "$(printf '%s' "$b15b" | grep -c 'once the backend is healthy to settle it')"
+ok "B15b: ...no NO SIGNAL block is on screen to point at" 0 "$(printf '%s' "$b15b" | grep -c '🛑 NO SIGNAL')"
+ok "B15b: ...so the NOTE carries the remedy itself"   1 "$(printf '%s' "$b15b" | grep -c 'Launch on the fleet.s backend: SHIPYARD_BACKEND=agterm')"
 rm -f "$B_GIT/ship-escalations/container-agterm"
 DOWN_REMOVE=0; DOWN_PIN_OTHER=0; export DOWN_REMOVE DOWN_PIN_OTHER; printf '0\n' >"$DOWN_RC_FILE"
 

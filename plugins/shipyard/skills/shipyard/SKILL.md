@@ -252,9 +252,11 @@ pin whose fleet has ended: confirm with `shipyard-report.sh` under the pinned ba
 lists no `ship-*` terminal and prints no `NO SIGNAL` block (`shipyard-down.sh --list` shows
 worktrees, not terminals), then tear down under that backend, which clears the pin once it has
 proven the fleet empty. A pin that survives the teardown was **kept** — the fleet could not be
-verified, or a slot remains — and is never removed by hand; the one exception the refusal names
-is a teardown whose only warning was a continuity watcher it could not stop. Never remove a pin
-while its fleet may be live. A dry run writes no pin.
+verified, or a slot remains — and is never removed by hand. The refusal names two ways past that:
+removing it by hand after a teardown whose only warning was a continuity watcher it could not stop,
+and `shipyard-down.sh --unpin` when the pinned backend cannot answer at all (below), which an agent
+runs only on the human's go-ahead. Never remove a pin while its fleet may be live. A dry run writes
+no pin.
 
 **Both backends pinned is refused too** (#132): one of the two is stale and nothing on disk says
 which, so the report prints `NO SIGNAL` under either backend and the order above cannot complete.
@@ -1432,6 +1434,7 @@ fails towards leaving a worktree alone, and the manual command below is unchange
 bash <SKILL>/shipyard-down.sh --list        # what exists and whether it is safe
 bash <SKILL>/shipyard-down.sh <slot>        # close the terminal, remove the worktree, prune
 bash <SKILL>/shipyard-down.sh <slot> --force
+bash <SKILL>/shipyard-down.sh --unpin <agterm|tmux>   # only on the human's go-ahead; see Step 1
 ```
 
 It refuses a slot with uncommitted changes, one whose content it cannot prove is already in
@@ -1562,24 +1565,3 @@ collide with it.
   named after `ship`, not after this skill, and that is deliberate: they are the protocol
   between a parent watcher and a `/ship` child, so a rename here must not touch them. A
   live run's mailbox is the one place where renaming would orphan work already in flight.
-
-## Known limits
-
-Residual review findings that are not ordinary-use failures, kept where an agent using this skill
-reads them. Each names what would make it fileable.
-
-* **KL-1** — the `container` check scans every slot still in its worktree, so a per-slot verb
-  (`down`, `tell` of slot A) can refuse because a *different* slot B sits in another container; the
-  refusal names B, so it is louder, not wrong. `shipyard-backend.sh:508`. Found in the #292 review.
-  Promote when a supervisor acting on such a refusal tears down or relaunches the wrong slot.
-* **KL-2** — the `container` check matches by terminal name, so two repos launched from one agterm
-  workspace share a container and the other repo's same-named `ship-<slot>` can raise the refusal;
-  the remedy warns about it, and matching on the recorded handle would remove it.
-  `shipyard-backend.sh:532`. Found in the #292 review. Promote when two repos sharing a workspace
-  is a supported, documented setup rather than an incidental one.
-* **KL-3** — the `container` remedy arms are asserted by no test: the report's `no_signal_block`
-  (`shipyard-report.sh:233`), the launch refusal (`shipyard-launch.sh:150`), the admission gate
-  (`shipyard-admission.sh:120`), `shipyard-down.sh --list`'s `?container`
-  (`shipyard-down.sh:127`), and the agterm branch of `shipyard_container_remedy`
-  (`shipyard-backend.sh:547`). Found in the #292 review. Promote when one of those arms prints the
-  wrong remedy or none.

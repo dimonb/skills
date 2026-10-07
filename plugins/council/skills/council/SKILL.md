@@ -1406,6 +1406,11 @@ an ordinary-use failure, and so fileable.
   the review of #257. Promote on a CI flake in t9g's "vouched for" rows on the Linux runner, or a
   report of `decide` saying "no live keeper" over a live one on Linux. The CI runner is Linux and
   runs those rows on every pull request, so it is the standing measurement.
+* **KL-3** — `relaunch` suppresses its "If pinning it fails" line when both backends are pinned,
+  and no test reaches that suppression: t24's cases set a single pin, and t15 asserts only that
+  `ct_both_pinned` delegates to the driver. Dropping the `!` prints advice that only fits "pin the
+  other" under the both-pinned remedy, with every suite green. `lib/up.sh:1485`. Found by the review
+  of #292. Promote when a room pinned on both backends is reported to have been given that line.
 
 ## Files
 
