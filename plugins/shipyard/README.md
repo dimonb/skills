@@ -399,3 +399,12 @@ unsupported setup, not by ordinary use. Each names what would make it a defect w
   `plugins/shipyard/skills/shipyard/shipyard-report.sh:233`, `shipyard-launch.sh:150`,
   `shipyard-admission.sh:120`, `shipyard-down.sh:128` and `shipyard-backend.sh:547`. Found by the
   review of #292. *Promote when* one of those arms prints the wrong remedy, or none.
+- **KL-15 — the both-pinned remedy re-reads the pins after its caller has.** A caller that has just
+  found both pins present calls `shipyard_elsewhere_remedy`, which reads them again; a mailbox write
+  in the milliseconds between can switch it to the single-pin branch's launch wording, or to its
+  one-line return with no clearing order. The caller's own header line still prints, so the operator
+  is still told; only the remedy under it is thinner.
+  `plugins/shipyard/skills/shipyard/shipyard-backend.sh:578`. Found by the review of #347.
+  *Promote when* an operator reports a refusal or NOTE whose remedy was a single line, or the pins
+  start being rewritten often enough for that window to matter: then the caller passes the pin state
+  it read into the remedy.

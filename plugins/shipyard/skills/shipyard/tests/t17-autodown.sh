@@ -703,8 +703,27 @@ ok "B15b: a removed-then-warned teardown under a second pin is still torn down" 
 ok "B15b: ...its NOTE names the other backend's pin"  1 "$(printf '%s' "$b15b" | grep -c 'also holds the agterm pin')"
 ok "B15b: ...and does not advise re-running down here" 0 "$(printf '%s' "$b15b" | grep -c 'once the backend is healthy to settle it')"
 ok "B15b: ...no NO SIGNAL block is on screen to point at" 0 "$(printf '%s' "$b15b" | grep -c '🛑 NO SIGNAL')"
-ok "B15b: ...so the NOTE carries the remedy itself"   1 "$(printf '%s' "$b15b" | grep -c 'Launch on the fleet.s backend: SHIPYARD_BACKEND=agterm')"
+ok "B15b: ...so the NOTE carries the remedy itself"   1 "$(printf '%s' "$b15b" | grep -c 'tear it down under SHIPYARD_BACKEND=agterm')"
+ok "B15b: ...naming --unpin for a backend that is gone" 1 "$(printf '%s' "$b15b" | grep -c 'shipyard-down.sh --unpin agterm')"
+ok "B15b: ...in teardown words, not a launch refusal's" 0 "$(printf '%s' "$b15b" | grep -c 'Launch on the fleet')"
 rm -f "$B_GIT/ship-escalations/container-agterm"
+
+# --- B15c: the same with this backend's pin already there, so the teardown leaves BOTH -------
+# The commoner shape: slots in flight on tmux keep its pin, and the other pin appears beside it.
+# Then one pin is stale and nothing says which, so the NOTE prints the both-pinned order.
+b_reset
+b_slot 77 877 ready-to-merge
+mkdir -p "$B_ROOT/.claude/worktrees/ship-77"
+: >"$B_GIT/ship-escalations/container-tmux"
+printf '877\tMERGED\n' >"$B_STATES"
+DOWN_REMOVE=0; DOWN_PIN_OTHER=0; export DOWN_REMOVE DOWN_PIN_OTHER; printf '0\n' >"$DOWN_RC_FILE"
+b_tick -- 77 79 >/dev/null
+printf '1\n' >"$DOWN_RC_FILE"; DOWN_REMOVE=1; DOWN_PIN_OTHER=1; export DOWN_REMOVE DOWN_PIN_OTHER
+b15c=$(b_tick -- 77 79)
+ok "B15c: both pins after the teardown -> torn down"   1 "$(printf '%s' "$b15c" | grep -c 'TORN DOWN — merged, finished')"
+ok "B15c: ...and the NOTE prints the both-pinned order" 1 "$(printf '%s' "$b15c" | grep -c 'Both backends are pinned in this mailbox')"
+ok "B15c: ...with its way out for a backend that is gone" 1 "$(printf '%s' "$b15c" | grep -c 'shipyard-down.sh --unpin <b>')"
+rm -f "$B_GIT/ship-escalations/container-agterm" "$B_GIT/ship-escalations/container-tmux"
 DOWN_REMOVE=0; DOWN_PIN_OTHER=0; export DOWN_REMOVE DOWN_PIN_OTHER; printf '0\n' >"$DOWN_RC_FILE"
 
 # --- B16: the counter lookup must not read another slot's row ------------------------------

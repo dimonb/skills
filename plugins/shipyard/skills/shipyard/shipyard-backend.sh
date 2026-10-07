@@ -556,8 +556,9 @@ shipyard_container_remedy() {
 }
 
 # shipyard_elsewhere_remedy — the operator's next move after an `elsewhere` refusal, on stdout, one
-# indented line each, so the words live here once. Every launch refusal prints it; the report and
-# the per-slot refusal print only its both-pinned branch, having single-pin words of their own.
+# indented line each, so the words live here once. Every launch refusal prints it; the report's NO
+# SIGNAL block, its autodown NOTE and the per-slot refusal print only its both-pinned branch, having
+# single-pin words of their own (this branch's first lines are about a launch).
 #
 # ONE MAILBOX RUNS ONE BACKEND AT A TIME. Its pins cannot tell two live fleets from one fleet and a
 # failed probe, so a launch is refused whether the other backend came from `auto` or was asked for
@@ -590,7 +591,8 @@ shipyard_elsewhere_remedy() {
     echo "       <b> listed a slot, could not answer, or a launch record on <b> names another container that still"
     echo "       holds (or cannot be asked about) its slot. Do not remove it by hand — go back to step 1."
     echo "    If <b> cannot answer at all (uninstalled, its app gone for good), steps 1 and 2 cannot run:"
-    echo "    bash $d/shipyard-down.sh --unpin <b> removes its pin only after two failed prechecks — an operator verb: an agent asks the human first."
+    echo "    bash $d/shipyard-down.sh --unpin <b> removes its pin only after two failed prechecks."
+    echo "    It is an operator verb: an agent asks the human first."
     return 0
   else
     case "${SHIPYARD_BACKEND:-auto}" in
@@ -609,7 +611,8 @@ shipyard_elsewhere_remedy() {
   echo "       and not the second). Do not remove it — go back to step 1. Remove $mb/container-$pin by hand only when"
   echo "       step 1 was empty and step 2's one warning was that it could not stop a continuity watcher."
   echo "  If $pin cannot answer at all (uninstalled, its app gone for good), steps 1 and 2 cannot run:"
-  echo "    bash $d/shipyard-down.sh --unpin $pin removes its pin only after two failed prechecks — an operator verb: an agent asks the human first."
+  echo "    bash $d/shipyard-down.sh --unpin $pin removes its pin only after two failed prechecks."
+  echo "    It is an operator verb: an agent asks the human first."
 }
 
 # shipyard_unpin_unreachable — `shipyard-down.sh --unpin <backend>`: remove the resolved backend's

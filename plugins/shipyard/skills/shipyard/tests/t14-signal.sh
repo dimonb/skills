@@ -754,6 +754,7 @@ rc=0
 unset -f tmux
 ok "8g: --unpin tmux with tmux installed -> refused (rc 1)" 1 "$rc"
 ok "8g: ...and the tmux pin is kept"                     yes "$([ -f "$UMB/container-tmux" ] && echo yes || echo no)"
+ok "8g: ...by its precheck, not a usage error"           yes "$(has "$(cat "$UNPIN_LOG")" 'refused: the tmux backend answered its precheck')"
 unset -f agtermctl sleep
 # 8f. The down-level end of section 7's status 4, through the real script: both pinned, tmux
 #     answers with an empty session, so down clears the tmux pin alone, says so, and exits 1.

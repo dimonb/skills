@@ -2252,7 +2252,16 @@ EOF
         if [ -n "$reap_pe" ]; then
           echo "  NOTE: it exited $drc AFTER removing the slot. This mailbox also holds the $reap_pe pin, so re-running"
           echo "  \`shipyard-down.sh\` under $(shipyard_backend) cannot settle the fleet-level cleanup: it reads that pin every time."
-          shipyard_elsewhere_remedy | sed 's/^/  /'
+          if shipyard_both_pinned; then
+            shipyard_elsewhere_remedy | sed 's/^/  /'
+          else
+            # Not the shared remedy's single-pin branch: its first lines speak to a launch.
+            echo "  Once that fleet has ended, tear it down under SHIPYARD_BACKEND=$reap_pe, which clears that pin"
+            echo "  (\`shipyard-down.sh <slot> ...\`; with no worktree left, any one slot name runs the same check)."
+            echo "  If $reap_pe cannot answer at all (uninstalled, its app gone for good):"
+            echo "    bash $DIR/shipyard-down.sh --unpin $reap_pe removes its pin only after two failed prechecks."
+            echo "    It is an operator verb: a supervising agent asks the human before running it."
+          fi
         else
           echo "  NOTE: it exited $drc AFTER removing the slot — its fleet-level cleanup (container pin, parent watchers) could not be verified. Re-run \`bash $DIR/shipyard-down.sh $sl\` once the backend is healthy to settle it."
         fi
