@@ -706,6 +706,8 @@ ok "B15b: ...no NO SIGNAL block is on screen to point at" 0 "$(printf '%s' "$b15
 ok "B15b: ...so the NOTE carries the remedy itself"   1 "$(printf '%s' "$b15b" | grep -c 'tear it down under SHIPYARD_BACKEND=agterm')"
 ok "B15b: ...naming --unpin for a backend that is gone" 1 "$(printf '%s' "$b15b" | grep -c 'shipyard-down.sh --unpin agterm')"
 ok "B15b: ...in teardown words, not a launch refusal's" 0 "$(printf '%s' "$b15b" | grep -c 'Launch on the fleet')"
+ok "B15b: ...after confirming that fleet has ended"   1 "$(printf '%s' "$b15b" | grep -c 'SHIPYARD_BACKEND=agterm bash .*shipyard-report.sh. lists no ship-')"
+ok "B15b: ...with --unpin as the human's call"         1 "$(printf '%s' "$b15b" | grep -c 'asks the human before running it')"
 rm -f "$B_GIT/ship-escalations/container-agterm"
 
 # --- B15c: the same with this backend's pin already there, so the teardown leaves BOTH -------

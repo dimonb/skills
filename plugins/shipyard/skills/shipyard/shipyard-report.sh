@@ -2256,8 +2256,10 @@ EOF
             shipyard_elsewhere_remedy | sed 's/^/  /'
           else
             # Not the shared remedy's single-pin branch: its first lines speak to a launch.
-            echo "  Once that fleet has ended, tear it down under SHIPYARD_BACKEND=$reap_pe, which clears that pin"
+            echo "  Once that fleet has ended — \`SHIPYARD_BACKEND=$reap_pe bash $DIR/shipyard-report.sh\` lists no ship-* terminal"
+            echo "  and prints no NO SIGNAL block — tear it down under SHIPYARD_BACKEND=$reap_pe, which clears that pin"
             echo "  (\`shipyard-down.sh <slot> ...\`; with no worktree left, any one slot name runs the same check)."
+            echo "  A pin that survives that teardown was kept: never remove it by hand."
             echo "  If $reap_pe cannot answer at all (uninstalled, its app gone for good):"
             echo "    bash $DIR/shipyard-down.sh --unpin $reap_pe removes its pin only after two failed prechecks."
             echo "    It is an operator verb: a supervising agent asks the human before running it."

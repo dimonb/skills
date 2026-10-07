@@ -558,7 +558,7 @@ shipyard_container_remedy() {
 # shipyard_elsewhere_remedy — the operator's next move after an `elsewhere` refusal, on stdout, one
 # indented line each, so the words live here once. Every launch refusal prints it; the report's NO
 # SIGNAL block, its autodown NOTE and the per-slot refusal print only its both-pinned branch, having
-# single-pin words of their own (this branch's first lines are about a launch).
+# single-pin words of their own (the single-pin branch's first lines are about a launch).
 #
 # ONE MAILBOX RUNS ONE BACKEND AT A TIME. Its pins cannot tell two live fleets from one fleet and a
 # failed probe, so a launch is refused whether the other backend came from `auto` or was asked for
