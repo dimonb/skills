@@ -5,8 +5,9 @@
 # into. Two backends provide that surface:
 #
 #   agterm (DEFAULT) — a native macOS terminal driven over a control socket by
-#                      `agtermctl`. Children are SESSIONS named `ship-<slot>` inside a
-#                      WORKSPACE named `<repo>-ai`.
+#                      `agtermctl`. Children are SESSIONS named `ship-<slot>`, each a
+#                      COMPANION of the session the parent watcher runs in, inside that
+#                      session's own workspace.
 #   tmux             — the original backend. Children are WINDOWS named `ship-<slot>`
 #                      inside a session named `<repo>`.
 #
@@ -27,9 +28,9 @@
 #
 # The container name is the ONE place the two backends differ, and the ONE place shipyard differs
 # from council — so it is expressed entirely through the driver's caller-set vars (mapped below):
-#   agterm: workspace `<parent's workspace>-ai`, falling back to `<repo>-ai`
-#           (the `-ai` suffix keeps agent sessions in their own workspace, away from the
-#            human's own tabs)
+#   agterm: the parent watcher's own workspace, falling back to `<repo>`; each child is a
+#           companion of the watcher's session there (`DRV_COMPANIONS`), so the fleet nests
+#           under it in the sidebar instead of filling a workspace of its own
 #   tmux:   session   `<repo>`      (unchanged, so ship windows coexist with your own)
 # The agterm name is derived ONCE and then PINNED in the shipyard mailbox, because it depends on
 # where the caller was sitting. Re-deriving it per call would mean a report run from a different
@@ -54,14 +55,16 @@
 # SHIPYARD_BACKEND is process-stable, so this single mapping reproduces shipyard_backend's old
 # resolve-and-cache-on-first-call exactly, including the `invalid` a bad value used to yield.
 #   DRV_BACKEND          <- SHIPYARD_BACKEND (default auto).
-#   DRV_CONTAINER_SUFFIX  "-ai": shipyard keeps its agent sessions in a `<workspace>-ai` container.
+#   DRV_COMPANIONS       1: on agterm each child is a companion of the watcher's session, in the
+#                        watcher's own workspace — so no DRV_CONTAINER_SUFFIX is set. (Until #349 it
+#                        was "-ai", a workspace of their own; a fleet pinned to one keeps it.)
 # DRV_REPO_KEY, DRV_CONTAINER_OVERRIDE are set just below (they need the sourced driver's resolved
 # backend and shipyard's own repo-key rule); DRV_CONTAINER_PIN_DIR is set at the end of
 # shipyard-lib.sh, once shipyard_mailbox is defined. None of these are exported: the old code put
 # nothing of the kind into a launched child's or the tmux server's environment, and neither does
 # this.
 DRV_BACKEND="${SHIPYARD_BACKEND:-auto}"
-DRV_CONTAINER_SUFFIX="-ai"
+DRV_COMPANIONS=1
 # shellcheck source=agent-driver.sh
 . "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/agent-driver.sh"
 
@@ -169,10 +172,10 @@ shipyard_backend_check() {
 # that one and leave the other alone. A pin whose fleet ended some other way does outlive it — and
 # that is fail-CLOSED (a refusal that names itself and says what to run), which is the direction to
 # be wrong in.
-shipyard_container_unpin() {
-  local f; f=$(_drv_pin_file 2>/dev/null) && rm -f "$f" 2>/dev/null
-  return 0
-}
+#
+# The driver's `drv_unpin` is that same rule, plus the agterm parent pin, which belongs to the
+# fleet the container pin does and goes with it.
+shipyard_container_unpin() { drv_unpin; }
 
 # What kind of thing that container is, for messages. No driver twin.
 shipyard_container_kind() {
@@ -661,6 +664,10 @@ shipyard_unpin_unreachable() {
     return 1
   fi
   rm -f "$f" 2>/dev/null || { echo "error: could not remove $f" >&2; return 1; }
+  # The agterm parent pin belongs to the same fleet (#349); left behind, it would nest the next
+  # fleet under the old watcher's session whenever that session is still open in the container.
+  [ "$be" != agterm ] || { f=$(_drv_parent_pin_file 2>/dev/null) && rm -f "$f" 2>/dev/null; } || true
+  f=$(_drv_pin_file 2>/dev/null)
   echo "removed: $f — the $be backend failed its precheck on two reads ${iv}s apart." >&2
   [ -z "$why" ] || printf '%s\n' "$why" | sed 's/^error: /         the precheck said: /; s/^       /         /' >&2
   echo "warning: a fleet on a backend this shell cannot reach is also one shipyard cannot see. If $be may" >&2
@@ -763,9 +770,15 @@ shipyard_note() {
   agtermctl session status "$@" --target "$t" >/dev/null 2>&1 || true
 }
 
-# shipyard_container_prune — drop the container once it holds no ship terminals, so a repo
-# that has finished all its work stops showing an empty `<repo>-ai` workspace. Only
-# ever removes an EMPTY one, so a human tab parked in there keeps it alive. No driver twin.
+# shipyard_container_prune — drop a LEGACY `-ai` container once it holds no session at all, so a
+# fleet from before companions does not leave an empty workspace behind. Only ever removes an
+# EMPTY one, so a human tab parked in there keeps it alive. No driver twin.
+#
+# ONLY A LEGACY `-ai` WORKSPACE (#349). Children are companions in the watcher's OWN workspace now,
+# so the container is the human's, and emptying it of ship terminals is no reason to delete it. A
+# fleet launched before that change stays pinned to the `-ai` workspace it was given, and that one
+# is still dropped once empty. The test is the name, so a human workspace that happens to end in
+# `-ai` is dropped too — but only when it holds no session at all, the rule above.
 #
 # The emptiness is read through `drv_sessions`, whose shape assertion turns a tree it does not
 # recognise into "unanswered" (#139(4)). A raw count here used to read a workspace whose `.sessions`
@@ -776,6 +789,7 @@ shipyard_container_prune() {
   case "$(shipyard_backend)" in
     agterm)
       local sessions ws
+      case "$(shipyard_container)" in *-ai) ;; *) return 0 ;; esac
       sessions=$(drv_sessions "$(shipyard_container)" 2>/dev/null && printf .) || return 0
       [ "$sessions" = . ] || return 0
       ws=$(agtermctl tree --json 2>/dev/null | jq -r --arg ws "$(shipyard_container)" \

@@ -207,6 +207,19 @@ ok "4b: ...and NOT offering the pin's backend"     no   "$(has "$out" 'COUNCIL_B
 ok "4b: ...and what it means if pinning fails"     yes  "$(has "$out" 'really gone')"
 if [ -n "$LRF_SAVED" ]; then cp "$LRF_SAVED" "$LRF"; else rm -f "$LRF"; fi
 
+# ====================================================== 5. A TERMINAL THE DRIVER WOULD NOT CLOSE (#349)
+# Exit 3: the seat's terminal has agterm companions, which closing it would close too; exit 4: the
+# driver could not tell. Either way the seat is still running, so a launch now would be a second
+# agent under its name.
+printf '\n── a terminal the driver refused to close ──\n'
+for krc in 3 4; do
+  reset; : >"$ROOM/state/container-tmux"; : >"$SESSIONS"; printf '0\n' >"$SESSIONS_RC"
+  out=$(FAKE_KILL_RC=$krc run_relaunch claude)
+  ok "5/$krc: relaunch over a refused close fails"   1    "$(rc_of "$out")"
+  ok "5/$krc: ...launching nothing"                  no   "$(lines "$LAUNCHED")"
+  ok "5/$krc: ...saying the seat is still running"   yes  "$(has "$out" 'still running and was not closed')"
+done
+
 printf '\nt24-relaunch-absence: %s checks, %s\n' "$CHECKS" \
   "$([ "$FAILURES" = 0 ] && echo 'all passed' || echo "$FAILURES FAILED")"
 [ "$FAILURES" = 0 ]

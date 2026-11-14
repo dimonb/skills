@@ -171,9 +171,11 @@ ok "tmux: an absent session is honestly empty" "|0" "$r"
 # count sessions with a raw jq read, so a workspace whose `.sessions` was not an array counted 0 and
 # was deleted with every terminal in it. Each fake answers `tree` and records a `workspace delete`.
 PRUNE_LOG="$T14TMP/prune-log"; export PRUNE_LOG
-prune_deletes() { # <tree-json> -> yes|no
+# Since #349 only a legacy `-ai` workspace is ever pruned, so the shape cases name one; the last
+# case is the user's own workspace, which children are companions in now and which is never deleted.
+prune_deletes() { # <tree-json> [<workspace>] -> yes|no
   : >"$PRUNE_LOG"
-  ( export SHIPYARD_BACKEND=agterm SHIPYARD_WORKSPACE=t14ws SHIPYARD_SESSION=t14ex
+  ( export SHIPYARD_BACKEND=agterm SHIPYARD_WORKSPACE="${2:-t14ws-ai}" SHIPYARD_SESSION=t14ex
     . "$SKILL_DIR/shipyard-backend.sh" >/dev/null 2>&1
     PRUNE_TREE="$1"
     agtermctl() { case "$1 ${2:-}" in
@@ -183,12 +185,14 @@ prune_deletes() { # <tree-json> -> yes|no
     shipyard_container_prune ) >/dev/null 2>&1
   [ -s "$PRUNE_LOG" ] && printf yes || printf no
 }
-PT_EMPTY='{"ok":true,"result":{"tree":{"workspaces":[{"id":"w1","name":"t14ws","sessions":[]}]}}}'
-PT_BADSHAPE='{"ok":true,"result":{"tree":{"workspaces":[{"id":"w1","name":"t14ws","sessions":"oops"}]}}}'
-PT_UNNAMED='{"ok":true,"result":{"tree":{"workspaces":[{"id":"w1","name":"t14ws","sessions":[{"id":"a","name":""}]}]}}}'
+PT_EMPTY='{"ok":true,"result":{"tree":{"workspaces":[{"id":"w1","name":"t14ws-ai","sessions":[]}]}}}'
+PT_BADSHAPE='{"ok":true,"result":{"tree":{"workspaces":[{"id":"w1","name":"t14ws-ai","sessions":"oops"}]}}}'
+PT_UNNAMED='{"ok":true,"result":{"tree":{"workspaces":[{"id":"w1","name":"t14ws-ai","sessions":[{"id":"a","name":""}]}]}}}'
+PT_OWN='{"ok":true,"result":{"tree":{"workspaces":[{"id":"w1","name":"t14ws","sessions":[]}]}}}'
 ok "prune: a shaped, empty workspace is deleted"                yes "$(prune_deletes "$PT_EMPTY")"
 ok "prune: a workspace whose sessions are not a list is kept"   no  "$(prune_deletes "$PT_BADSHAPE")"
 ok "prune: one session with an empty name still keeps it"       no  "$(prune_deletes "$PT_UNNAMED")"
+ok "prune: a workspace without the legacy -ai suffix is kept"    no  "$(prune_deletes "$PT_OWN" t14ws)"
 
 # --------------------------------------------- 3./4. THE REPORT, EXECUTED
 # The rig is t13-wait.sh's: exported shell functions shadow `git`, `tmux` and `gh`, which works

@@ -28,19 +28,30 @@
 #   DRV_BACKEND            agterm|tmux|auto (default auto). A caller maps its own backend
 #                          variable onto this.
 #   DRV_CONTAINER_OVERRIDE an explicit container name; wins over everything below.
-#   DRV_CONTAINER_PIN_DIR  directory holding the `container-<backend>` pin file. Set = the name
-#                          is pinned at first launch and every later call agrees with it; unset
-#                          = no pinning (each call derives afresh).
+#   DRV_CONTAINER_PIN_DIR  directory holding the `container-<backend>` pin file (and, with
+#                          DRV_COMPANIONS, the `parent-agterm` pin). Set = the name is pinned at
+#                          first launch and every later call agrees with it; unset = no pinning
+#                          (each call derives afresh).
 #   DRV_CONTAINER_SUFFIX   suffix for the agterm container (default empty). A caller that keeps
-#                          its agent sessions in their own workspace sets this (e.g. "-ai"); the
-#                          suffix is never stacked, so a name already ending in it is left alone.
+#                          its agent sessions in their own workspace would set this (both did, as
+#                          "-ai", until #349 moved them to companions); the suffix is never
+#                          stacked, so a name already ending in it is left alone.
 #   DRV_REPO_KEY           the repo-derived container stem (default: the basename of the git
 #                          top-level, or of $PWD outside a repo). A caller that sanitises the
 #                          stem (say ":" -> "_") or requires a repo injects its own value here.
+#   DRV_COMPANIONS         agterm only; set non-empty = launch each session as a COMPANION of a
+#                          parent session (`session new --parent`) instead of as a top-level one.
+#                          The container is still a workspace name — a companion sits flat in its
+#                          workspace's `sessions[]` with a `parent` field, so every lookup by
+#                          workspace + name is unchanged. A caller that opts in normally drops its
+#                          suffix too, so the container is its own workspace. See `_drv_parent`.
+#   DRV_SPAWNED            set BY the driver, never by a caller: every agterm session it launches
+#                          runs with DRV_SPAWNED=1, so a launch made from inside one knows it is a
+#                          child and does not offer its own session as a parent (`_drv_parent`).
 
 # A version marker, bumped when the body changes, so sync + the drift gate stay easy to prove
 # end to end.
-_DRV_VERSION=2
+_DRV_VERSION=3
 
 # --- backend selection ---------------------------------------------------------
 # agterm when its control socket answers, else tmux; `none` when neither is reachable and
@@ -193,10 +204,99 @@ drv_container_pin() {
 # Write <name> as the resolved backend's pin, by rename (above). Silent; a write that cannot happen
 # leaves no pin, which the next launch retries.
 _drv_pin_write() {
-  local v="$1" f tmp
-  if f=$(_drv_pin_file 2>/dev/null) && [ ! -d "$f" ] \
-    && tmp=$(mktemp "${f%/*}/.drv-pin.XXXXXXXX" 2>/dev/null); then
+  local f
+  f=$(_drv_pin_file 2>/dev/null) && _drv_pin_write_to "$f" "$1"
+  return 0
+}
+
+# Write <value> into pin file <file> by rename — the one write both pins use, for the FIFO reason
+# stated at `drv_container_pin`.
+_drv_pin_write_to() {
+  local f="$1" v="$2" tmp
+  if [ ! -d "$f" ] && tmp=$(mktemp "${f%/*}/.drv-pin.XXXXXXXX" 2>/dev/null); then
     { printf '%s\n' "$v" >"$tmp" && mv -f "$tmp" "$f"; } 2>/dev/null || rm -f "$tmp" 2>/dev/null
+  fi
+  return 0
+}
+
+# --- companions (agterm) -------------------------------------------------------
+# agterm can nest a session under another one in the sidebar: `session new --parent <id>`. Measured
+# on a live agterm (0.41 server, 0.42 client): the response is `{"result":{"id":…,"parent":…}}`;
+# in `tree --json` the companion sits FLAT in the parent's workspace's `sessions[]` with a `parent`
+# field; a companion given as `--parent` means its parent (nesting is one level deep); and
+# `session close` on a parent closes every companion with it. That last fact is why `drv_kill`
+# refuses to close a session that has companions (below).
+
+# Where the parent pin lives. agterm only — tmux has no companions — so the name carries no
+# backend switch. Empty + exit 1 with no pin directory.
+_drv_parent_pin_file() {
+  [ -n "${DRV_CONTAINER_PIN_DIR:-}" ] || return 1
+  printf '%s/parent-agterm' "$DRV_CONTAINER_PIN_DIR"
+}
+
+# _drv_parent <container> — the session id a new session in <container> should be a companion of,
+# or exit 1 for "launch it top-level". Off unless the caller set DRV_COMPANIONS. Candidates, first
+# hit wins:
+#   1. the PINNED parent — so every child of one fleet or room nests under one session even when a
+#      later launch runs from somewhere else (the reason the container is pinned, applied here);
+#   2. the caller's own session, AGTERM_SESSION_ID — but when the caller runs inside a session
+#      this driver launched (DRV_SPAWNED), only if that session is itself a COMPANION, so the new
+#      one goes under its parent, beside it. A child is a top-level session whenever it was launched
+#      without a parent: a fleet pinned to a pre-companion `-ai` workspace, a SHIPYARD_WORKSPACE
+#      override, a watcher sitting in another workspace. A sibling launched from such a child would
+#      otherwise nest under it, pin it as the fleet's parent, and make the child's own teardown
+#      refuse (`drv_kill`, below). Measured by review before this guard existed. With the guard, a
+#      top-level child's launch nests under the pinned parent when there is one, and is top-level
+#      otherwise; a companion child's — a ship child running `council up` — nests beside it.
+# A candidate counts only while it, AND its effective parent, are live sessions IN <container>:
+# `--parent` puts the new session in the PARENT's workspace, and one outside the container would be
+# a child no lookup by container can find. What is printed is the candidate's EFFECTIVE parent (its
+# own `parent` when it is a companion), because that is where agterm nests the new session and what
+# the pin should say.
+#
+# WHAT THE PIN CAN BE MADE TO DO. The pin directory may be writable by the supervised agents
+# (shipyard's is the shared mailbox), so a child can name another parent. It cannot move a session
+# out of the container (rule above), and the parent decides layout, never whether anything is
+# reported. The one consequence beyond layout — closing that parent would take the new children
+# with it — is what `drv_kill`'s companion refusal stops for this driver's own closes. Not stopped:
+# a human closing that session by hand, and any close made outside `drv_kill` (shipyard's
+# continuity guard closes its own guard session directly, on a failed start). An agent can also
+# unset DRV_SPAWNED, which only nests sessions under ITS OWN terminal — whose teardown then
+# refuses, naming them.
+_drv_parent() {
+  [ -n "${DRV_COMPANIONS:-}" ] || return 1
+  [ "$(drv_backend)" = agterm ] || return 1
+  local ws="$1" f pinned="" tree c p
+  if f=$(_drv_parent_pin_file 2>/dev/null) && [ -f "$f" ]; then
+    read -r pinned < "$f" 2>/dev/null || pinned=""
+  fi
+  tree=$(agtermctl tree --json 2>/dev/null) || return 1
+  # Each candidate carries whether it must be a companion: "1" for a spawned caller's own session.
+  local spawned=0
+  [ -z "${DRV_SPAWNED:-}" ] || spawned=1
+  for c in "0:$pinned" "$spawned:${AGTERM_SESSION_ID:-}"; do
+    [ -n "${c#*:}" ] || continue
+    p=$(printf '%s' "$tree" | jq -r --arg ws "$ws" --arg c "${c#*:}" --arg comp "${c%%:*}" '
+          [.result.tree.workspaces[]? | select(.name == $ws) | .sessions[]? | objects] as $in
+          | ([$in[] | .id | strings]) as $ids
+          | [$in[] | select(.id == $c) | select($comp == "0" or ((.parent | type) == "string"))
+              | (.parent // .id) | strings | select(length > 0)
+              | select(. as $e | $ids | index($e))][0] // empty
+        ' 2>/dev/null) || p=""
+    [ -n "$p" ] && { printf '%s' "$p"; return 0; }
+  done
+  return 1
+}
+
+# drv_unpin — forget the resolved backend's container pin and the parent pin, so the next launch
+# derives both afresh. Only the RESOLVED backend's container pin: proving one backend's container
+# empty says nothing about the other's (the rule `shipyard_container_unpin` explains). The parent
+# pin goes with it on agterm only, because that is the only backend it belongs to.
+drv_unpin() {
+  local f
+  f=$(_drv_pin_file 2>/dev/null) && rm -f "$f" 2>/dev/null
+  if [ "$(drv_backend)" = agterm ] && f=$(_drv_parent_pin_file 2>/dev/null); then
+    rm -f "$f" 2>/dev/null
   fi
   return 0
 }
@@ -264,18 +364,29 @@ drv_launch_handle() {
 
 # The launch both verbs share. Echoes "<container><TAB><handle>", and the handle may be empty.
 _drv_launch() {
-  local name="$1" cwd="$2" launcher="$3" container inner cmd out h
+  local name="$1" cwd="$2" launcher="$3" container inner cmd out h parent=""
+  local -a where
   case "$(drv_backend)" in
     agterm)
       container=$(drv_container) || return 1
       # `zsh -lc` gives the child a LOGIN shell: agterm spawns it from the app, so it inherits
       # the GUI environment and would otherwise miss the user's PATH entirely. --wait holds the
       # session open after the agent exits, so a crash stays readable.
-      inner="exec $(drv_shq "$launcher")"
+      # DRV_SPAWNED marks everything running in this session as a driver child (`_drv_parent`).
+      inner="export DRV_SPAWNED=1; exec $(drv_shq "$launcher")"
       cmd="zsh -lc $(drv_shq "$inner")"
+      # A companion is placed by its parent, which `_drv_parent` only returns from inside the
+      # container, so `--parent` lands it where every lookup looks. With no parent the session is
+      # top-level in the container workspace, created if it is missing — the pre-companion launch.
+      if parent=$(_drv_parent "$container"); then
+        where=(--parent "$parent")
+      else
+        parent=""
+        where=(--workspace-name "$container" --create-workspace)
+      fi
       # --json so the response carries the new session's id: `{"ok":true,"result":{"id":…}}`,
       # captured from a real agtermctl.
-      out=$(agtermctl session new --cwd "$cwd" --workspace-name "$container" --create-workspace \
+      out=$(agtermctl session new --cwd "$cwd" "${where[@]}" \
         --name "$name" --no-select --wait --command "$cmd" --json) || return 1
       h=$(printf '%s' "$out" | jq -r 'if .ok == true and (.result.id | type) == "string"
                                       then .result.id else empty end' 2>/dev/null) || h="" ;;
@@ -304,6 +415,12 @@ _drv_launch() {
   # for a backend that holds nothing beside the real one, and since both pins disagree from either
   # side (#132) every later verb refused on it.
   _drv_pin_write "$container"
+  # The parent is pinned on the same rule, and only when this launch used one: a top-level launch
+  # leaves an earlier parent pin alone, since `_drv_parent` re-checks it on every launch anyway.
+  if [ -n "$parent" ]; then
+    local pf
+    pf=$(_drv_parent_pin_file 2>/dev/null) && _drv_pin_write_to "$pf" "$parent"
+  fi
   printf '%s\t%s' "$container" "$h"
 }
 
@@ -339,10 +456,36 @@ drv_submit() {
 }
 
 # drv_kill <session-name> — end the session (closing its pane HUP-reaps the subtree).
+#
+# On agterm it REFUSES to close a session that has companions — EXIT 3, naming them on stderr —
+# or whose companionship cannot be read — EXIT 4, the session is there and nothing was closed, so
+# a caller must not read it as an absence (exit 1 stays "no such session"): agterm closes every companion with its parent, so
+# that one close would end terminals nobody asked to end — another child, a human's own tab. A
+# session this driver launched does not become a parent through this driver (`_drv_parent` skips a
+# DRV_SPAWNED caller), so one that has companions was given them by something else: a human, an
+# agent calling agtermctl, a planted parent pin. Exit 3 is its own status so a caller can say
+# "close those first" rather than treat it as an absence; every caller treats a failed kill as
+# "nothing closed".
 drv_kill() {
-  local t; t=$(drv_target "$1") || return 1
+  local t n; t=$(drv_target "$1") || return 1
   case "$(drv_backend)" in
-    agterm) agtermctl session close --target "$t" >/dev/null ;;
+    agterm)
+      # A tree that is not this shape must not read as "no companions", so it is an error, not 0.
+      n=$(agtermctl tree --json 2>/dev/null | jq -r --arg t "$t" '
+            if .ok != true or (.result.tree.workspaces | type) != "array" then error("invalid tree")
+            else [.result.tree.workspaces[].sessions[]? | objects | select(.parent == $t)]
+              | "\(length)\t\([.[] | .name // .id | tostring] | join(", "))"
+            end' 2>/dev/null) || n=""
+      local tab cnt names; tab=$(printf '\t'); cnt=${n%%"$tab"*}; names=${n#*"$tab"}
+      case "$cnt" in
+        0) ;;
+        ''|*[!0-9]*) echo "error: cannot tell whether $1 has companion sessions; not closing it" >&2
+                     return 4 ;;
+        *)  echo "error: $1 has $cnt companion session(s) that closing it would close too: $names" >&2
+            echo "       close those first, then retry; $1 was left running" >&2
+            return 3 ;;
+      esac
+      agtermctl session close --target "$t" >/dev/null ;;
     tmux)   tmux kill-window -t "$t" ;;
   esac
 }
@@ -548,8 +691,11 @@ drv_sessions() {
       # workspace an object with a string name and a sessions array — is agterm's own structure,
       # so it is asserted over the whole tree: a schema change there is what would make the
       # `select` below match nothing and pass for an empty container. The SESSION level is
-      # asserted only inside the workspace being enumerated. The other workspaces are the human's
-      # own tabs; a malformed session there cannot change this answer, and asserting over it made
+      # asserted only inside the workspace being enumerated. (Since #349 that workspace is often
+      # the human's own too — children are companions there — so a malformed human session in it
+      # now does raise the alarm; every session a real agterm tree has shown carries both fields.)
+      # The other workspaces are the human's own tabs; a malformed session there cannot change
+      # this answer, and asserting over it made
       # one of them raise a permanent `unreachable` alarm the operator could not act on, against a
       # socket that was answering. Nothing that could change THIS container's answer stopped being
       # checked: an empty or absent workspace is empty whatever its sessions' schema would be.

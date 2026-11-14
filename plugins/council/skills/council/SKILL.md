@@ -53,10 +53,24 @@ producing polite agreement.
   board/closed-over      the messages the record was written from (see "A closed room"
                          below); readers of a closed room build their graph from it
   mailbox/               only in an AD HOC room: its escalation writes (see the trust contract)
-  state/                 counters, launchers, the pinned terminal container, keeper pid,
+  state/                 counters, launchers, the pinned terminal container (and on agterm
+                         the pinned parent session, `parent-agterm`), keeper pid,
                          `teardown` — a decided close's request that the keeper reap — and
                          `reaping`, which the keeper leaves when it starts a reap
 ```
+
+On agterm each seat is a **companion** of the session `up` ran in (`session new --parent`):
+the room nests under that session in the sidebar, inside its own workspace, rather than in a
+workspace of its own. The parent is pinned in `state/parent-agterm` at the first launch, so
+`relaunch` puts a seat back where it was. With no usable parent — `up` run outside agterm, from a
+session outside the container, or from inside a terminal the driver itself launched (a `ship`
+child) with no parent pinned — seats are launched top-level in the container, as before.
+**Closing that parent session closes every seat under it** — agterm ends a parent's companions
+with it — so keep it open while the room runs; the room itself survives on disk and `relaunch`
+brings a seat back. The shared driver's close refuses a seat terminal that has companions of its
+own and names them (or that it cannot tell whether it has any): `down` reports that seat as left
+running, keeps the room, exits 1 and refuses `--purge`, and `relaunch` refuses rather than start a
+second agent beside the live one. On tmux nothing changes.
 
 It lives in the **shared git dir** so one path resolves from every worktree of the repo,
 git never tracks it, and `git clean` cannot eat a discussion in progress. That location

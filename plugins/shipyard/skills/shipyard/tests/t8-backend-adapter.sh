@@ -6,8 +6,8 @@
 # own mechanics are covered by shared/driver/tests/t-driver.sh; THIS file asserts only the
 # SHIPYARD-specific glue the migration introduced, which none of t1..t7 exercises: the
 # SHIPYARD_BACKEND -> DRV_BACKEND mapping (including the refusal a bad value yields, still naming
-# SHIPYARD_BACKEND), the container name with shipyard's own repo-key ':' -> '_' transform and the
-# '-ai' suffix, the SHIPYARD_WORKSPACE / SHIPYARD_SESSION override (backend-specific), the pin file
+# SHIPYARD_BACKEND), the container name with shipyard's own repo-key ':' -> '_' transform and no
+# suffix (children are companions since #349, and DRV_COMPANIONS is set), the SHIPYARD_WORKSPACE / SHIPYARD_SESSION override (backend-specific), the pin file
 # living in the shipyard mailbox keyed by backend, and that shipyard_target/slots build their query
 # from the 'ship-<slot>' template.
 #
@@ -96,12 +96,12 @@ inv_msg=$( export SHIPYARD_BACKEND=nonsense; . "$BACKEND"; shipyard_backend_chec
 case "$inv_msg" in *SHIPYARD_BACKEND*) ok "the refusal names SHIPYARD_BACKEND" yes yes ;;
                    *) ok "the refusal names SHIPYARD_BACKEND" yes "no: [$inv_msg]" ;; esac
 
-# --- 2. container name: shipyard's ':' -> '_' transform and the '-ai' suffix ------------------
+# --- 2. container name: shipyard's ':' -> '_' transform, and no suffix on either backend ------
 printf '\n── container naming ──\n'
 ok "shipyard_repo_key sanitises ':' -> '_'" proj_x "$( . "$BACKEND"; shipyard_repo_key )"
 ok "tmux container: sanitised stem, no suffix" proj_x \
   "$( export SHIPYARD_BACKEND=tmux; . "$BACKEND"; shipyard_container )"
-ok "agterm container: sanitised stem + '-ai'"  proj_x-ai \
+ok "agterm container: sanitised stem, no suffix"  proj_x \
   "$( export SHIPYARD_BACKEND=agterm; . "$BACKEND"; shipyard_container )"
 ok "container kind is 'session' on tmux"   session   "$( export SHIPYARD_BACKEND=tmux;   . "$BACKEND"; shipyard_container_kind )"
 ok "container kind is 'workspace' on agterm" workspace "$( export SHIPYARD_BACKEND=agterm; . "$BACKEND"; shipyard_container_kind )"
@@ -113,7 +113,7 @@ ok "SHIPYARD_WORKSPACE overrides on agterm" my-ws \
 ok "SHIPYARD_SESSION overrides on tmux" my-sess \
   "$( export SHIPYARD_BACKEND=tmux SHIPYARD_SESSION=my-sess; . "$BACKEND"; shipyard_container )"
 # Each override applies only to its own backend: the other backend ignores it and derives.
-ok "SHIPYARD_SESSION is ignored on agterm" proj_x-ai \
+ok "SHIPYARD_SESSION is ignored on agterm" proj_x \
   "$( export SHIPYARD_BACKEND=agterm SHIPYARD_SESSION=my-sess; . "$BACKEND"; shipyard_container )"
 ok "SHIPYARD_WORKSPACE is ignored on tmux" proj_x \
   "$( export SHIPYARD_BACKEND=tmux SHIPYARD_WORKSPACE=my-ws; . "$BACKEND"; shipyard_container )"
@@ -131,6 +131,12 @@ ok "a later shipyard_container reads that pin" proj_x \
 # unpin forgets it, so the next derive is fresh.
 ( export SHIPYARD_BACKEND=tmux DRV_CONTAINER_PIN_DIR="$MB"; . "$BACKEND"; shipyard_container_unpin )
 ok "shipyard_container_unpin removes the mailbox pin file" "" "$(cat "$MB/container-tmux" 2>/dev/null)"
+# On agterm the parent pin belongs to the same fleet and goes with the container pin (#349).
+printf 'proj_x\n' >"$MB/container-agterm"; printf 'sess-id\n' >"$MB/parent-agterm"
+( export SHIPYARD_BACKEND=agterm DRV_CONTAINER_PIN_DIR="$MB"; . "$BACKEND"; shipyard_container_unpin )
+ok "agterm unpin removes the container and the parent pin" "" "$(ls "$MB")"
+# shipyard opts into companions; the driver reads this to launch each child under a parent.
+ok "shipyard opts into agterm companions" 1 "$( . "$BACKEND"; printf '%s' "${DRV_COMPANIONS:-}" )"
 
 # shipyard-lib.sh really does point the pin dir at the mailbox: source the full lib with a git
 # FUNCTION (which survives lib's PATH prepend, unlike a PATH stub) and read the resolved var.
@@ -148,10 +154,10 @@ ok "shipyard-lib points the driver pin dir at the mailbox" "$mb_expect" "$pindir
 
 # --- 5. drv_target query construction from the 'ship-<slot>' template ------------------------
 printf '\n── target query construction ──\n'
-# agterm: the container is 'proj_x-ai' (derived), so the fixture tree names that workspace and puts
+# agterm: the container is 'proj_x' (derived), so the fixture tree names that workspace and puts
 # a 'ship-5' session in it. shipyard_target 5 must resolve that session's UUID.
 cat >"$TMP/tree.json" <<'EOF'
-{"ok":true,"result":{"tree":{"workspaces":[{"id":"w1","name":"proj_x-ai","sessions":[{"id":"u5","name":"ship-5"},{"id":"u9","name":"ship-9"}]}]}}}
+{"ok":true,"result":{"tree":{"workspaces":[{"id":"w1","name":"proj_x","sessions":[{"id":"u5","name":"ship-5"},{"id":"u9","name":"ship-9"}]}]}}}
 EOF
 ok "agterm shipyard_target builds a ship-<slot> query -> UUID" u5 \
   "$( export SHIPYARD_BACKEND=agterm FAKE_AT_TREE="$TMP/tree.json"; . "$BACKEND"; shipyard_target 5 )"

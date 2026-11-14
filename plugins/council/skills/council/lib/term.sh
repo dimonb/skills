@@ -12,7 +12,7 @@
 # hand-synced copy of that code is now a thin council ADAPTER over it: this file maps council's
 # own knobs onto the driver's caller-set variables, keeps council's session-name template, and
 # lets every ct_* verb delegate to the matching drv_* one. Everything council must keep identical
-# to before — its `<workspace>-ai` container name, its `council-<room>-<peer>` session names, and
+# to before — its `council-<room>-<peer>` session names, and
 # how launch/read/type/submit/capture/kill/focus resolve — is preserved by the mapping below,
 # not by a duplicate of the backend logic. If a backend needs fixing, fix it in the shared
 # driver; there is no longer a second copy here to keep in step.
@@ -24,13 +24,16 @@ export PATH="/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin:$PAT
 # this single mapping reproduces ct_backend's old resolve-and-cache-on-first-call exactly,
 # including the `invalid` a bad value used to yield.
 #   DRV_BACKEND          <- COUNCIL_BACKEND (default auto).
-#   DRV_CONTAINER_SUFFIX  "-ai": council keeps its agent sessions in a `<workspace>-ai` container.
+#   DRV_COMPANIONS       1: on agterm each seat is a companion of the session `up` ran in, in that
+#                        session's own workspace, so no DRV_CONTAINER_SUFFIX is set (until #349 it
+#                        was "-ai", a workspace of their own). The parent is pinned beside the
+#                        container, in $ROOM/state, so a relaunch nests the seat where it was.
 # council sets no container override and does not sanitise the repo stem — the #78 API decision —
 # so DRV_CONTAINER_OVERRIDE and DRV_REPO_KEY are left unset; the driver's defaults already match
 # council's old repo-key derivation. None of these are exported: the old code put nothing of the
 # kind into a launched agent's or the tmux server's environment, and neither does this.
 DRV_BACKEND="${COUNCIL_BACKEND:-auto}"
-DRV_CONTAINER_SUFFIX="-ai"
+DRV_COMPANIONS=1
 . "$(dirname "${BASH_SOURCE[0]}")/agent-driver.sh"
 
 # The container is pinned INSIDE the room: the derived name depends on which workspace the

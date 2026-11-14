@@ -34,8 +34,9 @@
 #   SHIPYARD_AGENT      codex | claude | agy | auto (default: match the parent runtime;
 #                 auto never picks agy)
 #   SHIPYARD_BACKEND    agterm (default) | tmux | auto
-#   SHIPYARD_WORKSPACE  agterm workspace name (default: the parent's workspace + "-ai",
-#                 pinned in <mailbox>/container-agterm at the first launch)
+#   SHIPYARD_WORKSPACE  agterm workspace name (default: the parent's own workspace, pinned in
+#                 <mailbox>/container-agterm at the first launch; each child is a companion
+#                 of the parent's session, pinned in <mailbox>/parent-agterm)
 #   SHIPYARD_SESSION    tmux session name    (default: <repo>)
 #   SHIPYARD_ENV_PASS   env vars copied from THIS session into the child (default:
 #                 CODEX_HOME for Codex; CLAUDE_HOME CLAUDE_CONFIG_DIR for Claude; none for agy)

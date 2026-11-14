@@ -1550,7 +1550,20 @@ council_relaunch() {
   # participant leaves its session LISTED (`--wait`, so the crash stays readable), so this
   # finds it and prints `terminal closed`. On tmux the window died with the process, so
   # ct_kill simply reports no live terminal and prints nothing. Neither blocks the launch.
-  ct_kill "$peer" 2>/dev/null && echo "terminal closed: $peer"
+  #
+  # Exit 3 and 4 are the driver refusing a terminal that is THERE (#349): it has agterm companions
+  # that closing it would close too (3, named in its message), or it could not tell whether it has
+  # any (4). Either way it is still RUNNING, and launching now would start the second agent for
+  # this name that the paragraph above exists to prevent; stop here.
+  local krc=0 kerr
+  kerr=$(ct_kill "$peer" 2>&1 >/dev/null) || krc=$?
+  if [ "$krc" = 0 ]; then
+    echo "terminal closed: $peer"
+  elif [ "$krc" = 3 ] || [ "$krc" = 4 ]; then
+    printf '%s\n' "$kerr" >&2
+    echo "council relaunch: '$peer' is still running and was not closed (see above); nothing was launched" >&2
+    return 1
+  fi
   _write_launcher "$ROOM" "$peer" "$kind" "$cwd" \
     || { echo "council relaunch: could not write the launcher for '$peer'" >&2; return 1; }
   _write_protocol "$ROOM" "$peer" "$role" "$sf" "${roster[@]}" \
@@ -1621,8 +1634,18 @@ council_down() {
   # maintained. A roster nobody can read closes no terminal and says so; the keeper below
   # still goes, and `--purge` still removes the room, which is what teardown is for.
   local p
+  # Exit 3 or 4 (#349): the driver refused a terminal that is there — it has agterm companions, or
+  # it could not tell — so that seat is still running. Say so, and refuse `--purge` below: deleting
+  # the room and its launch record would drop the only record of where that seat runs.
+  local krc kerr left=""
   for p in $(c_peers); do
-    ct_kill "$p" 2>/dev/null && echo "terminal closed: $p"
+    krc=0; kerr=$(ct_kill "$p" 2>&1 >/dev/null) || krc=$?
+    if [ "$krc" = 0 ]; then echo "terminal closed: $p"
+    elif [ "$krc" = 3 ] || [ "$krc" = 4 ]; then
+      printf '%s\n' "$kerr" >&2
+      echo "council down: '$p' left running" >&2
+      left="${left:+$left }$p"
+    fi
   done
   local keep="$ROOM/state/keeper.pid" pid
   # Signal only a pid still verified as this room's keeper — a recycled one belongs to some other
@@ -1635,6 +1658,14 @@ council_down() {
   # in the `--only-changed` signature and in `_stall_line`'s first-firing floor. Guarded because it
   # lives in verbs.sh, which council.sh sources for this verb and a library caller may not have.
   command -v _status_forget >/dev/null 2>&1 && _status_forget
+  if [ -n "$left" ]; then
+    if [ "$purge" = 1 ]; then
+      echo "council down: --purge refused, the room was kept: seats still running: $left — close them, then re-run" >&2
+    else
+      echo "council down: room kept with seats still running: $left — close them, then re-run" >&2
+    fi
+    return 1
+  fi
   if [ "$purge" = 1 ]; then
     # The room IS the record — the ADR and the transcript live in it. Deleting it throws
     # away the only durable output the room produced, so it takes an explicit flag.
