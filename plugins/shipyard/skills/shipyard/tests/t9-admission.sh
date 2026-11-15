@@ -96,7 +96,7 @@ exit 0
 EOF
 chmod +x "$FAKEBIN/git" "$FAKEBIN/agtermctl" "$FAKEBIN/memory_pressure"
 export PATH="$FAKEBIN:$PATH"
-# The repo the fake git reports; container derives to 'proj_x-ai' on agterm (t8 asserts that
+# The repo the fake git reports; container derives to 'proj_x' on agterm (t8 asserts that
 # transform), so the tree fixtures below name that workspace.
 export FAKE_TOPLEVEL="$TMP/proj:x"
 export FAKE_GITDIR="$TMP/gd"; mkdir -p "$FAKE_GITDIR/ship-escalations"
@@ -106,7 +106,7 @@ tree_of() { # <file> <session-name...>  — write a valid agterm tree naming the
   local f="$1"; shift
   local sess="" i=0 n
   for n in "$@"; do sess="$sess${sess:+,}{\"id\":\"u$i\",\"name\":\"$n\"}"; i=$((i+1)); done
-  printf '{"ok":true,"result":{"tree":{"workspaces":[{"id":"w1","name":"proj_x-ai","sessions":[%s]}]}}}\n' "$sess" >"$f"
+  printf '{"ok":true,"result":{"tree":{"workspaces":[{"id":"w1","name":"proj_x","sessions":[%s]}]}}}\n' "$sess" >"$f"
 }
 TREE0="$TMP/t0.json"; tree_of "$TREE0" human
 TREE1="$TMP/t1.json"; tree_of "$TREE1" human ship-5

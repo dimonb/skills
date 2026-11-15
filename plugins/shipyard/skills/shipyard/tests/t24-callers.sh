@@ -283,6 +283,39 @@ out=$(run shipyard-report.sh 'a|b')
 ok "the report refuses a bad slot with exit 1, never 0" 1   "$(rc_of "$out")"
 ok "...naming the rule"                          yes        "$(has "$out" 'refusing the slot name')"
 
+# ================================================================= E. down and a companion parent
+# #349: on agterm a terminal with companions is not closed (the driver refuses with exit 3, since
+# agterm would close them too). Its agent is still running, so down must keep the worktree — even
+# under --force, which would otherwise remove it from under a live agent.
+printf '\n── E. down refuses a slot whose terminal has companions ──\n'
+mkdir -p "$FAKE_ROOT/.claude/worktrees/ship-41"
+mv "$MB/container-tmux" "$TMP/pin-tmux.saved"; printf 't24ws\n' >"$MB/container-agterm"
+# exit 3: the tree names a companion of ship-41. exit 4: a tree without `ok` still resolves the
+# target but fails the kill's shape check, so the driver cannot tell — the terminal is still there.
+T24_TREE3='{"ok":true,"result":{"tree":{"workspaces":[{"id":"w","name":"t24ws","sessions":[{"id":"s41","name":"ship-41"},{"id":"c9","name":"human-tab","parent":"s41"}]}]}}}'
+T24_TREE4='{"result":{"tree":{"workspaces":[{"id":"w","name":"t24ws","sessions":[{"id":"s41","name":"ship-41"}]}]}}}'
+export T24_TREE
+agtermctl() {
+  printf 'agtermctl %s\n' "$*" >> "$CALLS"
+  case "${1:-}" in tree) printf '%s\n' "$T24_TREE" ;; esac
+  return 0
+}
+export -f agtermctl
+for k in 3 4; do
+  if [ "$k" = 3 ]; then T24_TREE=$T24_TREE3; why='has companion sessions under it'
+  else T24_TREE=$T24_TREE4; why='terminal is up and was not closed'; fi
+  : > "$CALLS"
+  out=$( env SHIPYARD_MOTION_INTERVAL=0.01 SHIPYARD_BACKEND=agterm SHIPYARD_WORKSPACE=t24ws \
+           bash "$SKILL_DIR/shipyard-down.sh" 41 --force 2>&1 ) && rc=0 || rc=$?
+  ok "E$k: down exits non-zero, even with --force" 1      "$rc"
+  ok "E$k: ...saying why"                          yes    "$(has "$out" "$why")"
+  ok "E$k: ...closing no session"                  0      "$(grep -c 'session close' "$CALLS")"
+  ok "E$k: ...and removing no worktree"            0      "$(grep -c 'worktree remove' "$CALLS")"
+done
+ok "E3: ...naming the companion"                   yes    "$(T24_TREE=$T24_TREE3; has "$(env SHIPYARD_MOTION_INTERVAL=0.01 SHIPYARD_BACKEND=agterm SHIPYARD_WORKSPACE=t24ws bash "$SKILL_DIR/shipyard-down.sh" 41 --force 2>&1)" 'human-tab')"
+unset -f agtermctl
+rm -f "$MB/container-agterm"; mv "$TMP/pin-tmux.saved" "$MB/container-tmux"
+
 printf '\n'
 if [ "$FAILURES" -eq 0 ]; then
   printf 't24-callers: %d checks, all passed\n' "$CHECKS"

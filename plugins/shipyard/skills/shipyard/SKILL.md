@@ -39,8 +39,8 @@ behaves identically on either:
 
 | | agterm (preferred by `auto`) | tmux (fallback) |
 |---|---|---|
-| container | workspace **`<your workspace>-ai`** | session `<repo>` |
-| a child | session `ship-<slot>` | window `ship-<slot>` |
+| container | **your own workspace** | session `<repo>` |
+| a child | session `ship-<slot>`, a **companion** of your session | window `ship-<slot>` |
 | worktree | `.claude/worktrees/ship-<slot>` | same |
 | addressed by | session UUID | `<session>:<index>` |
 | sidebar glyph | yes — `active`/`blocked`/`completed` | none |
@@ -51,20 +51,44 @@ stops with an error naming both — it has no third way to reach a child, and a 
 "starts" work it cannot see or type into is worse than one that refuses. A misspelled
 `SHIPYARD_BACKEND` gets its own error rather than the not-installed one.
 
-### Which workspace children land in
+### Where children land
 
-Children go **beside the work**: the agterm workspace the parent watcher is sitting in,
-plus `-ai`. Launch from workspace `myproject` and they appear in `myproject-ai`. The suffix
-keeps them out of the workspace you keep your own tabs in, and it never stacks — launching
-from inside `myproject-ai` (a child starting a sibling) stays `myproject-ai`.
+Children go **beside the work**: each is an agterm **companion** of the session the parent
+watcher runs in (`session new --parent`), so the fleet nests under that session in the sidebar,
+inside your own workspace, instead of filling a workspace of its own. A child that starts a
+sibling never offers its own session as the parent (every session the driver launches carries
+`DRV_SPAWNED=1`): the sibling goes under the fleet's pinned parent, beside the child, or top-level
+when there is none.
 
-Resolution order, first hit wins:
+**Closing the watcher's session closes every child under it.** agterm ends a parent's companions
+with it (measured: one `session close` reported both closed). Nothing durable goes with them —
+worktrees, branches and each child's agent history stay — and a resume of each slot brings it
+back, but the terminals and anything unsubmitted in them are gone. Keep that session open while
+the fleet runs. The shared driver's close refuses a session that has companions and names them,
+so tearing down a child or a seat never takes others with it; `shipyard-down.sh` then refuses that
+slot — `--force` does not override it, since the agent is still running — until those are closed.
+Anything that closes a parent outside that close — you, an agent calling `agtermctl` directly —
+takes its companions with it.
+
+The parent is the watcher's own session (`AGTERM_SESSION_ID`) at the first launch, and it is
+**pinned** in `<mailbox>/parent-agterm` beside the container pin, so every later child of the
+fleet nests under the same session even when it is launched from somewhere else. The mailbox is
+writable by the children, so the session to keep open is whichever one that file names — any live
+session in the container can be put there. A pinned parent
+counts only while it is a live session in the container; with no usable parent — outside agterm,
+or the caller sitting in another workspace — a child is launched top-level in the container
+workspace, as before companions existed.
+
+The container is still a workspace name, and resolution order, first hit wins:
 
 1. `SHIPYARD_WORKSPACE` (agterm) / `SHIPYARD_SESSION` (tmux) — an explicit override;
 2. the name **pinned** at the first launch, in `<mailbox>/container-<backend>`;
-3. freshly derived — the parent's workspace `-ai`, or `<repo>-ai` when there is no agterm
-   around (a plain shell, cron, another terminal). tmux is always `<repo>`, unchanged, so
-   ship windows keep sharing one session with your own.
+3. freshly derived — the parent's own workspace, or `<repo>` when there is no agterm around
+   (a plain shell, cron, another terminal). tmux is always `<repo>`, unchanged, so ship windows
+   keep sharing one session with your own.
+
+A fleet launched before companions existed is pinned to a `<workspace>-ai` workspace and keeps it
+until its last slot is torn down; the next fleet lands as companions.
 
 **Step 2 is the load-bearing one.** The derived name depends on *where the caller was
 sitting*, so re-deriving it later — a report run from another workspace, a script run from
@@ -72,8 +96,9 @@ inside a child — would name a different container and honestly report that it 
 children. That is the worst thing a monitor can do, so the name is written down at the
 first launch and every later script reads it. `shipyard-down.sh` erases the pin once the last
 child is gone — **the pin of the backend it resolved**, and only that one, since proving one
-container empty says nothing about the other — so the next run picks a fresh workspace; to
-repoint sooner, delete `<mailbox>/container-<backend>` or pass `SHIPYARD_WORKSPACE`.
+container empty says nothing about the other, plus the parent pin on agterm — so the next run
+picks a fresh workspace and parent; to repoint sooner, delete `<mailbox>/container-<backend>`
+(and `<mailbox>/parent-agterm`) or pass `SHIPYARD_WORKSPACE`.
 
 The pin's *name* is also read as evidence by the status report (see Step 2's corroboration), so
 deleting one by hand switches off the half of that check which notices the backend moving under
@@ -268,7 +293,8 @@ the container are left, and down says so in a notice (its last-slot cleanup's st
 
 **When the pinned backend cannot answer at all** (#132) — the app uninstalled, the tmux binary gone
 — neither order above can run, because both ask that backend first. `shipyard-down.sh --unpin
-<agterm|tmux>` is the way out: it removes that backend's pin **only** when the backend fails its
+<agterm|tmux>` is the way out: it removes that backend's pin (on agterm, the parent pin with it)
+**only** when the backend fails its
 precheck (`shipyard_backend_check`) on two reads `SHIPYARD_MOTION_INTERVAL` apart, and refuses,
 pointing back at the order above, when it answers. Its evidence is the running shell's own
 environment, never the mailbox. It prints what it removed and a warning: a fleet on a backend this
@@ -1468,8 +1494,9 @@ go with the directory and are not.
 
 It removes the worktree with a DOUBLE `-f` (one
 for dirty, one for locked — a single `-f` fails on a lock with a message that reads like a
-permissions problem), prunes, and on agterm drops the `-ai` workspace — plus its pinned
-name — once it holds no ship sessions. The change's feature branch can go afterwards — but note
+permissions problem), prunes, and forgets the pinned container and parent once no ship session
+is left. A legacy `-ai` workspace (a fleet from before companions) is also dropped once it holds
+no session at all; your own workspace never is. The change's feature branch can go afterwards — but note
 that `git branch -d` asks the ANCESTRY question this gate abandoned, so after a squash merge it
 refuses a branch whose content is fully in the base branch (measured). Once teardown has printed
 `content is already in <ref>`, that IS the containment proof and `git branch -D <branch>` is the

@@ -235,7 +235,23 @@ for slot in "${SLOTS[@]}"; do
   killed=0
   if shipyard_target "$slot" >/dev/null 2>&1; then
     where=$(shipyard_where "$slot")
-    shipyard_kill "$slot" && { echo "closed $where"; killed=1; }
+    kill_rc=0; shipyard_kill "$slot" || kill_rc=$?
+    if [ "$kill_rc" = 0 ]; then
+      echo "closed $where"; killed=1
+    elif [ "$kill_rc" = 3 ] || [ "$kill_rc" = 4 ]; then
+      # #349: the driver refused because the terminal has agterm companions, which closing it would
+      # close too (exit 3, named above), or because it could not tell whether it has any (exit 4).
+      # Either way the terminal is THERE and its agent still running, so the worktree must stay —
+      # and --force does not override this: it would remove the worktree from under a live agent.
+      if [ "$kill_rc" = 3 ]; then
+        echo "refused: ship-$slot has companion sessions under it; closing it would close them too" >&2
+        echo "         close or tear those down first, then re-run; the worktree was left in place" >&2
+      else
+        echo "refused: ship-$slot's terminal is up and was not closed; re-run once agterm answers" >&2
+        echo "         the worktree was left in place" >&2
+      fi
+      rc=1; continue
+    fi
   fi
 
   # #139(1): THE KILL THAT DID NOT HAPPEN MUST NOT LET THE WORKTREE GO. Until now an
@@ -281,9 +297,10 @@ done
 
 git -C "$ROOT" worktree prune 2>/dev/null
 
-# Once the last child is gone, drop the container and forget its pinned name, so the
-# next run derives a fresh one from wherever you launch it. Keeping a stale pin would
-# send tomorrow's children into a workspace you have since stopped working in.
+# Once the last child is gone, forget the pinned container and parent (and drop a legacy `-ai`
+# workspace, the only kind pruned since #349), so the next run derives both afresh from wherever
+# you launch it. Keeping a stale pin would send tomorrow's children into a workspace you have
+# since stopped working in, under a session you may have closed.
 remaining_slots=""
 enumeration_status=0
 remaining_slots=$(shipyard_slots 2>/dev/null) || enumeration_status=$?

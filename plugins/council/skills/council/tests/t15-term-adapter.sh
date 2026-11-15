@@ -5,7 +5,7 @@
 # driver (lib/agent-driver.sh) and delegates each ct_* verb to the matching drv_*. The driver's
 # own mechanics are covered by shared/driver/tests/t-driver.sh; THIS file asserts only the
 # council-specific glue the migration introduced, and that the naming stays byte-identical to
-# before: the `-ai` container suffix on agterm and none on tmux, the pin file under $ROOM/state,
+# before: no container suffix on either backend (seats are agterm companions since #349), the pin file under $ROOM/state,
 # the council-<room>-<peer> session-name template, and the COUNCIL_BACKEND -> DRV_BACKEND mapping
 # including the refusal a bad value yields. Everything here is a pure read over environment
 # variables — no live terminal, no agtermctl, no tmux: an explicit COUNCIL_BACKEND resolves the
@@ -47,14 +47,15 @@ mkdir -p "$ROOM/state"
 got=$( export COUNCIL_BACKEND=tmux ROOM="$ROOM"; . "$TERM_SH"; ct_name alice )
 ok "ct_name is council-<room>-<peer>" "council-demo-room-alice" "$got"
 
-# --- the container suffix: -ai on agterm, none on tmux --------------------------------------
+# --- the container suffix: none on either backend (#349: seats are agterm companions) -------
 # Both derive from the same repo stem (same cwd), so their relationship is asserted without
 # hard-coding the machine's repo name. AGTERM_WORKSPACE_ID is unset so agterm takes the repo-stem
 # fallback rather than a live workspace name.
 tmux_c=$( export COUNCIL_BACKEND=tmux ROOM="$ROOM"; . "$TERM_SH"; ct_container )
 agt_c=$(  export COUNCIL_BACKEND=agterm ROOM="$ROOM"; unset AGTERM_WORKSPACE_ID; . "$TERM_SH"; ct_container )
-ok "tmux container carries no -ai suffix" "$tmux_c"    "${agt_c%-ai}"
-ok "agterm container appends -ai"         "$tmux_c-ai" "$agt_c"
+ok "agterm derives the tmux stem, with no suffix" "$tmux_c" "$agt_c"
+ok "council opts into agterm companions" 1 \
+  "$( export COUNCIL_BACKEND=agterm ROOM="$ROOM"; . "$TERM_SH"; printf '%s' "${DRV_COMPANIONS:-}" )"
 
 # --- the pin lives under $ROOM/state, keyed by backend — exactly where it did pre-migration --
 pin_v=$( export COUNCIL_BACKEND=tmux ROOM="$ROOM"; . "$TERM_SH"; ct_container_pin )

@@ -51,12 +51,12 @@ done
 for e in "$REAL_SKILL"/lib/*; do
   case "${e##*/}" in term.sh) ;; *) ln -s "$e" "$SHADOW/lib/${e##*/}" ;; esac
 done
-SESSIONS="$ROOT/sessions"; SESSIONS_RC="$ROOT/sessions-rc"; KILLED="$ROOT/killed"
+SESSIONS="$ROOT/sessions"; SESSIONS_RC="$ROOT/sessions-rc"; KILLED="$ROOT/killed"; KILL_RC="$ROOT/kill-rc"
 cat >"$SHADOW/lib/term.sh" <<SHADOWEOF
 COUNCIL_BACKEND=tmux
 . "$REAL_SKILL/lib/term.sh"
 ct_sessions() { cat "$SESSIONS" 2>/dev/null; return "\$(cat "$SESSIONS_RC" 2>/dev/null || printf 0)"; }
-ct_kill()     { printf '%s\n' "\$1" >>"$KILLED"; return 1; }
+ct_kill()     { printf '%s\n' "\$1" >>"$KILLED"; return "\$(cat "$KILL_RC" 2>/dev/null || printf 1)"; }
 SHADOWEOF
 
 # --- the real code under test, with what council.sh sources for `down` ---------------------------
@@ -192,6 +192,21 @@ out=$(COUNCIL_BACKEND=none-for-tests bash "$CLI" down 2>&1); rc=$?
 ok "4b: the entrypoint takes the room down"       0    "$rc"
 ok "4b: ...removing the status signature"         no   "$(present "$SIGF")"
 ok "4b: ...and the STALL firing record"           no   "$(present "$EPF")"
+
+# ============================================ 6. A SEAT THE DRIVER WOULD NOT CLOSE (#349): KEPT
+# Exit 3 is the driver refusing a terminal with agterm companions; that seat is still running, so
+# --purge must not delete the room and the launch record, the only record of where it runs.
+printf '\n── a seat the driver refused to close ──\n'
+for krc in 3 4; do
+  seed; : >"$ROOM/state/container-tmux"; : >"$SESSIONS"; printf '0\n' >"$SESSIONS_RC"
+  printf '%s\n' "$krc" >"$KILL_RC"
+  out=$(run_down --purge)
+  ok "6/$krc: a purge with a seat left running fails"  1    "$(rc_of "$out")"
+  ok "6/$krc: ...saying which seats"                 yes  "$(has "$out" 'seats still running: claude codex')"
+  ok "6/$krc: ...keeping the room"                   yes  "$(present "$ROOM")"
+  ok "6/$krc: ...and the launch record"              yes  "$(present "$LRF")"
+done
+rm -f "$KILL_RC"
 
 # ====================================================== 5. CORROBORATED --purge: EVERYTHING GOES
 printf '\n── a purge the backend corroborates ──\n'

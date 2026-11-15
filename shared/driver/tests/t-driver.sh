@@ -312,6 +312,143 @@ printf '%s\n' 'pane contents here' >"$TMP/cap.txt"
 ok "tmux read returns the captured pane" "pane contents here" \
   "$(FAKE_TMUX_WINDOWS="$TMP/win-dispatch.txt" FAKE_TMUX_CAPTURE="$TMP/cap.txt" _DRV_BE=tmux DRV_CONTAINER_OVERRIDE=cont drv_read sess)"
 
+# --- 5b. companions (#349) -------------------------------------------------------------------
+# The tree shape is the one measured on a live agterm: a companion sits FLAT in its workspace's
+# sessions[] with a `parent` field. `me` is the caller's top-level session, `kid` a companion of
+# it, `elsewhere` a session in another workspace, `gone` is in no workspace at all.
+printf '\n── companions ──\n'
+COMP_TREE="$TMP/tree-comp.json"
+cat >"$COMP_TREE" <<'JSON'
+{"ok":true,"result":{"tree":{"workspaces":[
+  {"id":"w1","name":"proj","sessions":[
+    {"id":"me","name":"watcher"},
+    {"id":"kid","name":"ship-1","parent":"me"},
+    {"id":"other","name":"human-tab"},
+    {"id":"top","name":"ship-2"},
+    {"id":"stray","name":"ship-3","parent":"far"}]},
+  {"id":"w2","name":"else","sessions":[{"id":"elsewhere","name":"x"},{"id":"far","name":"y"}]}]}}}
+JSON
+COMP_PINS="$TMP/comp-pins"; mkdir -p "$COMP_PINS"
+# comp_launch <log> [VAR=value ...] — one agterm launch into container `proj`, logged.
+comp_launch() {
+  local log="$1"; shift
+  ( export FAKE_AT_LOG="$log" FAKE_AT_TREE="$COMP_TREE" _DRV_BE=agterm DRV_CONTAINER_OVERRIDE=proj \
+      DRV_CONTAINER_PIN_DIR="$COMP_PINS" "$@"
+    drv_launch sess /work/dir /path/to/launcher >/dev/null )
+}
+pin_of() { cat "$COMP_PINS/parent-agterm" 2>/dev/null || printf none; }
+
+: >"$TMP/c1.log"; rm -f "$COMP_PINS"/*
+comp_launch "$TMP/c1.log" DRV_COMPANIONS=1 AGTERM_SESSION_ID=me
+case "$(cat "$TMP/c1.log")" in
+  *"--parent me "*) r=yes ;; *) r="no: [$(cat "$TMP/c1.log")]" ;; esac
+ok "companions: the caller's own session is the parent" yes "$r"
+grep -q -- '--workspace-name\|--create-workspace' "$TMP/c1.log" && r=yes || r=no
+ok "companions: a companion launch names no workspace" no "$r"
+ok "companions: the parent is pinned after the launch" me "$(pin_of)"
+
+# The caller is itself a companion: agterm would nest under its parent, so that is what is pinned.
+: >"$TMP/c2.log"; rm -f "$COMP_PINS"/*
+comp_launch "$TMP/c2.log" DRV_COMPANIONS=1 AGTERM_SESSION_ID=kid
+grep -q -- '--parent me ' "$TMP/c2.log" && r=yes || r=no
+ok "companions: a companion caller resolves to its own parent" yes "$r"
+ok "companions: the effective parent is what is pinned" me "$(pin_of)"
+
+# A live pinned parent wins over the caller's session, so one fleet nests under one session.
+: >"$TMP/c3.log"; printf 'other\n' >"$COMP_PINS/parent-agterm"
+comp_launch "$TMP/c3.log" DRV_COMPANIONS=1 AGTERM_SESSION_ID=me
+grep -q -- '--parent other ' "$TMP/c3.log" && r=yes || r=no
+ok "companions: a live pinned parent wins" yes "$r"
+
+# A pinned parent that is gone, or outside the container, is skipped for the caller's session.
+for stale in gone elsewhere; do
+  : >"$TMP/c4.log"; printf '%s\n' "$stale" >"$COMP_PINS/parent-agterm"
+  comp_launch "$TMP/c4.log" DRV_COMPANIONS=1 AGTERM_SESSION_ID=me
+  grep -q -- '--parent me ' "$TMP/c4.log" && r=yes || r=no
+  ok "companions: a pinned parent that is $stale falls through to the caller" yes "$r"
+  ok "companions: ... and the pin is repointed" me "$(pin_of)"
+done
+
+# No usable parent at all — the caller sits in another workspace — is the top-level launch, and
+# writes no parent pin.
+: >"$TMP/c5.log"; rm -f "$COMP_PINS"/*
+comp_launch "$TMP/c5.log" DRV_COMPANIONS=1 AGTERM_SESSION_ID=elsewhere
+case "$(cat "$TMP/c5.log")" in
+  *"--parent"*) r="no: [$(cat "$TMP/c5.log")]" ;;
+  *"--workspace-name proj --create-workspace"*) r=yes ;;
+  *) r="no: [$(cat "$TMP/c5.log")]" ;; esac
+ok "companions: no parent in the container launches top-level" yes "$r"
+ok "companions: a top-level launch pins no parent" none "$(pin_of)"
+
+# A caller inside a session the driver launched (DRV_SPAWNED) never offers its own session. This is
+# the legacy / override / other-workspace fleet, where children are top-level: `top` is one, and a
+# sibling it launches must not nest under it (its teardown would then refuse). Found by review.
+: >"$TMP/c8.log"; rm -f "$COMP_PINS"/*
+comp_launch "$TMP/c8.log" DRV_COMPANIONS=1 AGTERM_SESSION_ID=top DRV_SPAWNED=1
+case "$(cat "$TMP/c8.log")" in
+  *"--parent"*) r="no: [$(cat "$TMP/c8.log")]" ;;
+  *"--workspace-name proj --create-workspace"*) r=yes ;;
+  *) r="no: [$(cat "$TMP/c8.log")]" ;; esac
+ok "companions: a spawned caller with no pin launches top-level" yes "$r"
+ok "companions: ... and pins no parent" none "$(pin_of)"
+# A spawned caller that is a COMPANION (a ship child running `council up`) nests beside itself,
+# under its own parent.
+: >"$TMP/c8b.log"; rm -f "$COMP_PINS"/*
+comp_launch "$TMP/c8b.log" DRV_COMPANIONS=1 AGTERM_SESSION_ID=kid DRV_SPAWNED=1
+grep -q -- '--parent me ' "$TMP/c8b.log" && r=yes || r="no: [$(cat "$TMP/c8b.log")]"
+ok "companions: a spawned companion caller nests under its parent" yes "$r"
+# ... but it does join the fleet's pinned parent, so it lands beside itself.
+: >"$TMP/c9.log"; printf 'me\n' >"$COMP_PINS/parent-agterm"
+comp_launch "$TMP/c9.log" DRV_COMPANIONS=1 AGTERM_SESSION_ID=top DRV_SPAWNED=1
+grep -q -- '--parent me ' "$TMP/c9.log" && r=yes || r=no
+ok "companions: a spawned caller joins the pinned parent" yes "$r"
+# A candidate in the container whose own parent is NOT would land outside it.
+: >"$TMP/c10.log"; printf 'stray\n' >"$COMP_PINS/parent-agterm"
+comp_launch "$TMP/c10.log" DRV_COMPANIONS=1 AGTERM_SESSION_ID=me
+grep -q -- '--parent me ' "$TMP/c10.log" && r=yes || r="no: [$(cat "$TMP/c10.log")]"
+ok "companions: a candidate whose parent is outside the container is skipped" yes "$r"
+# Every launched session carries the marker.
+grep -q 'export DRV_SPAWNED=1; exec' "$TMP/c10.log" && r=yes || r=no
+ok "companions: the launch marks the session DRV_SPAWNED" yes "$r"
+
+# Off unless the caller opts in.
+: >"$TMP/c6.log"; rm -f "$COMP_PINS"/*
+comp_launch "$TMP/c6.log" AGTERM_SESSION_ID=me
+grep -q -- '--parent' "$TMP/c6.log" && r=yes || r=no
+ok "companions: without DRV_COMPANIONS no parent is used" no "$r"
+
+# A failed launch pins nothing, the rule the container pin already follows.
+: >"$TMP/c7.log"; rm -f "$COMP_PINS"/*
+comp_launch "$TMP/c7.log" DRV_COMPANIONS=1 AGTERM_SESSION_ID=me FAKE_AT_NEW_RC=1
+ok "companions: a failed launch pins no parent" none "$(pin_of)"
+
+# drv_unpin clears both pins on agterm.
+printf 'proj\n' >"$COMP_PINS/container-agterm"; printf 'me\n' >"$COMP_PINS/parent-agterm"
+( _DRV_BE=agterm DRV_CONTAINER_PIN_DIR="$COMP_PINS" drv_unpin )
+ok "drv_unpin clears the container and parent pins" "" "$(ls "$COMP_PINS")"
+# On tmux only tmux's container pin goes: the parent pin is agterm's, and proving the tmux
+# container empty says nothing about an agterm fleet.
+printf 'proj\n' >"$COMP_PINS/container-tmux"; printf 'me\n' >"$COMP_PINS/parent-agterm"
+( _DRV_BE=tmux DRV_CONTAINER_PIN_DIR="$COMP_PINS" drv_unpin )
+ok "drv_unpin on tmux keeps the agterm parent pin" "parent-agterm" "$(ls "$COMP_PINS")"
+rm -f "$COMP_PINS"/*
+
+# drv_kill refuses a session with companions, closes one without, refuses a tree it cannot read.
+kill_at() {
+  local log="$1" tree="$2" name="$3"; : >"$log"
+  ( export FAKE_AT_LOG="$log" FAKE_AT_TREE="$tree" _DRV_BE=agterm DRV_CONTAINER_OVERRIDE=proj
+    drv_kill "$name" 2>"$log.err" ); printf 'rc%s' "$?"
+  grep -q 'session close' "$log" && printf ':closed' || printf ':kept'
+}
+ok "drv_kill refuses a parent of companions, with exit 3" "rc3:kept" "$(kill_at "$TMP/k1.log" "$COMP_TREE" watcher)"
+grep -q 'ship-1' "$TMP/k1.log.err" && r=yes || r=no
+ok "drv_kill's refusal names the companions" yes "$r"
+ok "drv_kill closes a session with no companions" "rc0:closed" "$(kill_at "$TMP/k2.log" "$COMP_TREE" ship-1)"
+printf '%s' '{"result":{"tree":{"workspaces":[{"id":"w1","name":"proj","sessions":[{"id":"kid","name":"ship-1"}]}]}}}' \
+  >"$TMP/tree-nook.json"
+ok "drv_kill refuses with exit 4 when the tree is not the expected shape" "rc4:kept" \
+  "$(kill_at "$TMP/k3.log" "$TMP/tree-nook.json" ship-1)"
+
 # --- 6. drv_signal: minimal liveness + capacity ----------------------------------------------
 printf '\n── drv_signal ──\n'
 # Dead: the name has no live terminal in a tree the backend really answered with -> "dead|gone",
