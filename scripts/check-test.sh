@@ -503,6 +503,12 @@ enprobe '\u043f\u0440\u0438\u0432\u0435\u0442'  'Cyrillic'
 enprobe '\u03b1\u03b2\u03b3'                      'Greek'
 enprobe '\u6f22\u5b57'                             'Han'
 enprobe '\u0641\u0642'                             'Arabic'
+# And punctuation whose Script EXTENSIONS name one of those scripts must pass (#351): U+00B7 is
+# Common by script, Greek among its extensions. This only bites where git links PCRE2 >= 10.40 —
+# an older one never matched it, so there the probe passes either way and proves nothing.
+printf '%b\n' 'a \u00b7 b' > docs/_probe.md
+expect_pass "non-Latin script: a middle dot is not Greek"
+rm -f docs/_probe.md
 rmdir docs 2>/dev/null || true
 
 # 8 — the assertions the gate is most easily made vacuous by, and which the review noted were
@@ -517,7 +523,7 @@ mv scripts/check.sh.bak scripts/check.sh
 # the error arm can fire. Without this the arm is vacuous — reverting the check to a bare
 # `if [ "$g" -eq 0 ]` would read the error as "no violation" and still pass check-test.
 cp scripts/check.sh "$SCRATCH/check8.bak"
-perl -pi -e 's/\\p\{Cyrillic\}/(unclosed/' scripts/check.sh
+perl -pi -e 's/\\p\{sc=Cyrillic\}/(unclosed/' scripts/check.sh
 expect_fail "English check fails LOUDLY when git grep errors (not open)"
 cp "$SCRATCH/check8.bak" scripts/check.sh
 

@@ -556,7 +556,13 @@ fi
 # would put the very characters this check forbids into the check, which then has to exempt
 # itself — and an exemption is how a check stops covering the file most likely to be edited
 # by whoever is adding a violation.
-nonlatin=$(git grep --untracked -nIP '\p{Cyrillic}|\p{Greek}|\p{Han}|\p{Hiragana}|\p{Katakana}|\p{Hangul}|\p{Arabic}|\p{Hebrew}|\p{Devanagari}|\p{Thai}|\p{Armenian}|\p{Georgian}' -- . 2>&1)
+#
+# `\p{sc=X}`, never the bare `\p{X}` (#351). PCRE2 10.40 made the bare form match on Script
+# EXTENSIONS, and punctuation shared across scripts carries several: U+00B7 MIDDLE DOT lists Greek
+# among them, so a CI runner whose git links a newer PCRE2 flagged every `·` in the tree as Greek,
+# while an older PCRE2 on a workstation stayed green. `sc=` is the Script property alone, and the
+# older PCRE2 that Apple Git 2.50 links accepts it too (measured).
+nonlatin=$(git grep --untracked -nIP '\p{sc=Cyrillic}|\p{sc=Greek}|\p{sc=Han}|\p{sc=Hiragana}|\p{sc=Katakana}|\p{sc=Hangul}|\p{sc=Arabic}|\p{sc=Hebrew}|\p{sc=Devanagari}|\p{sc=Thai}|\p{sc=Armenian}|\p{sc=Georgian}' -- . 2>&1)
 g=$?
 if [ "$g" -eq 0 ]; then
   echo "FAIL: non-Latin script (AGENTS.md: English everywhere):"; printf '%s\n' "$nonlatin"; rc=1
