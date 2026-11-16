@@ -163,6 +163,7 @@ message dies with the context that held it.
 | `shipyard-tell.sh` | parent side: speak first, into the child's terminal |
 | `shipyard-compact.sh` | compact a child **and** put it back to work |
 | `shipyard-down.sh` | teardown after a merge, including the last parent continuity watcher |
+| `shipyard-finish.sh` | child side: once ship records `done`, close the child's own terminal |
 
 Every script runs by hand from a shell too.
 
@@ -249,11 +250,14 @@ report's own knob and does not reach it.
 read `merged` on `SHIPYARD_AUTODOWN_TICKS` consecutive ticks (default and minimum `2`), ship's own
 stage is terminal, its terminal is gone (and the backend corroborates that) and no escalation is
 open, the report calls `shipyard-down.sh` — unchanged, with no flags and never `--force` — which
-removes the worktree. A slot whose terminal is still up is never torn down automatically, whatever
-its screen shows; `shipyard-down.sh <slot>` stays the way to finish it. **The branch is never
+removes the worktree. A finished child closes its own terminal as its last act
+(`shipyard-finish.sh`), which is what normally makes the terminal gone. A slot whose terminal is
+still up is never torn down automatically, whatever its screen shows: it is named in a
+`🏁 FINISHED` block with `shipyard-down.sh <slot>`, which the supervising agent runs. **The branch is never
 touched**, so the work is recoverable from it either way. Anything the gate declines is named in
 its own block with the exact command; a slot held by an open question gets its own block naming
-the records that hold it. Set it to `0` to keep teardown entirely manual; that also makes a
+the records that hold it. Set it to `0` to keep teardown entirely manual — the `🏁 FINISHED`
+block goes with it; that also makes a
 no-argument `/shipyard` run non-destructive — though not inert: the report still writes its
 mailbox bookkeeping (truncating the consecutive-merged counts — with the teardown off, all of
 them), repaints sidebar glyphs, closes pending notices, and re-arms the Codex parent continuity
@@ -309,7 +313,7 @@ unsupported setup, not by ordinary use. Each names what would make it a defect w
   bash 5 is installed there (the CI job, and a Homebrew or `/usr/local` install as the Requirements
   above describe) they run under it. A Mac with no bash 5 on that `PATH` runs them under 3.2,
   where the escalations block would vanish silently (its stderr goes to `/dev/null`) if that script ever used a bash-4 construct; it
-  uses none today. `plugins/shipyard/skills/shipyard/shipyard-report.sh:2279`. Found by the review
+  uses none today. `plugins/shipyard/skills/shipyard/shipyard-report.sh:2334`. Found by the review
   of #336 (#337). *Promote when* a bash-4 construct lands in `shipyard-escalations.sh` or
   `shipyard-down.sh`, or when bash 5 stops being a requirement.
 - **KL-3 — the continuity watcher's start path is measured under bash 5, not 3.2.** For a Codex
@@ -326,15 +330,15 @@ unsupported setup, not by ordinary use. Each names what would make it a defect w
   before it reaches arithmetic, but t13's E6b corrupts them together with `since`, and a refused
   `since` keeps the slot from stalling, so neither guard's own arithmetic is reached. Only a peer
   write to the mailbox puts such a value there; the report writes canonical epochs.
-  `plugins/shipyard/skills/shipyard/shipyard-report.sh:1559`. Found by the review of #237.
+  `plugins/shipyard/skills/shipyard/shipyard-report.sh:1606`. Found by the review of #237.
   *Promote when* the report itself writes a zero-padded or non-canonical number into
   `report-stall`, or a slot is seen to lose its alarm over a malformed record.
 - **KL-5 — the `report-tick` octal refusal and the stall table's string compare are pinned by no
   fixture.** A leading-zero tick is refused rather than read as octal (`08` would abort the whole
   report), and the stall table matches slot names as strings so `43` and `043` stay apart. No test
   writes such a tick or such a pair of rows. The tick is written only by the report, and launched
-  slot names carry no leading zero. `plugins/shipyard/skills/shipyard/shipyard-report.sh:688` and
-  `:1553`. Found by the review of #237. *Promote when* a writer other than the report stamps
+  slot names carry no leading zero. `plugins/shipyard/skills/shipyard/shipyard-report.sh:724` and
+  `:1600`. Found by the review of #237. *Promote when* a writer other than the report stamps
   `report-tick`, or slot names can begin with a zero.
 - **KL-6 — the owner-hold launch and two temp names are FIFO-tested by nothing.** t21's NOT COVERED
   header names them: a FIFO at the owner-hold launch's log, a temp name swapped between `mktemp` and
@@ -399,7 +403,7 @@ unsupported setup, not by ordinary use. Each names what would make it a defect w
   arm, the launch refusal, the admission gate, `shipyard-down.sh --list`'s `?container`, and the
   agterm branch of `shipyard_container_remedy` are reached by no case; only the per-slot route
   through `shipyard_absence_report` is (t14 6f).
-  `plugins/shipyard/skills/shipyard/shipyard-report.sh:233`, `shipyard-launch.sh:151`,
+  `plugins/shipyard/skills/shipyard/shipyard-report.sh:250`, `shipyard-launch.sh:151`,
   `shipyard-admission.sh:120`, `shipyard-down.sh:128` and `shipyard-backend.sh:550`. Found by the
   review of #292. *Promote when* one of those arms prints the wrong remedy, or none.
 - **KL-15 — the both-pinned remedy re-reads the pins after its caller has.** A caller that has just

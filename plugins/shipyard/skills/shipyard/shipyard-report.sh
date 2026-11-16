@@ -177,6 +177,23 @@ if [ ${#SLOTS[@]} -eq 0 ]; then
   done <<EOF
 $SLOTS_OUT
 EOF
+  # ...AND every finished worktree whose terminal is gone (#355). A finished child now closes its
+  # own terminal (shipyard-finish.sh), so a discovery run that listed terminals alone would drop
+  # exactly the slot the teardown is waiting for: it vanished from the table, and if it was the
+  # last one the run printed "no live ship terminals" and exited 0 with its worktree still on
+  # disk — finished work kept by nobody, the failure #355 was filed for. Only a worktree whose
+  # ship stage is terminal (`done` or `ready-to-merge`) is added, so a crashed child's worktree
+  # is not swept into a supervision run that did not ask about it; such a slot is listed by
+  # `shipyard-down.sh --list` and reaped by a run that names it, as before. An added slot is
+  # still asked of the backend like any other: it reaches the gone-slot arm only once the backend
+  # corroborates that no terminal carries its name.
+  for d in "$ROOT/.claude/worktrees/ship-"*; do
+    [ -d "$d" ] || continue
+    slot=${d##*/ship-}
+    shipyard_slot_check "$slot" 2>/dev/null || continue
+    case " ${SLOTS[*]-} " in *" $slot "*) continue ;; esac
+    case "$(shipyard_stage_of "$d")" in done|ready-to-merge) SLOTS+=("$slot") ;; esac
+  done
 fi
 
 TAB=$(printf '\t')
@@ -374,10 +391,11 @@ MERGED_ROWS=()   # this tick's consecutive-merged counts, rewritten whole (see a
 REAPED=()        # slots this tick tore down
 REAP_REFUSED=()  # slots that got as far as the teardown and were refused, with the reason
 REAP_HELD=()     # slots held back by an open escalation — finished, but somebody is owed an answer
+REAP_LIVE=()     # slots finished by every lock but the terminal, which is still up (#355)
 
 # autodown_consider <slot> <iid> <state> <stage> <addr> <pending> — the locks above, in cost
 # order, then the teardown. Echoes nothing; it reports through globals — MERGED_ROWS, REAPED,
-# REAP_REFUSED and REAP_HELD — which is also why it is never called inside a `$( )`: every one of
+# REAP_REFUSED, REAP_HELD and REAP_LIVE — which is also why it is never called inside a `$( )`: every one of
 # them would be appended to in a subshell and lost, and the consecutive count would never advance
 # past one. (Named rather than counted: this sentence read "three globals" for exactly as long as
 # it took the next round to add a fourth.)
@@ -443,7 +461,25 @@ autodown_consider() {
   # diagnostic is captured rather than printed: this whole report is buffered into one block, and
   # `shipyard_absence_report`'s rc-0 wording is written for a caller that did not expect the
   # absence.
-  [ -z "$addr" ] || return 1
+  #
+  # REFUSED, BUT NAMED (#355). A child closes its own terminal once ship records `done`
+  # (shipyard-finish.sh), and that absence is what this path then acts on. A finished slot whose
+  # terminal is STILL up — a child launched before that protocol, a close the driver refused over
+  # companions, a no-merge repo's child parked at `ready-to-merge` — used to be refused here in
+  # silence and sat until somebody noticed. Now it goes into the 🏁 FINISHED block with the exact
+  # command, which SKILL.md makes the parent's to run. Nothing here acts on it: closing a live
+  # terminal stays the decision of an agent that can look at it.
+  #
+  # An unsettled record does NOT keep the slot out of the block; it changes the entry to name the
+  # hold and withhold the command. Leaving it out was the first version, and the count it keyed
+  # on is the fail-closed one: it also counts a record of a kind the escalation block never shows,
+  # so one child-written file removed the slot from both blocks with nothing on screen saying so
+  # (AGENTS.md: untrusted evidence may annotate a signal, never suppress one). Now the only effect
+  # such a file has is visible in the entry itself.
+  if [ -n "$addr" ]; then
+    REAP_LIVE+=("$slot|$stage|$seen|${pending:-0}")
+    return 1
+  fi
   shipyard_absence_report "$slot" >/dev/null 2>&1 || return 1
 
   # AN OPEN ESCALATION IS A HOLD, and it is passed in rather than read out of the caller's own
@@ -469,8 +505,8 @@ autodown_consider() {
   # OUT, the launcher tells the child in as many words to carry on past a `PENDING:` reply, and
   # nothing but an operator answering ever clears the record — ship's own plugin has no
   # reference to the mailbox at all, so its stage can reach `ready-to-merge` with a question
-  # still open. (A `notice` also counts here, but the report's own tail closes notices each
-  # tick, so that arm holds a slot for one tick at most.)
+  # still open. (A parseable `notice` does not count: it owes nobody an answer — see
+  # slot_unsettled.)
   #
   # PLACED LAST, after the count and after lock 3, and the position is load-bearing twice over.
   # It used to sit before the count, which meant a held slot appended no row and the
@@ -952,13 +988,9 @@ mr_state() {
   printf '%s' "$st"
 }
 
-# Pipeline stage out of ship's state file (issue-ready / spec-review / apply / impl-review / ...).
-slot_stage() {
-  local slot="$1" sd f
-  sd="$ROOT/.claude/worktrees/ship-$slot/.pipeline-state"
-  f=$(ls -1 "$sd"/*.json 2>/dev/null | tail -1)
-  [ -n "$f" ] && jq -r '.stage // .state // .phase // empty' "$f" 2>/dev/null
-}
+# Pipeline stage out of ship's state file — shipyard_stage_of in shipyard-lib.sh, which
+# shipyard-finish.sh asks too (#355).
+slot_stage() { shipyard_stage_of "$ROOT/.claude/worktrees/ship-$1"; }
 
 # Pending escalations for a slot (count).
 slot_pending() {
@@ -1072,7 +1104,7 @@ slot_unsettled_files() {
     # Not a regular file (a FIFO would block jq, #253): listed rather than skipped, matching the
     # count in slot_unsettled, which holds the teardown on it.
     [ -f "$f" ] || { printf '%q (not a regular file — cannot be answered)\n' "${f##*/}"; continue; }
-    st=$(jq -r '.status // "pending"' "$f" 2>/dev/null) || st=""
+    st=$(jq -r 'if .kind == "notice" then "done" else (.status // "pending") end' "$f" 2>/dev/null) || st=""
     case "$st" in
       done|answered) ;;
       '')            printf '%q (unreadable — cannot be answered)\n' "${f##*/}" ;;
@@ -1113,7 +1145,12 @@ slot_unsettled() {
     # it cannot read and a planted FIFO must not be the way to release the hold. The window between
     # this check and jq's open is the read residual #246 deferred.
     [ -f "$f" ] || { n=$((n+1)); continue; }
-    st=$(jq -r '.status // "pending"' "$f" 2>/dev/null) || st=""
+    # A NOTICE owes nobody an answer, so it never holds (#355): it is fire-and-forget, it lives in
+    # the mailbox and survives the worktree, and the commonest one is now the "finished: closing
+    # terminal" notice shipyard-finish.sh writes as the child's last act — which used to put every
+    # normal self-close into a ✋ HELD block reading "somebody is owed an answer". Only a notice jq
+    # can PARSE is exempt; an unreadable record still counts, whatever kind it claims to be.
+    st=$(jq -r 'if .kind == "notice" then "done" else (.status // "pending") end' "$f" 2>/dev/null) || st=""
     case "$st" in
       done|answered) ;;
       *)             n=$((n+1)) ;;
@@ -1265,7 +1302,16 @@ for slot in "${SLOTS[@]}"; do
         # the tick the whole fleet drained, and never at all on a fleet that keeps being topped
         # up — on precisely the arm this block calls the shape that ACCUMULATES.
         [ "${#REAP_REFUSED[@]}" -gt "$gone_before" ] && gone_note="reap-refused"
-        [ "${#REAP_HELD[@]}" -gt "$gone_held" ] && gone_note="reap-held" ;;
+        [ "${#REAP_HELD[@]}" -gt "$gone_held" ] && gone_note="reap-held"
+        # A merged, finished slot that is neither torn down, refused nor held this tick is waiting
+        # for its next consecutive merged read (or for its absence to be corroborated). It counts
+        # in flight, or the run would report the fleet drained and stop the very loop whose next
+        # tick tears it down — the common case now that a finished child closes its own terminal
+        # (#355). Refused and held slots are not counted: those are named in their own blocks and
+        # need a person, which is what the exit status already says about them.
+        if [ "$AUTODOWN" = 1 ] && [ "$gone_state" = merged ] && [ -z "$gone_note" ]; then
+          inflight=$((inflight+1)); gone_note="reap-pending"
+        fi ;;
     esac
     ROWS+=("| $slot | $mr_label | — | ⛔ no terminal | — | $esc | — | — |")
     SIG+=("$slot|$mr_label|term=0|—|—|$pend/$badrec|$gone_note")
@@ -1358,9 +1404,10 @@ for slot in "${SLOTS[@]}"; do
   # Cleared every iteration, not just assigned: these are plain shell variables in one long
   # loop, so a value left over from the previous slot would otherwise decide this one's row.
   reap_note=""; before_refused=${#REAP_REFUSED[@]}; before_held=${#REAP_HELD[@]}
-  # A slot reaching here has a terminal, so lock 3 refuses it, and this call only keeps the
-  # consecutive-merged count current: lock 3 returns before the escalation check, so a live slot
-  # is never in the HELD block (its question still shows in the escalation block). The success
+  # A slot reaching here has a terminal, so lock 3 refuses it. This call keeps the
+  # consecutive-merged count current and, for a slot finished by every other lock, names it in the
+  # 🏁 FINISHED block (#355). A live slot is never in the HELD block (its question still shows in
+  # the escalation block). The success
   # branch is kept so the row and the SIG stay right if lock 3 ever passes a live terminal again
   # (#156 carries that design); until then it cannot run.
   if autodown_consider "$slot" "$iid" "$state" "$stage" "$addr" "$unsettled"; then
@@ -1791,6 +1838,7 @@ EP_ROWS=()
 NOAGENT_EP=()   # parallel to NOAGENT:      "<full>|<ticks>|<minutes held>|<first HH:MM>"
 HELD_EP=()      # parallel to REAP_HELD
 REFUSED_EP=()   # parallel to REAP_REFUSED
+LIVE_EP=()      # parallel to REAP_LIVE
 EP_NOW_ISO=$(shipyard_now)
 
 # episode <block> <slot> <fp> — sets EP_OUT to "<full>|<ticks>|<minutes>|<HH:MM>" and appends this
@@ -1831,6 +1879,13 @@ $(slot_unsettled_files "$sl")")"; HELD_EP+=("$EP_OUT")
 done
 for x in ${REAP_REFUSED[@]+"${REAP_REFUSED[@]}"}; do
   episode refused "${x%%|*}" "$(ep_fp "${x#*|}")"; REFUSED_EP+=("$EP_OUT")
+done
+# The fingerprint is the stage and the hold: a slot that moves from `ready-to-merge` to `done`, or
+# whose hold clears, prints its full entry again, since the advice differs.
+for x in ${REAP_LIVE[@]+"${REAP_LIVE[@]}"}; do
+  sl=${x%%|*}; rest=${x#*|}
+  # Stage and hold together: a change in either is news (the advice differs).
+  episode live "$sl" "$(ep_fp "${rest%%|*}|${rest##*|}")"; LIVE_EP+=("$EP_OUT")
 done
 if [ -n "$EPISODEFILE" ]; then
   # By rename, like every report-* write (#253, above the stall table's write).
@@ -1953,7 +2008,7 @@ fi
 if [ "$ONLY_CHANGED" = 1 ] && [ "$TERMINAL" = 0 ] && [ "${#STALLED[@]}" -eq 0 ] \
    && [ "${#NOAGENT[@]}" -eq 0 ] && [ "${#UNREADABLE[@]}" -eq 0 ] \
    && [ "${#REAP_HELD[@]}" -eq 0 ] && [ "${#REAP_REFUSED[@]}" -eq 0 ] \
-   && [ "${#REAPED[@]}" -eq 0 ] \
+   && [ "${#REAPED[@]}" -eq 0 ] && [ "${#REAP_LIVE[@]}" -eq 0 ] \
    && [ "$NOSIG_RC" = 0 ] && [ -z "$PINNED_ELSEWHERE" ] && [ "$GAP" = 0 ] && [ -n "$SIGFILE" ]; then
   NOW_SIG=$(printf '%s\n' "${SIG[@]}")
   if [ -f "$SIGFILE" ] && [ "$NOW_SIG" = "$(cat "$SIGFILE" 2>/dev/null)" ]; then
@@ -2281,6 +2336,45 @@ EOF
       fi
       echo "  Nothing was removed. Tearing it down by hand first destroys the session that asked, and"
       echo "  the reply then reports success to a child that is no longer there."
+    done
+  fi
+  # 🏁 FINISHED (#355): every teardown lock passed except that the terminal is still up. The remedy
+  # is the ordinary teardown, and running it is the PARENT's job on the tick it reads this (SKILL.md
+  # Step 6), not something left for a human to notice. `done` means the child said it is finished,
+  # so the command is given flat; `ready-to-merge` means the forge merged but the child has not yet
+  # recorded `done`, so the parent looks at the terminal first — the child may be mid-turn on the
+  # merge it has just seen.
+  if [ "${#REAP_LIVE[@]}" -gt 0 ]; then
+    echo
+    echo "### 🏁 FINISHED — merged, terminal still up; close it"
+    i=0
+    for x in "${REAP_LIVE[@]}"; do
+      sl=${x%%|*}; rest=${x#*|}; st=${rest%%|*}; rest=${rest#*|}; n=${rest%%|*}; held=${rest#*|}
+      IFS='|' read -r ep_full ep_n ep_min ep_at <<EOF
+${LIVE_EP[$i]}
+EOF
+      i=$((i+1))
+      if [ "$held" != 0 ]; then
+        # Named, never dropped, and no command: closing it now would strand whatever the record is.
+        echo "- \`$sl\` — merged and finished (\`$st\`), terminal still up, but $held unsettled record(s) hold it:"
+        slot_unsettled_files "$sl" | while IFS= read -r hf; do echo "    $hf"; done
+        echo "  Answer or clear them first (the escalation block shows the ones it can); then it is listed here to close."
+        continue
+      fi
+      if [ "$ep_full" = 0 ]; then
+        echo "- \`$sl\` — STILL up (\`$st\`), first raised ${ep_min} min ago (at ${ep_at} UTC), tick $ep_n:"
+        [ "$st" = done ] || echo "  look at its terminal first; tear it down only if it is idle:"
+        echo "    bash $DIR/shipyard-down.sh $sl"
+        continue
+      fi
+      if [ "$st" = done ]; then
+        echo "- \`$sl\` — merged on $n consecutive ticks and ship recorded \`done\`, but its terminal is still up"
+        echo "  (the child closes it itself through shipyard-finish.sh; it did not). Tear it down now:"
+      else
+        echo "- \`$sl\` — merged on $n consecutive ticks, ship's stage is \`$st\`, and its terminal is still up."
+        echo "  Look at its terminal first: if it is idle, tear it down now; if it is mid-turn, leave it:"
+      fi
+      echo "    bash $DIR/shipyard-down.sh $sl"
     done
   fi
   if [ "${#REAP_REFUSED[@]}" -gt 0 ]; then
