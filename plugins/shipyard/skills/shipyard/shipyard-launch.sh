@@ -361,6 +361,21 @@ ENVSUM=$(shipyard_env_summary "$AGENT") \
   echo "a review pass posted blocking findings, pipeline failed, change archived, merged, and"
   echo "whenever you stop for any reason. No waiting, one line each."
   echo
+  echo "## When the change is done, close your own terminal"
+  echo
+  echo "Once \`$SHIP_REF\` has recorded \`done\` — the PR/MR is merged (or closed) and the pipeline"
+  echo "has nothing left to do — and you have sent your last notice, the very LAST thing you do is:"
+  echo
+  echo '```bash'
+  echo "bash $DIR/shipyard-finish.sh"
+  echo '```'
+  echo
+  echo "It checks that ship's state file says \`done\` and that it is running in this slot's own"
+  echo "terminal, writes a closing notice, and closes this terminal. The worktree stays; the parent"
+  echo "removes it after its own checks. Do nothing after it. Never run it at \`ready-to-merge\` or"
+  echo "\`needs-human\`: there a human still owes the next move. If it refuses, its notice says why"
+  echo "— leave the terminal as it is and stop; the parent closes it."
+  echo
   echo "## The review handshake — two traps that have stranded sessions"
   echo
   echo "**There will be no formal APPROVE.** GitHub forbids approving your own PR, and any"

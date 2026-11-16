@@ -97,6 +97,13 @@
 #      carries the command, then full again for a new reason.
 #   B23 TORN DOWN fires once per act: a slot that was really removed is not reaped or reported again.
 #   B24 HELD's short entry for an UNREADABLE record points at the file, not at an answer (#197).
+#   B26 a finished slot whose terminal is STILL UP is named in 🏁 FINISHED with the exact command,
+#      and the report tears nothing down itself (#355): `done` says tear it down, `ready-to-merge`
+#      says look first, an open question keeps it out, SHIPYARD_AUTODOWN=0 silences it, and both
+#      entry forms render under /bin/bash. A held slot is listed with its records and no command.
+#   B27 a parseable notice never holds a teardown — the child's own closing notice is one.
+#   B28 discovery mode lists a finished worktree whose terminal is gone, keeps the loop alive until
+#      its next merged tick tears it down, and does not sweep in a crashed child's worktree.
 # That list is maintained by hand and has gone stale twice already, each time when a fix round
 # added cases and left it ending where it was. The file below is the authority.
 #
@@ -953,6 +960,102 @@ ok "B25: under /bin/bash, AWAITING REMOVAL's second tick is the short entry" 1 \
 ok "B25: ...and no tick wrote to stderr"               "" \
    "$(cat "$T17TMP/floor-refused-1.err" "$T17TMP/floor-refused-2.err" "$T17TMP/floor-refused-3.err")"
 printf '0\n' >"$DOWN_RC_FILE"
+
+# --- B26: a finished slot whose terminal is STILL UP is named, not silently kept (#355) ------
+# A child closes its own terminal once ship records `done`; one that did not — launched before
+# that protocol, a close the driver refused, a child parked at `ready-to-merge` — used to be
+# refused at lock 3 in silence and sat until the human asked why. Now it is named in 🏁 FINISHED
+# with the exact command, and NOTHING is torn down by the report itself (B4 still holds).
+b_reset; rm -f "$B_GIT/ship-escalations/report-episodes"
+b_slot 86 886 done
+printf '1 ship-86\n' >"$B_WINS"; printf 'ship-86\n' >"$B_ENUM"
+printf '886\tMERGED\n' >"$B_STATES"
+b26a=$(b_tick -- --only-changed 86)
+ok "B26: one merged tick names nothing"                0 "$(printf '%s' "$b26a" | grep -c 'FINISHED — merged')"
+b26b=$(b_tick -- --only-changed 86)
+ok "B26: the second names the live finished slot"      1 "$(printf '%s' "$b26b" | grep -c 'FINISHED — merged, terminal still up')"
+ok "B26: ...as done, to tear down now"                 1 "$(printf '%s' "$b26b" | grep -c 'ship recorded `done`, but its terminal is still up')"
+ok "B26: ...with the exact command"                    1 "$(printf '%s' "$b26b" | grep -c 'shipyard-down.sh 86$')"
+ok "B26: ...and the report tore nothing down itself"   0 "$(grep -c . "$DOWN_CALLS")"
+b26c=$(b_tick -- --only-changed 86)
+ok "B26: it bypasses --only-changed, as a short entry" 1 \
+   "$(printf '%s' "$b26c" | grep -c '^- `86` — STILL up (`done`), first raised .* tick 2:')"
+ok "B26: ...still carrying the command"                1 "$(printf '%s' "$b26c" | grep -c 'shipyard-down.sh 86$')"
+# ready-to-merge: the forge merged but the child has not recorded done — look first.
+b_reset; rm -f "$B_GIT/ship-escalations/report-episodes"
+b_slot 86 886 ready-to-merge
+b_tick -- 86 >/dev/null
+b26d=$(b_tick -- 86)
+ok "B26: at ready-to-merge it says to look first"      1 "$(printf '%s' "$b26d" | grep -c 'Look at its terminal first')"
+# An unsettled record does not keep it OUT — that would let one child-written file of a kind the
+# escalation block never shows remove the slot from every block. It is listed, naming the record,
+# with no command.
+b_reset; rm -f "$B_GIT/ship-escalations/report-episodes"
+b_slot 86 886 done
+printf '{"kind":"x","status":"pending","slot":"86"}\n' >"$B_GIT/ship-escalations/86-1.json"
+b_tick -- 86 >/dev/null
+b26e=$(b_tick -- 86)
+ok "B26: a held slot is still listed in FINISHED"      1 "$(printf '%s' "$b26e" | grep -c '`86` — merged and finished (`done`), terminal still up, but 1 unsettled')"
+ok "B26: ...naming the record"                         1 "$(printf '%s' "$b26e" | grep -c '86-1.json')"
+ok "B26: ...and offering no command"                   0 "$(printf '%s' "$b26e" | grep -c 'shipyard-down.sh 86$')"
+rm -f "$B_GIT/ship-escalations/86-1.json"
+# SHIPYARD_AUTODOWN=0 leaves teardown entirely manual, this block included.
+b_reset; rm -f "$B_GIT/ship-escalations/report-episodes"
+b_tick SHIPYARD_AUTODOWN=0 -- 86 >/dev/null
+b26f=$(b_tick SHIPYARD_AUTODOWN=0 -- 86)
+ok "B26: SHIPYARD_AUTODOWN=0 names nothing"            0 "$(printf '%s' "$b26f" | grep -c 'FINISHED — merged')"
+# Under the macOS floor, where the report actually runs: both entry forms render, nothing on stderr.
+b_reset; rm -f "$B_GIT/ship-escalations/report-episodes"
+T17_BASH=/bin/bash T17_ERR="$T17TMP/floor-live-1.err" b_tick -- --only-changed 86 >/dev/null
+b26g=$(T17_BASH=/bin/bash T17_ERR="$T17TMP/floor-live-2.err" b_tick -- --only-changed 86)
+b26h=$(T17_BASH=/bin/bash T17_ERR="$T17TMP/floor-live-3.err" b_tick -- --only-changed 86)
+ok "B26: under /bin/bash, the full entry"              1 "$(printf '%s' "$b26g" | grep -c 'ship recorded `done`')"
+ok "B26: under /bin/bash, then the short one"          1 "$(printf '%s' "$b26h" | grep -c '^- `86` — STILL up (`done`), .* tick 2:')"
+ok "B26: ...and no tick wrote to stderr"               "" \
+   "$(cat "$T17TMP/floor-live-1.err" "$T17TMP/floor-live-2.err" "$T17TMP/floor-live-3.err")"
+# The short entry at ready-to-merge keeps the warning to look first.
+b_reset; rm -f "$B_GIT/ship-escalations/report-episodes"
+b_slot 86 886 ready-to-merge
+b_tick -- --only-changed 86 >/dev/null; b_tick -- --only-changed 86 >/dev/null
+b26i=$(b_tick -- --only-changed 86)
+ok "B26: the ready-to-merge short entry still says look first" 1 "$(printf '%s' "$b26i" | grep -c 'look at its terminal first')"
+
+# --- B27: a NOTICE never holds the teardown (#355) -------------------------------------------
+# A notice owes nobody an answer, and the commonest one is now the child's own closing notice from
+# shipyard-finish.sh: holding on it put every normal self-close into a ✋ HELD block.
+b_reset; rm -f "$B_GIT/ship-escalations/report-episodes"
+b_slot 87 887 done
+printf '1 ship-79\n' >"$B_WINS"; printf 'ship-79\n' >"$B_ENUM"
+printf '887\tMERGED\n' >"$B_STATES"
+# The notice lands between the two ticks, so it is still pending on the tick that tears down: the
+# report's own tail closes notices each tick, and a notice written before the first tick would be
+# closed by then, leaving this case unable to tell the hold from its absence (measured: it was).
+b_tick -- 87 >/dev/null
+printf '{"kind":"notice","status":"pending","slot":"87","question":"finished: closing"}\n' \
+  >"$B_GIT/ship-escalations/87-1.json"
+b27=$(b_tick -- 87)
+ok "B27: a pending notice does not hold the teardown"  1 "$(grep -c '^87$' "$DOWN_CALLS")"
+ok "B27: ...and no HELD block"                         0 "$(printf '%s' "$b27" | grep -c 'HELD — finished and merged')"
+rm -f "$B_GIT/ship-escalations/87-1.json"
+
+# --- B28: discovery mode keeps a finished slot whose child closed its own terminal (#355) ------
+# Discovery used to list terminals only, so a child that closed itself vanished from the table, and
+# a last one made the run print "no live ship terminals" and exit 0 over its worktree. The other
+# cases' fixture worktrees are cleared first so discovery sees only these two.
+b_reset; rm -f "$B_GIT/ship-escalations/report-episodes"
+rm -rf "$B_ROOT/.claude/worktrees"
+b_slot 88 888 done
+b_slot 89 889 impl-review          # a crashed child's worktree: not swept in
+printf '1 ship-79\n' >"$B_WINS"; : >"$B_ENUM"
+printf '888\tMERGED\n889\tMERGED\n' >"$B_STATES"
+b28a=$(b_tick --); b28a_rc=$?
+ok "B28: discovery lists the finished worktree"        1 "$(printf '%s' "$b28a" | grep -c '^| 88 ')"
+ok "B28: ...not a crashed child's"                     0 "$(printf '%s' "$b28a" | grep -c '^| 89 ')"
+ok "B28: ...does not call the fleet drained"           0 "$(printf '%s' "$b28a" | grep -c 'no live ship terminals')"
+ok "B28: ...and keeps the loop alive for the next tick" 1 "$b28a_rc"
+b28b=$(b_tick --)
+ok "B28: the next tick tears it down"                  1 "$(grep -c '^88$' "$DOWN_CALLS")"
+ok "B28: ...and only it"                               1 "$(grep -c . "$DOWN_CALLS")"
 
 printf '\n%s: %d checks, %d failures\n' "$(basename "$0")" "$CHECKS" "$FAILURES"
 [ "$FAILURES" -eq 0 ]
