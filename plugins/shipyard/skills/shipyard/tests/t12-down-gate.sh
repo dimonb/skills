@@ -585,14 +585,23 @@ ok "M ...and no CLI ran" "0" "$(wc -l < "$FORGE_LOG" | tr -d ' ')"
 # The repository asked is the one the REF belongs to, not `origin`, and of nested remote names
 # (`team` and `team/fork`, both legal) the longest wins.
 git -C "$TMP/wtM" remote set-url origin https://github.com/example/proj.git
-git -C "$TMP/wtM" remote add team https://github.com/example/team.git
-git -C "$TMP/wtM" remote add team/fork https://github.com/example/fork.git
-ok "M nested remote names: the longest owns the ref" "team/fork	main" \
-   "$(_shipyard_down_remote_of "$TMP/wtM" team/fork/main)"
+# Not every git keeps the pair: on the CI runner's git (2.56.1) this split read `team`, i.e. git
+# did not list `team/fork` beside `team`. So the nested check runs only where git lists both — on
+# any other git the case cannot arise — and the ref's-own-remote check uses a remote that is not
+# `origin` and nests nothing.
+git -C "$TMP/wtM" remote add up https://github.com/example/upstream.git
 : > "$FORGE_LOG"
-( shipyard_down_merged_head "$TMP/wtM" team/fork/main >/dev/null )
+( shipyard_down_merged_head "$TMP/wtM" up/main >/dev/null )
 ok "M proof 3 asks the ref's own remote, not origin" "1" \
-   "$(grep -c -- '-R github.com/example/fork --head feat/m' "$FORGE_LOG")"
+   "$(grep -c -- '-R github.com/example/upstream --head feat/m' "$FORGE_LOG")"
+git -C "$TMP/wtM" remote add team https://github.com/example/team.git
+if git -C "$TMP/wtM" remote add team/fork https://github.com/example/fork.git 2>/dev/null \
+   && git -C "$TMP/wtM" remote | grep -qx 'team/fork'; then
+  ok "M nested remote names: the longest owns the ref" "team/fork	main" \
+     "$(_shipyard_down_remote_of "$TMP/wtM" team/fork/main)"
+else
+  skip "M nested remote names" "this git refuses a remote 'team/fork' beside 'team', so names cannot nest here"
+fi
 # The proof-3 label is reset by every verdict: in shipyard-down.sh's multi-slot loop a stale one
 # would label a later slot proven by proof 1 as "merged as #7".
 ok "M a later verdict does not inherit the merged label" "safe 7|safe -" \
