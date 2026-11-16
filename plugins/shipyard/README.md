@@ -240,7 +240,10 @@ See **A launch this machine cannot take** above.
 
 `SHIPYARD_DOWN_FETCH` (default `1`) allows the teardown gate one `git fetch` of the base branch
 per invocation, so a slot torn down seconds after its merge is not refused over a
-remote-tracking ref this clone has simply not seen yet. Set it to `0` to keep teardown offline.
+remote-tracking ref this clone has simply not seen yet, and one bounded `gh`/`glab` lookup of the
+merged PR/MR at the slot's HEAD when no other proof settled it. Set it to `0` to keep teardown
+offline. That lookup takes the forge CLI's default 20-second bound; `SHIPYARD_FORGE_TIMEOUT` is the
+report's own knob and does not reach it.
 
 `SHIPYARD_AUTODOWN` (default `1`) lets the monitor finish a slot off for you: once its PR/MR has
 read `merged` on `SHIPYARD_AUTODOWN_TICKS` consecutive ticks (default and minimum `2`), ship's own

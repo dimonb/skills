@@ -550,8 +550,8 @@ ok "M local-path remote: neither CLI ran" "0" "$(wc -l < "$FORGE_LOG" | tr -d ' 
 git -C "$TMP/wtM" remote set-url origin https://github.com/example/proj.git
 : > "$FORGE_LOG"
 ok "M merged PR at this HEAD into main -> safe, names it" "safe 7" "$(m_verdict)"
-ok "M gh was pointed at the remote's own repository" "1" \
-   "$(grep -c -- '-R example/proj --head feat/m --state merged' "$FORGE_LOG")"
+ok "M gh was pointed at the remote's own repository, host included" "1" \
+   "$(grep -c -- '-R github.com/example/proj --head feat/m --state merged' "$FORGE_LOG")"
 GH_JSON=$(gh_pr "$MHEAD" release false 7)
 ok "M merged into ANOTHER branch -> no proof" "$MBASE -" "$(m_verdict)"
 GH_JSON=$(gh_pr "0000000000000000000000000000000000000000" main false 7)
@@ -577,6 +577,28 @@ ok "M glab was given the remote URL whole" "1" \
    "$(grep -c -- '-R https://gitlab.example/grp/sub/proj.git --source-branch feat/m --merged' "$FORGE_LOG")"
 GLAB_JSON=$(printf '[{"sha":"%s","target_branch":"main","iid":9,"source_project_id":2,"target_project_id":1}]' "$MHEAD")
 ok "M glab: a fork's MR -> no proof" "$MBASE -" "$(m_verdict)"
+# An option-shaped URL never reaches a CLI's argument list.
+git -C "$TMP/wtM" config remote.origin.url '-oProxyCommand=x:example/proj.git'
+: > "$FORGE_LOG"
+ok "M an option-shaped URL -> no proof" "$MBASE -" "$(m_verdict)"
+ok "M ...and no CLI ran" "0" "$(wc -l < "$FORGE_LOG" | tr -d ' ')"
+# The repository asked is the one the REF belongs to, not `origin`, and of nested remote names
+# (`team` and `team/fork`, both legal) the longest wins.
+git -C "$TMP/wtM" remote set-url origin https://github.com/example/proj.git
+git -C "$TMP/wtM" remote add team https://github.com/example/team.git
+git -C "$TMP/wtM" remote add team/fork https://github.com/example/fork.git
+ok "M nested remote names: the longest owns the ref" "team/fork	main" \
+   "$(_shipyard_down_remote_of "$TMP/wtM" team/fork/main)"
+: > "$FORGE_LOG"
+( shipyard_down_merged_head "$TMP/wtM" team/fork/main >/dev/null )
+ok "M proof 3 asks the ref's own remote, not origin" "1" \
+   "$(grep -c -- '-R github.com/example/fork --head feat/m' "$FORGE_LOG")"
+# The proof-3 label is reset by every verdict: in shipyard-down.sh's multi-slot loop a stale one
+# would label a later slot proven by proof 1 as "merged as #7".
+ok "M a later verdict does not inherit the merged label" "safe 7|safe -" \
+   "$( ( shipyard_down_refresh() { return 1; }
+         shipyard_down_verdict "$TMP/wtM"; a="$SHIPYARD_DOWN_KIND ${SHIPYARD_DOWN_MERGED:--}"
+         shipyard_down_verdict "$TMP/wtA"; printf '%s|%s %s' "$a" "$SHIPYARD_DOWN_KIND" "${SHIPYARD_DOWN_MERGED:--}" ) )"
 unset -f gh glab
 
 done_ t12-down-gate

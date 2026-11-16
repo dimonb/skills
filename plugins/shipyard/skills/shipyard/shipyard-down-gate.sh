@@ -29,7 +29,7 @@
 # between the operator and genuinely unrecoverable content is gate 1, the dirty check — which
 # is why a `dirty` refusal deserves MORE weight than an `unmerged` one, not less.
 #
-# CONTAINMENT IS PROVEN, NEVER ASSUMED. Two independent proofs, first one that succeeds wins:
+# CONTAINMENT IS PROVEN, NEVER ASSUMED. Independent proofs, in order; the first that succeeds wins:
 #
 #   1. TREE EQUALITY — the worktree's committed tree is byte-identical to the base branch's.
 #      Exact, instant, and works on any git.
@@ -135,19 +135,30 @@ shipyard_down_contained() {
 # The refspec is fully qualified and follows `--` so that no part of it can be read as an
 # option (see _shipyard_ref_ok in shipyard-lib.sh), and GIT_TERMINAL_PROMPT=0 keeps a teardown from blocking
 # forever on a credential prompt nobody is watching.
+# _shipyard_down_remote_of <worktree> <ref> — "<remote><TAB><branch>" for a remote-tracking ref,
+# split on a remote git actually has rather than on the first slash: a remote name may itself
+# contain one (`git remote add team/fork <url>` is accepted), and splitting by shape then talks to a
+# remote called `team`. And the LONGEST matching name wins, because names do nest: git accepts both
+# `team` and `team/fork`, and `git remote` lists `team` first, so a first match would split
+# `team/fork/main` into remote `team` and branch `fork/main`. Two consumers, the lazy fetch and
+# proof 3; rc 1 when no remote of this repository owns the ref.
+_shipyard_down_remote_of() {
+  local r best=''
+  for r in $(git -C "$1" remote 2>/dev/null); do
+    case "$2" in "$r/"?*) [ "${#r}" -gt "${#best}" ] && best=$r ;; esac
+  done
+  [ -n "$best" ] || return 1
+  printf '%s\t%s' "$best" "${2#"$best/"}"
+}
+
 _SHIPYARD_DOWN_FETCHED=''
 shipyard_down_refresh() {
-  local wt="$1" ref="$2" r remote='' branch=''
+  local wt="$1" ref="$2" rb remote='' branch=''
   [ "${SHIPYARD_DOWN_FETCH:-1}" = 1 ] || return 1
   case " $_SHIPYARD_DOWN_FETCHED " in *" $ref "*) return 1 ;; esac
   _SHIPYARD_DOWN_FETCHED="$_SHIPYARD_DOWN_FETCHED $ref"
-  # Split on a remote git actually has, rather than on the first slash: a remote name may
-  # itself contain one (`git remote add team/fork <url>` is accepted), and splitting by shape
-  # then fetches from a remote called `team`. Longest match would be better still, but remote
-  # names cannot nest here — one of them is a prefix or none is.
-  for r in $(git -C "$wt" remote 2>/dev/null); do
-    case "$ref" in "$r/"?*) remote=$r; branch=${ref#"$r/"}; break ;; esac
-  done
+  rb=$(_shipyard_down_remote_of "$wt" "$ref") || return 1
+  remote=${rb%%"	"*}; branch=${rb#*"	"}
   [ -n "$remote" ] && [ -n "$branch" ] || return 1
   GIT_TERMINAL_PROMPT=0 git -C "$wt" fetch --quiet "$remote" -- \
     "+refs/heads/$branch:refs/remotes/$ref" >/dev/null 2>&1 || return 1
@@ -162,19 +173,21 @@ shipyard_down_refresh() {
 # THE REPOSITORY IS NAMED, never left to the CLI's discovery. Run bare in the worktree, `gh` picks
 # among the remotes by its own rules (a `set-default`, then remote names), and a fork chosen there
 # could answer with a PR merged into the FORK's base branch at the same head — a pass for content
-# that is not in <ref>. So the remote is the one <ref> belongs to, split the way
-# shipyard_down_refresh splits it, and its URL is handed over explicitly: `gh` gets the URL's
-# OWNER/REPO path, which also survives an SSH host alias that `gh` itself cannot resolve; `glab`
-# takes the URL whole (`glab mr list --help`: "Also accepts full URL or Git URL").
+# that is not in <ref>. So the remote is the one <ref> belongs to (_shipyard_down_remote_of), and
+# its URL is handed over explicitly. `glab` takes the URL whole (`glab mr list --help`: "Also
+# accepts full URL or Git URL"). `gh` takes HOST/OWNER/REPO when the URL's host is a real hostname
+# (it has a dot), so neither GH_HOST nor gh's github.com default can send the query to another
+# host; and OWNER/REPO alone when the host is an SSH alias (no dot), which gh cannot resolve —
+# that one falls to gh's default host, the same one it would use for the alias's own pushes only
+# if the alias points there, so an alias for an Enterprise host gets no proof unless GH_HOST says so.
 #
 # The candidate query mirrors slot_iid_forge in shipyard-report.sh (fork filter, same field
 # names), restricted to merged ones. Bounded by forge_bounded, ten candidates.
 shipyard_down_merged_head() {
-  local wt="$1" ref="$2" r remote='' base='' url path br head out
+  local wt="$1" ref="$2" rb remote='' base='' url rest host path br head out
   [ "${SHIPYARD_DOWN_FETCH:-1}" = 1 ] || return 1
-  for r in $(git -C "$wt" remote 2>/dev/null); do
-    case "$ref" in "$r/"?*) remote=$r; base=${ref#"$r/"}; break ;; esac
-  done
+  rb=$(_shipyard_down_remote_of "$wt" "$ref") || return 1
+  remote=${rb%%"	"*}; base=${rb#*"	"}
   [ -n "$remote" ] && [ -n "$base" ] || return 1
   url=$(git -C "$wt" remote get-url "$remote" 2>/dev/null) || return 1
   # A local path or file:// remote has no forge to ask, and asking one anyway would send a CLI
@@ -186,10 +199,14 @@ shipyard_down_merged_head() {
   head=$(git -C "$wt" rev-parse --verify --quiet HEAD 2>/dev/null) || return 1
   case "$(shipyard_forge "$url")" in
     github)
-      path=${url#*://}
-      if [ "$path" != "$url" ]; then path=${path#*/}; else path=${url#*:}; fi
+      # scheme://[user@]host[:port]/path, or scp-like [user@]host:path.
+      rest=${url#*://}
+      if [ "$rest" != "$url" ]; then host=${rest%%/*}; path=${rest#*/}
+      else host=${url%%:*}; path=${url#*:}; fi
+      host=${host##*@}; host=${host%%:*}
       path=${path%/}; path=${path%.git}
       case "$path" in */*) ;; *) return 1 ;; esac
+      case "$host" in *.*) path="$host/$path" ;; esac
       out=$( (unset GITHUB_TOKEN
               forge_bounded gh pr list -R "$path" --head "$br" --state merged --limit 10 \
                 --json number,headRefOid,baseRefName,isCrossRepository \
@@ -202,8 +219,10 @@ shipyard_down_merged_head() {
                            | "\(.sha) \(.target_branch) \(.iid)"') 2>/dev/null) ;;
   esac
   # Field-exact on the head AND the target: a prefix match on either would let a near miss pass.
-  out=$(printf '%s\n' "$out" | awk -v h="$head" -v b="$base" \
-          '$1""==h"" && $2""==b"" && $3 ~ /^[0-9]+$/ { print $3; exit }')
+  # Through ENVIRON, not `awk -v`, which processes escapes in a branch name (see the report's
+  # $MERGEDFILE lookup for the measured case).
+  out=$(printf '%s\n' "$out" | H="$head" B="$base" awk \
+          '$1""==ENVIRON["H"]"" && $2""==ENVIRON["B"]"" && $3 ~ /^[0-9]+$/ { print $3; exit }')
   [ -n "$out" ] || return 1
   printf '%s' "$out"
 }
