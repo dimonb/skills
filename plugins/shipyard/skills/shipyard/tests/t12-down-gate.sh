@@ -59,6 +59,19 @@
 #      (identical to the branch by construction, so every pushed-but-unmerged branch would
 #      read `safe`).
 #
+#   M  proof 3 (#356): a squash-merged slot whose base branch then edited the same region reads
+#      `unprovable` to proofs 1 and 2 — the refusal a real fleet hit on a merged, clean slot — and
+#      is `safe` once the forge reports a MERGED PR/MR at exactly this HEAD into the base branch.
+#      Each lock is a case of its own: the target branch (merged into a side branch is not in the
+#      base), the head (a PR merged at another commit says nothing about this one), the fork
+#      filter, SHIPYARD_DOWN_FETCH=0, a failing CLI, and a local-path remote, which must not ask a
+#      forge at all. The forge CLIs are the second named exception to "nothing faked": shell
+#      functions that apply the query's own --jq (gh) or emit raw JSON for the pipeline's jq
+#      (glab), and record their arguments so the repository they were pointed at is asserted —
+#      that argument is what keeps a fork's PR from answering (see shipyard_down_merged_head).
+#      The lazy fetch is stubbed out in those subshells, since the remote URL is then a forge's
+#      and a real fetch would go to the network.
+#
 #   W  a forge remote that is not named `origin`, and whose name itself contains a slash. The
 #      module claims to work in such a repo and the lazy fetch must split a ref to honour it;
 #      splitting on the first slash passed every origin-named fixture, so restoring the old
@@ -491,5 +504,110 @@ git -C "$TMP/lonely" add -A; git -C "$TMP/lonely" commit -qm x
 ok "R no origin refs -> resolution fails" "1" \
    "$( { shipyard_default_ref "$TMP/lonely" >/dev/null; echo $?; } )"
 ok "R no origin refs -> no-default"       "no-default" "$(verdict "$TMP/lonely")"
+
+# ------------------------------------------------- M: proof 3, the merged PR/MR's head (#356)
+C=$(repo m)
+git -C "$C" switch -q -c feat/m origin/main
+printf 'm1\n' >> "$C/a.txt"; git -C "$C" add -A; git -C "$C" commit -qm m1
+git -C "$C" switch -q main
+git -C "$C" merge -q --squash feat/m >/dev/null 2>&1
+git -C "$C" commit -qm "squashed (#7)"
+printf 'later\n' >> "$C/a.txt"; git -C "$C" add -A; git -C "$C" commit -qm "same region, later"
+git -C "$C" push -q origin main
+git -C "$C" worktree add -q "$TMP/wtM" feat/m
+git -C "$TMP/wtM" fetch -q origin
+MHEAD=$(git -C "$TMP/wtM" rev-parse HEAD)
+# What proofs 1 and 2 say on their own: the refusal this case exists to clear.
+MBASE=unprovable
+[ "$MERGE_TREE" = yes ] || MBASE=no-proof-tool
+FORGE_LOG="$TMP/forge.log"
+# gh: records its arguments, then answers $GH_JSON through the --jq the caller passed, the way the
+# real client applies it. GH_RC lets a case make the CLI fail outright.
+gh() {
+  local q=''
+  printf 'gh %s\n' "$*" >> "$FORGE_LOG"
+  while [ $# -gt 0 ]; do [ "$1" = --jq ] && q=$2; shift; done
+  [ "${GH_RC:-0}" = 0 ] || return "$GH_RC"
+  printf '%s' "$GH_JSON" | jq -r "$q"
+}
+glab() { printf 'glab %s\n' "$*" >> "$FORGE_LOG"; printf '%s' "$GLAB_JSON"; }
+# m_verdict [<env assignments>...] — the verdict word plus the merged number, with the fetch
+# stubbed out (see M in the header).
+m_verdict() {
+  ( shipyard_down_refresh() { return 1; }
+    for a in "$@"; do export "${a?}"; done
+    shipyard_down_verdict "$TMP/wtM"; printf '%s %s' "$SHIPYARD_DOWN_KIND" "${SHIPYARD_DOWN_MERGED:--}" )
+}
+gh_pr() { # <head> <base> <cross> <number> — one candidate in gh's --json shape
+  printf '[{"headRefOid":"%s","baseRefName":"%s","isCrossRepository":%s,"number":%s}]' "$@"
+}
+
+: > "$FORGE_LOG"
+GH_JSON=$(gh_pr "$MHEAD" main false 7)
+ok "M local-path remote: proofs 1-2 only, no forge asked" "$MBASE -" "$(m_verdict)"
+ok "M local-path remote: neither CLI ran" "0" "$(wc -l < "$FORGE_LOG" | tr -d ' ')"
+
+git -C "$TMP/wtM" remote set-url origin https://github.com/example/proj.git
+: > "$FORGE_LOG"
+ok "M merged PR at this HEAD into main -> safe, names it" "safe 7" "$(m_verdict)"
+ok "M gh was pointed at the remote's own repository, host included" "1" \
+   "$(grep -c -- '-R github.com/example/proj --head feat/m --state merged' "$FORGE_LOG")"
+GH_JSON=$(gh_pr "$MHEAD" release false 7)
+ok "M merged into ANOTHER branch -> no proof" "$MBASE -" "$(m_verdict)"
+GH_JSON=$(gh_pr "0000000000000000000000000000000000000000" main false 7)
+ok "M merged at another head -> no proof" "$MBASE -" "$(m_verdict)"
+GH_JSON=$(gh_pr "$MHEAD" main true 7)
+ok "M a fork's PR at the same head -> no proof" "$MBASE -" "$(m_verdict)"
+GH_JSON=$(gh_pr "$MHEAD" main false 7)
+: > "$FORGE_LOG"
+ok "M SHIPYARD_DOWN_FETCH=0 -> no proof" "$MBASE -" "$(m_verdict SHIPYARD_DOWN_FETCH=0)"
+ok "M SHIPYARD_DOWN_FETCH=0 -> no forge call" "0" "$(wc -l < "$FORGE_LOG" | tr -d ' ')"
+ok "M a failing gh -> no proof, never a pass" "$MBASE -" "$(m_verdict GH_RC=1)"
+# An SSH host alias: `gh` cannot resolve the host, so it is given the OWNER/REPO path alone.
+git -C "$TMP/wtM" remote set-url origin git@github-work:example/proj.git
+: > "$FORGE_LOG"
+ok "M ssh host alias -> safe" "safe 7" "$(m_verdict)"
+ok "M ssh host alias -> gh given OWNER/REPO" "1" "$(grep -c -- '-R example/proj ' "$FORGE_LOG")"
+
+git -C "$TMP/wtM" remote set-url origin https://gitlab.example/grp/sub/proj.git
+: > "$FORGE_LOG"
+GLAB_JSON=$(printf '[{"sha":"%s","target_branch":"main","iid":9,"source_project_id":1,"target_project_id":1}]' "$MHEAD")
+ok "M glab: merged MR at this HEAD into main -> safe" "safe 9" "$(m_verdict)"
+ok "M glab was given the remote URL whole" "1" \
+   "$(grep -c -- '-R https://gitlab.example/grp/sub/proj.git --source-branch feat/m --merged' "$FORGE_LOG")"
+GLAB_JSON=$(printf '[{"sha":"%s","target_branch":"main","iid":9,"source_project_id":2,"target_project_id":1}]' "$MHEAD")
+ok "M glab: a fork's MR -> no proof" "$MBASE -" "$(m_verdict)"
+# An option-shaped URL never reaches a CLI's argument list.
+git -C "$TMP/wtM" config remote.origin.url '-oProxyCommand=x:example/proj.git'
+: > "$FORGE_LOG"
+ok "M an option-shaped URL -> no proof" "$MBASE -" "$(m_verdict)"
+ok "M ...and no CLI ran" "0" "$(wc -l < "$FORGE_LOG" | tr -d ' ')"
+# The repository asked is the one the REF belongs to, not `origin`, and of nested remote names
+# (`team` and `team/fork`, both legal) the longest wins.
+git -C "$TMP/wtM" remote set-url origin https://github.com/example/proj.git
+# Not every git keeps the pair: on the CI runner's git (2.56.1) this split read `team`, i.e. git
+# did not list `team/fork` beside `team`. So the nested check runs only where git lists both — on
+# any other git the case cannot arise — and the ref's-own-remote check uses a remote that is not
+# `origin` and nests nothing.
+git -C "$TMP/wtM" remote add up https://github.com/example/upstream.git
+: > "$FORGE_LOG"
+( shipyard_down_merged_head "$TMP/wtM" up/main >/dev/null )
+ok "M proof 3 asks the ref's own remote, not origin" "1" \
+   "$(grep -c -- '-R github.com/example/upstream --head feat/m' "$FORGE_LOG")"
+git -C "$TMP/wtM" remote add team https://github.com/example/team.git
+if git -C "$TMP/wtM" remote add team/fork https://github.com/example/fork.git 2>/dev/null \
+   && git -C "$TMP/wtM" remote | grep -qx 'team/fork'; then
+  ok "M nested remote names: the longest owns the ref" "team/fork	main" \
+     "$(_shipyard_down_remote_of "$TMP/wtM" team/fork/main)"
+else
+  skip "M nested remote names" "this git refuses a remote 'team/fork' beside 'team', so names cannot nest here"
+fi
+# The proof-3 label is reset by every verdict: in shipyard-down.sh's multi-slot loop a stale one
+# would label a later slot proven by proof 1 as "merged as #7".
+ok "M a later verdict does not inherit the merged label" "safe 7|safe -" \
+   "$( ( shipyard_down_refresh() { return 1; }
+         shipyard_down_verdict "$TMP/wtM"; a="$SHIPYARD_DOWN_KIND ${SHIPYARD_DOWN_MERGED:--}"
+         shipyard_down_verdict "$TMP/wtA"; printf '%s|%s %s' "$a" "$SHIPYARD_DOWN_KIND" "${SHIPYARD_DOWN_MERGED:--}" ) )"
+unset -f gh glab
 
 done_ t12-down-gate

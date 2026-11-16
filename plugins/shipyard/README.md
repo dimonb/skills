@@ -240,7 +240,10 @@ See **A launch this machine cannot take** above.
 
 `SHIPYARD_DOWN_FETCH` (default `1`) allows the teardown gate one `git fetch` of the base branch
 per invocation, so a slot torn down seconds after its merge is not refused over a
-remote-tracking ref this clone has simply not seen yet. Set it to `0` to keep teardown offline.
+remote-tracking ref this clone has simply not seen yet, and one bounded `gh`/`glab` lookup of the
+merged PR/MR at the slot's HEAD when no other proof settled it. Set it to `0` to keep teardown
+offline. That lookup takes the forge CLI's default 20-second bound; `SHIPYARD_FORGE_TIMEOUT` is the
+report's own knob and does not reach it.
 
 `SHIPYARD_AUTODOWN` (default `1`) lets the monitor finish a slot off for you: once its PR/MR has
 read `merged` on `SHIPYARD_AUTODOWN_TICKS` consecutive ticks (default and minimum `2`), ship's own
@@ -306,7 +309,7 @@ unsupported setup, not by ordinary use. Each names what would make it a defect w
   bash 5 is installed there (the CI job, and a Homebrew or `/usr/local` install as the Requirements
   above describe) they run under it. A Mac with no bash 5 on that `PATH` runs them under 3.2,
   where the escalations block would vanish silently (its stderr goes to `/dev/null`) if that script ever used a bash-4 construct; it
-  uses none today. `plugins/shipyard/skills/shipyard/shipyard-report.sh:2317`. Found by the review
+  uses none today. `plugins/shipyard/skills/shipyard/shipyard-report.sh:2279`. Found by the review
   of #336 (#337). *Promote when* a bash-4 construct lands in `shipyard-escalations.sh` or
   `shipyard-down.sh`, or when bash 5 stops being a requirement.
 - **KL-3 — the continuity watcher's start path is measured under bash 5, not 3.2.** For a Codex
@@ -323,7 +326,7 @@ unsupported setup, not by ordinary use. Each names what would make it a defect w
   before it reaches arithmetic, but t13's E6b corrupts them together with `since`, and a refused
   `since` keeps the slot from stalling, so neither guard's own arithmetic is reached. Only a peer
   write to the mailbox puts such a value there; the report writes canonical epochs.
-  `plugins/shipyard/skills/shipyard/shipyard-report.sh:1597`. Found by the review of #237.
+  `plugins/shipyard/skills/shipyard/shipyard-report.sh:1559`. Found by the review of #237.
   *Promote when* the report itself writes a zero-padded or non-canonical number into
   `report-stall`, or a slot is seen to lose its alarm over a malformed record.
 - **KL-5 — the `report-tick` octal refusal and the stall table's string compare are pinned by no
@@ -331,7 +334,7 @@ unsupported setup, not by ordinary use. Each names what would make it a defect w
   report), and the stall table matches slot names as strings so `43` and `043` stay apart. No test
   writes such a tick or such a pair of rows. The tick is written only by the report, and launched
   slot names carry no leading zero. `plugins/shipyard/skills/shipyard/shipyard-report.sh:688` and
-  `:1591`. Found by the review of #237. *Promote when* a writer other than the report stamps
+  `:1553`. Found by the review of #237. *Promote when* a writer other than the report stamps
   `report-tick`, or slot names can begin with a zero.
 - **KL-6 — the owner-hold launch and two temp names are FIFO-tested by nothing.** t21's NOT COVERED
   header names them: a FIFO at the owner-hold launch's log, a temp name swapped between `mktemp` and
