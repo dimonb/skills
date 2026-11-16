@@ -702,48 +702,10 @@ fi
 # a report which always dies mid-loop re-announces the gap every tick; that is noisy, honest, and
 # true (nothing IS being watched), which is the right way round.
 
-# Which forge origin points at. The report used to assume GitLab everywhere and ran
-# `glab mr view` against a GitHub remote, where it fails silently — see mr_state().
-forge() {
-  case "$(git -C "$ROOT" remote get-url origin 2>/dev/null)" in
-    *github.com*|*github-*) printf 'github' ;;
-    *)                      printf 'gitlab' ;;
-  esac
-}
-
-# Run a forge CLI with a deadline of $FORGE_TIMEOUT seconds; rc is the command's own, or the
-# signal's when the watchdog killed it. `gh` and `glab` can hang — bad network, or a client with
-# no credentials stalled on a prompt — and one hung call withholds the WHOLE tick's report, which
-# on an `--only-changed` monitor is indistinguishable from a quiet tick (#143).
-#
-# PURE BASH, not `timeout(1)`: macOS ships no `timeout`, bash 3.2 must run this, and an external
-# wrapper would exec the binary past the shell functions the test rigs shadow `gh` with.
-#
-# THE WATCHDOG POLLS in short sleeps rather than sleeping the whole deadline. The first cut slept
-# $FORGE_TIMEOUT in the background and killed that sleep from a TERM trap on cancel, and a cancel
-# landing between the sleep's fork and the trap learning its pid left the full-length sleep behind:
-# measured, two of them after one t15 run. Now the most a cancel can orphan is one 0.2s sleep.
-# Its output goes to /dev/null because it runs inside the caller's $( ), whose pipe it would
-# otherwise hold open. PID REUSE: the watchdog is still this shell's unreaped child when it is
-# cancelled, so that kill cannot land elsewhere; the command is unreaped for as long as this shell
-# waits on it, so the deadline kill can only miss if the deadline falls in the instant between that
-# wait returning and the cancel. The deadline has a one-second grain ($SECONDS), and the poll costs
-# five forks a second only while a call is running — one at a time per report.
-# What it does NOT reach: a grandchild the command spawned, which the TERM to the command itself
-# does not signal.
-forge_bounded() {
-  local pid wd rc
-  "$@" &
-  pid=$!
-  ( end=$((SECONDS + FORGE_TIMEOUT))
-    while [ "$SECONDS" -lt "$end" ]; do sleep 0.2; done
-    kill -TERM "$pid" ) </dev/null >/dev/null 2>&1 &
-  wd=$!
-  wait "$pid"; rc=$?
-  kill -TERM "$wd" 2>/dev/null
-  wait "$wd" 2>/dev/null
-  return "$rc"
-}
+# Which forge origin points at, and the bounded CLI call: both live in shipyard-lib.sh since the
+# teardown gate became their second consumer (#356). `forge` keeps its old name and its old
+# subject, this repository's `origin`, so no call site below changed.
+forge() { shipyard_forge "$(git -C "$ROOT" remote get-url origin 2>/dev/null)"; }
 
 # How many PR/MR candidates slot_iid_forge asks for per branch. More than one because the branch
 # name alone does not identify the child (see there); ten covers any plausible reuse of one name.

@@ -43,6 +43,20 @@
 #      those refusals get their own word (`no-proof-tool`) rather than borrowing one that
 #      would understate them.
 #
+#   3. THE MERGED PR/MR'S HEAD (#356) — the worktree's HEAD is the head commit of a PR/MR that
+#      the forge reports MERGED, from this branch, from this repository rather than a fork, and
+#      into the very base branch proofs 1 and 2 measure against. Tried only when they did not
+#      prove containment. It answers the case they cannot: a squash merge after which the base
+#      branch edited the same region, so the test merge conflicts (`unprovable`), or removed
+#      something the branch added (`unmerged`). Either way the content WAS merged, and what this
+#      gate protects against — history orphaned in a branch nobody will look at again — cannot
+#      happen: that history is in the base branch's own merge. The TARGET check is the load-
+#      bearing half; without it a branch merged into a side branch would pass with its content
+#      nowhere in the base branch.
+#      It asks the network, so SHIPYARD_DOWN_FETCH=0 forbids it, a local-path remote (no forge)
+#      skips it, and every failure — no CLI, no auth, a timeout, a URL the CLI cannot resolve —
+#      is NO PROOF, never a pass: the refusal is then exactly what it was without it.
+#
 # Proof 1 is subsumed by proof 2 whenever merge-tree is available. It is kept because it costs
 # one command, answers the commonest case without invoking a merge, and is the whole gate on a
 # git too old for the second.
@@ -67,12 +81,16 @@
 # `git fetch` of the base branch (shipyard_down_refresh), and the merged tree that
 # `merge-tree --write-tree` persists — unreferenced, reclaimed by gc, and required because the
 # proof compares the OID it prints against the base branch's tree. Set SHIPYARD_DOWN_FETCH=0 to
-# forbid the fetch; there is no way to ask for the proof without the object, and no need.
+# forbid the fetch — and with it proof 3's forge lookup, the module's one other network call;
+# there is no way to ask for the merge proof without the object, and no need.
 
 # OUTPUTS of shipyard_down_verdict, set in the CALLER's shell. They are outputs, not knobs:
 # nothing reads them as input, and every caller overwrites both.
 SHIPYARD_DOWN_KIND=''
 SHIPYARD_DOWN_REF=''
+# Set only when a `safe` verdict came from proof 3 (below): the merged PR/MR's number, so the
+# caller can say which proof it was. Empty for every other outcome, proofs 1 and 2 included.
+SHIPYARD_DOWN_MERGED=''
 
 # The base-branch ref every proof below measures against comes from shipyard_default_ref(), in
 # shipyard-lib.sh (sourced by shipyard-down.sh before this file). It lived here until the status
@@ -136,10 +154,65 @@ shipyard_down_refresh() {
   return 0
 }
 
+# shipyard_down_merged_head <worktree> <ref> — proof 3. rc 0 and the PR/MR number on stdout when
+# the worktree's HEAD is the head of a merged PR/MR from its branch into <ref>'s branch; rc 1 for
+# no proof, whatever the reason. The worktree is already known clean: the verdict asks gate 1
+# first, and this is never reached past a dirty tree.
+#
+# THE REPOSITORY IS NAMED, never left to the CLI's discovery. Run bare in the worktree, `gh` picks
+# among the remotes by its own rules (a `set-default`, then remote names), and a fork chosen there
+# could answer with a PR merged into the FORK's base branch at the same head — a pass for content
+# that is not in <ref>. So the remote is the one <ref> belongs to, split the way
+# shipyard_down_refresh splits it, and its URL is handed over explicitly: `gh` gets the URL's
+# OWNER/REPO path, which also survives an SSH host alias that `gh` itself cannot resolve; `glab`
+# takes the URL whole (`glab mr list --help`: "Also accepts full URL or Git URL").
+#
+# The candidate query mirrors slot_iid_forge in shipyard-report.sh (fork filter, same field
+# names), restricted to merged ones. Bounded by forge_bounded, ten candidates.
+shipyard_down_merged_head() {
+  local wt="$1" ref="$2" r remote='' base='' url path br head out
+  [ "${SHIPYARD_DOWN_FETCH:-1}" = 1 ] || return 1
+  for r in $(git -C "$wt" remote 2>/dev/null); do
+    case "$ref" in "$r/"?*) remote=$r; base=${ref#"$r/"}; break ;; esac
+  done
+  [ -n "$remote" ] && [ -n "$base" ] || return 1
+  url=$(git -C "$wt" remote get-url "$remote" 2>/dev/null) || return 1
+  # A local path or file:// remote has no forge to ask, and asking one anyway would send a CLI
+  # off to guess. The same shape screen as _shipyard_ref_ok keeps an option-shaped URL out of
+  # the CLI's argument list.
+  case "$url" in ''|-*|/*|./*|../*|~*|file://*) return 1 ;; esac
+  br=$(git -C "$wt" symbolic-ref --quiet --short HEAD 2>/dev/null) || return 1
+  case "$br" in ''|-*) return 1 ;; esac
+  head=$(git -C "$wt" rev-parse --verify --quiet HEAD 2>/dev/null) || return 1
+  case "$(shipyard_forge "$url")" in
+    github)
+      path=${url#*://}
+      if [ "$path" != "$url" ]; then path=${path#*/}; else path=${url#*:}; fi
+      path=${path%/}; path=${path%.git}
+      case "$path" in */*) ;; *) return 1 ;; esac
+      out=$( (unset GITHUB_TOKEN
+              forge_bounded gh pr list -R "$path" --head "$br" --state merged --limit 10 \
+                --json number,headRefOid,baseRefName,isCrossRepository \
+                --jq '.[] | select(.isCrossRepository | not)
+                          | "\(.headRefOid) \(.baseRefName) \(.number)"') 2>/dev/null) ;;
+    *)
+      out=$( (OAUTH_TOKEN= forge_bounded glab mr list -R "$url" --source-branch "$br" --merged \
+                -P 10 -F json \
+              | jq -r '.[] | select(.source_project_id == .target_project_id)
+                           | "\(.sha) \(.target_branch) \(.iid)"') 2>/dev/null) ;;
+  esac
+  # Field-exact on the head AND the target: a prefix match on either would let a near miss pass.
+  out=$(printf '%s\n' "$out" | awk -v h="$head" -v b="$base" \
+          '$1""==h"" && $2""==b"" && $3 ~ /^[0-9]+$/ { print $3; exit }')
+  [ -n "$out" ] || return 1
+  printf '%s' "$out"
+}
+
 # shipyard_down_verdict <worktree> — the whole gate. Sets SHIPYARD_DOWN_KIND and
 # SHIPYARD_DOWN_REF in the caller's shell and returns 0 ONLY for `safe`:
 #
-#   safe          <ref>  content already in the base branch; removing the worktree loses nothing
+#   safe          <ref>  content already in the base branch; removing the worktree loses nothing.
+#                        SHIPYARD_DOWN_MERGED names the PR/MR when proof 3 is what showed it
 #   dirty                uncommitted or untracked changes — refused exactly as before
 #   unmerged      <ref>  the branch genuinely carries content the base branch does not have
 #   unprovable    <ref>  the test merge conflicted: the base branch has since edited the same
@@ -159,6 +232,7 @@ shipyard_down_verdict() {
   local wt="$1" ref st
   SHIPYARD_DOWN_KIND=unknown
   SHIPYARD_DOWN_REF=''
+  SHIPYARD_DOWN_MERGED=''
   # Not a worktree (nor a repository root): git would discover its way UP to the parent repo
   # and answer about that instead, which is a confident answer to a question about the wrong
   # tree. Measured on a stray directory under .claude/worktrees/.
@@ -184,6 +258,12 @@ shipyard_down_verdict() {
       2) SHIPYARD_DOWN_KIND=unprovable ;;
       *) SHIPYARD_DOWN_KIND=no-proof-tool ;;
     esac
+  fi
+  # Proof 3, last because it is the only one that costs a forge call. It runs after the fetch so
+  # a stale ref gets its cheap retry first.
+  local n
+  if n=$(shipyard_down_merged_head "$wt" "$ref"); then
+    SHIPYARD_DOWN_KIND=safe; SHIPYARD_DOWN_MERGED=$n; return 0
   fi
   return 1
 }

@@ -136,7 +136,8 @@ if [ "$LIST" = 1 ]; then
     shipyard_down_verdict "$w"
     kind=$SHIPYARD_DOWN_KIND; ref=$SHIPYARD_DOWN_REF
     case "$kind" in
-      safe)       st="safe, content in $ref" ;;
+      safe)       st="safe, content in $ref"
+                  [ -z "$SHIPYARD_DOWN_MERGED" ] || st="safe, merged into $ref as #$SHIPYARD_DOWN_MERGED" ;;
       dirty)      st="DIRTY" ;;
       unmerged)   st="UNMERGED against $ref" ;;
       # Not "unmerged": the gate failed to PROVE containment, and a column that asserts more
@@ -177,7 +178,12 @@ for slot in "${SLOTS[@]}"; do
       safe)
         # Say WHY it is safe. The guard spent a long time crying wolf on the happy path,
         # and one line naming the proof is what makes the next refusal worth reading.
-        echo "ship-$slot: content is already in $ref — nothing to lose"
+        if [ -n "$SHIPYARD_DOWN_MERGED" ]; then
+          # Proof 3: the trees differ, but this exact HEAD is what the forge merged into $ref.
+          echo "ship-$slot: its HEAD is the head of #$SHIPYARD_DOWN_MERGED, merged into $ref — nothing to lose"
+        else
+          echo "ship-$slot: content is already in $ref — nothing to lose"
+        fi
         ;;
       dirty)
         # The gate that actually stands between the operator and unrecoverable content:
