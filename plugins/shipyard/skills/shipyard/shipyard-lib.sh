@@ -116,6 +116,16 @@ forge_bounded() {
   return "$rc"
 }
 
+# shipyard_stage_of <worktree> — ship's pipeline stage out of its state file (issue-ready /
+# spec-review / apply / impl-review / ready-to-merge / done / ...), or nothing. TWO CONSUMERS: the
+# report reads it for every slot, and shipyard-finish.sh refuses to close a child's terminal
+# unless it reads `done` (#355). The newest-named file wins, since ship keeps one per change.
+shipyard_stage_of() {
+  local f
+  f=$(ls -1 "$1/.pipeline-state"/*.json 2>/dev/null | tail -1)
+  [ -n "$f" ] && jq -r '.stage // .state // .phase // empty' "$f" 2>/dev/null
+}
+
 # --- the base branch, asked of git rather than assumed ---------------------------
 #
 # TWO CONSUMERS, one answer (#143): shipyard-down-gate.sh measures a slot's content against it,

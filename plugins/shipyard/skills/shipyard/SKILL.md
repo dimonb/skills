@@ -227,11 +227,13 @@ mode launches nothing: `bash <SKILL>/shipyard-report.sh` with no arguments finds
 list in the command).
 
 **It is not read-only, and this section used to say it was.** Discovery mode reaches the same
-per-slot code a named run does, teardown included (Step 6). In practice the teardown almost never
-fires here. Discovery mode lists the slots that have a live terminal, and a live terminal is never
-torn down, so it acts only on a slot whose terminal disappears between the listing and the lookup.
-A finished slot whose terminal is already gone is not listed at all, so its worktree needs a named
-run (`shipyard-report.sh <slot>`) or `shipyard-down.sh <slot>`. What discovery mode always does is
+per-slot code a named run does, teardown included (Step 6). Discovery mode lists every slot with a
+live terminal, **and every worktree whose ship stage is terminal (`done` or `ready-to-merge`) and
+whose terminal is gone** — the shape a finished child leaves now that it closes its own terminal
+(#355). Those are torn down exactly as a named run would, and while one waits for its next merged
+tick the run counts it in flight, so the loop does not stop before it. A worktree in any other
+stage with no terminal — a crashed child's — is not swept in: it needs a named run
+(`shipyard-report.sh <slot>`) or `shipyard-down.sh <slot>`, and `shipyard-down.sh --list` shows it. What discovery mode always does is
 write, and the paragraph below says what. `SHIPYARD_AUTODOWN=0` removes the teardown.
 
 It does NOT make a run inert, and the first draft of this very paragraph claimed it did. With the
@@ -458,10 +460,12 @@ so do not plan on driving it from here.
 * on agterm, it also repaints each child's sidebar glyph (its completed/active verdict comes
   from the declared slot graph — see below);
 * **and it TEARS DOWN a slot that is finished** — merged on consecutive ticks, ship's stage
-  terminal, its terminal already gone, and clear through `shipyard-down.sh`'s own content gate.
-  That removes the worktree, so arming this loop arms that. A live terminal is never torn down by
-  it. An open escalation holds it, and anything it declines is named in its own block with the
-  exact command. Step 6 has every lock and the reasoning; `SHIPYARD_AUTODOWN=0` turns it off;
+  terminal, its terminal already gone (a finished child closes its own), and clear through
+  `shipyard-down.sh`'s own content gate. That removes the worktree, so arming this loop arms that.
+  A live terminal is never torn down by it: a finished slot whose terminal is still up is named in
+  `🏁 FINISHED`, and **running that block's command is your job, on the tick you read it**. An
+  open escalation holds it, and anything it declines is named in its own block with the exact
+  command. Step 6 has every lock and the reasoning; `SHIPYARD_AUTODOWN=0` turns it off;
 * whole report in one block → Monitor batches it into one notification;
 * exit 0 = nothing in flight **and** no open escalation → stop the loop; exit 1 = work
   is still open, **or this run could not tell**. Those two share an exit code deliberately: the
@@ -536,20 +540,20 @@ closer. Both counts are fixed on purpose rather than tunable; the report's sourc
 **Some blocks bypass `--only-changed` entirely** rather than riding the per-slot signature:
 `🛑 STALLED` (and `🛑 STALL UNANSWERED`, which comes from the same condition), `💀 NO AGENT`,
 `🛑 NO SIGNAL`, `🛑 UNREADABLE` (a slot whose screen reads empty now and that nothing has seen move for longer than the stall threshold — so it can fire on the first failed read of a slot already motionless that long), and — added with the automatic teardown — `🧹 TORN DOWN`,
-`✋ HELD` and `✋ AWAITING REMOVAL`. `🧹 TORN DOWN` reports an act already taken, and a signature
-is the wrong thing to gate that on because the signature file lives in the mailbox children write
-into. The other two report a destructive act being attempted and declined on every tick, and an
-action only you can take, so they repeat for as long as the condition lasts rather than being news
-once. Those are the blocks checked against the bypass condition in `shipyard-report.sh`; nothing
+`✋ HELD`, `✋ AWAITING REMOVAL` and `🏁 FINISHED`. `🧹 TORN DOWN` reports an act already taken,
+and a signature is the wrong thing to gate that on because the signature file lives in the mailbox
+children write into. The other three report a destructive act being attempted and declined on every
+tick, or an action only you can take, so they repeat for as long as the condition lasts rather than
+being news once. Those are the blocks checked against the bypass condition in `shipyard-report.sh`; nothing
 keeps this list and that condition in step, so read the condition if it matters. A block that
 repeats verbatim trains the operator to skim it (#182), so what repeats is no longer the whole
 block. The stall blocks print in full once and then as their delta (above). So do `💀 NO AGENT`,
-`✋ HELD` and `✋ AWAITING REMOVAL`: on the first tick of an episode, the full block; on later ticks,
+`✋ HELD`, `✋ AWAITING REMOVAL` and `🏁 FINISHED`: on the first tick of an episode, the full block; on later ticks,
 a short entry per slot. Its first line says how long ago the block was first raised (with the time)
-and which tick this is. Its second line names the remedy, and for `✋ AWAITING REMOVAL` that line
-is the exact `shipyard-down.sh` command. `✋ HELD` prints in full again when the set of records
+and which tick this is. Its second line names the remedy, and for `✋ AWAITING REMOVAL` and
+`🏁 FINISHED` that line is the exact `shipyard-down.sh` command. `✋ HELD` prints in full again when the set of records
 holding the slot changes, and `✋ AWAITING REMOVAL` does the same when the refusal's text changes,
-because each of those is news. An episode ends on the first tick its condition does not fire, and
+because each of those is news; `🏁 FINISHED` does when the slot's stage changes. An episode ends on the first tick its condition does not fire, and
 after a supervision gap every episode starts over. `🧹 TORN DOWN` needs none of this: it fires once
 per act, because the slot's stage file goes with its worktree, so nothing is left to tear down a
 second time. `🛑 NO SIGNAL` and `🛑 UNREADABLE` still print in full on every tick. Episodes are recorded in
@@ -569,7 +573,7 @@ column and its own block, and is exempt from the stall clock:
 | `session` column | what it means | what to do |
 |---|---|---|
 | `⏳ rate-limited` / `⏳ overloaded` | the client announced a capacity wait, and has said nothing since | nothing — it resumes itself |
-| `✅ finished` | the slot graph says the change is concluded **and** ship's stage agrees | review and merge, or tell it what to change — unless the row adds `(no agent)`: then recover it before asking for changes (below) |
+| `✅ finished` | the slot graph says the change is concluded **and** ship's stage agrees | once merged, the child closes its own terminal; if it is still up after the merge, `🏁 FINISHED` names it for you to tear down. Before the merge: review and merge, or tell it what to change — unless the row adds `(no agent)`: then recover it before asking for changes (below) |
 | `🙋 needs you` | ship's stage is `needs-human`: it stopped on blockers it will not fix | read its record on the PR/MR and answer it — unless its `Withheld:` line counts a held entry: that is a disclosure hold, and only the human may release it (Step 3) |
 
 **None of those is ever a compaction trigger**, and each block says so. What is left — idle,
@@ -1433,8 +1437,38 @@ has read `merged` on two consecutive ticks (`SHIPYARD_AUTODOWN_TICKS`), ship's o
 terminal (`done` or `ready-to-merge`), and its terminal is gone and the backend corroborates
 that, the report calls `shipyard-down.sh <slot>` for you. **A slot whose terminal is still up is
 never torn down automatically**, whatever its screen shows: no screen read here is one this path
-may act on yet, so that slot stays for the manual command below (#156).
-It calls it **unchanged, with no flags and never `--force`**, so every gate below is the gate
+may act on yet (#156).
+
+**So the child closes its own terminal (#355).** The launcher's protocol tells every child that,
+once ship has recorded `done` and its last notice is sent, its final act is
+`bash <SKILL>/shipyard-finish.sh`. That script refuses unless ship's state file in the child's
+worktree reads `done` and the terminal it would close is the one it runs in (`AGTERM_SESSION_ID`,
+or the tmux pane's window). It writes its closing notice before the close, in the same process,
+so the child's last record cannot race the terminal going away, and it closes through the driver,
+which refuses a session with companions. It removes nothing else: the worktree, the branch and
+the records stay, and the path above then runs with every gate. The agent is the one party that
+knows it is finished without reading a screen, which is why the close is its act and not the
+report's.
+
+**And a finished slot whose terminal is still up is named, and closing it is YOUR job.** Every
+lock above but the terminal passes — merged on consecutive ticks, stage terminal — and the
+terminal is up: a child launched before this protocol, one whose close the
+driver refused (companions) or that `--permission-mode` denied, a no-merge repo's child parked
+at `ready-to-merge`. The report puts it in `🏁 FINISHED` with the exact command, bypassing
+`--only-changed`, and **the parent runs that command on the same tick** — it is not left for a
+human to notice. At `done` run it as given. At `ready-to-merge` the forge has merged but the
+child has not yet recorded `done`, so look at its terminal first: tear it down if it is idle, and
+leave it if it is mid-turn, since it may be acting on the merge it has just seen. A slot with an
+open escalation is still listed there, but with the records that hold it and no command: answering
+them comes first. It is listed rather than left out so that a record the escalation block cannot
+show does not quietly keep the slot off the screen.
+`SHIPYARD_AUTODOWN=0` turns this block off with the rest of the automatic teardown. ship also
+records `done` for a PR/MR closed without merging, and the child closes its terminal then too; that
+slot is never torn down for you (it is not `merged`) and stays a `⛔ no terminal` row for a person.
+A parseable `notice` never holds a teardown — it owes nobody an answer — so the child's own
+closing notice does not turn its slot into a `✋ HELD` block.
+
+When the report tears a slot down it calls `shipyard-down.sh` **unchanged, with no flags and never `--force`**, so every gate below is the gate
 that runs; a slot the gate refuses is named in the report's `✋ AWAITING REMOVAL` block with the
 exact command, and nothing is removed. `SHIPYARD_AUTODOWN=0` turns it off and leaves teardown
 entirely manual. **An open escalation THAT THIS REPORT CAN SEE holds it**: a child that stopped to ask you something is
@@ -1445,9 +1479,8 @@ and the slot tears itself down on the next tick. A record the report cannot PARS
 cannot be answered — the block names the file to look at, and the escalation view lists it as an
 unreadable record but can offer no reply for it, so the remedy is the file (#197).
 
-This applies to `/shipyard` with no arguments too, since discovery mode reaches the same code. But
-discovery mode lists only slots that still have a terminal, and those are never torn down, so a
-finished slot whose terminal is gone is reaped only by a monitor that names it (Step 0).
+This applies to `/shipyard` with no arguments too, since discovery mode reaches the same code and
+lists a finished worktree whose terminal is gone (Step 0).
 
 Why those conditions and not simply `merged`: **merged is not "child done"**. The forge state
 says one PR ended, and a child is still posting its record and writing its state file after
@@ -1579,14 +1612,16 @@ collide with it.
 | `shipyard-tell.sh` | PARENT side: speak first, into the child's terminal |
 | `shipyard-compact.sh` | compact a child AND put it back to work |
 | `shipyard-down.sh` | teardown after a merge — by hand, and the one the report calls for you |
+| `shipyard-finish.sh` | CHILD side: once ship records `done`, close the child's own terminal (no arguments) |
 
 ## Reminders
 
 * Do not tear a terminal/worktree down before the MR is actually merged — ship re-wakes
   itself and continues after an idle pause (Step 6). The report will do it for you only once the
   merge, ship's own stage and a corroborated-absent terminal all agree; it never forces, and
-  what it declines it names. A slot whose terminal is still up is never torn down for you:
-  `shipyard-down.sh <slot>` is how it goes.
+  what it declines it names. A slot whose terminal is still up is never torn down for you: a
+  finished child closes its own (`shipyard-finish.sh`), and one that did not is named in
+  `🏁 FINISHED`, whose `shipyard-down.sh <slot>` you run on that tick.
 * A merge that changes the ship skill does not reach a child already running: send every running
   child one directive naming the changed section and what it now requires, before it reaches the
   stage that section governs (Step 4).
