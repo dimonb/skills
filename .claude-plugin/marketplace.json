@@ -9,7 +9,7 @@
   "plugins": [
     {
       "name": "ship",
-      "description": "Drive one change end-to-end through a repo's pipeline on GitHub or GitLab — issue, spec, implementation, its own review passes, hand-off or merge. Self-driven: read-only review subagents with adversarial verification, and no stage that waits on an external reviewer.",
+      "description": "Drive one change end-to-end through a repo's pipeline on GitHub or GitLab \u2014 issue, spec, implementation, its own review passes, hand-off or merge. Self-driven: read-only review subagents with adversarial verification, and no stage that waits on an external reviewer.",
       "author": {
         "name": "dimonb"
       },
@@ -29,13 +29,23 @@
     },
     {
       "name": "council",
-      "description": "A room where several agent sessions argue one question by a strict protocol — turn-taking, referenced objections, mechanical closure — and write a decision record when they converge, or an honest unresolved one when they do not.",
+      "description": "A room where several agent sessions argue one question by a strict protocol \u2014 turn-taking, referenced objections, mechanical closure \u2014 and write a decision record when they converge, or an honest unresolved one when they do not.",
       "author": {
         "name": "dimonb"
       },
       "category": "workflow",
       "source": "./plugins/council",
       "homepage": "https://github.com/dimonb/skills/tree/main/plugins/council"
+    },
+    {
+      "name": "api-design",
+      "source": "./plugins/api-design",
+      "description": "Design and evolve APIs with contract-first workflows, recoverable operations, compatibility checks, and HTTP, SDK and UI guidance from Sergey Konstantinov.",
+      "author": {
+        "name": "dimonb"
+      },
+      "category": "development",
+      "homepage": "https://github.com/dimonb/skills/tree/main/plugins/api-design"
     }
   ]
 }
