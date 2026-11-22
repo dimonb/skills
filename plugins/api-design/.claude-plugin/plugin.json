@@ -1,0 +1,19 @@
+{
+  "name": "api-design",
+  "version": "0.1.0",
+  "description": "Design and evolve APIs with contract-first workflows, recoverable operations, compatibility checks, and HTTP, SDK and UI guidance from Sergey Konstantinov.",
+  "author": {
+    "name": "dimonb",
+    "url": "https://github.com/dimonb"
+  },
+  "homepage": "https://github.com/dimonb/skills/tree/main/plugins/api-design",
+  "repository": "https://github.com/dimonb/skills",
+  "license": "MIT",
+  "keywords": [
+    "api",
+    "design",
+    "rest",
+    "sdk",
+    "compatibility"
+  ]
+}
