@@ -389,20 +389,24 @@ run by hand, gated by nothing, for as long as it existed (#111).
 `make check` also runs the suites its `check:` recipe lists — today every suite under `shared/`,
 all fast and pure — so a regression in any of them reds a commit. What keeps a suite in that recipe
 rather than only in `test:` is one `scripts/check-test.sh` probe per suite (the 30* family), added
-by hand with the suite; nothing checks that a new shared suite got one. CI runs `make check` and
-`make test` in one workflow (`.github/workflows/ci.yml`) on every push to `main` and every pull
-request — plus, in a macOS job
-of the same workflow, the test files that run shipyard code under /bin/bash, whose 3.2 floor is
-vacuous on Linux (the job lists them; `scripts/check.sh` check 16 reds when a test naming
-`/bin/bash` on a line it runs is missing from it, and a floor reached through a variable set
-elsewhere or a helper it cannot see, so that step is still added by hand) — and `make check-test` in
-a SEPARATE, concurrent workflow (`.github/workflows/check-test.yml`) — unconditionally on every push
-to `main`, and on a pull request only when the change touches a path that could affect what it
-proves. That filter is derived from `$GUARDED` in `scripts/check-test.sh` and asserted by check 13;
-the workflow file carries the reasoning and the one standing exception. So the shipyard and council
-suites' **runtime** errors — not only their registration — red a check the change must pass. Locally
-those still surface at `make test`, run by hand like `make check-test`, since `make check`
-deliberately does not run them.
+by hand with the suite; nothing checks that a new shared suite got one. CI always runs the static gate directly (`bash scripts/check.sh`), not `make check`,
+which would execute the shared suites even for prose-only changes. `scripts/ci_paths.py`
+selects runtime suites from the full PR merge-base diff or push before/after range:
+shared changes run all runtime suites, operational ship/shipyard/council content includes
+markdown protocols and adapter integration callers, and unknown paths/history plus CI or
+gate infrastructure changes run full coverage. Generic README and api-design prose and
+manifests need static validation without unrelated runtime suites. The classifier's Python
+regressions run locally in `make check` (with a mutation probe proving invocation) and in
+CI when gate/test infrastructure changes.
+
+The stable `make check + test` and macOS floor job names remain. The latter runs its
+existing bash 3.2 files when operational/shared coverage is selected and completes without
+test steps otherwise. The separate concurrent `check-test.yml` runs on every PR and main push
+without outer paths filters (asserted by check 13), avoiding GitHub's 300-file limit, while its classifier step selects the full mutation
+suite for gate/Makefile/workflow/test-infrastructure or unknown changes. Plugin content
+and shared changes do not re-prove the gate's implementation. The policy is tested, but
+new cross-plugin runtime dependencies still need an explicit classifier update; static
+validation does not infer arbitrary shell or markdown dependencies.
 
 Then install it the way a user would, from this clone, in whichever agents the change affects
 (exact commands are in the README):

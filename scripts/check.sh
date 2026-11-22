@@ -18,10 +18,8 @@
 # 11. every vendored copy of a shared module is byte-identical to its module's one canonical source
 # 12. every test runner on disk under plugins/ or shared/ is invoked by a Makefile recipe AND
 #     declared in $GATED_SUITES, so no whole suite runs nowhere or escapes check 10
-# 13. the check-test CI job's pull-request path filter covers every path check-test.sh guards, so
-#     the gate-of-the-gate cannot be skipped by a change that could break what it proves; and its
-#     triggers carry only the keys it reads: push on main, unfiltered (the backstop that filter
-#     rests on), and pull_request narrowed by paths alone
+# 13. mutation CI triggers unconditionally on every PR and main push; the complete
+#     git-range classifier selects execution inside the job, avoiding event path limits
 # 14. no pgrep/pkill selects by parent (-P / --parent) without a pattern: on macOS that form
 #     lists every process on the machine
 # 15. every section cross-reference (a section sign and a number) in a markdown file names a
@@ -902,29 +900,13 @@ else
   fi
 fi
 
-# ------------------ 13. the check-test job's PR path filter covers everything its probes mutate
-# `make check-test` runs on every push to main and, on a PULL REQUEST, only when the change
-# touches a path that could affect what it proves (see .github/workflows/check-test.yml for why).
-# That filter is the whole of the risk in skipping it, so it is DERIVED rather than written by
-# hand: the derivation is `$GUARDED` in scripts/check-test.sh — the paths that file restores with
-# `git checkout --`, i.e. an upper bound on what its probes mutate — and this check asserts the
-# filter still covers it.
-#
-# WHAT IT CATCHES: a path added to `$GUARDED` and not to the filter. That is the direction this
-# goes quiet in — a future probe mutates a new tree, the author adds it to `$GUARDED` because
-# otherwise the restore misses it, and nothing would otherwise connect that to a CI filter in
-# another file.
-#
-# WHAT IT DOES NOT CATCH, so a green gate is not read as more: it does not verify that `$GUARDED`
-# is itself complete. A probe that mutates a path outside it and restores it by hand satisfies
-# both this check and check-test's own end-of-run cleanliness assertion. That one is judgement,
-# and it is stated in check-test.yml too. Nor does it read the job: it reads the triggers only, so a
-# job-level `if:` that skips pushes, or a step that no longer runs `make check-test`, takes the
-# backstop away with this check green.
-#
-# Both inputs are read with a LOUD failure if either cannot be read: a filter check that abstains
-# is worse than none, because the job it guards is the one that proves the rest of this file is
-# not decoration.
+# ------------------ 13. mutation CI starts for every PR and main push
+# GitHub path filters inspect at most 300 changed files, so even a list covering
+# every guarded path is insufficient. Trigger unconditionally, then use the full
+# git range classifier inside the job to choose the complete mutation suite.
+# The strict block-shape reader below refuses ambiguous YAML and narrowed events.
+# It does not validate job/step conditions or infer complete mutation cleanup scope;
+# the latter is checked at the end of check-test.sh and remains an author obligation.
 CT_FILE=scripts/check-test.sh
 CT_WF=.github/workflows/check-test.yml
 if [ ! -f "$CT_FILE" ]; then
@@ -1072,12 +1054,12 @@ else
       fail "$CT_WF filters its push: trigger by $(printf '%s' "$push_filter" | tr '\n' ' ')— the run on main must be unconditional, it is the backstop for the pull-request filter"
     fi
     # AN ALLOWLIST OF KEYS, not a denylist of the ones seen so far (#58). Under `push:` only
-    # `branches:` is accepted, and under `pull_request:` only `paths:`: every other key GitHub
+    # `branches:` is accepted, and under `pull_request:` no keys: every other key GitHub
     # honours there narrows when the job runs (`branches-ignore:`, `tags:`, `types:`, a
     # `branches:` on pull requests), and each of those passed green while this check read only the
     # keys it was written about. `paths`/`paths-ignore` are left to the arms that name them.
     for ev in push pull_request; do
-      if [ "$ev" = push ]; then allowed=branches; else allowed=paths; fi
+      if [ "$ev" = push ]; then allowed=branches; else allowed=none; fi
       extra=$(printf '%s\n' "$ct_on" | awk -F'\t' -v ev="$ev" -v ok="$allowed" \
         '$1 == "key" && $2 == ev && $3 != ok && $3 !~ /^paths(-ignore)?$/ { print $3 }')
       if [ -n "$extra" ]; then
@@ -1131,38 +1113,21 @@ else
       fi
     done
   fi
-  # The pull-request filter is the `paths:` list under `pull_request:` and nothing else, so an entry
-  # under another trigger cannot stand in for one missing here.
-  filter=$(printf '%s\n' "$ct_on" | awk -F'\t' '$1 == "item" && $2 == "pull_request" && $3 == "paths" { print $4 }')
+  # No outer PR filter: even a complete list is limited to GitHub's first 300 files.
+  # The full git range classifier, after checkout, makes the runtime selection.
   if [ -z "$guarded" ]; then
-    fail "could not read \$GUARDED out of $CT_FILE — the check-test path filter cannot be checked"
-  elif [ "$ct_rc" -ne 0 ]; then
-    :   # reported above; the arms below would only repeat it as an empty filter
-  elif [ -z "$filter" ]; then
-    fail "could not read any path filter out of $CT_WF — a pull request would skip check-test entirely"
-  else
-    # Every entry of the filter is read, or the filter is refused: an entry the reader skips (an
-    # unquoted `- docs/**`, an escape) would drop out silently wherever `$GUARDED` does not derive
-    # it. And a negated entry (`'!scripts/**'`) takes a guarded tree back out of a filter that still
-    # lists it, which the coverage loop below cannot see, so it is refused rather than reasoned about.
-    pr_raw=$(printf '%s\n' "$ct_on" | awk -F'\t' '$1 == "raw" && $2 == "pull_request" && $3 == "paths" { n++ } END { print n + 0 }')
-    pr_read=$(printf '%s\n' "$filter" | awk 'NF { n++ } END { print n + 0 }')
-    if [ "$pr_raw" -ne "$pr_read" ]; then
-      fail "$CT_WF's pull_request: paths: has an entry check 13 cannot read (unquoted, aliased or escaped) — write every entry as a quoted block item"
-    fi
-    if printf '%s\n' "$filter" | grep -q '^!'; then
-      fail "$CT_WF's pull_request: paths: carries a negated pattern, which check 13 does not reason about — it could take a guarded tree back out of the filter"
-    fi
-    for g in $guarded; do
-      # A file entry must appear verbatim; a directory entry is covered by `<dir>/**`.
-      if [ -f "$g" ]; then want="$g"; else want="$g/**"; fi
-      printf '%s\n' "$filter" | grep -qxF -- "$want" \
-        || fail "check-test guards '$g' but $CT_WF's path filter has no '$want' — a pull request touching it would skip the gate-of-the-gate"
-    done
-    # No separate arm for "the filter names the workflow that carries it": `$GUARDED` includes
-    # `.github` (check-test's probes mutate this very file), so the loop above already requires
-    # `.github/**`, which covers it. If `.github` ever leaves that list, this needs its own arm.
+    fail "could not read \$GUARDED out of $CT_FILE - cannot validate mutation cleanup scope"
   fi
+  if [ "$ct_rc" -eq 0 ]; then
+    if ! printf '%s\n' "$ct_on" | grep -qxF "$(printf 'event\tpull_request')"; then
+      fail "$CT_WF has no pull_request: trigger - runtime selection would never start"
+    fi
+    pr_filter=$(printf '%s\n' "$ct_on" | awk -F'\t' '$1 == "key" && $2 == "pull_request" && $3 ~ /^paths(-ignore)?$/ { print $3 }')
+    if [ -n "$pr_filter" ]; then
+      fail "$CT_WF filters its pull_request: trigger - outer paths filters can skip relevant files beyond GitHub's 300-file limit"
+    fi
+  fi
+
 fi
 
 # ------------------ 14. no pgrep/pkill selecting by parent (-P / --parent) without a pattern

@@ -46,8 +46,8 @@ RUNNER=$TESTS_DIR/run-all.sh
 # check-test workflow, so an interrupt between a mutation and its revert would otherwise leave the
 # repo with a broken or empty CI file and nothing to put it back.
 #
-# THIS LIST IS ALSO READ BY THE GATE. check.sh check 13 derives the check-test job's pull-request
-# path filter from it, so adding an entry here is a change the gate will insist you finish. And
+# THIS LIST IS ALSO READ BY THE GATE. check.sh check 13 validates the guarded restore
+# inventory; workflow triggers remain unconditional and coverage is selected inside the job. And
 # the assertion at the very bottom of this file asserts the whole tree is clean when the run ends,
 # which is what keeps the list honest in the other direction: a probe that mutates a path outside
 # it reds the run that added it, instead of the next person's.
@@ -1112,6 +1112,18 @@ else
 fi
 git checkout -- shared/canary/tests/t-canary.sh
 
+# 30g - classifier regressions belong to the per-commit gate too. A failing
+# Python test must fail make check, not merely be present in its recipe text.
+printf 'raise SystemExit(1)\n' > scripts/test_ci_paths.py
+if make check >"$SCRATCH/out" 2>&1; then
+  echo "NOT CAUGHT: make check does not run the CI classifier tests"
+  nocatch=$((nocatch+1))
+else
+  echo "caught:     make check runs the CI classifier tests"
+  pass=$((pass+1))
+fi
+git checkout -- scripts/test_ci_paths.py
+
 # 31 — the mirror of 30 for the STATIC gate: `make check` must also invoke scripts/check.sh, not
 # only the fast test suites. When this suite switched its ~60 probes from `make check` to
 # `bash scripts/check.sh` (so it tests the static gate directly and does not pay those suites'
@@ -1222,254 +1234,76 @@ expect_fail "check 12 reds when the Makefile is missing" \
   "Makefile is missing"
 git checkout -- Makefile
 
-# 33 — check 13's coverage arm: a path this file GUARDS that the check-test CI job's pull-request
-# filter does not name. That job runs in full on every push to `main` and, on a pull request, only
-# when the change touches a path that could affect what it proves — so the filter is the whole of
-# the risk in skipping it, and the direction it goes quiet in is a probe being added that mutates a
-# NEW tree. The author adds that tree to $GUARDED (or the restore misses it) and nothing else would
-# connect it to a workflow file. Removing one entry from the filter is the honest reproduction.
-perl -ni -e "print unless m{^ *- 'shared/\\*\\*'\$}" .github/workflows/check-test.yml
-expect_fail "check 13: a \$GUARDED path the check-test job's filter does not cover" \
-  "path filter has no 'shared/**'"
-git checkout -- .github/workflows/check-test.yml
-
-# 33b — the same arm from the other side: $GUARDED grows and the filter does not. This is the
-# likelier way round in practice, and it is a DIFFERENT mutation — 33 deletes from the filter, this
-# adds to the guarded list — so neither substitutes for the other.
-# The injected name must be one NO filter entry can cover. `docs` was used here and stopped being
-# a valid probe the moment `docs/**` was deliberately added to the filter: check 13 then found the
-# entry, reddened nothing, and this probe recorded `not proven` — failing the whole run over an
-# arm that is in fact fine. A token that exists nowhere cannot acquire that problem.
-perl -pi -e "s{^GUARDED='([^']*)'}{GUARDED='\$1 _probe-guarded-tree'}" scripts/check-test.sh
-expect_fail "check 13: a path added to \$GUARDED but not to the filter" \
-  "path filter has no '_probe-guarded-tree/**'"
-git checkout -- scripts/check-test.sh
-
-# 33b2 — check 13's REFUSAL arm. `paths-ignore:` is the same YAML shape as `paths:` with the
-# opposite meaning, and check 13 reasons only about an explicit list of the paths that run the
-# job — so without this arm an inverted list would be read as one, reporting full coverage while
-# the job skipped on exactly the paths it was proving were covered.
-perl -pi -e 's/^    paths:$/    paths-ignore:/' .github/workflows/check-test.yml
-expect_fail "check 13: paths-ignore is refused rather than misread" \
-  "uses paths-ignore"
-git checkout -- .github/workflows/check-test.yml
-# 33b3 — and the same key quoted, which is the same key to YAML.
-perl -pi -e "s/^    paths:\$/    'paths-ignore':/" .github/workflows/check-test.yml
-expect_fail "check 13: a quoted paths-ignore is refused too" \
-  "uses paths-ignore"
-git checkout -- .github/workflows/check-test.yml
-
-# 33c — and the two loud arms, so a filter check that ABSTAINS can never be mistaken for one that
-# passed. A check that goes quiet over the job proving every other check is not decoration is the
-# worst shape this file guards against.
-: > .github/workflows/check-test.yml
-expect_fail "check 13: an unreadable path filter is loud, not silent" \
-  "could not read any path filter"
-git checkout -- .github/workflows/check-test.yml
-
-perl -pi -e "s{^GUARDED='[^']*'}{GUARDED_RENAMED=''}" scripts/check-test.sh
-expect_fail "check 13: an unreadable \$GUARDED is loud, not silent" \
-  "could not read \$GUARDED"
-git checkout -- scripts/check-test.sh
-
-# 33d — the backstop (#215): a `paths:` list under `push:` makes the run on main conditional. The
-# flat scrape this replaced read the new entry as one more pull-request filter entry and said
-# nothing. Every pull-request entry stays in place, so only the push arm can fire.
-perl -0pi -e "s{(\n  push:\n    branches:\n      - 'main'\n)}{\$1    paths:\n      - 'docs/**'\n}" .github/workflows/check-test.yml
-expect_fail "check 13: a path filter under push: is refused" \
-  "filters its push: trigger by paths"
-git checkout -- .github/workflows/check-test.yml
-# 33d2 — the same filter in flow style, which a block reader would read as an unfiltered push...
-perl -0pi -e "s{\n  push:\n    branches:\n      - 'main'\n}{\n  push: {branches: [main], paths: ['docs/**']}\n}" .github/workflows/check-test.yml
-expect_fail "check 13: a flow-style push: trigger is refused" \
-  "writes its push: trigger in flow style"
-git checkout -- .github/workflows/check-test.yml
-# 33d3 — ...and under a quoted key, which a reader of bare keys would file under `branches:`.
-perl -0pi -e "s{(\n  push:\n    branches:\n      - 'main'\n)}{\$1    \"paths\":\n      - 'docs/**'\n}" .github/workflows/check-test.yml
-expect_fail "check 13: a quoted paths key under push: is read as the key it is" \
-  "filters its push: trigger by paths"
-git checkout -- .github/workflows/check-test.yml
-# 33d4 — and the flow mapping moved to the line below its event, where it is neither a key nor an
-# item: a line the reader cannot place reds instead of being skipped.
-perl -0pi -e "s{\n  push:\n    branches:\n      - 'main'\n}{\n  push:\n    {branches: [main], paths: ['docs/**']}\n}" .github/workflows/check-test.yml
-expect_fail "check 13: a line under push: that is neither a key nor an item is refused" \
-  "cannot read as a key or a list item"
-git checkout -- .github/workflows/check-test.yml
-# 33d5 — the same under pull_request:, after its complete paths list, where nothing else reds.
-perl -0pi -e "s{(\n *- 'docs/\\*\\*'\n)}{\$1    {types: [opened]}\n}" .github/workflows/check-test.yml
-expect_fail "check 13: a line under pull_request: that is neither a key nor an item is refused" \
-  "has a line under its pull_request: trigger"
-git checkout -- .github/workflows/check-test.yml
-# 33d6 — an EVENT line it cannot name: without its own red, the `paths:` under it would be credited
-# to the event before it, so `plugins/**` dropped from pull_request: would read as still covered.
-perl -0pi -e "s{\n *- 'plugins/\\*\\*'\n}{\n}; s{\npermissions:}{  pull_request_target :\n    paths:\n      - 'plugins/**'\n\npermissions:}" .github/workflows/check-test.yml
-expect_fail "check 13: an event line it cannot name is refused" \
-  "has an event under on: that check 13 cannot read"
-git checkout -- .github/workflows/check-test.yml
-# 33e — and the backstop removed outright.
-perl -0pi -e 's{\n  push:\n    branches:\n      - \x27main\x27\n}{\n}' .github/workflows/check-test.yml
-expect_fail "check 13: a workflow with no push: trigger reds" \
-  "has no push: trigger"
-git checkout -- .github/workflows/check-test.yml
-# 33i — the key allowlist (#58). Each key below narrows when the job runs and passed green while
-# check 13 read only the keys it was written about. `branches:` stays in place under push: in the
-# first two, so the must-name-main arm cannot claim the red.
-perl -0pi -e "s{(\n  push:\n    branches:\n      - 'main'\n)}{\$1    branches-ignore:\n      - 'main'\n}" .github/workflows/check-test.yml
-expect_fail "check 13: branches-ignore under push: is refused" \
-  "push: trigger carries branches-ignore"
-git checkout -- .github/workflows/check-test.yml
-perl -0pi -e "s{(\n  push:\n    branches:\n      - 'main'\n)}{\$1    tags:\n      - 'v*'\n}" .github/workflows/check-test.yml
-expect_fail "check 13: tags under push: is refused" \
-  "push: trigger carries tags"
-git checkout -- .github/workflows/check-test.yml
-perl -0pi -e "s{(\n  pull_request:\n)}{\$1    branches:\n      - 'release'\n}" .github/workflows/check-test.yml
-expect_fail "check 13: branches under pull_request: is refused" \
-  "pull_request: trigger carries branches"
-git checkout -- .github/workflows/check-test.yml
-perl -0pi -e "s{(\n  pull_request:\n)}{\$1    types:\n      - 'closed'\n}" .github/workflows/check-test.yml
-expect_fail "check 13: types under pull_request: is refused" \
-  "pull_request: trigger carries types"
-git checkout -- .github/workflows/check-test.yml
-# 33j — push: branches: is exactly main. A list without it, spelt as a near miss so that a match
-# loosened to a substring would pass it; one that excludes it again; and an entry beside it the
-# reader cannot read (unquoted), which only the count of `-` lines sees.
-perl -0pi -e "s{(\n  push:\n    branches:\n      - )'main'\n}{\$1'main-old'\n}" .github/workflows/check-test.yml
-expect_fail "check 13: a push: branches list without main reds" \
-  "push: trigger does not name 'main'"
-git checkout -- .github/workflows/check-test.yml
-perl -0pi -e "s{(\n  push:\n    branches:\n      - 'main'\n)}{\$1      - '!main'\n}" .github/workflows/check-test.yml
-expect_fail "check 13: a negated pattern under push: branches reds" \
-  "push: branches: carries an entry other than 'main'"
-git checkout -- .github/workflows/check-test.yml
-perl -0pi -e "s{(\n  push:\n    branches:\n      - 'main'\n)}{\$1      - release\n}" .github/workflows/check-test.yml
-expect_fail "check 13: an unreadable entry beside main under push: branches reds" \
-  "push: branches: carries an entry other than 'main'"
-git checkout -- .github/workflows/check-test.yml
-# 33k — a value on the key's own line: `>-` makes the list below it a string to YAML, yet its
-# `- 'main'` would read as an item. Nothing else reds here.
-perl -0pi -e "s{(\n  push:\n    branches:)\n}{\$1 >-\n}" .github/workflows/check-test.yml
-expect_fail "check 13: a key under push: with a value on its own line is refused" \
-  "with a value on the key's own line"
-git checkout -- .github/workflows/check-test.yml
-# 33k2 — the same under pull_request:, where the list below still reads as a complete filter.
-perl -0pi -e "s{(\n  pull_request:\n    paths:)\n}{\$1 >-\n}" .github/workflows/check-test.yml
-expect_fail "check 13: a key under pull_request: with a value on its own line is refused" \
-  "under its pull_request: trigger with a value on the key's own line"
-git checkout -- .github/workflows/check-test.yml
-# 33j4 — a YAML escape: `'main''x'` is main'x, a branch that is not main. An item regex that stops at
-# the first closing quote would read it as `main`.
-perl -0pi -e "s{(\n  push:\n    branches:\n      - )'main'\n}{\$1'main''x'\n}" .github/workflows/check-test.yml
-expect_fail "check 13: an escaped quote in the only push: branch is not read as main" \
-  "push: trigger does not name 'main'"
-git checkout -- .github/workflows/check-test.yml
-# 33l — the pull-request filter reads every entry or reds: an unquoted one beside the complete
-# list, where the coverage loop stays green because every entry $GUARDED derives is still there...
-perl -0pi -e "s{(\n *- 'docs/\\*\\*'\n)}{\$1      - scripts/extra/**\n}" .github/workflows/check-test.yml
-expect_fail "check 13: an unreadable pull_request: paths: entry is refused" \
-  "has an entry check 13 cannot read"
-git checkout -- .github/workflows/check-test.yml
-# 33l2 — ...and a negated one, which takes a guarded tree back out of a list that still names it.
-perl -0pi -e "s{(\n *- 'docs/\\*\\*'\n)}{\$1      - '!scripts/**'\n}" .github/workflows/check-test.yml
-expect_fail "check 13: a negated pull_request: paths: entry is refused" \
-  "pull_request: paths: carries a negated pattern"
-git checkout -- .github/workflows/check-test.yml
-# 33l3 — the same negation spelt as a double-quoted escape (`\x21` is `!`), which a reader that read
-# a backslash inside double quotes would take for a plain entry.
-perl -0pi -e "s{(\n *- 'docs/\\*\\*'\n)}{\$1      - \"\\\\x21scripts/**\"\n}" .github/workflows/check-test.yml
-expect_fail "check 13: an escaped double-quoted pull_request: paths: entry is not read" \
-  "has an entry check 13 cannot read"
-git checkout -- .github/workflows/check-test.yml
-# 33l4 — a tab inside the quotes is part of the value, but the reader's rows are tab-separated, so a
-# reader that kept it would split `scripts/**` back off it and read a path the filter does not hold.
-perl -0pi -e "s{(\n *- 'docs/\\*\\*'\n)}{\$1      - 'scripts/**\t'\n}" .github/workflows/check-test.yml
-expect_fail "check 13: a tab inside a quoted pull_request: paths: entry is not read" \
-  "has an entry check 13 cannot read"
-git checkout -- .github/workflows/check-test.yml
-# 33l5 — the same tab inside a DOUBLE-quoted entry, which is a separate regex in the reader (#314):
-# reverting its tab exclusion (`[^"\\\t]` to `[^"\\]`) passed every probe above.
-perl -0pi -e "s{(\n *- 'docs/\\*\\*'\n)}{\$1      - \"scripts/**\t\"\n}" .github/workflows/check-test.yml
-expect_fail "check 13: a tab inside a double-quoted pull_request: paths: entry is not read" \
-  "has an entry check 13 cannot read"
-git checkout -- .github/workflows/check-test.yml
-# 33n — a line break awk does not split on (a lone CR) hides a second entry behind a comment.
-perl -0pi -e "s{(\n  push:\n    branches:\n      - 'main')\n}{\$1 #\r      - '!main'\n}" .github/workflows/check-test.yml
-expect_fail "check 13: a line break other than LF is refused" \
-  "contains a line break other than LF"
-git checkout -- .github/workflows/check-test.yml
-# 33o — a key written twice under one event: parsers disagree on which copy wins, and one that keeps
-# the last would run check-test on `docs/**` alone. This reader credits both lists, so the coverage
-# loop stays green and nothing else reds.
-perl -0pi -e "s{(\n *- 'docs/\\*\\*'\n)}{\$1    paths:\n      - 'docs/**'\n}" .github/workflows/check-test.yml
-expect_fail "check 13: a repeated key under pull_request: is refused" \
-  "repeats pull_request.paths"
-git checkout -- .github/workflows/check-test.yml
-# 33p — the file's SHAPE (#314): check 13 reads one document with one block-style `on:`, and reds
-# every other shape rather than reading it wrongly. Most fixtures below only add to the file and
-# leave the committed `on:` block intact, so the trigger arms above stay green; every one is pinned
-# on its own shape arm's message, whatever else reds beside it.
-# A second `on:` after the committed one, in block style and in flow style: a parser that keeps the
-# last copy runs check-test on neither push nor pull request.
-printf 'on:\n  workflow_dispatch:\n' >> .github/workflows/check-test.yml
-expect_fail "check 13: a second block-style top-level on: is refused" \
-  "has 2 top-level on: keys"
-git checkout -- .github/workflows/check-test.yml
-printf 'on: [workflow_dispatch]\n' >> .github/workflows/check-test.yml
-expect_fail "check 13: a second flow-style top-level on: is refused" \
-  "has 2 top-level on: keys"
-git checkout -- .github/workflows/check-test.yml
-# 33p2 — the only `on:` in flow style, which the reader does not look inside.
-perl -0pi -e "s{\non:\n.*?\n\npermissions:}{\non: [push, pull_request]\n\npermissions:}s" .github/workflows/check-test.yml
-expect_fail "check 13: a flow-style top-level on: is refused" \
-  "writes its top-level on: in flow style"
-git checkout -- .github/workflows/check-test.yml
-# 33p3 — a multi-document file: a parser that reads the first document runs its triggers, not these.
-# The leading document carries an `on:` of its own, so the on-count arm would red too; the pin is
-# the marker arm, and the trailing `...` below has no second `on:` to lean on.
-perl -0pi -e 's{\A}{on: [workflow_dispatch]\njobs: {}\n---\n}' .github/workflows/check-test.yml
-expect_fail "check 13: a document marker after line 1 is refused" \
-  "carries a YAML document marker"
-git checkout -- .github/workflows/check-test.yml
-printf '...\n' >> .github/workflows/check-test.yml
-expect_fail "check 13: a document end marker is refused" \
-  "carries a YAML document marker"
-git checkout -- .github/workflows/check-test.yml
-# ...and a line-1 marker carrying content: `--- |` makes the whole document one string to YAML.
-perl -0pi -e 's{\A}{--- |\n}' .github/workflows/check-test.yml
-expect_fail "check 13: a line-1 document marker with content after it is refused" \
-  "carries a YAML document marker"
-git checkout -- .github/workflows/check-test.yml
-# 33p4 — the top-level allowlist: `true:` is the key `on:` is to a YAML 1.1 parser, so a block under
-# it is a second trigger key the on-count arm cannot see...
-printf 'true:\n  workflow_dispatch:\n' >> .github/workflows/check-test.yml
-expect_fail "check 13: a top-level key outside the allowlist is refused" \
-  "has top-level key true"
-git checkout -- .github/workflows/check-test.yml
-# 33p5 — ...and a column-0 line that is no plain key: `on :` is the key `on` to YAML.
-printf 'on :\n  workflow_dispatch:\n' >> .github/workflows/check-test.yml
-expect_fail "check 13: a column-0 line it cannot read as a key is refused" \
-  "cannot read as a top-level key"
-git checkout -- .github/workflows/check-test.yml
-# 33p6 — the event allowlist under `on:`: an event this check reasons nothing about.
-perl -0pi -e "s{\non:\n}{\non:\n  workflow_dispatch:\n}" .github/workflows/check-test.yml
-expect_fail "check 13: an event under on: outside the allowlist is refused" \
-  "on: carries event workflow_dispatch"
-git checkout -- .github/workflows/check-test.yml
-# 33p7 — and the two spellings the shape arms must NOT refuse: a quoted `"on":` is the same key, and
-# a `---` on line 1 opens the one document rather than a second.
+# 33 - check 13: unconditional outer triggers, strict YAML shape, fail closed.
+# A PR path filter can skip a gate change after GitHub's first 300 changed files.
+# Selection belongs inside the workflow; every narrowing/ambiguous trigger below reds.
+python3 - "$SCRATCH" <<'PYFIX'
+from pathlib import Path
+import sys
+root = Path(sys.argv[1])
+base = Path('.github/workflows/check-test.yml').read_text()
+pr = '  pull_request:\n'
+push = "  push:\n    branches:\n      - 'main'\n"
+cases = []
+def add(name, expected, text):
+    assert text != base, name
+    cases.append((name, expected, text))
+def under(name, key, expected, event=pr):
+    add(name, expected, base.replace(event, event + key, 1))
+for key in ('paths', 'paths-ignore', '"paths"', "'paths-ignore'"):
+    under('pr-filter-' + str(len(cases)), '    ' + key + ":\n      - '**'\n", 'filters its pull_request: trigger')
+add('missing-pr', 'has no pull_request: trigger', base.replace(pr, ''))
+add('missing-push', 'has no push: trigger', base.replace(push, ''))
+add('empty', 'has no pull_request: trigger', '')
+for key in ('paths', '"paths"'):
+    under('push-filter-' + str(len(cases)), '    ' + key + ":\n      - '**'\n", 'filters its push: trigger by paths', push)
+for key in ('branches-ignore', 'tags'):
+    under(key, '    ' + key + ":\n      - 'main'\n", 'push: trigger carries ' + key, push)
+for key in ('branches', 'types'):
+    under('pr-' + key, '    ' + key + ":\n      - 'closed'\n", 'pull_request: trigger carries ' + key)
+for name, branch in [('missing-main', "'main-old'"), ('escape-main', "'main''x'")]:
+    add(name, "push: trigger does not name 'main'", base.replace("- 'main'", '- ' + branch))
+for name, branch in [('negated-main', "'!main'"), ('unquoted-main', 'main'), ('escaped-main', '"ma\\in"')]:
+    add(name, "push: branches: carries an entry other than 'main'", base.replace("- 'main'", "- 'main'\n      - " + branch))
+add('push-key-value', "under its push: trigger with a value on the key's own line", base.replace('    branches:\n', '    branches: >-\n'))
+under('pr-key-value', "    paths: >-\n      - '**'\n", "under its pull_request: trigger with a value on the key's own line")
+for event, name in ((push, 'push'), (pr, 'pull_request')):
+    add('inline-' + name, 'writes its ' + name + ': trigger in flow style', base.replace(event, '  ' + name + ': {}\n'))
+    under('unread-' + name, '    {types: [opened]}\n', 'has a line under its ' + name + ': trigger', event)
+add('event-shape', 'has an event under on: that check 13 cannot read', base.replace(pr, '  pull_request :\n'))
+add('duplicate-event', 'repeats on.pull_request', base.replace(pr, pr + pr))
+add('duplicate-key', 'repeats push.branches', base.replace(push, push + "    branches:\n      - 'main'\n"))
+add('cr', 'contains a line break other than LF', base.replace("- 'main'", "- 'main' #\r      - '!main'"))
+add('double-on', 'has 2 top-level on: keys', base + 'on:\n  workflow_dispatch:\n')
+add('double-flow-on', 'has 2 top-level on: keys', base + 'on: [workflow_dispatch]\n')
+a = base.index('\non:\n'); b = base.index('\npermissions:', a)
+add('flow-on', 'writes its top-level on: in flow style', base[:a] + '\non: [push, pull_request]\n' + base[b:])
+add('doc-start', 'carries a YAML document marker', 'on: [workflow_dispatch]\njobs: {}\n---\n' + base)
+add('doc-end', 'carries a YAML document marker', base + '...\n')
+add('doc-content', 'carries a YAML document marker', '--- |\n' + base)
+add('top-key', 'has top-level key true', base + 'true:\n  workflow_dispatch:\n')
+add('top-shape', 'has a column-0 line check 13 cannot read', base + 'on :\n  workflow_dispatch:\n')
+add('event-extra', 'on: carries event workflow_dispatch', base.replace('\non:\n', '\non:\n  workflow_dispatch:\n'))
+for name, expected, text in cases:
+    (root / ('check13-' + name + '.yml')).write_text(text)
+    (root / ('check13-' + name + '.want')).write_text(expected)
+PYFIX
+for fixture in "$SCRATCH"/check13-*.yml; do
+  cp "$fixture" .github/workflows/check-test.yml
+  expect_fail "check 13: $(basename "$fixture" .yml)" "$(cat "${fixture%.yml}.want")"
+  git checkout -- .github/workflows/check-test.yml
+done
+# Valid alternate spellings still pass the shape reader.
 perl -0pi -e 's{\non:\n}{\n"on":\n}' .github/workflows/check-test.yml
-expect_pass "check 13: a quoted top-level on: is read as on:"
+expect_pass "check 13: a quoted top-level on: is accepted"
 git checkout -- .github/workflows/check-test.yml
 perl -0pi -e 's{\A}{---\n}' .github/workflows/check-test.yml
-expect_pass "check 13: a document start marker on line 1 is accepted"
+expect_pass "check 13: a line-1 bare document start is accepted"
 git checkout -- .github/workflows/check-test.yml
-# 33f — an entry under ANOTHER trigger cannot stand in for one missing from the pull-request
-# filter. Under the flat scrape this line was read as coverage, so dropping `shared/**` from
-# `pull_request:` passed green. `pull_request_target:` rather than `push:`, so the push arm above
-# cannot claim the red.
-perl -0pi -e "s{\non:\n}{\non:\n  pull_request_target:\n    paths:\n      - 'shared/**'\n}; s{\n *- 'shared/\\*\\*'\n( *- 'Makefile')}{\n\$1}" .github/workflows/check-test.yml
-expect_fail "check 13: an entry under another trigger does not cover the pull-request filter" \
-  "path filter has no 'shared/**'"
-git checkout -- .github/workflows/check-test.yml
+perl -pi -e "s{^GUARDED='[^']*'}{GUARDED_RENAMED=''}" scripts/check-test.sh
+expect_fail "check 13: unreadable cleanup scope is loud" 'could not read $GUARDED'
+git checkout -- scripts/check-test.sh
+
 # 33g — the reader's fail-closed arm: an awk error is never read as an empty filter.
 cp scripts/check.sh "$SCRATCH/check13.bak"
 perl -pi -e 's{^(\s*)# A line in column 0 opens a top-level key.*$}{$1) (}' scripts/check.sh
@@ -1957,7 +1791,7 @@ make check >/dev/null 2>&1 || { echo "gate not green after restore"; exit 1; }
 
 # THE WHOLE TREE, not just $GUARDED, and that difference is the point. Every probe above restores
 # with `git checkout -- $GUARDED`, so $GUARDED is an upper bound on what this file may mutate —
-# which is exactly the property check 13 derives the CI path filter from. Nothing enforced it:
+# which defines the cleanup boundary independently of CI selection. Nothing enforced it:
 # a probe that mutated a path outside the list would restore nothing, leave the tree dirty, and
 # be noticed only by whoever ran `make check-test` NEXT and hit the dirty-tree guard at the top —
 # which in CI, on a fresh checkout every time, is nobody, ever.
@@ -1987,7 +1821,7 @@ left=$(printf '%s\n' "$post" | grep -vxF -f <(printf '%s\n' "$PRE_STATUS") | gre
 if [ -n "$left" ]; then
   echo "check-test left the tree dirty — a probe mutated something it does not restore:"
   printf '%s\n' "$left"
-  echo "add its path to \$GUARDED (and to the CI filter check 13 derives from it), or restore it inline"
+  echo "add its path to \$GUARDED, or restore it inline"
   echo "(paths already dirty when this run started are excluded, so every line above is this run's)"
   exit 1
 fi
