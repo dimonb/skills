@@ -1,14 +1,8 @@
 name: CI
 
-# Runs this repo's own gate on every push to the default branch and on every pull request, so a
-# suite that ERRORS at runtime — not just one that stops being registered — reds something the
-# change has to pass. Local `make check` stays fast and deliberately does not run the slow suites;
-# this workflow is where their runtime errors get caught (issue #91, decision C of #84).
-#
-# `make check-test` is NOT here. It lives in check-test.yml, as a SEPARATE workflow, so it runs
-# CONCURRENTLY with this one instead of after it, and so it can be skipped on a pull request that
-# cannot affect what it proves. That file carries the reasoning and the path filter; this one is
-# the part every change pays.
+# Static validation always runs. Runtime selection uses the full git diff through
+# scripts/ci_paths.py; unknown paths/history, CI and gate changes run everything.
+# Stable job names are retained, including a successful skipped macOS floor job.
 
 on:
   push:
@@ -29,19 +23,57 @@ jobs:
   gate:
     name: make check + test
     runs-on: ubuntu-latest
+    outputs:
+      floor: ${{ steps.paths.outputs.floor }}
     steps:
       - name: Check out the repository
         uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+          persist-credentials: false
 
-      # The static gate plus every fast, pure suite; the Makefile's `check` recipe is the list.
-      - name: make check
-        run: make check
+      - name: Select runtime coverage
+        id: paths
+        run: python3 scripts/ci_paths.py
 
-      # Every suite's fast subset, the two slow ones included — this is where a runtime error in
-      # those surfaces, since `make check` deliberately does not run them.
-      - name: make test
-        run: make test
+      - name: Static validation (every change)
+        run: bash scripts/check.sh
 
+      - name: Classifier regression tests
+        if: steps.paths.outputs.check_test == 'true'
+        run: python3 scripts/test_ci_paths.py
+
+      - name: driver runtime suite
+        if: steps.paths.outputs.driver == 'true'
+        run: bash shared/driver/tests/run-all.sh
+
+      - name: flow runtime suite
+        if: steps.paths.outputs.flow == 'true'
+        run: bash shared/flow/tests/run-all.sh
+
+      - name: adapters runtime suite
+        if: steps.paths.outputs.adapters == 'true'
+        run: bash shared/adapters/tests/run-all.sh
+
+      - name: policy runtime suite
+        if: steps.paths.outputs.policy == 'true'
+        run: bash shared/policy/tests/run-all.sh
+
+      - name: knobs runtime suite
+        if: steps.paths.outputs.knobs == 'true'
+        run: bash shared/knobs/tests/run-all.sh
+
+      - name: canary runtime suite
+        if: steps.paths.outputs.canary == 'true'
+        run: bash shared/canary/tests/run-all.sh
+
+      - name: shipyard runtime suite
+        if: steps.paths.outputs.shipyard == 'true'
+        run: bash plugins/shipyard/skills/shipyard/tests/run-all.sh
+
+      - name: council runtime suite
+        if: steps.paths.outputs.council == 'true'
+        run: bash plugins/council/skills/council/tests/run-all.sh
   # The shipyard report is run by stock macOS /bin/bash 3.2, and so is the continuity watcher it
   # launches. The tests that hold them to that run parts of them under /bin/bash — which on Linux is
   # 5.x, so there t15's floor prints a skip line (#332) and the others' /bin/bash sections pass
@@ -60,41 +92,52 @@ jobs:
   # `make test`: the rest already runs on Linux.
   bash32-floor:
     name: shipyard report bash 3.2 floor (macOS)
+    needs: gate
     runs-on: macos-latest
     steps:
       - name: Check out the repository
+        if: needs.gate.outputs.floor == 'true'
         uses: actions/checkout@v7
 
       - name: Install a bash >= 5 beside the stock 3.2
+        if: needs.gate.outputs.floor == 'true'
         env:
           HOMEBREW_NO_AUTO_UPDATE: 1
         run: brew install bash
 
       - name: t15 under /bin/bash 3.2
+        if: needs.gate.outputs.floor == 'true'
         env:
           SHIPYARD_TEST_BASH32: /bin/bash
         run: bash plugins/shipyard/skills/shipyard/tests/t15-iid-fallback.sh
 
       - name: t19 under /bin/bash 3.2
+        if: needs.gate.outputs.floor == 'true'
         run: bash plugins/shipyard/skills/shipyard/tests/t19-occupant.sh
 
       - name: t13 under /bin/bash 3.2
+        if: needs.gate.outputs.floor == 'true'
         run: bash plugins/shipyard/skills/shipyard/tests/t13-wait.sh
 
       - name: t17 under /bin/bash 3.2
+        if: needs.gate.outputs.floor == 'true'
         run: bash plugins/shipyard/skills/shipyard/tests/t17-autodown.sh
 
       - name: t-policy under /bin/bash 3.2
+        if: needs.gate.outputs.floor == 'true'
         run: bash shared/policy/tests/t-policy.sh
 
       - name: t-adapters under /bin/bash 3.2
+        if: needs.gate.outputs.floor == 'true'
         run: bash shared/adapters/tests/t-adapters.sh
 
       # The Codex continuity watcher is launched as `/bin/bash shipyard-continuity.sh ...`, and t7
       # and t21 drive that command through their fake agtermctl, so here the WATCHER runs under 3.2.
       # The code that starts it runs in the test's own bash 5 (the README's Known limits, KL-3).
       - name: t7 under /bin/bash 3.2
+        if: needs.gate.outputs.floor == 'true'
         run: bash plugins/shipyard/skills/shipyard/tests/t7-continuity.sh
 
       - name: t21 under /bin/bash 3.2
+        if: needs.gate.outputs.floor == 'true'
         run: bash plugins/shipyard/skills/shipyard/tests/t21-continuity-fifo.sh

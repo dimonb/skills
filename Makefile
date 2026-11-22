@@ -19,6 +19,7 @@
 # check 12.
 check:
 	@bash scripts/check.sh
+	@python3 scripts/test_ci_paths.py
 	@bash shared/driver/tests/run-all.sh
 	@bash shared/flow/tests/run-all.sh
 	@bash shared/adapters/tests/run-all.sh
@@ -73,7 +74,7 @@ check:
 # by arithmetic. It has now gone stale twice inside one change, and #203 was expected to be the
 # most likely thing to make it stale again. If you are adding or growing a test, this line is part
 # of your change. AGENTS.md points here rather than carrying its own number, so this is the place
-# to update. CI runs the same target on every push and pull request.
+# to update. CI selects relevant runners by changed paths; static validation always runs.
 test:
 	@bash shared/driver/tests/run-all.sh
 	@bash shared/flow/tests/run-all.sh
